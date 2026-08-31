@@ -1,0 +1,948 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import {
+  ComposedChart, LineChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip,
+  ReferenceLine, ReferenceDot, ResponsiveContainer, PieChart, Pie, Cell,
+} from "recharts";
+import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Database } from "lucide-react";
+import { storage } from "@/lib/storage";
+
+/* ---------------- design tokens ---------------- */
+const C = {
+  bg: "#0A0F1C", panel: "#111A2C", panel2: "#0D1424",
+  border: "#22304C", borderSoft: "#1A2540",
+  text: "#E7ECF3", textMuted: "#8592AC", textDim: "#56637F",
+  teal: "#45C4B0", amber: "#D9A24B", rust: "#C0654B", rustSoft: "rgba(192,101,75,0.16)",
+  violet: "#8B7FC7", blue: "#5B90C7",
+};
+function depthColor(v) { if (v >= -3) return C.teal; if (v >= -18) return C.amber; return C.rust; }
+function hexToRgb(hex) { const h = hex.replace("#", ""); return { r: parseInt(h.substring(0, 2), 16), g: parseInt(h.substring(2, 4), 16), b: parseInt(h.substring(4, 6), 16) }; }
+function lerpColor(a, b, t) { const pa = hexToRgb(a), pb = hexToRgb(b); return `rgb(${Math.round(pa.r + (pb.r - pa.r) * t)},${Math.round(pa.g + (pb.g - pa.g) * t)},${Math.round(pa.b + (pb.b - pa.b) * t)})`; }
+function rankColor(rank) { const order = ["A", "B", "C", "D", "E"]; const idx = order.indexOf(rank); const t = idx / (order.length - 1); return t <= 0.5 ? lerpColor(C.teal, C.amber, t / 0.5) : lerpColor(C.amber, C.rust, (t - 0.5) / 0.5); }
+
+const MILESTONES = [-3, -5, -8, -10, -12, -15, -18, -20, -25, -30, -35, -40, -45, -50];
+
+/* ---------------- bundled seed data (~31y), used until real data is imported ---------------- */
+function mulberry32(a) { return function () { let t = (a += 0x6d588f5); t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+function addTradingDay(d) { const nd = new Date(d); nd.setDate(nd.getDate() + 1); while (nd.getDay() === 0 || nd.getDay() === 6) nd.setDate(nd.getDate() + 1); return nd; }
+function buildSeedSeries() {
+  const rnd = mulberry32(11);
+  const regimes = [[900, 0.34, 1.5], [230, -1.05, 2.3], [650, 0.32, 1.4], [420, -0.85, 2.5], [900, 0.30, 1.3], [110, -1.7, 3.3], [70, 1.9, 2.0], [1500, 0.27, 1.3], [260, -0.6, 2.1], [1600, 0.30, 1.4], [340, -0.95, 2.4], [1450, 0.28, 1.3], [330, -0.75, 2.0]];
+  let price = 55; let date = new Date("1995-09-01"); const pts = [];
+  for (const [len, drift, vol] of regimes) { for (let k = 0; k < len; k++) { price = Math.max(8, price + drift + (rnd() - 0.5) * vol); pts.push({ date, price: Number(price.toFixed(2)) }); date = addTradingDay(date); } }
+  return pts;
+}
+const SEED_SERIES = buildSeedSeries();
+
+/* ---------------- CSV parsing (Stooq: Date,Open,High,Low,Close,Volume) ---------------- */
+function findCol(header, candidates) { for (const c of candidates) { const idx = header.indexOf(c); if (idx !== -1) return idx; } return -1; }
+function parseStooqCSV(text) {
+  const lines = text.trim().split(/\r?\n/);
+  if (!lines.length) return [];
+  const header = lines[0].split(",").map((h) => h.trim().toLowerCase());
+  const dateIdx = findCol(header, ["date", "日付"]);
+  const closeIdx = findCol(header, ["close", "終値"]);
+  if (dateIdx === -1 || closeIdx === -1) return [];
+  const rows = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = lines[i].split(",");
+    if (cols.length <= Math.max(dateIdx, closeIdx)) continue;
+    const d = new Date(cols[dateIdx]);
+    const c = parseFloat(String(cols[closeIdx]).replace(/[",]/g, ""));
+    if (!isNaN(d.getTime()) && !isNaN(c)) rows.push({ date: d, price: c });
+  }
+  rows.sort((a, b) => a.date - b.date);
+  return rows;
+}
+const VOO_LISTING_DATE = new Date("2010-09-07"); // VOOの実際の設定日（この日以前はVOOの実データが存在しない）
+function backfillFromIndex(vooSeries, indexSeries) {
+  if (!vooSeries.length || !indexSeries.length) return { merged: vooSeries, added: 0, scale: null };
+  const vooFirst = vooSeries[0];
+  // scale = VOOの最初の終値 ÷ 同日(または直前)のインデックス水準
+  const candidates = indexSeries.filter((p) => p.date <= vooFirst.date);
+  const matched = candidates.length ? candidates[candidates.length - 1] : indexSeries[0];
+  const scale = vooFirst.price / matched.price;
+  const synthetic = indexSeries.filter((p) => p.date < vooFirst.date).map((p) => ({ date: p.date, price: Number((p.price * scale).toFixed(2)), synthetic: true }));
+  const merged = [...synthetic, ...vooSeries].sort((a, b) => a.date - b.date);
+  return { merged, added: synthetic.length, scale };
+}
+
+/* ---------------- derived analytics (recomputed whenever the price series changes) ---------------- */
+function analyzeEpisode(series) {
+  const n = series.length; let athIdx = n - 1;
+  for (let k = n - 1; k >= 0; k--) { if (series[k].dd === 0) { athIdx = k; break; } }
+  const crossIdx = {};
+  for (const t of MILESTONES) { let idx = -1; for (let k = athIdx; k < n; k++) { if (series[k].dd <= t) { idx = k; break; } } crossIdx[t] = idx; }
+  let currentT = null, currentIdx = -1, prevT = null, prevIdx = -1;
+  for (const t of MILESTONES) { if (crossIdx[t] !== -1) { prevT = currentT; prevIdx = currentIdx; currentT = t; currentIdx = crossIdx[t]; } }
+  return { athIdx, crossIdx, currentT, currentIdx, prevT, prevIdx };
+}
+function nearestModelRow(dd) { let closest = MODEL_ROWS[0], bestDist = Infinity; for (const r of MODEL_ROWS) { const dist = Math.abs(r.v - dd); if (dist < bestDist) { bestDist = dist; closest = r; } } return closest; }
+const DD3_FREQ_PER_YEAR = 3.5; // 過去傾向として、DD3%級の押し目は年に約3.5回発生する前提(目安値)
+function freqLabelFromP(p) { const perYear = DD3_FREQ_PER_YEAR * (p / 100); if (perYear >= 1) return `年に${perYear.toFixed(1)}回`; const years = 1 / perYear; return `${years < 10 ? years.toFixed(1) : Math.round(years)}年に1度`; }
+
+function computeAll(rawSeries) {
+  let ath = 0;
+  const FULL = rawSeries.map((p, i) => { ath = Math.max(ath, p.price); return { i, date: p.date, price: p.price, ath, dd: Number((((p.price / ath) - 1) * 100).toFixed(2)) }; });
+  const last = FULL[FULL.length - 1];
+  const currentDD = last.dd, currentPrice = last.price, currentATH = last.ath;
+  const isDrawdown = currentDD <= -3;
+  const mode = isDrawdown ? "下落モード" : "最高値更新モード";
+  const episode = analyzeEpisode(FULL);
+  const ddStartIdx = episode.crossIdx[-3];
+  const daysSinceDDStart = ddStartIdx !== -1 ? last.i - FULL[ddStartIdx].i : null;
+  const daysSinceCurrentThreshold = episode.currentIdx !== -1 ? last.i - FULL[episode.currentIdx].i : null;
+  const legDays = (episode.prevIdx !== -1 && episode.currentIdx !== -1) ? FULL[episode.currentIdx].i - FULL[episode.prevIdx].i : null;
+  const isEntryLeg = episode.prevT === -3 && episode.currentT === -5;
+  const currentTLabel = currentDD <= -50 ? "-50%以上" : (episode.currentT !== null ? `${episode.currentT}%` : "—");
+  const currentEpisodeCurve = ddStartIdx !== -1 ? FULL.slice(ddStartIdx, last.i + 1).map((p, idx) => ({ day: idx, dd: p.dd })) : [];
+  const speedCategory = legDays !== null ? (legDays <= 5 ? "急落" : "緩慢") : null;
+  const nextProg = episode.currentT !== null ? PROGRESSION_DATA.find((r) => r.from === episode.currentT) : null;
+  const modelRow = nearestModelRow(currentDD);
+  const currentLevelP = currentTLabel === "-3%" ? 100 : (FINAL_REACH_DATA.find((r) => r.label === currentTLabel)?.p ?? null);
+  const currentFreqLabel = currentLevelP !== null ? freqLabelFromP(currentLevelP) : null;
+  return { FULL, last, currentDD, currentPrice, currentATH, isDrawdown, mode, episode, ddStartIdx, daysSinceDDStart, daysSinceCurrentThreshold, legDays, isEntryLeg, currentTLabel, currentEpisodeCurve, speedCategory, nextProg, modelRow, currentLevelP, currentFreqLabel };
+}
+
+const PROGRESSION_DATA = [
+  { from: -3, to: -5, p: 55, real: true }, { from: -5, to: -8, p: 52, real: true }, { from: -8, to: -10, p: 72, real: true, watershed: true },
+  { from: -10, to: -12, p: 82, real: false }, { from: -12, to: -15, p: 79, real: false }, { from: -15, to: -18, p: 80, real: false },
+  { from: -18, to: -20, p: 85, real: false }, { from: -20, to: -25, p: 72, real: false }, { from: -25, to: -30, p: 76, real: false },
+  { from: -30, to: -35, p: 70, real: false }, { from: -35, to: -40, p: 68, real: false }, { from: -40, to: -45, p: 65, real: false }, { from: -45, to: -50, p: 60, real: false },
+];
+const FINAL_REACH_DATA = [
+  { label: "-5%", p: 55, real: true }, { label: "-8%", p: 28, real: true }, { label: "-10%", p: 20, real: true }, { label: "-12%", p: 17, real: false },
+  { label: "-15%", p: 13, real: true }, { label: "-18%", p: 11, real: false }, { label: "-20%", p: 10, real: true }, { label: "-25%", p: 7, real: false },
+  { label: "-30%", p: 5, real: true }, { label: "-35%", p: 3, real: false }, { label: "-40%", p: 2, real: false }, { label: "-45%", p: 1.3, real: false },
+  { label: "-50%", p: 0.8, real: false }, { label: "-50%以上", p: 0.4, real: false },
+];
+const SPEED_TABLE = { fast: { "-8": 56, "-10": 44, "-15": 34, "-20": 25 }, slow: { "-8": 47, "-10": 30, "-15": 13, "-20": 10 } };
+
+/* ---------------- allocation model ---------------- */
+const MODEL_ROWS = [
+  { label: "+15%", v: 15, A: 12, B: 12, C: 36, D: 22, E: 18 }, { label: "+10%", v: 10, A: 13, B: 12, C: 37, D: 22, E: 16 },
+  { label: "+5%", v: 5, A: 14, B: 13, C: 38, D: 20, E: 15 }, { label: "ATH", v: 0, A: 15, B: 13, C: 40, D: 20, E: 12 },
+  { label: "DD-3%", v: -3, A: 14, B: 13, C: 41, D: 20, E: 12 }, { label: "DD-5%", v: -5, A: 15, B: 14, C: 42, D: 19, E: 10 },
+  { label: "DD-8%", v: -8, A: 16, B: 15, C: 42, D: 18, E: 9 }, { label: "DD-10%", v: -10, A: 17, B: 16, C: 42, D: 17, E: 8 },
+  { label: "DD-15%", v: -15, A: 16, B: 16, C: 42, D: 18, E: 8 }, { label: "DD-20%", v: -20, A: 14, B: 15, C: 40, D: 19, E: 12 },
+  { label: "DD-30%", v: -30, A: 10, B: 12, C: 38, D: 22, E: 18 }, { label: "DD-50%", v: -50, A: 6, B: 9, C: 33, D: 25, E: 27 },
+];
+const CATS = ["A", "B", "C", "D", "E"];
+const CAT_LABEL = { A: "現金・高配当・金", B: "金・ヘッジ・防衛", C: "SP500", D: "NASDAQ/テック指数", E: "レバ・モメンタム" };
+
+/* ---------------- portfolio holdings (default/seed — replaced once real data is imported) ---------------- */
+const HOLDINGS_DEFAULT = [
+  { name: "eMAXIS Slim 米国株式(S&P500)", category: "SP500", currency: "円", rank: "C", account: "特定", owner: "shin", amount: 8200000 },
+  { name: "VOO", category: "SP500", currency: "ドル", rank: "C", account: "特定", owner: "saki", amount: 6400000 },
+  { name: "楽天SP500", category: "SP500", currency: "円", rank: "C", account: "NISA成長", owner: "shin", amount: 3100000 },
+  { name: "2521 円ヘッジSP500", category: "SP500", currency: "円", rank: "B", account: "特定", owner: "saki", amount: 1400000 },
+  { name: "QQQ", category: "Nasdaq", currency: "ドル", rank: "D", account: "特定", owner: "shin", amount: 4200000 },
+  { name: "eMAXIS NASDAQ100", category: "Nasdaq", currency: "円", rank: "D", account: "NISA成長", owner: "saki", amount: 2600000 },
+  { name: "FANG+", category: "テック系ETF・投信", currency: "円", rank: "D", account: "特定", owner: "shin", amount: 1800000 },
+  { name: "金プラス(株分)", category: "テック系ETF・投信", currency: "円", rank: "D", account: "特定", owner: "shin", amount: 700000 },
+  { name: "SPXL", category: "SP500", currency: "ドル", rank: "E", account: "特定", owner: "shin", amount: 1500000 },
+  { name: "SOXL", category: "テック系ETF・投信", currency: "ドル", rank: "E", account: "特定", owner: "shin", amount: 900000 },
+  { name: "GLD", category: "ゴールド", currency: "ドル", rank: "B", account: "特定", owner: "saki", amount: 3300000 },
+  { name: "金プラス(金分)", category: "ゴールド", currency: "円", rank: "A", account: "特定", owner: "shin", amount: 700000 },
+  { name: "HDV", category: "その他", currency: "ドル", rank: "A", account: "特定", owner: "saki", amount: 2100000 },
+  { name: "日経高配当(399A)", category: "日本株", currency: "円", rank: "A", account: "NISAつみたて", owner: "shin", amount: 1900000 },
+  { name: "ITA(防衛)", category: "その他", currency: "ドル", rank: "B", account: "特定", owner: "shin", amount: 1600000 },
+  { name: "現金(円)", category: "現金", currency: "円", rank: "A", account: "—", owner: "shin", amount: 4800000 },
+  { name: "現金(ドル)", category: "現金", currency: "ドル", rank: "A", account: "—", owner: "saki", amount: 2200000 },
+];
+function groupByField(holdings, field) { const map = {}; for (const h of holdings) { map[h[field]] = (map[h[field]] || 0) + h.amount; } return Object.entries(map).map(([k, v]) => ({ name: k, value: v })); }
+function holdingsTotal(holdings) { return holdings.reduce((s, h) => s + h.amount, 0); }
+function currentHoldingPctFromHoldings(holdings) {
+  const total = holdingsTotal(holdings) || 1;
+  const byRank = groupByField(holdings, "rank");
+  const pct = { A: 0, B: 0, C: 0, D: 0, E: 0 };
+  for (const r of byRank) if (pct[r.name] !== undefined) pct[r.name] = Number(((r.value / total) * 100).toFixed(1));
+  return pct;
+}
+const CATEGORY_COLORS = { "SP500": C.teal, "Nasdaq": C.blue, "テック系ETF・投信": C.violet, "ゴールド": C.amber, "現金": "#7FA37A", "日本株": "#BE7A63", "その他": C.textDim };
+const CURRENCY_COLORS = { "ドル": C.teal, "円": C.amber };
+function colorForView(view, key) { return view === "category" ? (CATEGORY_COLORS[key] || C.textDim) : view === "currency" ? CURRENCY_COLORS[key] : rankColor(key); }
+
+/* ---------------- Rakuten Securities CSV (Shift-JIS) ---------------- */
+function decodeShiftJIS(buffer) { try { return new TextDecoder("shift-jis").decode(buffer); } catch (e) { return new TextDecoder("utf-8").decode(buffer); } }
+function splitCsvLine(line) {
+  const out = []; let cur = ""; let inQ = false;
+  for (let i = 0; i < line.length; i++) { const ch = line[i]; if (ch === '"') { inQ = !inQ; continue; } if (ch === "," && !inQ) { out.push(cur); cur = ""; continue; } cur += ch; }
+  out.push(cur);
+  return out.map((s) => s.trim());
+}
+function parseYen(s) { if (s == null) return NaN; return parseFloat(String(s).replace(/[,¥\s]/g, "")); }
+const RANK_KEYWORDS = [
+  { rank: "C", category: "SP500", keys: ["S&P500", "SP500", "米国株式", "VOO", "SPY", "楽天SP500", "2521"] },
+  { rank: "D", category: "Nasdaq", keys: ["NASDAQ", "ナスダック", "QQQ", "FANG", "テック指数", "Zテック"] },
+  { rank: "E", category: "テック系ETF・投信", keys: ["SPXL", "SPUU", "SOXL", "MSFU", "METU"] },
+  { rank: "B", category: "ゴールド", keys: ["GLD", "ITA", "防衛", "円ヘッジ"] },
+  { rank: "A", category: "その他", keys: ["HDV", "高配当", "2013", "399A"] },
+];
+function guessCategoryRank(name) {
+  for (const g of RANK_KEYWORDS) if (g.keys.some((k) => name.includes(k))) return { rank: g.rank, category: g.category };
+  if (/ゴールド|金/.test(name)) return { rank: "A", category: "ゴールド" };
+  if (/現金|MRF|預り金/.test(name)) return { rank: "A", category: "現金" };
+  if (/日本|日経|TOPIX/.test(name)) return { rank: "A", category: "日本株" };
+  return { rank: "D", category: "その他" };
+}
+function guessCurrency(name) { return /^[A-Z0-9.]{2,6}$/.test(name.trim()) ? "ドル" : "円"; }
+function parseRakutenCSV(text) {
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  let headerIdx = -1, cols = null;
+  for (let i = 0; i < lines.length; i++) {
+    const c = splitCsvLine(lines[i]);
+    if (c.some((x) => x.includes("銘柄") || x.includes("名称")) && c.some((x) => x.includes("評価額"))) { headerIdx = i; cols = c; break; }
+  }
+  if (headerIdx === -1) return [];
+  const nameIdx = cols.findIndex((x) => x.includes("銘柄") || x.includes("名称"));
+  const accountIdx = cols.findIndex((x) => x.includes("口座"));
+  const amountIdx = cols.findIndex((x) => x.includes("評価額"));
+  const rows = [];
+  for (let i = headerIdx + 1; i < lines.length; i++) {
+    const c = splitCsvLine(lines[i]);
+    if (c.length <= amountIdx || !c[nameIdx]) continue;
+    const name = c[nameIdx];
+    if (!name || name.includes("合計")) continue;
+    const amount = parseYen(c[amountIdx]);
+    if (isNaN(amount)) continue;
+    const account = accountIdx !== -1 && c[accountIdx] ? c[accountIdx] : "特定";
+    const guess = guessCategoryRank(name);
+    rows.push({ name, account, amount, category: guess.category, rank: guess.rank, currency: guessCurrency(name) });
+  }
+  return rows;
+}
+
+/* ---------------- historical crashes (approximate, for shape comparison) ---------------- */
+function buildCrashCurve({ troughDay, recoveryDay, maxDD, seed }) {
+  const rnd = mulberry32(seed); const arr = [];
+  for (let d = 0; d <= recoveryDay; d++) {
+    let dd;
+    if (d <= troughDay) { const t = troughDay === 0 ? 1 : d / troughDay; dd = maxDD * Math.pow(t, 1.3); }
+    else { const t = (d - troughDay) / Math.max(1, recoveryDay - troughDay); const s = t * t * (3 - 2 * t); dd = maxDD * (1 - s); }
+    const noise = (rnd() - 0.5) * Math.abs(maxDD) * 0.04;
+    dd = Math.min(0, Math.max(maxDD * 1.05, dd + noise));
+    arr.push({ day: d, dd: Number(dd.toFixed(2)) });
+  }
+  arr[0].dd = 0;
+  return arr;
+}
+function fmtDuration(days) { const months = days / 21; if (months >= 12) return `約${(months / 12).toFixed(1)}年`; return `約${Math.round(months)}ヶ月`; }
+const CRASHES_META = [
+  { id: "1987", name: "ブラックマンデー", start: "1987-08-25", low: "1987-10-19", athRecovery: "1989年頃", maxDD: -33.2, troughDay: 38, recoveryDay: 520, color: C.violet,
+    cause: "プログラム売買の連鎖的な自動売り、ポートフォリオインシュアランスの逆機能、投資家心理の急速な悪化。単一の日(10/19)で市場全体が約20%下落。",
+    resolution: "FRB(グリーンスパン議長)による迅速な流動性供給の表明、実体経済への波及が限定的だったこと。",
+    lesson: "暴落自体は歴史上最も急激だったが、実体経済が堅調であれば株価の回復も比較的早い。市場構造(プログラム売買)が引き金でもファンダメンタルズが崩れていなければ回復力がある。" },
+  { id: "dotcom", name: "ドットコムバブル崩壊", start: "2000-03-24", low: "2002-10-09", athRecovery: "2007年頃", maxDD: -49.1, troughDay: 650, recoveryDay: 1764, color: C.blue,
+    cause: "ITバブルの過剰な期待と高PERのハイテク株の急落。2001年の同時多発テロによる景気後退の追い打ち、企業会計不正(エンロン等)による信頼失墜。",
+    resolution: "FRBの継続的な利下げ、景気の底打ちと企業収益の回復。",
+    lesson: "バブル的な高評価を伴う下落は回復に非常に時間がかかる(今回は約7年)。下落期間中に複数回の戻り相場(ベアマーケットラリー)があり、早期の「底打ち」判断は危険。" },
+  { id: "gfc", name: "リーマンショック(世界金融危機)", start: "2007-10-09", low: "2009-03-09", athRecovery: "2013年頃", maxDD: -56.8, troughDay: 356, recoveryDay: 1360, color: C.rust,
+    cause: "サブプライムローン危機に端を発する金融システム全体の信用収縮。リーマン・ブラザーズ破綻による連鎖的な金融不安。",
+    resolution: "各国中央銀行・政府による大規模な金融緩和と公的資金注入、量的緩和(QE)の開始。",
+    lesson: "金融システム自体が毀損すると回復に数年単位を要する。政策対応(流動性供給)のスピードと規模が回復ペースを大きく左右する。" },
+  { id: "covid", name: "コロナショック", start: "2020-02-19", low: "2020-03-23", athRecovery: "2020年8月頃", maxDD: -33.9, troughDay: 23, recoveryDay: 125, color: C.amber,
+    cause: "新型コロナウイルスの世界的流行による経済活動の急停止(ロックダウン)。",
+    resolution: "各国政府・中央銀行による前例のない規模の財政・金融刺激策、ワクチン開発への期待。",
+    lesson: "外生的ショック(感染症等)による暴落は、政策対応が迅速であれば歴史的に見て最も回復が早いパターンになりうる(今回は約半年)。深さだけでなく「原因の性質」が回復速度を左右する。" },
+];
+const CRASHES = CRASHES_META.map((c, i) => ({ ...c, curve: buildCrashCurve({ troughDay: c.troughDay, recoveryDay: c.recoveryDay, maxDD: c.maxDD, seed: 200 + i }) }));
+const MAX_CMP_DAY = Math.max(...CRASHES.map((c) => c.recoveryDay));
+function buildComparisonData(currentEpisodeCurve) {
+  const rows = [];
+  for (let d = 0; d <= MAX_CMP_DAY; d++) {
+    const row = { day: d };
+    for (const c of CRASHES) row[c.id] = d < c.curve.length ? c.curve[d].dd : 0;
+    row.current = d < currentEpisodeCurve.length ? currentEpisodeCurve[d].dd : undefined;
+    rows.push(row);
+  }
+  const step = Math.max(1, Math.ceil(rows.length / 320));
+  const out = []; for (let k = 0; k < rows.length; k += step) out.push(rows[k]);
+  if (out[out.length - 1] !== rows[rows.length - 1]) out.push(rows[rows.length - 1]);
+  return out;
+}
+
+/* ---------------- period selector ---------------- */
+const PERIODS = [{ key: "1M", label: "1ヶ月", days: 21 }, { key: "3M", label: "3ヶ月", days: 63 }, { key: "6M", label: "6ヶ月", days: 126 }, { key: "YTD", label: "年初来" }, { key: "1Y", label: "1年", days: 252 }, { key: "3Y", label: "3年", days: 756 }, { key: "5Y", label: "5年", days: 1260 }, { key: "10Y", label: "10年", days: 2520 }, { key: "20Y", label: "20年", days: 5040 }, { key: "30Y", label: "30年", days: 7560 }, { key: "MAX", label: "最長" }];
+function sliceForPeriod(FULL, last, key) {
+  let sliced;
+  if (key === "MAX") sliced = FULL;
+  else if (key === "YTD") { const y = last.date.getFullYear(); sliced = FULL.filter((p) => p.date.getFullYear() === y); }
+  else { const days = PERIODS.find((p) => p.key === key).days; sliced = FULL.slice(-days); }
+  if (!sliced.length) sliced = FULL;
+  const step = Math.max(1, Math.ceil(sliced.length / 260));
+  const out = []; for (let k = 0; k < sliced.length; k += step) out.push(sliced[k]);
+  if (out[out.length - 1] !== sliced[sliced.length - 1]) out.push(sliced[sliced.length - 1]);
+  return out;
+}
+function fmtAxisDate(d, rangeDays) { if (rangeDays > 900) return `${d.getFullYear()}`; if (rangeDays > 120) return `${d.getFullYear()}/${d.getMonth() + 1}`; return `${d.getMonth() + 1}/${d.getDate()}`; }
+
+/* ---------------- depth gauge ---------------- */
+function DepthGauge({ dd }) {
+  const marks = [0, ...MILESTONES]; const top = 0, bottom = -55;
+  const pct = (v) => ((v - top) / (bottom - top)) * 100;
+  const markerPct = Math.min(100, Math.max(0, pct(Math.max(dd, bottom))));
+  return (
+    <div className="flex flex-col items-center h-full py-4" style={{ width: 64, background: C.panel2, borderRight: `1px solid ${C.border}` }}>
+      <div className="text-[10px] tracking-widest" style={{ color: C.textDim, writingMode: "vertical-rl" }}>DEPTH GAUGE</div>
+      <div className="relative flex-1 mt-3" style={{ width: 6 }}>
+        <div className="absolute inset-0 rounded-full" style={{ background: `linear-gradient(to bottom, ${C.teal} 0%, ${C.amber} 45%, ${C.rust} 100%)`, opacity: 0.35 }} />
+        {marks.map((m) => (<div key={m} className="absolute flex items-center" style={{ top: `${pct(m)}%`, left: 10, transform: "translateY(-50%)" }}><div style={{ width: 8, height: 1, background: C.borderSoft }} /><span className="ml-1 text-[8px] font-mono" style={{ color: C.textDim }}>{m === 0 ? "ATH" : `${m}`}</span></div>))}
+        <div className="absolute rounded-full" style={{ top: `${markerPct}%`, left: "50%", width: 14, height: 14, transform: "translate(-50%,-50%)", background: depthColor(dd), boxShadow: `0 0 0 4px ${depthColor(dd)}33, 0 0 12px ${depthColor(dd)}88` }} />
+      </div>
+      <div className="mt-3 font-mono text-sm font-semibold px-2 py-1 rounded" style={{ color: depthColor(dd), background: `${depthColor(dd)}1a` }}>{dd.toFixed(1)}%</div>
+    </div>
+  );
+}
+
+/* ---------------- atoms ---------------- */
+function Panel({ title, action, children, className = "", style }) {
+  return (
+    <div className={`rounded-lg flex flex-col ${className}`} style={{ background: C.panel, border: `1px solid ${C.border}`, ...style }}>
+      <div className="flex items-center justify-between px-4 py-2.5" style={{ borderBottom: `1px solid ${C.borderSoft}` }}>
+        <span className="text-xs font-medium tracking-wide" style={{ color: C.textMuted }}>{title}</span>
+        {action}
+      </div>
+      <div className="flex-1 min-h-0">{children}</div>
+    </div>
+  );
+}
+function DiffBar({ cat, current, target, onClick }) {
+  const diff = Number((current - target).toFixed(1)); const max = 50; const emphasize = Math.abs(diff) >= 4;
+  return (
+    <div onClick={onClick} className="px-4 py-2.5 flex items-center gap-2" style={{ borderBottom: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+      <div className="flex-1">
+        <div className="flex items-baseline justify-between mb-1.5">
+          <div className="flex items-baseline gap-2"><span className="text-sm font-semibold" style={{ color: C.text }}>{cat}</span><span className="text-[11px]" style={{ color: C.textDim }}>{CAT_LABEL[cat]}</span></div>
+          <div className="flex items-baseline gap-2 font-mono text-xs"><span style={{ color: C.textMuted }}>{current}%</span><span style={{ color: C.textDim }}>→ {target}%</span><span className="font-semibold px-1.5 py-0.5 rounded" style={{ color: emphasize ? C.rust : C.textMuted, background: emphasize ? C.rustSoft : "transparent" }}>{diff > 0 ? "+" : ""}{diff}</span></div>
+        </div>
+        <div className="relative h-1.5 rounded-full" style={{ background: C.panel2 }}>
+          <div className="absolute top-0 h-1.5 rounded-full" style={{ width: `${(target / max) * 100}%`, background: C.borderSoft }} />
+          <div className="absolute top-0 h-1.5 rounded-full" style={{ width: `${(current / max) * 100}%`, background: emphasize ? C.rust : C.teal }} />
+          <div className="absolute" style={{ left: `${(target / max) * 100}%`, top: -3, width: 2, height: 12, background: C.text, opacity: 0.6 }} />
+        </div>
+      </div>
+      <ChevronRight size={13} style={{ color: C.textDim, flexShrink: 0 }} />
+    </div>
+  );
+}
+
+/* ---------------- sortable table ---------------- */
+function SortableTable({ columns, rows, defaultSortKey, defaultDir = "desc" }) {
+  const [sortKey, setSortKey] = useState(defaultSortKey);
+  const [dir, setDir] = useState(defaultDir);
+  const sorted = useMemo(() => { const copy = [...rows]; copy.sort((a, b) => { const av = a[sortKey], bv = b[sortKey]; if (typeof av === "number") return dir === "asc" ? av - bv : bv - av; return dir === "asc" ? String(av).localeCompare(String(bv), "ja") : String(bv).localeCompare(String(av), "ja"); }); return copy; }, [rows, sortKey, dir]);
+  const headerClick = (key) => { if (key === sortKey) setDir((d) => (d === "asc" ? "desc" : "asc")); else { setSortKey(key); setDir("desc"); } };
+  return (
+    <table className="w-full text-xs mono">
+      <thead><tr style={{ color: C.textDim }}>{columns.map((col) => (<th key={col.key} onClick={() => headerClick(col.key)} className={`font-normal py-1 select-none ${col.align === "right" ? "text-right" : "text-left"}`} style={{ cursor: "pointer", color: sortKey === col.key ? C.textMuted : C.textDim }}>{col.label}{sortKey === col.key ? (dir === "asc" ? " ▲" : " ▼") : ""}</th>))}</tr></thead>
+      <tbody>{sorted.map((row, i) => (<tr key={i} style={{ borderTop: `1px solid ${C.borderSoft}` }}>{columns.map((col) => (<td key={col.key} className={col.align === "right" ? "text-right" : ""} style={{ color: col.emphasize ? C.text : C.textMuted, padding: "4px 4px" }}>{col.format ? col.format(row[col.key], row) : row[col.key]}</td>))}</tr>))}</tbody>
+    </table>
+  );
+}
+
+/* ---------------- status panel ---------------- */
+function StatusPanel({ d, onOpenTrackRecord }) {
+  return (
+    <Panel title="現在のステータス">
+      <div className="flex h-full">
+        <div className="flex-1 px-4 py-3 flex flex-col justify-center" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
+          <div className="text-[10px] mb-1" style={{ color: C.textDim }}>評価額（VOO終値）</div>
+          <div className="mono text-2xl font-bold">${d.currentPrice.toFixed(2)}</div>
+          <div className="text-[10px] mt-0.5" style={{ color: C.textDim }}>ATH ${d.currentATH.toFixed(2)}</div>
+        </div>
+        <div className="flex-1 px-4 py-3 flex flex-col justify-center" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
+          <div className="flex items-center gap-1.5 mb-1">{d.isDrawdown ? <TrendingDown size={11} style={{ color: depthColor(d.currentDD) }} /> : <TrendingUp size={11} style={{ color: C.teal }} />}<span className="text-[10px]" style={{ color: C.textDim }}>{d.isDrawdown ? "DD（ATH比）" : "上昇（直近安値比）"}</span></div>
+          <div className="mono text-2xl font-bold" style={{ color: depthColor(d.currentDD) }}>{d.isDrawdown ? `${d.currentDD.toFixed(1)}%` : `+${(-d.currentDD).toFixed(1)}%`}</div>
+          <div className="text-[10px] mt-0.5" style={{ color: C.textDim }}>DD3%到達でリセット</div>
+        </div>
+        <div className="flex-1 px-4 py-3 flex flex-col justify-center" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
+          <div className="flex items-center gap-1.5 mb-1.5"><Clock size={11} style={{ color: C.textDim }} /><span className="text-[10px]" style={{ color: C.textDim }}>経過日数</span></div>
+          <div className="flex items-baseline justify-between text-xs mb-1"><span style={{ color: C.textMuted }}>DD開始（-3%）から</span><span className="mono font-semibold">{d.daysSinceDDStart ?? "—"}日</span></div>
+          <div className="flex items-baseline justify-between text-xs"><span style={{ color: C.textMuted }}>前節目（{d.currentTLabel}）通過から</span><span className="mono font-semibold">{d.daysSinceCurrentThreshold ?? "—"}日</span></div>
+        </div>
+        <button onClick={onOpenTrackRecord} className="flex-1 px-4 py-3 flex flex-col justify-center text-left cursor-pointer" style={{ background: "transparent", border: "none" }}>
+          <div className="flex items-center gap-1.5 mb-1.5"><AlertTriangle size={11} style={{ color: C.amber }} /><span className="text-[10px]" style={{ color: C.textDim }}>その後の下落確率</span><ChevronRight size={11} style={{ color: C.textDim, marginLeft: "auto" }} /></div>
+          {d.isEntryLeg && d.speedCategory ? (<><div className="text-xs mb-1" style={{ color: C.textMuted }}>DD3→5%は{d.legDays}日（{d.speedCategory}）</div><div className="mono text-xs" style={{ color: C.text }}>→15%以深 <b style={{ color: C.rust }}>{SPEED_TABLE[d.speedCategory === "急落" ? "fast" : "slow"]["-15"]}%</b>　→20%以深 <b style={{ color: C.rust }}>{SPEED_TABLE[d.speedCategory === "急落" ? "fast" : "slow"]["-20"]}%</b></div></>)
+            : d.nextProg ? (<><div className="text-xs mb-1" style={{ color: C.textMuted }}>次の節目（{d.nextProg.to}%）への進行</div><div className="mono text-lg font-bold" style={{ color: d.nextProg.watershed ? C.rust : C.text }}>{d.nextProg.p}% {d.nextProg.watershed && <span className="text-[10px] font-normal">分水嶺</span>}</div></>) : (<div className="text-xs" style={{ color: C.textDim }}>下落モード外</div>)}
+          <div className="text-[9px] mt-1 underline" style={{ color: C.textDim }}>クリックで全トラックレコード表示</div>
+        </button>
+      </div>
+    </Panel>
+  );
+}
+
+/* ---------------- portfolio pie panel ---------------- */
+function PortfolioPie({ view, holdings, onOpen }) {
+  const field = view === "category" ? "category" : view === "currency" ? "currency" : "rank";
+  const total = useMemo(() => holdingsTotal(holdings), [holdings]);
+  const data = useMemo(() => groupByField(holdings, field).sort((a, b) => b.value - a.value), [holdings, field]);
+  return (
+    <div onClick={onOpen} className="h-full flex cursor-pointer" style={{ padding: "8px 4px" }}>
+      <div className="relative" style={{ width: "48%" }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <PieChart><Pie data={data} dataKey="value" nameKey="name" innerRadius="55%" outerRadius="88%" paddingAngle={2} stroke={C.panel} strokeWidth={2} isAnimationActive={false}>{data.map((d, i) => (<Cell key={i} fill={colorForView(view, d.name)} />))}</Pie><Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} formatter={(v, n) => [`¥${v.toLocaleString()}`, n]} /></PieChart>
+        </ResponsiveContainer>
+        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none"><span className="text-[9px]" style={{ color: C.textDim }}>合計評価額</span><span className="mono text-sm font-bold">¥{Math.round(total / 10000).toLocaleString()}万</span></div>
+      </div>
+      <div className="flex-1 pl-3 flex flex-col justify-center gap-1.5 overflow-y-auto">
+        {data.map((d) => (<div key={d.name} className="flex items-center gap-1.5 text-[11px]"><span style={{ width: 8, height: 8, borderRadius: 2, background: colorForView(view, d.name), flexShrink: 0 }} /><span style={{ color: C.textMuted }} className="flex-1 truncate">{d.name}</span><span className="mono" style={{ color: C.text }}>{((d.value / total) * 100).toFixed(1)}%</span></div>))}
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- modal shell ---------------- */
+function FullScreenModal({ title, onClose, children }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-6" style={{ background: "rgba(5,8,16,0.82)" }} onClick={onClose}>
+      <div className="w-full h-full rounded-lg overflow-hidden flex flex-col" style={{ maxWidth: 1150, background: C.panel, border: `1px solid ${C.border}`, fontFamily: "'Zen Kaku Gothic New',sans-serif", color: C.text }} onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-3" style={{ borderBottom: `1px solid ${C.borderSoft}` }}>
+          <span className="text-sm font-semibold">{title}</span>
+          <button onClick={onClose} className="flex items-center gap-1 text-xs px-2 py-1 rounded" style={{ color: C.textMuted, background: "transparent", border: "none", cursor: "pointer" }}><X size={13} /> 閉じる</button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-6">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function TrackRecordContent({ currentT }) {
+  return (
+    <div className="grid grid-cols-2 gap-x-8 gap-y-6">
+      <div>
+        <div className="text-xs mb-3" style={{ color: C.textDim }}>節目間の進行確率</div>
+        {PROGRESSION_DATA.map((row) => (<div key={row.from} className="flex items-center gap-2 mb-1.5"><span className="mono text-xs w-20" style={{ color: row.from === currentT ? C.text : C.textMuted }}>{row.from}%→{row.to}%</span><div className="flex-1 h-2 rounded-full" style={{ background: C.panel2 }}><div className="h-2 rounded-full" style={{ width: `${row.p}%`, background: row.watershed ? C.rust : row.real ? C.teal : C.amber }} /></div><span className="mono text-xs w-10 text-right">{row.p}%</span>{!row.real && <span className="text-[9px] shrink-0" style={{ color: C.textDim }}>参考値</span>}</div>))}
+      </div>
+      <div>
+        <div className="text-xs mb-3" style={{ color: C.textDim }}>DD-3%到達からの最終到達確率</div>
+        {FINAL_REACH_DATA.map((r) => (<div key={r.label} className="flex items-center gap-2 mb-1.5"><span className="mono text-xs w-16" style={{ color: C.textMuted }}>{r.label}</span><div className="flex-1 h-2 rounded-full" style={{ background: C.panel2 }}><div className="h-2 rounded-full" style={{ width: `${Math.min(100, r.p * 2)}%`, background: C.amber, opacity: r.real ? 1 : 0.6 }} /></div><span className="mono text-xs w-10 text-right">{r.p}%</span><span className="text-[10px] w-20 text-right shrink-0" style={{ color: C.textDim }}>{freqLabelFromP(r.p)}</span>{!r.real && <span className="text-[9px] shrink-0" style={{ color: C.textDim }}>参考値</span>}</div>))}
+        <div className="text-[9px] mt-2" style={{ color: C.textDim }}>発生頻度はDD3%級の押し目が年{DD3_FREQ_PER_YEAR}回発生する前提での目安換算値です。</div>
+      </div>
+      <div className="col-span-2">
+        <div className="text-xs mb-3" style={{ color: C.textDim }}>速度条件付き確率（DD3→5%区間の日数別）</div>
+        <table className="w-full text-xs mono"><thead><tr style={{ color: C.textDim }}><th className="text-left font-normal py-1">区分</th><th>→8%</th><th>→10%</th><th>→15%</th><th>→20%</th></tr></thead>
+          <tbody>
+            <tr style={{ borderTop: `1px solid ${C.borderSoft}` }}><td className="py-1" style={{ color: C.textMuted }}>急落（5日以内）</td><td className="text-center">56%</td><td className="text-center">44%</td><td className="text-center">34%</td><td className="text-center">25%</td></tr>
+            <tr style={{ borderTop: `1px solid ${C.borderSoft}` }}><td className="py-1" style={{ color: C.textMuted }}>緩慢（6日以上）</td><td className="text-center">47%</td><td className="text-center">30%</td><td className="text-center">13%</td><td className="text-center">10%</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div className="col-span-2 text-[11px] leading-relaxed" style={{ color: C.textDim }}>「参考値」は69年トラックレコードで明示されていない区間の暫定推定値です。過去確率は将来を保証しません。</div>
+    </div>
+  );
+}
+
+function PortfolioTableContent({ view, holdings }) {
+  const field = view === "category" ? "category" : view === "currency" ? "currency" : "rank";
+  const total = holdingsTotal(holdings);
+  const grouped = groupByField(holdings, field).sort((a, b) => b.value - a.value);
+  const viewLabel = view === "category" ? "カテゴリー別" : view === "currency" ? "為替別" : "A〜Eランク別";
+  const rows = holdings.map((h) => ({ ...h, share: (h.amount / total) * 100 }));
+  const columns = [
+    { key: "name", label: "銘柄" }, { key: "category", label: "カテゴリー" }, { key: "currency", label: "為替" }, { key: "rank", label: "ランク" },
+    { key: "account", label: "口座" }, { key: "owner", label: "口座主" },
+    { key: "amount", label: "金額", align: "right", format: (v) => `¥${v.toLocaleString()}` },
+    { key: "share", label: "構成比", align: "right", format: (v) => `${v.toFixed(1)}%` },
+  ];
+  return (
+    <div>
+      <div className="mb-6">
+        <div className="text-xs mb-3" style={{ color: C.textDim }}>内訳（{viewLabel}）</div>
+        {grouped.map((g) => (<div key={g.name} className="flex items-center gap-2 mb-1.5"><span style={{ width: 10, height: 10, borderRadius: 2, background: colorForView(view, g.name), flexShrink: 0 }} /><span className="text-xs w-32 truncate" style={{ color: C.textMuted }}>{g.name}</span><div className="flex-1 h-2 rounded-full" style={{ background: C.panel2 }}><div className="h-2 rounded-full" style={{ width: `${(g.value / total) * 100}%`, background: colorForView(view, g.name) }} /></div><span className="mono text-xs w-14 text-right">{((g.value / total) * 100).toFixed(1)}%</span><span className="mono text-xs w-28 text-right" style={{ color: C.textMuted }}>¥{g.value.toLocaleString()}</span></div>))}
+      </div>
+      <div className="text-xs mb-2" style={{ color: C.textDim }}>保有銘柄一覧（列見出しクリックでソート）</div>
+      <SortableTable columns={columns} rows={rows} defaultSortKey="amount" />
+    </div>
+  );
+}
+
+function DDTableContent({ modelRow }) {
+  return (
+    <table className="w-full text-sm mono">
+      <thead><tr style={{ color: C.textDim }}><th className="text-left font-normal py-1.5">局面（VOO DD）</th><th>A</th><th>B</th><th>C</th><th>D</th><th>E</th></tr></thead>
+      <tbody>{MODEL_ROWS.map((r) => (<tr key={r.label} style={{ borderTop: `1px solid ${C.borderSoft}`, background: r.label === modelRow.label ? `${C.teal}14` : "transparent" }}><td className="py-1.5" style={{ color: r.label === modelRow.label ? C.teal : C.text, fontWeight: r.label === modelRow.label ? 700 : 400 }}>{r.label}{r.label === modelRow.label ? " ← 現在" : ""}</td><td className="text-center">{r.A}%</td><td className="text-center">{r.B}%</td><td className="text-center">{r.C}%</td><td className="text-center">{r.D}%</td><td className="text-center">{r.E}%</td></tr>))}</tbody>
+    </table>
+  );
+}
+
+function RankHoldingsContent({ rank, holdings }) {
+  const items = holdings.filter((h) => h.rank === rank);
+  const total = items.reduce((s, h) => s + h.amount, 0);
+  const rows = items.map((h) => ({ ...h, share: (h.amount / total) * 100 }));
+  const columns = [
+    { key: "name", label: "銘柄" }, { key: "account", label: "口座" }, { key: "owner", label: "口座主" },
+    { key: "amount", label: "金額", align: "right", format: (v) => `¥${v.toLocaleString()}` },
+    { key: "share", label: "構成比", align: "right", format: (v) => `${v.toFixed(1)}%` },
+  ];
+  return (<div><div className="text-xs mb-3" style={{ color: C.textDim }}>{rank}（{CAT_LABEL[rank]}） 合計 ¥{total.toLocaleString()}　（列見出しクリックでソート）</div><SortableTable columns={columns} rows={rows} defaultSortKey="amount" /></div>);
+}
+
+function CrashModalContent({ crash, daysSinceDDStart, currentDD, currentEpisodeCurve }) {
+  const cmpIdx = Math.min(daysSinceDDStart ?? 0, crash.curve.length - 1);
+  const crashDDatSameDay = crash.curve[cmpIdx].dd;
+  const deeper = currentDD < crashDDatSameDay;
+  return (
+    <div>
+      <div className="grid grid-cols-4 gap-3 mb-5">
+        <div className="rounded px-3 py-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}><div className="text-[10px]" style={{ color: C.textDim }}>開始</div><div className="mono text-xs">{crash.start}</div></div>
+        <div className="rounded px-3 py-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}><div className="text-[10px]" style={{ color: C.textDim }}>底値</div><div className="mono text-xs">{crash.low}（最大DD {crash.maxDD}%）</div></div>
+        <div className="rounded px-3 py-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}><div className="text-[10px]" style={{ color: C.textDim }}>下落期間</div><div className="mono text-xs">{fmtDuration(crash.troughDay)}</div></div>
+        <div className="rounded px-3 py-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}><div className="text-[10px]" style={{ color: C.textDim }}>ATH回復まで</div><div className="mono text-xs">{crash.athRecovery}（{fmtDuration(crash.recoveryDay)}）</div></div>
+      </div>
+      <div style={{ height: 260 }} className="mb-4">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+            <CartesianGrid stroke={C.borderSoft} vertical={false} />
+            <XAxis dataKey="day" type="number" domain={[0, crash.recoveryDay]} allowDuplicatedCategory={false} tick={{ fill: C.textDim, fontSize: 10 }} axisLine={{ stroke: C.border }} tickLine={false} label={{ value: "経過日数（下落開始起点）", position: "insideBottom", offset: -2, fill: C.textDim, fontSize: 10 }} />
+            <YAxis domain={[Math.min(crash.maxDD * 1.1, -20), 2]} tick={{ fill: C.textDim, fontSize: 10 }} axisLine={false} tickLine={false} width={44} />
+            <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} formatter={(v, n) => [`${v}%`, n === "dd" ? crash.name : "現在"]} />
+            <ReferenceLine x={crash.troughDay} stroke={C.borderSoft} strokeDasharray="2 3" label={{ value: "底値", fill: C.textDim, fontSize: 9, position: "top" }} />
+            {daysSinceDDStart !== null && <ReferenceLine x={daysSinceDDStart} stroke={C.teal} strokeDasharray="2 3" label={{ value: "現在", fill: C.teal, fontSize: 9, position: "top" }} />}
+            <Line data={crash.curve} dataKey="dd" type="monotone" stroke={crash.color} strokeWidth={1.8} dot={false} isAnimationActive={false} name="dd" />
+            <Line data={currentEpisodeCurve} dataKey="dd" type="monotone" stroke={C.teal} strokeWidth={2.4} dot={false} isAnimationActive={false} connectNulls={false} name="current" />
+            <ReferenceDot x={crash.troughDay} y={crash.maxDD} r={4} fill={crash.color} stroke={C.bg} strokeWidth={2} />
+            {daysSinceDDStart !== null && <ReferenceDot x={daysSinceDDStart} y={currentDD} r={4} fill={C.teal} stroke={C.bg} strokeWidth={2} />}
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+      <div className="rounded px-4 py-3 mb-5 text-sm leading-relaxed" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }}>
+        現在はDD開始から{daysSinceDDStart}日目でDD{currentDD.toFixed(1)}%。{crash.name}の同じ経過日数時点ではDD{crashDDatSameDay}%でした
+        （現状の方が<span style={{ color: deeper ? C.rust : C.teal, fontWeight: 700 }}>{deeper ? "深い" : "浅い"}</span>ペース）。
+      </div>
+      <div className="grid grid-cols-1 gap-4">
+        <div><div className="text-[10px] mb-1" style={{ color: C.textDim }}>原因</div><div className="text-sm leading-relaxed" style={{ color: C.textMuted }}>{crash.cause}</div></div>
+        <div><div className="text-[10px] mb-1" style={{ color: C.textDim }}>終息した要因</div><div className="text-sm leading-relaxed" style={{ color: C.textMuted }}>{crash.resolution}</div></div>
+        <div><div className="text-[10px] mb-1" style={{ color: C.textDim }}>その後の学び</div><div className="text-sm leading-relaxed" style={{ color: C.textMuted }}>{crash.lesson}</div></div>
+      </div>
+      <div className="mt-4 text-[10px]" style={{ color: C.textDim }}>※ 期間・深さは概算です。カーブ形状は特徴を再現した簡易モデルであり、実際の日次値動きとは異なります。</div>
+    </div>
+  );
+}
+
+/* ---------------- data input modal ---------------- */
+function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, onBackfill, source, holdings, onImportHoldings, onResetHoldings, holdingsSource, overrides }) {
+  const [dataset, setDataset] = useState("voo"); // "voo" | "holdings"
+  const [tab, setTab] = useState("csv");
+  const [manualDate, setManualDate] = useState(new Date().toISOString().slice(0, 10));
+  const [manualPrice, setManualPrice] = useState("");
+  const [fileName, setFileName] = useState(null);
+  const [fileMsg, setFileMsg] = useState(null);
+  const [sp500FileName, setSp500FileName] = useState(null);
+  const [sp500Msg, setSp500Msg] = useState(null);
+  const [rakutenFileName, setRakutenFileName] = useState(null);
+  const [rakutenMsg, setRakutenMsg] = useState(null);
+  const [preview, setPreview] = useState(null); // rows pending confirmation
+  const [previewOwner, setPreviewOwner] = useState("shin");
+
+  const handleFile = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setFileName(file.name);
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const parsed = parseStooqCSV(String(ev.target.result));
+      if (parsed.length) { onReplace(parsed); setFileMsg(`${parsed.length}件を読み込みました（${parsed[0].date.toLocaleDateString("ja-JP")} 〜 ${parsed[parsed.length - 1].date.toLocaleDateString("ja-JP")}）`); }
+      else setFileMsg("CSVを解析できませんでした。Date,Open,High,Low,Close,Volume 形式か確認してください。");
+    };
+    reader.readAsText(file);
+  };
+  const handleSp500File = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setSp500FileName(file.name);
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const parsed = parseStooqCSV(String(ev.target.result));
+      if (!parsed.length) { setSp500Msg("CSVを解析できませんでした。列名(Date/日付, Close/終値)を確認してください。"); return; }
+      const { added, scale } = onBackfill(parsed);
+      if (added > 0) setSp500Msg(`VOO上場前(${VOO_LISTING_DATE.toLocaleDateString("ja-JP")}より前)を${added}件、SP500から換算係数${scale.toFixed(4)}(=VOO初値÷同時期SP500水準)で補完しました。`);
+      else setSp500Msg("補完対象の期間がありませんでした（VOOデータの開始日以前のSP500データが見つからないか、既にVOO上場後のデータのみです）。");
+    };
+    reader.readAsText(file);
+  };
+  const handleAddManual = () => {
+    const price = parseFloat(manualPrice);
+    if (!manualDate || isNaN(price)) return;
+    onAppend({ date: new Date(manualDate), price });
+    setManualPrice("");
+  };
+  const handleRakutenFile = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setRakutenFileName(file.name);
+    setRakutenMsg(null);
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const text = decodeShiftJIS(ev.target.result);
+      const rows = parseRakutenCSV(text).map((r) => (overrides[r.name] ? { ...r, ...overrides[r.name] } : r));
+      if (rows.length) setPreview(rows);
+      else setRakutenMsg("銘柄・評価額の列が見つかりませんでした。楽天証券の残高CSV（Shift-JIS）か確認してください。");
+    };
+    reader.readAsArrayBuffer(file);
+  };
+  const updatePreviewRow = (i, field, value) => setPreview((prev) => prev.map((r, idx) => (idx === i ? { ...r, [field]: value } : r)));
+  const confirmImport = () => {
+    onImportHoldings(previewOwner, preview);
+    setRakutenMsg(`${preview.length}件を${previewOwner}のデータとして反映しました。修正内容は銘柄名ごとに記憶され、次回以降は自動で適用されます。`);
+    setPreview(null);
+  };
+
+  const tabBtn = (val, setter, key, label) => (<button onClick={() => setter(key)} className="text-xs px-3 py-1.5 rounded" style={{ color: val === key ? C.bg : C.textMuted, background: val === key ? C.teal : "transparent", border: `1px solid ${val === key ? C.teal : C.borderSoft}`, fontWeight: val === key ? 700 : 400, cursor: "pointer" }}>{label}</button>);
+
+  return (
+    <FullScreenModal title="データの入力" onClose={onClose}>
+      <div className="flex gap-2 mb-3">{tabBtn(dataset, setDataset, "voo", "VOO価格データ")}{tabBtn(dataset, setDataset, "holdings", "保有資産データ（ポートフォリオ）")}</div>
+
+      {dataset === "voo" ? (
+        <>
+          <div className="flex gap-2 mb-5">{tabBtn(tab, setTab, "csv", "方式A：CSV取り込み（Stooq）")}{tabBtn(tab, setTab, "manual", "方式B：直接入力")}</div>
+          {tab === "csv" ? (
+            <div>
+              <p className="text-sm mb-1 leading-relaxed" style={{ color: C.textMuted }}>Stooqからダウンロードした VOO.US の日次CSV（Date,Open,High,Low,Close,Volume・日付昇順）を選択してください。</p>
+              <p className="text-xs mb-4" style={{ color: C.textDim }}>取得元: https://stooq.com/q/d/l/?s=voo.us&i=d</p>
+              <label className="inline-flex items-center gap-2 text-xs px-3 py-2 rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.textMuted, cursor: "pointer" }}>
+                <Upload size={13} /> CSVファイルを選択
+                <input type="file" accept=".csv" onChange={handleFile} style={{ display: "none" }} />
+              </label>
+              {fileName && <div className="text-xs mt-2" style={{ color: C.textDim }}>選択中: {fileName}</div>}
+              {fileMsg && <div className="text-xs mt-2" style={{ color: C.teal }}>{fileMsg}</div>}
+
+              <div className="mt-8 pt-5" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+                <p className="text-sm mb-1 leading-relaxed" style={{ color: C.textMuted }}>VOO上場（{VOO_LISTING_DATE.toLocaleDateString("ja-JP")}）より前の期間は、SP500の長期データから概算値を算出して補完できます。</p>
+                <p className="text-xs mb-4 leading-relaxed" style={{ color: C.textDim }}>方法：VOOの最初の終値と同時期のSP500水準から換算係数を計算し、それより前のSP500日次値に係数を掛けて合成します（お手持ちの sp500_daily_1957-2026.xlsx をCSV書き出ししたものなどが使えます。列名は Date/日付, Close/終値 に対応）。</p>
+                <label className="inline-flex items-center gap-2 text-xs px-3 py-2 rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.textMuted, cursor: "pointer" }}>
+                  <Upload size={13} /> SP500長期CSVを選択
+                  <input type="file" accept=".csv" onChange={handleSp500File} style={{ display: "none" }} />
+                </label>
+                {sp500FileName && <div className="text-xs mt-2" style={{ color: C.textDim }}>選択中: {sp500FileName}</div>}
+                {sp500Msg && <div className="text-xs mt-2" style={{ color: C.teal }}>{sp500Msg}</div>}
+                <div className="text-[10px] mt-2" style={{ color: C.textDim }}>※ 配当再投資を含まない価格指数としての概算です。VOOの実際の分配落ちとは完全には一致しません。</div>
+              </div>
+            </div>
+          ) : (
+            <div>
+              <p className="text-sm mb-4" style={{ color: C.textMuted }}>毎日の運用でその日のVOO終値だけを入力する簡易方式です。既存データに追記・上書きされます。</p>
+              <div className="flex items-end gap-3">
+                <div><label className="text-[10px] block mb-1" style={{ color: C.textDim }}>日付</label><input type="date" value={manualDate} onChange={(e) => setManualDate(e.target.value)} className="text-xs px-2 py-1.5 rounded mono" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }} /></div>
+                <div><label className="text-[10px] block mb-1" style={{ color: C.textDim }}>終値（$）</label><input type="number" step="0.01" value={manualPrice} onChange={(e) => setManualPrice(e.target.value)} placeholder="704.20" className="text-xs px-2 py-1.5 rounded w-28 mono" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }} /></div>
+                <button onClick={handleAddManual} className="text-xs px-4 py-1.5 rounded" style={{ background: C.teal, color: C.bg, fontWeight: 700, border: "none", cursor: "pointer" }}>追加</button>
+              </div>
+            </div>
+          )}
+
+          <div className="mt-8 pt-4 flex items-center justify-between" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+            <div className="flex items-center gap-2 text-xs" style={{ color: C.textDim }}>
+              <Database size={13} />
+              <span>現在のデータ: {rawSeries.length.toLocaleString()}件・最終日 {rawSeries[rawSeries.length - 1]?.date?.toLocaleDateString("ja-JP")}　（{source === "seed" ? "初期バンドルデータ" : "取り込み済みデータ"}）</span>
+            </div>
+            <button onClick={onReset} className="text-xs px-2 py-1 rounded" style={{ color: C.textMuted, background: "transparent", border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>初期データにリセット</button>
+          </div>
+        </>
+      ) : (
+        <div>
+          {!preview ? (
+            <>
+              <p className="text-sm mb-1 leading-relaxed" style={{ color: C.textMuted }}>楽天証券の口座管理画面から残高CSV（Shift-JIS）をダウンロードして選択してください。</p>
+              <p className="text-xs mb-4 leading-relaxed" style={{ color: C.textDim }}>「銘柄」「口座」「評価額」を含む表形式に対応。カテゴリー・A〜Eランク・為替は名称から自動推定するので、次の画面で内容を確認・修正してから反映します。</p>
+              <div className="flex items-end gap-3 mb-2">
+                <div>
+                  <label className="text-[10px] block mb-1" style={{ color: C.textDim }}>このCSVの口座主</label>
+                  <select value={previewOwner} onChange={(e) => setPreviewOwner(e.target.value)} className="text-xs px-2 py-1.5 rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }}>
+                    <option value="shin">shin</option><option value="saki">saki</option>
+                  </select>
+                </div>
+                <label className="inline-flex items-center gap-2 text-xs px-3 py-2 rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.textMuted, cursor: "pointer" }}>
+                  <Upload size={13} /> 楽天証券CSVを選択
+                  <input type="file" accept=".csv" onChange={handleRakutenFile} style={{ display: "none" }} />
+                </label>
+              </div>
+              {rakutenFileName && <div className="text-xs mt-2" style={{ color: C.textDim }}>選択中: {rakutenFileName}</div>}
+              {rakutenMsg && <div className="text-xs mt-2" style={{ color: C.teal }}>{rakutenMsg}</div>}
+
+              <div className="mt-8 pt-4 flex items-center justify-between" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+                <div className="flex items-center gap-2 text-xs" style={{ color: C.textDim }}>
+                  <Database size={13} />
+                  <span>現在のデータ: {holdings.length.toLocaleString()}件　（{holdingsSource === "seed" ? "初期データ" : "取り込み済みデータ"}）</span>
+                </div>
+                <button onClick={onResetHoldings} className="text-xs px-2 py-1 rounded" style={{ color: C.textMuted, background: "transparent", border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>初期データにリセット</button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="text-sm mb-1" style={{ color: C.textMuted }}>取り込み内容を確認してください。カテゴリー・ランクは自動推定です。誤りがあればここで修正できます。「反映する」を押すと、口座主「{previewOwner}」の既存データがこの内容で置き換わります。</p>
+              <p className="text-xs mb-3" style={{ color: C.textDim }}>ここでの修正は銘柄名ごとに記憶され、次回以降の取り込みでは自動的に同じ分類が適用されます（毎回直す必要はありません）。</p>
+              <div className="overflow-y-auto" style={{ maxHeight: 380 }}>
+                <table className="w-full text-xs mono">
+                  <thead><tr style={{ color: C.textDim }}><th className="text-left font-normal py-1">銘柄</th><th className="text-left font-normal">口座</th><th className="text-left font-normal">カテゴリー</th><th className="text-left font-normal">為替</th><th className="text-left font-normal">ランク</th><th className="text-right font-normal">評価額</th></tr></thead>
+                  <tbody>
+                    {preview.map((r, i) => (
+                      <tr key={i} style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+                        <td className="py-1" style={{ color: C.text }}>{r.name}</td>
+                        <td style={{ color: C.textMuted }}>{r.account}</td>
+                        <td><select value={r.category} onChange={(e) => updatePreviewRow(i, "category", e.target.value)} className="text-xs rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }}>{Object.keys(CATEGORY_COLORS).map((c) => (<option key={c} value={c}>{c}</option>))}</select></td>
+                        <td><select value={r.currency} onChange={(e) => updatePreviewRow(i, "currency", e.target.value)} className="text-xs rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }}><option value="円">円</option><option value="ドル">ドル</option></select></td>
+                        <td><select value={r.rank} onChange={(e) => updatePreviewRow(i, "rank", e.target.value)} className="text-xs rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }}>{CATS.map((c) => (<option key={c} value={c}>{c}</option>))}</select></td>
+                        <td className="text-right" style={{ color: C.text }}>¥{r.amount.toLocaleString()}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="flex gap-2 mt-4">
+                <button onClick={confirmImport} className="text-xs px-4 py-1.5 rounded" style={{ background: C.teal, color: C.bg, fontWeight: 700, border: "none", cursor: "pointer" }}>この内容を反映する</button>
+                <button onClick={() => setPreview(null)} className="text-xs px-4 py-1.5 rounded" style={{ color: C.textMuted, background: "transparent", border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>キャンセル</button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      <div className="mt-3 text-[10px] leading-relaxed" style={{ color: C.textDim }}>
+        入力したデータはブラウザの IndexedDB（このデバイス・ブラウザ専用の永続ストレージ）に保存されます。次回起動時も同じデータから始まります。別のデバイス・ブラウザとは共有されません（PC⇄スマホ同期は今後の Cloudflare Worker 連携で対応予定）。
+      </div>
+    </FullScreenModal>
+  );
+}
+
+/* ---------------- legends ---------------- */
+function ClickLegend({ items, hidden, onToggle }) {
+  return (<div className="flex items-center gap-3 px-1 flex-wrap">{items.map((it) => (<button key={it.key} onClick={() => onToggle(it.key)} className="flex items-center gap-1.5 text-[11px]" style={{ opacity: hidden[it.key] ? 0.35 : 1, background: "transparent", border: "none", cursor: "pointer" }}><span style={{ width: 10, height: 10, borderRadius: 2, background: it.color }} /><span style={{ color: C.textMuted, textDecoration: hidden[it.key] ? "line-through" : "none" }}>{it.label}</span></button>))}</div>);
+}
+
+/* ---------------- main ---------------- */
+export default function DDDashboard() {
+  const [rawSeries, setRawSeries] = useState(SEED_SERIES);
+  const [dataSource, setDataSource] = useState("seed");
+  const [holdings, setHoldings] = useState(HOLDINGS_DEFAULT);
+  const [holdingsSource, setHoldingsSource] = useState("seed");
+  const [overrides, setOverrides] = useState({});
+  const [period, setPeriod] = useState("1Y");
+  const [hidden, setHidden] = useState({});
+  const [hiddenCrash, setHiddenCrash] = useState({});
+  const [pieView, setPieView] = useState("category");
+  const [chartTab, setChartTab] = useState("normal");
+  const [modal, setModal] = useState(null);
+  const [hydrated, setHydrated] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await storage.get("voo_price_history");
+        if (res && res.value) {
+          const parsed = JSON.parse(res.value).map((p) => ({ date: new Date(p.date), price: p.price }));
+          if (parsed.length) { setRawSeries(parsed); setDataSource("imported"); }
+        }
+      } catch (e) { /* no saved data yet — keep bundled seed */ }
+      try {
+        const res2 = await storage.get("portfolio_holdings");
+        if (res2 && res2.value) { const parsed2 = JSON.parse(res2.value); if (parsed2.length) { setHoldings(parsed2); setHoldingsSource("imported"); } }
+      } catch (e) { /* no saved holdings yet — keep default */ }
+      try {
+        const res3 = await storage.get("classification_overrides");
+        if (res3 && res3.value) setOverrides(JSON.parse(res3.value));
+      } catch (e) { /* no saved overrides yet */ }
+      setHydrated(true);
+    })();
+  }, []);
+
+  async function persist(series) {
+    try { await storage.set("voo_price_history", JSON.stringify(series.map((p) => ({ date: p.date.toISOString().slice(0, 10), price: p.price })))); } catch (e) { /* storage unavailable */ }
+  }
+  async function persistHoldings(list) {
+    try { await storage.set("portfolio_holdings", JSON.stringify(list)); } catch (e) { /* storage unavailable */ }
+  }
+  async function persistOverrides(map) {
+    try { await storage.set("classification_overrides", JSON.stringify(map)); } catch (e) { /* storage unavailable */ }
+  }
+  function handleReplace(parsed) { setRawSeries(parsed); setDataSource("imported"); persist(parsed); }
+  function handleAppend(entry) {
+    setRawSeries((prev) => {
+      const map = new Map(prev.map((p) => [p.date.toISOString().slice(0, 10), p]));
+      map.set(entry.date.toISOString().slice(0, 10), entry);
+      const merged = Array.from(map.values()).sort((a, b) => a.date - b.date);
+      persist(merged);
+      return merged;
+    });
+    setDataSource("imported");
+  }
+  function handleReset() { setRawSeries(SEED_SERIES); setDataSource("seed"); storage.delete("voo_price_history").catch(() => {}); }
+  function handleBackfill(sp500Parsed) {
+    const { merged, added, scale } = backfillFromIndex(rawSeries, sp500Parsed);
+    if (added > 0) { setRawSeries(merged); setDataSource("imported"); persist(merged); }
+    return { added, scale };
+  }
+  function handleImportHoldings(owner, previewRows) {
+    setHoldings((prev) => {
+      const kept = prev.filter((h) => h.owner !== owner);
+      const incoming = previewRows.map((r) => ({ ...r, owner }));
+      const merged = [...kept, ...incoming];
+      persistHoldings(merged);
+      return merged;
+    });
+    setHoldingsSource("imported");
+    setOverrides((prev) => {
+      const next = { ...prev };
+      for (const r of previewRows) next[r.name] = { category: r.category, rank: r.rank, currency: r.currency };
+      persistOverrides(next);
+      return next;
+    });
+  }
+  function handleResetHoldings() { setHoldings(HOLDINGS_DEFAULT); setHoldingsSource("seed"); storage.delete("portfolio_holdings").catch(() => {}); }
+
+  const d = useMemo(() => computeAll(rawSeries), [rawSeries]);
+  const chartData = useMemo(() => sliceForPeriod(d.FULL, d.last, period), [d.FULL, d.last, period]);
+  const rangeDays = useMemo(() => { const f = chartData[0].date, l = chartData[chartData.length - 1].date; return Math.round((l - f) / 86400000); }, [chartData]);
+  const comparisonData = useMemo(() => buildComparisonData(d.currentEpisodeCurve), [d.currentEpisodeCurve]);
+  const toggle = (k) => setHidden((p) => ({ ...p, [k]: !p[k] }));
+  const toggleCrash = (k) => setHiddenCrash((p) => ({ ...p, [k]: !p[k] }));
+
+  const currentHoldingPct = useMemo(() => currentHoldingPctFromHoldings(holdings), [holdings]);
+  const blocks = useMemo(() => {
+    const AB = { cur: currentHoldingPct.A + currentHoldingPct.B, tgt: d.modelRow.A + d.modelRow.B };
+    const Cb = { cur: currentHoldingPct.C, tgt: d.modelRow.C };
+    const DE = { cur: currentHoldingPct.D + currentHoldingPct.E, tgt: d.modelRow.D + d.modelRow.E };
+    return { AB, Cb, DE };
+  }, [currentHoldingPct, d.modelRow]);
+
+  const crashLegendItems = [...CRASHES.map((c) => ({ key: c.id, label: c.name, color: c.color })), { key: "current", label: "現在", color: C.teal }];
+
+  if (!hydrated) {
+    return (
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100dvh", background: C.bg, color: C.textDim, fontFamily: "monospace", fontSize: 13 }}>
+        読み込み中…
+      </div>
+    );
+  }
+
+  return (
+    <div className="w-full flex flex-col" style={{ background: C.bg, color: C.text, minHeight: "100dvh", fontFamily: "'Zen Kaku Gothic New','Hiragino Kaku Gothic ProN',sans-serif" }}>
+      <style>{`.mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }`}</style>
+
+      {modal?.type === "trackRecord" && <FullScreenModal title="過去のトラックレコード（1957–2026・69年）" onClose={() => setModal(null)}><TrackRecordContent currentT={d.episode.currentT} /></FullScreenModal>}
+      {modal?.type === "portfolio" && <FullScreenModal title="ポートフォリオ構成表" onClose={() => setModal(null)}><PortfolioTableContent view={pieView} holdings={holdings} /></FullScreenModal>}
+      {modal?.type === "ddTable" && <FullScreenModal title="DD毎のA〜E配分表" onClose={() => setModal(null)}><DDTableContent modelRow={d.modelRow} /></FullScreenModal>}
+      {modal?.type === "rank" && <FullScreenModal title={`${modal.rank}ランクの保有銘柄`} onClose={() => setModal(null)}><RankHoldingsContent rank={modal.rank} holdings={holdings} /></FullScreenModal>}
+      {modal?.type === "crash" && <FullScreenModal title={`${modal.crash.name}（${modal.crash.start} 〜）と現状の比較`} onClose={() => setModal(null)}><CrashModalContent crash={modal.crash} daysSinceDDStart={d.daysSinceDDStart} currentDD={d.currentDD} currentEpisodeCurve={d.currentEpisodeCurve} /></FullScreenModal>}
+      {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} onBackfill={handleBackfill} source={dataSource} holdings={holdings} onImportHoldings={handleImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} />}
+
+      <div className="flex items-center justify-between px-5 py-3 shrink-0" style={{ borderBottom: `1px solid ${C.border}`, background: C.panel2 }}>
+        <div className="flex items-center gap-3"><span className="text-sm font-bold tracking-wide">DD戦略ダッシュボード</span><span className="text-[11px]" style={{ color: C.textDim }}>VOO・日次</span></div>
+        <div className="flex items-center gap-3">
+          <button onClick={() => setModal({ type: "dataInput" })} className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+            <Database size={12} /> データ入力 {dataSource === "seed" && <span style={{ color: C.textDim }}>（初期データ）</span>}
+          </button>
+          <span className="flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full" style={{ color: depthColor(d.currentDD), background: `${depthColor(d.currentDD)}1a`, border: `1px solid ${depthColor(d.currentDD)}44` }}>{d.isDrawdown ? <TrendingDown size={12} /> : <TrendingUp size={12} />} {d.mode}</span>
+        </div>
+      </div>
+
+      <div className="flex flex-1 min-h-0">
+        <DepthGauge dd={d.currentDD} />
+
+        <div className="flex-1 flex flex-col gap-3 p-3 min-w-0">
+          <div style={{ height: 108 }}><StatusPanel d={d} onOpenTrackRecord={() => setModal({ type: "trackRecord" })} /></div>
+
+          <div className="flex-1" style={{ display: "grid", gridTemplateColumns: "1fr 380px", gridTemplateRows: "1fr 300px", gap: 12, minHeight: 0 }}>
+            {/* top-left: chart */}
+            <div style={{ minHeight: 0 }}>
+              <Panel
+                title={chartTab === "normal" ? "評価額（左軸） / DD%（右軸）" : "過去の暴落との比較（経過日数ベース）"}
+                action={
+                  <div className="flex items-center gap-3">
+                    <div className="flex gap-0.5 mr-2">{[{ k: "normal", l: "通常表示" }, { k: "crash", l: "暴落比較" }].map((t) => (<button key={t.k} onClick={() => setChartTab(t.k)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: chartTab === t.k ? C.bg : C.textMuted, background: chartTab === t.k ? C.amber : "transparent", fontWeight: chartTab === t.k ? 700 : 400 }}>{t.l}</button>))}</div>
+                    {chartTab === "normal" ? (<><ClickLegend items={[{ key: "price", label: "評価額 / ATH", color: C.teal }, { key: "dd", label: "DD%", color: C.rust }]} hidden={hidden} onToggle={toggle} /><div className="flex gap-0.5">{PERIODS.map((p) => (<button key={p.key} onClick={() => setPeriod(p.key)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: period === p.key ? C.bg : C.textMuted, background: period === p.key ? C.teal : "transparent", fontWeight: period === p.key ? 700 : 400 }}>{p.label}</button>))}</div></>) : (<ClickLegend items={crashLegendItems} hidden={hiddenCrash} onToggle={toggleCrash} />)}
+                  </div>
+                }
+                className="h-full"
+              >
+                {chartTab === "normal" ? (
+                  <ResponsiveContainer width="100%" height="100%" key={period}>
+                    <ComposedChart data={chartData} margin={{ top: 12, right: 44, left: 0, bottom: 0 }}>
+                      <defs>
+                        <linearGradient id="ddFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={C.rust} stopOpacity={0} /><stop offset="100%" stopColor={C.rust} stopOpacity={0.32} /></linearGradient>
+                        <linearGradient id="priceFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={C.teal} stopOpacity={0.22} /><stop offset="100%" stopColor={C.teal} stopOpacity={0} /></linearGradient>
+                      </defs>
+                      <CartesianGrid stroke={C.borderSoft} vertical={false} />
+                      <XAxis dataKey="date" tickFormatter={(dt) => fmtAxisDate(dt, rangeDays)} tick={{ fill: C.textDim, fontSize: 10 }} axisLine={{ stroke: C.border }} tickLine={false} minTickGap={40} />
+                      <YAxis yAxisId="price" domain={["auto", "auto"]} tick={{ fill: C.textDim, fontSize: 10 }} axisLine={false} tickLine={false} width={48} label={{ value: "評価額", angle: -90, position: "insideLeft", fill: C.textDim, fontSize: 10 }} />
+                      <YAxis yAxisId="dd" orientation="right" domain={["dataMin", 2]} tick={{ fill: C.textDim, fontSize: 10 }} axisLine={false} tickLine={false} width={46} label={{ value: "DD%", angle: 90, position: "insideRight", fill: C.textDim, fontSize: 10 }} />
+                      <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} labelStyle={{ color: C.textMuted }} labelFormatter={(dt) => dt.toLocaleDateString("ja-JP")} formatter={(v, name) => [name === "dd" ? `${v}%` : `$${v}`, name === "dd" ? "DD" : name === "ath" ? "ATH" : "評価額"]} />
+                      {MILESTONES.map((t) => (<ReferenceLine key={t} yAxisId="dd" y={t} stroke={C.borderSoft} strokeDasharray="2 3" label={{ value: `${t}%`, position: "left", fill: C.textDim, fontSize: 8 }} />))}
+                      {chartData[0].date < VOO_LISTING_DATE && chartData[chartData.length - 1].date > VOO_LISTING_DATE && (<ReferenceLine yAxisId="price" x={VOO_LISTING_DATE} stroke={C.violet} strokeDasharray="3 3" label={{ value: "VOO上場", fill: C.violet, fontSize: 9, position: "top" }} />)}
+                      <Area yAxisId="dd" type="monotone" dataKey="dd" stroke={C.rust} fill="url(#ddFill)" strokeWidth={1.3} dot={false} isAnimationActive={false} fillOpacity={hidden.dd ? 0 : 1} strokeOpacity={hidden.dd ? 0 : 1} />
+                      <Area yAxisId="price" type="monotone" dataKey="price" stroke={C.teal} fill="url(#priceFill)" strokeWidth={1.8} dot={false} isAnimationActive={false} fillOpacity={hidden.price ? 0 : 1} strokeOpacity={hidden.price ? 0 : 1} />
+                      <Line yAxisId="price" type="monotone" dataKey="ath" stroke={C.textDim} strokeDasharray="3 4" strokeWidth={1} dot={false} isAnimationActive={false} strokeOpacity={hidden.price ? 0 : 1} />
+                      {!hidden.price && <ReferenceDot yAxisId="price" x={chartData[chartData.length - 1].date} y={d.currentPrice} r={4} fill={depthColor(d.currentDD)} stroke={C.bg} strokeWidth={2} />}
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="h-full flex flex-col">
+                    <div className="flex-1 min-h-0">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={comparisonData} margin={{ top: 12, right: 20, left: 0, bottom: 0 }}>
+                          <CartesianGrid stroke={C.borderSoft} vertical={false} />
+                          <XAxis dataKey="day" tick={{ fill: C.textDim, fontSize: 10 }} axisLine={{ stroke: C.border }} tickLine={false} label={{ value: "経過日数（下落開始起点）", position: "insideBottom", offset: -2, fill: C.textDim, fontSize: 10 }} />
+                          <YAxis domain={[-60, 2]} tick={{ fill: C.textDim, fontSize: 10 }} axisLine={false} tickLine={false} width={44} />
+                          <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} />
+                          {CRASHES.map((c) => (!hiddenCrash[c.id] && <Line key={c.id} type="monotone" dataKey={c.id} stroke={c.color} strokeWidth={1.3} dot={false} isAnimationActive={false} connectNulls={false} name={c.name} />))}
+                          {!hiddenCrash.current && <Line type="monotone" dataKey="current" stroke={C.teal} strokeWidth={2.4} dot={false} isAnimationActive={false} connectNulls={false} name="現在" />}
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                    <div className="flex gap-2 px-2 pb-2 pt-1 flex-wrap shrink-0">
+                      {CRASHES.map((c) => (<button key={c.id} onClick={() => setModal({ type: "crash", crash: c })} className="flex-1 min-w-[150px] text-left rounded px-2.5 py-1.5" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}><div className="flex items-center gap-1.5 mb-0.5"><span style={{ width: 8, height: 8, borderRadius: 2, background: c.color }} /><span className="text-[11px] font-semibold" style={{ color: C.text }}>{c.name}</span></div><div className="mono text-[10px]" style={{ color: C.textMuted }}>最大{c.maxDD}%・{fmtDuration(c.troughDay)}で底</div></button>))}
+                    </div>
+                  </div>
+                )}
+              </Panel>
+            </div>
+
+            {/* top-right: AI advice */}
+            <div style={{ minHeight: 0 }}>
+              <Panel title="現在のアドバイス（AI）" className="h-full">
+                <div className="p-4 flex flex-col gap-4 h-full overflow-y-auto">
+                  <div>
+                    <div className="text-[10px] mb-1.5" style={{ color: C.textDim }}>現在の判断</div>
+                    <div className="text-sm leading-relaxed" style={{ color: C.text }}>
+                      現状のDD（{d.currentTLabel}）は{d.currentFreqLabel ? `${d.currentFreqLabel}発生する水準` : "過去データの範囲外の水準"}。
+                      {d.nextProg && (<> さらに{d.nextProg.to}%まで下落する確率は<b style={{ color: d.nextProg.watershed ? C.rust : C.text }}>{d.nextProg.p}%</b>{d.nextProg.watershed ? "（分水嶺）" : ""}。</>)}
+                    </div>
+                  </div>
+                  <div><div className="text-[10px] mb-1.5" style={{ color: C.textDim }}>推奨アクション</div>
+                    <ul className="text-sm leading-relaxed list-disc pl-4" style={{ color: C.textMuted }}>
+                      <li>レバレッジ枠(E)を5%枠まで刈り込み済みか確認</li>
+                      <li>C(SP500)が目標比+6pt過多 — 新規買付は一旦停止</li>
+                      <li>A・Bが計-8pt不足 — 押し目で現金・ヘッジ資産を優先補充</li>
+                    </ul>
+                  </div>
+                  <div><div className="text-[10px] mb-1.5" style={{ color: C.textDim }}>取り崩し・現金バッファ</div><div className="text-sm leading-relaxed" style={{ color: C.textMuted }}>年480万取り崩し想定。生活費2-3年分(約1,000-1,440万)を目安に現金比率を維持。</div></div>
+                  <div className="mt-auto flex gap-2 text-[11px] leading-relaxed" style={{ color: C.textDim }}><Info size={12} style={{ flexShrink: 0, marginTop: 2 }} /><span>投資助言ではなく可視化・判断補助です。過去確率は将来を保証しません。</span></div>
+                </div>
+              </Panel>
+            </div>
+
+            {/* bottom-left: portfolio pie */}
+            <div style={{ minHeight: 0 }}>
+              <Panel title="ポートフォリオ構成" action={<div className="flex gap-1">{[{ k: "category", l: "カテゴリー別" }, { k: "currency", l: "為替別" }, { k: "rank", l: "A〜Eランク" }].map((t) => (<button key={t.k} onClick={() => setPieView(t.k)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: pieView === t.k ? C.bg : C.textMuted, background: pieView === t.k ? C.teal : "transparent", fontWeight: pieView === t.k ? 700 : 400 }}>{t.l}</button>))}</div>} className="h-full">
+                <PortfolioPie view={pieView} holdings={holdings} onOpen={() => setModal({ type: "portfolio" })} />
+              </Panel>
+            </div>
+
+            {/* bottom-right: A-E diff */}
+            <div style={{ minHeight: 0 }}>
+              <Panel title={`A〜E 配分乖離（モデル: ${d.modelRow.label}）`} action={<button onClick={() => setModal({ type: "ddTable" })} title="DD毎の配分表を表示" style={{ background: "transparent", border: "none", cursor: "pointer" }}><Info size={14} style={{ color: C.textDim }} /></button>} className="h-full">
+                <div className="overflow-y-auto h-full">
+                  {CATS.map((cat) => (<DiffBar key={cat} cat={cat} current={currentHoldingPct[cat]} target={d.modelRow[cat]} onClick={() => setModal({ type: "rank", rank: cat })} />))}
+                  <div className="px-4 py-3 grid grid-cols-3 gap-2">
+                    {[{ label: "A+B", ...blocks.AB }, { label: "C", ...blocks.Cb }, { label: "D+E", ...blocks.DE }].map((b) => { const diff = Number((b.cur - b.tgt).toFixed(1)); return (<div key={b.label} className="rounded px-2 py-1.5 text-center" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}><div className="text-[10px]" style={{ color: C.textDim }}>{b.label}</div><div className="mono text-xs font-semibold">{b.cur}%</div><div className="mono text-[10px]" style={{ color: Math.abs(diff) >= 4 ? C.rust : C.textMuted }}>{diff > 0 ? "+" : ""}{diff}pt</div></div>); })}
+                  </div>
+                </div>
+              </Panel>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

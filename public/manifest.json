@@ -1,0 +1,22 @@
+{
+  "name": "DD戦略ダッシュボード",
+  "short_name": "DD Dashboard",
+  "description": "VOOドローダウン連動リバランス戦略 可視化ツール",
+  "start_url": "/dd-dashboard/",
+  "display": "standalone",
+  "background_color": "#0A0F1C",
+  "theme_color": "#0A0F1C",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/dd-dashboard/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/dd-dashboard/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
