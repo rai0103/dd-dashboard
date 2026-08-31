@@ -311,11 +311,11 @@ function Panel({ title, action, children, className = "", style }) {
 function DiffBar({ cat, current, target, onClick }) {
   const diff = Number((current - target).toFixed(1)); const max = 50; const emphasize = Math.abs(diff) >= 4;
   return (
-    <div onClick={onClick} className="px-4 py-2.5 flex items-center gap-2" style={{ borderBottom: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
-      <div className="flex-1">
-        <div className="flex items-baseline justify-between mb-1.5">
-          <div className="flex items-baseline gap-2"><span className="text-sm font-semibold" style={{ color: C.text }}>{cat}</span><span className="text-[11px]" style={{ color: C.textDim }}>{CAT_LABEL[cat]}</span></div>
-          <div className="flex items-baseline gap-2 font-mono text-xs"><span style={{ color: C.textMuted }}>{current}%</span><span style={{ color: C.textDim }}>→ {target}%</span><span className="font-semibold px-1.5 py-0.5 rounded" style={{ color: emphasize ? C.rust : C.textMuted, background: emphasize ? C.rustSoft : "transparent" }}>{diff > 0 ? "+" : ""}{diff}</span></div>
+    <div onClick={onClick} className="px-3 py-1.5 flex items-center gap-2" style={{ borderBottom: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-baseline justify-between mb-1">
+          <div className="flex items-baseline gap-1.5 min-w-0"><span className="text-xs font-semibold shrink-0" style={{ color: C.text }}>{cat}</span><span className="text-[10px] truncate" style={{ color: C.textDim }}>{CAT_LABEL[cat]}</span></div>
+          <div className="flex items-baseline gap-1.5 font-mono text-[11px] shrink-0 ml-2"><span style={{ color: C.textMuted }}>{current}%</span><span style={{ color: C.textDim }}>→{target}%</span><span className="font-semibold px-1 rounded" style={{ color: emphasize ? C.rust : C.textMuted, background: emphasize ? C.rustSoft : "transparent" }}>{diff > 0 ? "+" : ""}{diff}</span></div>
         </div>
         <div className="relative h-1.5 rounded-full" style={{ background: C.panel2 }}>
           <div className="absolute top-0 h-1.5 rounded-full" style={{ width: `${(target / max) * 100}%`, background: C.borderSoft }} />
@@ -901,23 +901,23 @@ export default function DDDashboard() {
             {/* top-right: AI advice */}
             <div style={{ minHeight: 0 }}>
               <Panel title="現在のアドバイス（AI）" className="h-full">
-                <div className="p-4 flex flex-col gap-4 h-full overflow-y-auto">
+                <div className="p-3 flex flex-col gap-2.5 overflow-hidden h-full">
                   <div>
-                    <div className="text-[10px] mb-1.5" style={{ color: C.textDim }}>現在の判断</div>
-                    <div className="text-sm leading-relaxed" style={{ color: C.text }}>
+                    <div className="text-[10px] mb-1" style={{ color: C.textDim }}>現在の判断</div>
+                    <div className="text-xs leading-snug" style={{ color: C.text }}>
                       現状のDD（{d.currentTLabel}）は{d.currentFreqLabel ? `${d.currentFreqLabel}発生する水準` : "過去データの範囲外の水準"}。
                       {d.nextProg && (<> さらに{d.nextProg.to}%まで下落する確率は<b style={{ color: d.nextProg.watershed ? C.rust : C.text }}>{d.nextProg.p}%</b>{d.nextProg.watershed ? "（分水嶺）" : ""}。</>)}
                     </div>
                   </div>
-                  <div><div className="text-[10px] mb-1.5" style={{ color: C.textDim }}>推奨アクション</div>
-                    <ul className="text-sm leading-relaxed list-disc pl-4" style={{ color: C.textMuted }}>
+                  <div><div className="text-[10px] mb-1" style={{ color: C.textDim }}>推奨アクション</div>
+                    <ul className="text-xs leading-snug list-disc pl-3" style={{ color: C.textMuted }}>
                       <li>レバレッジ枠(E)を5%枠まで刈り込み済みか確認</li>
                       <li>C(SP500)が目標比+6pt過多 — 新規買付は一旦停止</li>
                       <li>A・Bが計-8pt不足 — 押し目で現金・ヘッジ資産を優先補充</li>
                     </ul>
                   </div>
-                  <div><div className="text-[10px] mb-1.5" style={{ color: C.textDim }}>取り崩し・現金バッファ</div><div className="text-sm leading-relaxed" style={{ color: C.textMuted }}>年480万取り崩し想定。生活費2-3年分(約1,000-1,440万)を目安に現金比率を維持。</div></div>
-                  <div className="mt-auto flex gap-2 text-[11px] leading-relaxed" style={{ color: C.textDim }}><Info size={12} style={{ flexShrink: 0, marginTop: 2 }} /><span>投資助言ではなく可視化・判断補助です。過去確率は将来を保証しません。</span></div>
+                  <div><div className="text-[10px] mb-1" style={{ color: C.textDim }}>取り崩し・現金バッファ</div><div className="text-xs leading-snug" style={{ color: C.textMuted }}>年480万取り崩し想定。生活費2-3年分(約1,000-1,440万)を目安に現金比率を維持。</div></div>
+                  <div className="mt-auto flex gap-1.5 text-[10px] leading-snug" style={{ color: C.textDim }}><Info size={11} style={{ flexShrink: 0, marginTop: 1 }} /><span>投資助言ではなく可視化・判断補助です。過去確率は将来を保証しません。</span></div>
                 </div>
               </Panel>
             </div>
@@ -932,9 +932,9 @@ export default function DDDashboard() {
             {/* bottom-right: A-E diff */}
             <div style={{ minHeight: 0 }}>
               <Panel title={`A〜E 配分乖離（モデル: ${d.modelRow.label}）`} action={<button onClick={() => setModal({ type: "ddTable" })} title="DD毎の配分表を表示" style={{ background: "transparent", border: "none", cursor: "pointer" }}><Info size={14} style={{ color: C.textDim }} /></button>} className="h-full">
-                <div className="overflow-y-auto h-full">
+                <div className="overflow-hidden h-full">
                   {CATS.map((cat) => (<DiffBar key={cat} cat={cat} current={currentHoldingPct[cat]} target={d.modelRow[cat]} onClick={() => setModal({ type: "rank", rank: cat })} />))}
-                  <div className="px-4 py-3 grid grid-cols-3 gap-2">
+                  <div className="px-3 py-2 grid grid-cols-3 gap-2">
                     {[{ label: "A+B", ...blocks.AB }, { label: "C", ...blocks.Cb }, { label: "D+E", ...blocks.DE }].map((b) => { const diff = Number((b.cur - b.tgt).toFixed(1)); return (<div key={b.label} className="rounded px-2 py-1.5 text-center" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}><div className="text-[10px]" style={{ color: C.textDim }}>{b.label}</div><div className="mono text-xs font-semibold">{b.cur}%</div><div className="mono text-[10px]" style={{ color: Math.abs(diff) >= 4 ? C.rust : C.textMuted }}>{diff > 0 ? "+" : ""}{diff}pt</div></div>); })}
                   </div>
                 </div>
