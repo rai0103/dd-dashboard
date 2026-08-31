@@ -204,6 +204,15 @@ function normalizeAccount(a) {
   if (a === "-" || a === "‐" || a === "―") return "—";
   return a.replace(/投資枠$/, "");
 }
+// ■資産合計欄（サマリー）から「預り金」（円建てのみ）または「外貨預り金」（外貨建てのみ）の合計額[円]を拾う。
+// 「預り金合計」は円+外貨の合計なので対象外（二重計上防止のため、その行自体は探さない）。
+function findSummaryCashAmount(summaryLines, label) {
+  for (const line of summaryLines) {
+    const c = splitCsvLine(line);
+    if (c[0] === label) { const v = parseYen(c[1]); return isNaN(v) ? 0 : v; }
+  }
+  return 0;
+}
 function parseRakutenCSV(text) {
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   let headerIdx = -1, cols = null;
@@ -227,9 +236,10 @@ function parseRakutenCSV(text) {
     if (c.length <= amountIdx || !c[nameIdx]) continue;
     const rawName = c[nameIdx];
     if (!rawName || rawName.includes("合計")) continue;
+    const assetType = typeIdx !== -1 ? c[typeIdx] : "";
+    if (assetType === "外貨預り金") continue; // 明細欄のこの行は通貨別の内訳が不完全なため使わず、サマリー欄の合計を別途使う
     const amount = parseYen(c[amountIdx]);
     if (isNaN(amount) || amount === 0) continue;
-    const assetType = typeIdx !== -1 ? c[typeIdx] : "";
     const ticker = tickerIdx !== -1 ? c[tickerIdx] : "";
     const name = ticker ? `${ticker} ${rawName}` : rawName;
     const account = normalizeAccount(accountIdx !== -1 && c[accountIdx] ? c[accountIdx] : "特定");
@@ -241,6 +251,11 @@ function parseRakutenCSV(text) {
     const guess = guessCategoryRank(rawName, ticker, assetType);
     rows.push({ name, account, amount, category: guess.category, rank: guess.rank, currency });
   }
+  const summaryLines = lines.slice(0, headerIdx);
+  const jpyCash = findSummaryCashAmount(summaryLines, "預り金");
+  const fxCash = findSummaryCashAmount(summaryLines, "外貨預り金");
+  if (jpyCash > 0) rows.push({ name: "現金(円)", account: "—", amount: jpyCash, category: "現金", rank: "A", currency: "円" });
+  if (fxCash > 0) rows.push({ name: "現金(ドル)", account: "—", amount: fxCash, category: "現金", rank: "A", currency: "ドル" });
   return rows;
 }
 
