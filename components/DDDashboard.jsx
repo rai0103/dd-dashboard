@@ -131,25 +131,46 @@ const MODEL_ROWS = [
 const CATS = ["A", "B", "C", "D", "E"];
 const CAT_LABEL = { A: "現金・高配当・金", B: "金・ヘッジ・防衛", C: "SP500", D: "NASDAQ/テック指数", E: "レバ・モメンタム" };
 
+/* ---------------- category taxonomy (fixed list) ---------------- */
+const CATEGORIES = [
+  "SP500", "Nasdaq", "日本（N225・Topix）", "個別（米）", "個別（日）", "ゴールド", "現金",
+  "テックETF・投信（米）", "テックETF・投信（日）", "高配当ETF・投信（米）", "高配当ETF・投信（日）",
+  "その他ETF・投信（米）", "その他ETF・投信（日）", "その他",
+];
+const CATEGORY_COLORS = {
+  "SP500": C.teal, "Nasdaq": C.blue, "日本（N225・Topix）": "#BE7A63",
+  "個別（米）": "#7C8DB0", "個別（日）": "#C9A06A", "ゴールド": C.amber, "現金": "#7FA37A",
+  "テックETF・投信（米）": C.violet, "テックETF・投信（日）": "#C77FB0",
+  "高配当ETF・投信（米）": "#4FA0A6", "高配当ETF・投信（日）": "#A3A24B",
+  "その他ETF・投信（米）": "#7B9BC7", "その他ETF・投信（日）": "#B98F6A", "その他": C.textDim,
+};
+// カテゴリー別のデフォルトA〜Eランク（自動推定・分割時に使用。ユーザーは行ごとに自由に上書き可能）
+const CATEGORY_DEFAULT_RANK = {
+  "SP500": "C", "Nasdaq": "D", "日本（N225・Topix）": "A", "個別（米）": "D", "個別（日）": "D",
+  "ゴールド": "B", "現金": "A", "テックETF・投信（米）": "D", "テックETF・投信（日）": "D",
+  "高配当ETF・投信（米）": "A", "高配当ETF・投信（日）": "A",
+  "その他ETF・投信（米）": "D", "その他ETF・投信（日）": "D", "その他": "D",
+};
+
 /* ---------------- portfolio holdings (default/seed — replaced once real data is imported) ---------------- */
 const HOLDINGS_DEFAULT = [
-  { name: "eMAXIS Slim 米国株式(S&P500)", category: "SP500", currency: "円", rank: "C", account: "特定", owner: "shin", amount: 8200000 },
-  { name: "VOO", category: "SP500", currency: "ドル", rank: "C", account: "特定", owner: "saki", amount: 6400000 },
-  { name: "楽天SP500", category: "SP500", currency: "円", rank: "C", account: "NISA成長", owner: "shin", amount: 3100000 },
-  { name: "2521 円ヘッジSP500", category: "SP500", currency: "円", rank: "B", account: "特定", owner: "saki", amount: 1400000 },
-  { name: "QQQ", category: "Nasdaq", currency: "ドル", rank: "D", account: "特定", owner: "shin", amount: 4200000 },
-  { name: "eMAXIS NASDAQ100", category: "Nasdaq", currency: "円", rank: "D", account: "NISA成長", owner: "saki", amount: 2600000 },
-  { name: "FANG+", category: "テック系ETF・投信", currency: "円", rank: "D", account: "特定", owner: "shin", amount: 1800000 },
-  { name: "金プラス(株分)", category: "テック系ETF・投信", currency: "円", rank: "D", account: "特定", owner: "shin", amount: 700000 },
-  { name: "SPXL", category: "SP500", currency: "ドル", rank: "E", account: "特定", owner: "shin", amount: 1500000 },
-  { name: "SOXL", category: "テック系ETF・投信", currency: "ドル", rank: "E", account: "特定", owner: "shin", amount: 900000 },
-  { name: "GLD", category: "ゴールド", currency: "ドル", rank: "B", account: "特定", owner: "saki", amount: 3300000 },
-  { name: "金プラス(金分)", category: "ゴールド", currency: "円", rank: "A", account: "特定", owner: "shin", amount: 700000 },
-  { name: "HDV", category: "その他", currency: "ドル", rank: "A", account: "特定", owner: "saki", amount: 2100000 },
-  { name: "日経高配当(399A)", category: "日本株", currency: "円", rank: "A", account: "NISAつみたて", owner: "shin", amount: 1900000 },
-  { name: "ITA(防衛)", category: "その他", currency: "ドル", rank: "B", account: "特定", owner: "shin", amount: 1600000 },
-  { name: "現金(円)", category: "現金", currency: "円", rank: "A", account: "—", owner: "shin", amount: 4800000 },
-  { name: "現金(ドル)", category: "現金", currency: "ドル", rank: "A", account: "—", owner: "saki", amount: 2200000 },
+  { id: "seed-1", name: "eMAXIS Slim 米国株式(S&P500)", category: "SP500", currency: "円", rank: "C", account: "特定", owner: "shin", amount: 8200000 },
+  { id: "seed-2", name: "VOO", category: "SP500", currency: "ドル", rank: "C", account: "特定", owner: "saki", amount: 6400000 },
+  { id: "seed-3", name: "楽天SP500", category: "SP500", currency: "円", rank: "C", account: "NISA成長", owner: "shin", amount: 3100000 },
+  { id: "seed-4", name: "2521 円ヘッジSP500", category: "SP500", currency: "円", rank: "B", account: "特定", owner: "saki", amount: 1400000 },
+  { id: "seed-5", name: "QQQ", category: "Nasdaq", currency: "ドル", rank: "D", account: "特定", owner: "shin", amount: 4200000 },
+  { id: "seed-6", name: "eMAXIS NASDAQ100", category: "Nasdaq", currency: "円", rank: "D", account: "NISA成長", owner: "saki", amount: 2600000 },
+  { id: "seed-7", name: "FANG+", category: "テックETF・投信（米）", currency: "円", rank: "D", account: "特定", owner: "shin", amount: 1800000 },
+  { id: "seed-8", name: "金プラス(株分)", category: "テックETF・投信（米）", currency: "円", rank: "D", account: "特定", owner: "shin", amount: 700000 },
+  { id: "seed-9", name: "SPXL", category: "SP500", currency: "ドル", rank: "E", account: "特定", owner: "shin", amount: 1500000 },
+  { id: "seed-10", name: "SOXL", category: "テックETF・投信（米）", currency: "ドル", rank: "E", account: "特定", owner: "shin", amount: 900000 },
+  { id: "seed-11", name: "GLD", category: "ゴールド", currency: "ドル", rank: "B", account: "特定", owner: "saki", amount: 3300000 },
+  { id: "seed-12", name: "金プラス(金分)", category: "ゴールド", currency: "円", rank: "A", account: "特定", owner: "shin", amount: 700000 },
+  { id: "seed-13", name: "HDV", category: "高配当ETF・投信（米）", currency: "ドル", rank: "A", account: "特定", owner: "saki", amount: 2100000 },
+  { id: "seed-14", name: "日経高配当(399A)", category: "高配当ETF・投信（日）", currency: "円", rank: "A", account: "NISAつみたて", owner: "shin", amount: 1900000 },
+  { id: "seed-15", name: "ITA(防衛)", category: "その他ETF・投信（米）", currency: "ドル", rank: "B", account: "特定", owner: "shin", amount: 1600000 },
+  { id: "seed-16", name: "現金(円)", category: "現金", currency: "円", rank: "A", account: "—", owner: "shin", amount: 4800000 },
+  { id: "seed-17", name: "現金(ドル)", category: "現金", currency: "ドル", rank: "A", account: "—", owner: "saki", amount: 2200000 },
 ];
 function groupByField(holdings, field) { const map = {}; for (const h of holdings) { map[h[field]] = (map[h[field]] || 0) + h.amount; } return Object.entries(map).map(([k, v]) => ({ name: k, value: v })); }
 function holdingsTotal(holdings) { return holdings.reduce((s, h) => s + h.amount, 0); }
@@ -160,7 +181,6 @@ function currentHoldingPctFromHoldings(holdings) {
   for (const r of byRank) if (pct[r.name] !== undefined) pct[r.name] = Number(((r.value / total) * 100).toFixed(1));
   return pct;
 }
-const CATEGORY_COLORS = { "SP500": C.teal, "Nasdaq": C.blue, "テック系ETF・投信": C.violet, "ゴールド": C.amber, "現金": "#7FA37A", "日本株": "#BE7A63", "その他": C.textDim };
 const CURRENCY_COLORS = { "ドル": C.teal, "円": C.amber };
 function colorForView(view, key) { return view === "category" ? (CATEGORY_COLORS[key] || C.textDim) : view === "currency" ? CURRENCY_COLORS[key] : rankColor(key); }
 
@@ -174,26 +194,55 @@ function splitCsvLine(line) {
 }
 function parseYen(s) { if (s == null) return NaN; return parseFloat(String(s).replace(/[,¥\s]/g, "")); }
 function toHalfWidth(s) { return String(s ?? "").normalize("NFKC"); }
-const RANK_KEYWORDS = [
-  { rank: "C", category: "SP500", keys: ["S&P500", "SP500", "VOO", "SPY", "楽天SP500"] },
-  { rank: "B", category: "SP500", keys: ["円ヘッジ", "2521"] },
-  { rank: "D", category: "Nasdaq", keys: ["NASDAQ", "ナスダック", "QQQ", "FANG", "テック指数", "Zテック"] },
-  { rank: "E", category: "テック系ETF・投信", keys: ["SPXL", "SPUU", "SOXL", "MSFU", "METU", "モメンタム", "トレンドランキング"] },
-  { rank: "B", category: "ゴールド", keys: ["GLD", "ゴールド", "金プラス", "プラチナ"] },
-  { rank: "B", category: "その他", keys: ["ITA", "防衛"] },
-  { rank: "A", category: "その他", keys: ["HDV", "高配当", "2013", "399A"] },
-];
-// 種別(国内株式/米国株式/投資信託/外貨預り金)とティッカー・銘柄名から、A〜Eランクとカテゴリーを推定する。
+function genId() { try { return crypto.randomUUID(); } catch (e) { return `id-${Date.now()}-${Math.random().toString(36).slice(2)}`; } }
+// 種別(国内株式/米国株式/投資信託/外貨預り金)とティッカー・銘柄名から、CATEGORIES（固定14分類）のいずれかを推定する。
 // 楽天のCSVはティッカーと日本語の銘柄名が別列のため、両方を正規化して突き合わせる。
-function guessCategoryRank(rawName, ticker, assetType) {
-  if (assetType === "外貨預り金") return { rank: "A", category: "現金" };
+// テーマ別カテゴリー（高配当/テック/その他ETF）は米国・日本の2種類に分かれるため、名称に「米国」等があるかで判定する。
+function guessCategory(rawName, ticker, assetType) {
+  if (assetType === "外貨預り金") return "現金";
   const norm = toHalfWidth(`${ticker ?? ""} ${rawName ?? ""}`);
-  for (const g of RANK_KEYWORDS) if (g.keys.some((k) => norm.includes(k))) return { rank: g.rank, category: g.category };
-  if (/ゴールド|金/.test(norm)) return { rank: "A", category: "ゴールド" };
-  if (/現金|MRF|預り金/.test(norm)) return { rank: "A", category: "現金" };
-  if (/日本|日経|TOPIX|JPX/.test(norm)) return { rank: "A", category: "日本株" };
-  if (assetType === "国内株式") return { rank: "D", category: "日本株" };
-  return { rank: "D", category: "その他" };
+  if (/S&P500|SP500|VOO|SPY|楽天SP500|円ヘッジ|2521/.test(norm)) return "SP500";
+  if (/NASDAQ|ナスダック|QQQ/i.test(norm)) return "Nasdaq";
+  if (/GLD|ゴールド|金プラス|プラチナ/.test(norm)) return "ゴールド";
+  if (/現金|MRF|預り金/.test(norm)) return "現金";
+  const mentionsUS = /米国|全世界|グローバル|USA?\b/i.test(norm);
+  const mentionsJP = /日経|N225|TOPIX|JPX|日本株|国内株/.test(norm);
+  const isJP = mentionsJP || (assetType === "国内株式" && !mentionsUS);
+  if (mentionsJP && !/高配当|テック|モメンタム/.test(norm)) return "日本（N225・Topix）";
+  if (/高配当|HDV/.test(norm)) return isJP ? "高配当ETF・投信（日）" : "高配当ETF・投信（米）";
+  if (/FANG|テック指数|Zテック|SPXL|SPUU|SOXL|MSFU|METU/.test(norm)) return isJP ? "テックETF・投信（日）" : "テックETF・投信（米）";
+  if (/モメンタム|トレンドランキング|ITA|防衛/.test(norm)) return isJP ? "その他ETF・投信（日）" : "その他ETF・投信（米）";
+  if (assetType === "国内株式") return isJP ? "個別（日）" : "個別（米）";
+  if (assetType === "米国株式") return "個別（米）";
+  return "その他";
+}
+function guessCategoryRank(rawName, ticker, assetType) {
+  const category = guessCategory(rawName, ticker, assetType);
+  return { category, rank: CATEGORY_DEFAULT_RANK[category] ?? "D" };
+}
+// 「ゴールドプラス」系の複合ファンド（ゴールド＋株価指数）を検出し、判明しているものは自動でペア先カテゴリーを返す。
+function detectKnownGoldPlusPair(normName) {
+  if (normName.includes("FANG") && normName.includes("ゴールド")) return "テックETF・投信（米）";
+  if (/S&P\s*500/i.test(normName) && normName.includes("ゴールド")) return "SP500";
+  if ((normName.includes("NASDAQ") || normName.includes("ナスダック")) && normName.includes("ゴールド")) return "Nasdaq";
+  if (/日経|N225|TOPIX|JPX/.test(normName) && normName.includes("ゴールド")) return "日本（N225・Topix）";
+  return null;
+}
+function isGoldPlusCandidate(normName) { return /ゴールド/.test(normName) && /プラス|\+/.test(normName); }
+// 明細行を「ゴールドプラス」系は自動で2行（ゴールド分＋対象カテゴリー分、評価額50%ずつ）に分割する。
+// 判明していない組み合わせは分割せず、splitCandidate フラグを立ててプレビュー画面でユーザーに確認してもらう。
+function expandGoldPlusSplits(rows) {
+  const out = [];
+  for (const r of rows) {
+    const norm = toHalfWidth(r.name);
+    if (!isGoldPlusCandidate(norm)) { out.push(r); continue; }
+    const pair = detectKnownGoldPlusPair(norm);
+    if (!pair) { out.push({ ...r, splitCandidate: true, suggestedPairCategory: "その他" }); continue; }
+    const half = Math.round(r.amount / 2);
+    out.push({ ...r, name: `${r.name}（ゴールド）`, category: "ゴールド", rank: CATEGORY_DEFAULT_RANK["ゴールド"], amount: half });
+    out.push({ ...r, name: `${r.name}（${pair}）`, category: pair, rank: CATEGORY_DEFAULT_RANK[pair], amount: r.amount - half });
+  }
+  return out;
 }
 // 単位列（円/USD）から通貨を判定する。銘柄名の見た目からの推測は実データ（日本語の説明的な名称）では機能しないため使わない。
 function pickCurrency(...units) {
@@ -416,7 +465,7 @@ function DiffBar({ cat, current, target, onClick }) {
 }
 
 /* ---------------- sortable table ---------------- */
-function SortableTable({ columns, rows, defaultSortKey, defaultDir = "desc" }) {
+function SortableTable({ columns, rows, defaultSortKey, defaultDir = "desc", onEditCell }) {
   const [sortKey, setSortKey] = useState(defaultSortKey);
   const [dir, setDir] = useState(defaultDir);
   const sorted = useMemo(() => { const copy = [...rows]; copy.sort((a, b) => { const av = a[sortKey], bv = b[sortKey]; if (typeof av === "number") return dir === "asc" ? av - bv : bv - av; return dir === "asc" ? String(av).localeCompare(String(bv), "ja") : String(bv).localeCompare(String(av), "ja"); }); return copy; }, [rows, sortKey, dir]);
@@ -424,7 +473,20 @@ function SortableTable({ columns, rows, defaultSortKey, defaultDir = "desc" }) {
   return (
     <table className="w-full text-xs mono">
       <thead><tr style={{ color: C.textDim }}>{columns.map((col) => (<th key={col.key} onClick={() => headerClick(col.key)} className={`font-normal py-1 select-none ${col.align === "right" ? "text-right" : "text-left"}`} style={{ cursor: "pointer", color: sortKey === col.key ? C.textMuted : C.textDim }}>{col.label}{sortKey === col.key ? (dir === "asc" ? " ▲" : " ▼") : ""}</th>))}</tr></thead>
-      <tbody>{sorted.map((row, i) => (<tr key={i} style={{ borderTop: `1px solid ${C.borderSoft}` }}>{columns.map((col) => (<td key={col.key} className={col.align === "right" ? "text-right" : ""} style={{ color: col.emphasize ? C.text : C.textMuted, padding: "4px 4px" }}>{col.format ? col.format(row[col.key], row) : row[col.key]}</td>))}</tr>))}</tbody>
+      <tbody>{sorted.map((row, i) => (<tr key={row.id ?? i} style={{ borderTop: `1px solid ${C.borderSoft}` }}>{columns.map((col) => (
+        <td key={col.key} className={col.align === "right" ? "text-right" : ""} style={{ color: col.emphasize ? C.text : C.textMuted, padding: "4px 4px" }}>
+          {col.editable ? (
+            <select
+              value={row[col.key]}
+              onChange={(e) => onEditCell && onEditCell(row, col.key, e.target.value)}
+              className="text-xs rounded"
+              style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text, padding: "1px 3px" }}
+            >
+              {col.options.map((o) => (<option key={o} value={o}>{o}</option>))}
+            </select>
+          ) : (col.format ? col.format(row[col.key], row) : row[col.key])}
+        </td>
+      ))}</tr>))}</tbody>
     </table>
   );
 }
@@ -521,15 +583,19 @@ function TrackRecordContent({ currentT }) {
   );
 }
 
-function PortfolioTableContent({ view, holdings }) {
+function PortfolioTableContent({ view, holdings, onEditHolding }) {
   const field = view === "category" ? "category" : view === "currency" ? "currency" : "rank";
   const total = holdingsTotal(holdings);
   const grouped = groupByField(holdings, field).sort((a, b) => b.value - a.value);
   const viewLabel = view === "category" ? "カテゴリー別" : view === "currency" ? "為替別" : "A〜Eランク別";
   const rows = holdings.map((h) => ({ ...h, share: (h.amount / total) * 100 }));
   const columns = [
-    { key: "name", label: "銘柄" }, { key: "category", label: "カテゴリー" }, { key: "currency", label: "為替" }, { key: "rank", label: "ランク" },
-    { key: "account", label: "口座" }, { key: "owner", label: "口座主" },
+    { key: "name", label: "銘柄" },
+    { key: "category", label: "カテゴリー", editable: true, options: CATEGORIES },
+    { key: "currency", label: "為替" },
+    { key: "rank", label: "ランク", editable: true, options: CATS },
+    { key: "account", label: "口座" },
+    { key: "owner", label: "口座主", editable: true, options: ["shin", "saki"] },
     { key: "amount", label: "金額", align: "right", format: (v) => `¥${v.toLocaleString()}` },
     { key: "share", label: "構成比", align: "right", format: (v) => `${v.toFixed(1)}%` },
   ];
@@ -539,8 +605,8 @@ function PortfolioTableContent({ view, holdings }) {
         <div className="text-xs mb-3" style={{ color: C.textDim }}>内訳（{viewLabel}）</div>
         {grouped.map((g) => (<div key={g.name} className="flex items-center gap-2 mb-1.5"><span style={{ width: 10, height: 10, borderRadius: 2, background: colorForView(view, g.name), flexShrink: 0 }} /><span className="text-xs w-32 truncate" style={{ color: C.textMuted }}>{g.name}</span><div className="flex-1 h-2 rounded-full" style={{ background: C.panel2 }}><div className="h-2 rounded-full" style={{ width: `${(g.value / total) * 100}%`, background: colorForView(view, g.name) }} /></div><span className="mono text-xs w-14 text-right">{((g.value / total) * 100).toFixed(1)}%</span><span className="mono text-xs w-28 text-right" style={{ color: C.textMuted }}>¥{g.value.toLocaleString()}</span></div>))}
       </div>
-      <div className="text-xs mb-2" style={{ color: C.textDim }}>保有銘柄一覧（列見出しクリックでソート）</div>
-      <SortableTable columns={columns} rows={rows} defaultSortKey="amount" />
+      <div className="text-xs mb-2" style={{ color: C.textDim }}>保有銘柄一覧（列見出しクリックでソート・カテゴリー/ランク/口座主は変更可）</div>
+      <SortableTable columns={columns} rows={rows} defaultSortKey="amount" onEditCell={(row, key, value) => onEditHolding && onEditHolding(row.id, key, value)} />
     </div>
   );
 }
@@ -554,16 +620,20 @@ function DDTableContent({ modelRow }) {
   );
 }
 
-function RankHoldingsContent({ rank, holdings }) {
+function RankHoldingsContent({ rank, holdings, onEditHolding }) {
   const items = holdings.filter((h) => h.rank === rank);
   const total = items.reduce((s, h) => s + h.amount, 0);
   const rows = items.map((h) => ({ ...h, share: (h.amount / total) * 100 }));
   const columns = [
-    { key: "name", label: "銘柄" }, { key: "account", label: "口座" }, { key: "owner", label: "口座主" },
+    { key: "name", label: "銘柄" },
+    { key: "category", label: "カテゴリー", editable: true, options: CATEGORIES },
+    { key: "account", label: "口座" },
+    { key: "owner", label: "口座主", editable: true, options: ["shin", "saki"] },
+    { key: "rank", label: "ランク", editable: true, options: CATS },
     { key: "amount", label: "金額", align: "right", format: (v) => `¥${v.toLocaleString()}` },
     { key: "share", label: "構成比", align: "right", format: (v) => `${v.toFixed(1)}%` },
   ];
-  return (<div><div className="text-xs mb-3" style={{ color: C.textDim }}>{rank}（{CAT_LABEL[rank]}） 合計 ¥{total.toLocaleString()}　（列見出しクリックでソート）</div><SortableTable columns={columns} rows={rows} defaultSortKey="amount" /></div>);
+  return (<div><div className="text-xs mb-3" style={{ color: C.textDim }}>{rank}（{CAT_LABEL[rank]}） 合計 ¥{total.toLocaleString()}　（列見出しクリックでソート・カテゴリー/ランク/口座主は変更可）</div><SortableTable columns={columns} rows={rows} defaultSortKey="amount" onEditCell={(row, key, value) => onEditHolding && onEditHolding(row.id, key, value)} /></div>);
 }
 
 function CrashModalContent({ crash, daysSinceDDStart, currentDD, currentEpisodeCurve }) {
@@ -663,13 +733,23 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, onBa
     const reader = new FileReader();
     reader.onload = (ev) => {
       const text = decodeShiftJIS(ev.target.result);
-      const rows = parseRakutenCSV(text).map((r) => (overrides[r.name] ? { ...r, ...overrides[r.name] } : r));
+      const parsed = expandGoldPlusSplits(parseRakutenCSV(text));
+      const rows = parsed.map((r) => (overrides[r.name] ? { ...r, ...overrides[r.name] } : r));
       if (rows.length) setPreview(rows);
       else setRakutenMsg("銘柄・評価額の列が見つかりませんでした。楽天証券の残高CSV（Shift-JIS）か確認してください。");
     };
     reader.readAsArrayBuffer(file);
   };
   const updatePreviewRow = (i, field, value) => setPreview((prev) => prev.map((r, idx) => (idx === i ? { ...r, [field]: value } : r)));
+  const splitPreviewRow = (i, pairCategory) => setPreview((prev) => {
+    const r = prev[i];
+    const half = Math.round(r.amount / 2);
+    const rowA = { ...r, name: `${r.name}（ゴールド）`, category: "ゴールド", rank: CATEGORY_DEFAULT_RANK["ゴールド"], amount: half, splitCandidate: false };
+    const rowB = { ...r, name: `${r.name}（${pairCategory}）`, category: pairCategory, rank: CATEGORY_DEFAULT_RANK[pairCategory] ?? "D", amount: r.amount - half, splitCandidate: false };
+    const next = [...prev];
+    next.splice(i, 1, rowA, rowB);
+    return next;
+  });
   const confirmImport = () => {
     onImportHoldings(previewOwner, preview);
     setRakutenMsg(`${preview.length}件を${previewOwner}のデータとして反映しました。修正内容は銘柄名ごとに記憶され、次回以降は自動で適用されます。`);
@@ -762,16 +842,25 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, onBa
               <p className="text-xs mb-3" style={{ color: C.textDim }}>ここでの修正は銘柄名ごとに記憶され、次回以降の取り込みでは自動的に同じ分類が適用されます（毎回直す必要はありません）。</p>
               <div className="overflow-y-auto" style={{ maxHeight: 380 }}>
                 <table className="w-full text-xs mono">
-                  <thead><tr style={{ color: C.textDim }}><th className="text-left font-normal py-1">銘柄</th><th className="text-left font-normal">口座</th><th className="text-left font-normal">カテゴリー</th><th className="text-left font-normal">為替</th><th className="text-left font-normal">ランク</th><th className="text-right font-normal">評価額</th></tr></thead>
+                  <thead><tr style={{ color: C.textDim }}><th className="text-left font-normal py-1">銘柄</th><th className="text-left font-normal">口座</th><th className="text-left font-normal">カテゴリー</th><th className="text-left font-normal">為替</th><th className="text-left font-normal">ランク</th><th className="text-right font-normal">評価額</th><th className="text-left font-normal">分割候補</th></tr></thead>
                   <tbody>
                     {preview.map((r, i) => (
-                      <tr key={i} style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+                      <tr key={i} style={{ borderTop: `1px solid ${C.borderSoft}`, background: r.splitCandidate ? `${C.amber}14` : "transparent" }}>
                         <td className="py-1" style={{ color: C.text }}>{r.name}</td>
                         <td style={{ color: C.textMuted }}>{r.account}</td>
-                        <td><select value={r.category} onChange={(e) => updatePreviewRow(i, "category", e.target.value)} className="text-xs rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }}>{Object.keys(CATEGORY_COLORS).map((c) => (<option key={c} value={c}>{c}</option>))}</select></td>
+                        <td><select value={r.category} onChange={(e) => updatePreviewRow(i, "category", e.target.value)} className="text-xs rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }}>{CATEGORIES.map((c) => (<option key={c} value={c}>{c}</option>))}</select></td>
                         <td><select value={r.currency} onChange={(e) => updatePreviewRow(i, "currency", e.target.value)} className="text-xs rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }}><option value="円">円</option><option value="ドル">ドル</option></select></td>
                         <td><select value={r.rank} onChange={(e) => updatePreviewRow(i, "rank", e.target.value)} className="text-xs rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }}>{CATS.map((c) => (<option key={c} value={c}>{c}</option>))}</select></td>
                         <td className="text-right" style={{ color: C.text }}>¥{r.amount.toLocaleString()}</td>
+                        <td>
+                          {r.splitCandidate && (
+                            <div className="flex items-center gap-1">
+                              <span style={{ color: C.amber, fontSize: 10 }}>ゴールド+</span>
+                              <select id={`split-pair-${i}`} defaultValue={r.suggestedPairCategory} className="text-xs rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }}>{CATEGORIES.filter((c) => c !== "ゴールド").map((c) => (<option key={c} value={c}>{c}</option>))}</select>
+                              <button onClick={() => splitPreviewRow(i, document.getElementById(`split-pair-${i}`).value)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: C.amber, color: C.bg, fontWeight: 700, border: "none", cursor: "pointer" }}>分割する</button>
+                            </div>
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -824,7 +913,12 @@ export default function DDDashboard() {
       } catch (e) { /* no saved data yet — keep bundled seed */ }
       try {
         const res2 = await storage.get("portfolio_holdings");
-        if (res2 && res2.value) { const parsed2 = JSON.parse(res2.value); if (parsed2.length) { setHoldings(parsed2); setHoldingsSource("imported"); } }
+        if (res2 && res2.value) {
+          const raw2 = JSON.parse(res2.value);
+          const hadMissingId = raw2.some((h) => !h.id);
+          const parsed2 = raw2.map((h) => (h.id ? h : { ...h, id: genId() })); // 旧バージョンで保存されたデータにidを補完
+          if (parsed2.length) { setHoldings(parsed2); setHoldingsSource("imported"); if (hadMissingId) persistHoldings(parsed2); }
+        }
       } catch (e) { /* no saved holdings yet — keep default */ }
       try {
         const res3 = await storage.get("classification_overrides");
@@ -863,7 +957,7 @@ export default function DDDashboard() {
   function handleImportHoldings(owner, previewRows) {
     setHoldings((prev) => {
       const kept = prev.filter((h) => h.owner !== owner);
-      const incoming = previewRows.map((r) => ({ ...r, owner }));
+      const incoming = previewRows.map((r) => ({ ...r, owner, id: r.id ?? genId() }));
       const merged = [...kept, ...incoming];
       persistHoldings(merged);
       return merged;
@@ -877,6 +971,27 @@ export default function DDDashboard() {
     });
   }
   function handleResetHoldings() { setHoldings(HOLDINGS_DEFAULT); setHoldingsSource("seed"); storage.delete("portfolio_holdings").catch(() => {}); }
+  // カテゴリー/ランクは銘柄名ごとに（同じ銘柄が複数口座・口座主にあっても揃うよう）まとめて更新し、overridesにも記憶する。
+  // 口座主は行固有の情報なので、その行だけを更新する。
+  function handleHoldingFieldEdit(id, field, value) {
+    const target = holdings.find((h) => h.id === id);
+    if (!target) return;
+    setHoldings((prev) => {
+      const next = field === "owner"
+        ? prev.map((h) => (h.id === id ? { ...h, owner: value } : h))
+        : prev.map((h) => (h.name === target.name ? { ...h, [field]: value } : h));
+      persistHoldings(next);
+      return next;
+    });
+    if (field === "category" || field === "rank") {
+      setOverrides((prev) => {
+        const prior = prev[target.name] || { category: target.category, rank: target.rank, currency: target.currency };
+        const next = { ...prev, [target.name]: { ...prior, [field]: value } };
+        persistOverrides(next);
+        return next;
+      });
+    }
+  }
 
   const d = useMemo(() => computeAll(rawSeries), [rawSeries]);
   const chartData = useMemo(() => sliceForPeriod(d.FULL, d.last, period), [d.FULL, d.last, period]);
@@ -908,9 +1023,9 @@ export default function DDDashboard() {
       <style>{`.mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }`}</style>
 
       {modal?.type === "trackRecord" && <FullScreenModal title="過去のトラックレコード（1957–2026・69年）" onClose={() => setModal(null)}><TrackRecordContent currentT={d.episode.currentT} /></FullScreenModal>}
-      {modal?.type === "portfolio" && <FullScreenModal title="ポートフォリオ構成表" onClose={() => setModal(null)}><PortfolioTableContent view={pieView} holdings={holdings} /></FullScreenModal>}
+      {modal?.type === "portfolio" && <FullScreenModal title="ポートフォリオ構成表" onClose={() => setModal(null)}><PortfolioTableContent view={pieView} holdings={holdings} onEditHolding={handleHoldingFieldEdit} /></FullScreenModal>}
       {modal?.type === "ddTable" && <FullScreenModal title="DD毎のA〜E配分表" onClose={() => setModal(null)}><DDTableContent modelRow={d.modelRow} /></FullScreenModal>}
-      {modal?.type === "rank" && <FullScreenModal title={`${modal.rank}ランクの保有銘柄`} onClose={() => setModal(null)}><RankHoldingsContent rank={modal.rank} holdings={holdings} /></FullScreenModal>}
+      {modal?.type === "rank" && <FullScreenModal title={`${modal.rank}ランクの保有銘柄`} onClose={() => setModal(null)}><RankHoldingsContent rank={modal.rank} holdings={holdings} onEditHolding={handleHoldingFieldEdit} /></FullScreenModal>}
       {modal?.type === "crash" && <FullScreenModal title={`${modal.crash.name}（${modal.crash.start} 〜）と現状の比較`} onClose={() => setModal(null)}><CrashModalContent crash={modal.crash} daysSinceDDStart={d.daysSinceDDStart} currentDD={d.currentDD} currentEpisodeCurve={d.currentEpisodeCurve} /></FullScreenModal>}
       {modal?.type === "ddChart" && <FullScreenModal title="評価額（左軸） / DD%（右軸）" onClose={() => setModal(null)}><DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} /></FullScreenModal>}
       {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} onBackfill={handleBackfill} source={dataSource} holdings={holdings} onImportHoldings={handleImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} />}
