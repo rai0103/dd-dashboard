@@ -300,7 +300,7 @@ function DepthGauge({ dd }) {
 function Panel({ title, action, children, className = "", style }) {
   return (
     <div className={`rounded-lg flex flex-col ${className}`} style={{ background: C.panel, border: `1px solid ${C.border}`, ...style }}>
-      <div className="flex items-center justify-between px-4 py-2.5" style={{ borderBottom: `1px solid ${C.borderSoft}` }}>
+      <div className="flex items-center justify-between px-4 py-2" style={{ borderBottom: `1px solid ${C.borderSoft}` }}>
         <span className="text-xs font-medium tracking-wide" style={{ color: C.textMuted }}>{title}</span>
         {action}
       </div>
@@ -347,26 +347,26 @@ function StatusPanel({ d, onOpenTrackRecord }) {
   return (
     <Panel title="現在のステータス">
       <div className="flex h-full">
-        <div className="flex-1 px-4 py-3 flex flex-col justify-center" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
-          <div className="text-[10px] mb-1" style={{ color: C.textDim }}>評価額（VOO終値）</div>
-          <div className="mono text-2xl font-bold">${d.currentPrice.toFixed(2)}</div>
+        <div className="flex-1 px-4 py-2 flex flex-col justify-center" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
+          <div className="text-[10px] mb-0.5" style={{ color: C.textDim }}>評価額（VOO終値）</div>
+          <div className="mono text-xl font-bold">${d.currentPrice.toFixed(2)}</div>
           <div className="text-[10px] mt-0.5" style={{ color: C.textDim }}>ATH ${d.currentATH.toFixed(2)}</div>
         </div>
-        <div className="flex-1 px-4 py-3 flex flex-col justify-center" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
-          <div className="flex items-center gap-1.5 mb-1">{d.isDrawdown ? <TrendingDown size={11} style={{ color: depthColor(d.currentDD) }} /> : <TrendingUp size={11} style={{ color: C.teal }} />}<span className="text-[10px]" style={{ color: C.textDim }}>{d.isDrawdown ? "DD（ATH比）" : "上昇（直近安値比）"}</span></div>
-          <div className="mono text-2xl font-bold" style={{ color: depthColor(d.currentDD) }}>{d.isDrawdown ? `${d.currentDD.toFixed(1)}%` : `+${(-d.currentDD).toFixed(1)}%`}</div>
+        <div className="flex-1 px-4 py-2 flex flex-col justify-center" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
+          <div className="flex items-center gap-1.5 mb-0.5">{d.isDrawdown ? <TrendingDown size={11} style={{ color: depthColor(d.currentDD) }} /> : <TrendingUp size={11} style={{ color: C.teal }} />}<span className="text-[10px]" style={{ color: C.textDim }}>{d.isDrawdown ? "DD（ATH比）" : "上昇（直近安値比）"}</span></div>
+          <div className="mono text-xl font-bold" style={{ color: depthColor(d.currentDD) }}>{d.isDrawdown ? `${d.currentDD.toFixed(1)}%` : `+${(-d.currentDD).toFixed(1)}%`}</div>
           <div className="text-[10px] mt-0.5" style={{ color: C.textDim }}>DD3%到達でリセット</div>
         </div>
-        <div className="flex-1 px-4 py-3 flex flex-col justify-center" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
-          <div className="flex items-center gap-1.5 mb-1.5"><Clock size={11} style={{ color: C.textDim }} /><span className="text-[10px]" style={{ color: C.textDim }}>経過日数</span></div>
-          <div className="flex items-baseline justify-between text-xs mb-1"><span style={{ color: C.textMuted }}>DD開始（-3%）から</span><span className="mono font-semibold">{d.daysSinceDDStart ?? "—"}日</span></div>
+        <div className="flex-1 px-4 py-2 flex flex-col justify-center" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
+          <div className="flex items-center gap-1.5 mb-1"><Clock size={11} style={{ color: C.textDim }} /><span className="text-[10px]" style={{ color: C.textDim }}>経過日数</span></div>
+          <div className="flex items-baseline justify-between text-xs mb-0.5"><span style={{ color: C.textMuted }}>DD開始（-3%）から</span><span className="mono font-semibold">{d.daysSinceDDStart ?? "—"}日</span></div>
           <div className="flex items-baseline justify-between text-xs"><span style={{ color: C.textMuted }}>前節目（{d.currentTLabel}）通過から</span><span className="mono font-semibold">{d.daysSinceCurrentThreshold ?? "—"}日</span></div>
         </div>
-        <button onClick={onOpenTrackRecord} className="flex-1 px-4 py-3 flex flex-col justify-center text-left cursor-pointer" style={{ background: "transparent", border: "none" }}>
-          <div className="flex items-center gap-1.5 mb-1.5"><AlertTriangle size={11} style={{ color: C.amber }} /><span className="text-[10px]" style={{ color: C.textDim }}>その後の下落確率</span><ChevronRight size={11} style={{ color: C.textDim, marginLeft: "auto" }} /></div>
-          {d.isEntryLeg && d.speedCategory ? (<><div className="text-xs mb-1" style={{ color: C.textMuted }}>DD3→5%は{d.legDays}日（{d.speedCategory}）</div><div className="mono text-xs" style={{ color: C.text }}>→15%以深 <b style={{ color: C.rust }}>{SPEED_TABLE[d.speedCategory === "急落" ? "fast" : "slow"]["-15"]}%</b>　→20%以深 <b style={{ color: C.rust }}>{SPEED_TABLE[d.speedCategory === "急落" ? "fast" : "slow"]["-20"]}%</b></div></>)
-            : d.nextProg ? (<><div className="text-xs mb-1" style={{ color: C.textMuted }}>次の節目（{d.nextProg.to}%）への進行</div><div className="mono text-lg font-bold" style={{ color: d.nextProg.watershed ? C.rust : C.text }}>{d.nextProg.p}% {d.nextProg.watershed && <span className="text-[10px] font-normal">分水嶺</span>}</div></>) : (<div className="text-xs" style={{ color: C.textDim }}>下落モード外</div>)}
-          <div className="text-[9px] mt-1 underline" style={{ color: C.textDim }}>クリックで全トラックレコード表示</div>
+        <button onClick={onOpenTrackRecord} className="flex-1 px-4 py-2 flex flex-col justify-center text-left cursor-pointer" style={{ background: "transparent", border: "none" }}>
+          <div className="flex items-center gap-1.5 mb-1"><AlertTriangle size={11} style={{ color: C.amber }} /><span className="text-[10px]" style={{ color: C.textDim }}>その後の下落確率</span><ChevronRight size={11} style={{ color: C.textDim, marginLeft: "auto" }} /></div>
+          {d.isEntryLeg && d.speedCategory ? (<><div className="text-xs mb-0.5" style={{ color: C.textMuted }}>DD3→5%は{d.legDays}日（{d.speedCategory}）</div><div className="mono text-xs" style={{ color: C.text }}>→15%以深 <b style={{ color: C.rust }}>{SPEED_TABLE[d.speedCategory === "急落" ? "fast" : "slow"]["-15"]}%</b>　→20%以深 <b style={{ color: C.rust }}>{SPEED_TABLE[d.speedCategory === "急落" ? "fast" : "slow"]["-20"]}%</b></div></>)
+            : d.nextProg ? (<><div className="text-xs mb-0.5" style={{ color: C.textMuted }}>次の節目（{d.nextProg.to}%）への進行</div><div className="mono text-lg font-bold" style={{ color: d.nextProg.watershed ? C.rust : C.text }}>{d.nextProg.p}% {d.nextProg.watershed && <span className="text-[10px] font-normal">分水嶺</span>}</div></>) : (<div className="text-xs" style={{ color: C.textDim }}>下落モード外</div>)}
+          <div className="text-[9px] mt-0.5 underline" style={{ color: C.textDim }}>クリックで全トラックレコード表示</div>
         </button>
       </div>
     </Panel>
@@ -817,7 +817,7 @@ export default function DDDashboard() {
   }
 
   return (
-    <div className="w-full flex flex-col" style={{ background: C.bg, color: C.text, minHeight: "100dvh", fontFamily: "'Zen Kaku Gothic New','Hiragino Kaku Gothic ProN',sans-serif" }}>
+    <div className="w-full flex flex-col" style={{ background: C.bg, color: C.text, height: "100dvh", overflow: "hidden", fontFamily: "'Zen Kaku Gothic New','Hiragino Kaku Gothic ProN',sans-serif" }}>
       <style>{`.mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }`}</style>
 
       {modal?.type === "trackRecord" && <FullScreenModal title="過去のトラックレコード（1957–2026・69年）" onClose={() => setModal(null)}><TrackRecordContent currentT={d.episode.currentT} /></FullScreenModal>}
@@ -841,9 +841,9 @@ export default function DDDashboard() {
         <DepthGauge dd={d.currentDD} />
 
         <div className="flex-1 flex flex-col gap-3 p-3 min-w-0">
-          <div style={{ height: 108 }}><StatusPanel d={d} onOpenTrackRecord={() => setModal({ type: "trackRecord" })} /></div>
+          <div style={{ height: 100, flexShrink: 0 }}><StatusPanel d={d} onOpenTrackRecord={() => setModal({ type: "trackRecord" })} /></div>
 
-          <div className="flex-1" style={{ display: "grid", gridTemplateColumns: "1fr 380px", gridTemplateRows: "1fr 300px", gap: 12, minHeight: 0 }}>
+          <div className="flex-1" style={{ display: "grid", gridTemplateColumns: "1fr 380px", gridTemplateRows: "1fr 1fr", gap: 10, minHeight: 0 }}>
             {/* top-left: chart */}
             <div style={{ minHeight: 0 }}>
               <Panel
