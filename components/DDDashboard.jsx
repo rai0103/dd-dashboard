@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   ComposedChart, LineChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip,
-  ReferenceLine, ReferenceDot, ResponsiveContainer, PieChart, Pie, Cell,
+  ReferenceLine, ReferenceDot, ResponsiveContainer, PieChart, Pie, Cell, Brush,
 } from "recharts";
 import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Database } from "lucide-react";
 import { storage } from "@/lib/storage";
@@ -278,6 +278,46 @@ function sliceForPeriod(FULL, last, key) {
 }
 function fmtAxisDate(d, rangeDays) { if (rangeDays > 900) return `${d.getFullYear()}`; if (rangeDays > 120) return `${d.getFullYear()}/${d.getMonth() + 1}`; return `${d.getMonth() + 1}/${d.getDate()}`; }
 
+/* ---------------- reusable evaluation/DD composed chart ---------------- */
+function EvalDDChartBody({ chartData, rangeDays, d, hidden, withBrush = false, fontSize = 10, width, height }) {
+  return (
+    <ComposedChart width={width} height={height} data={chartData} margin={{ top: 12, right: 44, left: 0, bottom: withBrush ? 0 : 0 }}>
+      <defs>
+        <linearGradient id="ddFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={C.rust} stopOpacity={0} /><stop offset="100%" stopColor={C.rust} stopOpacity={0.32} /></linearGradient>
+        <linearGradient id="priceFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={C.teal} stopOpacity={0.22} /><stop offset="100%" stopColor={C.teal} stopOpacity={0} /></linearGradient>
+      </defs>
+      <CartesianGrid stroke={C.borderSoft} vertical={false} />
+      <XAxis dataKey="date" tickFormatter={(dt) => fmtAxisDate(dt, rangeDays)} tick={{ fill: C.textDim, fontSize }} axisLine={{ stroke: C.border }} tickLine={false} minTickGap={40} />
+      <YAxis yAxisId="price" domain={["auto", "auto"]} tick={{ fill: C.textDim, fontSize }} axisLine={false} tickLine={false} width={48} label={{ value: "評価額", angle: -90, position: "insideLeft", fill: C.textDim, fontSize }} />
+      <YAxis yAxisId="dd" orientation="right" domain={["dataMin", 2]} tick={{ fill: C.textDim, fontSize }} axisLine={false} tickLine={false} width={46} label={{ value: "DD%", angle: 90, position: "insideRight", fill: C.textDim, fontSize }} />
+      <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} labelStyle={{ color: C.textMuted }} labelFormatter={(dt) => dt.toLocaleDateString("ja-JP")} formatter={(v, name) => [name === "dd" ? `${v}%` : `$${v}`, name === "dd" ? "DD" : name === "ath" ? "ATH" : "評価額"]} />
+      {MILESTONES.map((t) => (<ReferenceLine key={t} yAxisId="dd" y={t} stroke={C.borderSoft} strokeDasharray="2 3" label={{ value: `${t}%`, position: "left", fill: C.textDim, fontSize: Math.max(8, fontSize - 2) }} />))}
+      {chartData[0].date < VOO_LISTING_DATE && chartData[chartData.length - 1].date > VOO_LISTING_DATE && (<ReferenceLine yAxisId="price" x={VOO_LISTING_DATE} stroke={C.violet} strokeDasharray="3 3" label={{ value: "VOO上場", fill: C.violet, fontSize: Math.max(9, fontSize - 1), position: "top" }} />)}
+      <Area yAxisId="dd" type="monotone" dataKey="dd" stroke={C.rust} fill="url(#ddFill)" strokeWidth={1.3} dot={false} isAnimationActive={false} fillOpacity={hidden.dd ? 0 : 1} strokeOpacity={hidden.dd ? 0 : 1} />
+      <Area yAxisId="price" type="monotone" dataKey="price" stroke={C.teal} fill="url(#priceFill)" strokeWidth={1.8} dot={false} isAnimationActive={false} fillOpacity={hidden.price ? 0 : 1} strokeOpacity={hidden.price ? 0 : 1} />
+      <Line yAxisId="price" type="monotone" dataKey="ath" stroke={C.textDim} strokeDasharray="3 4" strokeWidth={1} dot={false} isAnimationActive={false} strokeOpacity={hidden.price ? 0 : 1} />
+      {!hidden.price && <ReferenceDot yAxisId="price" x={chartData[chartData.length - 1].date} y={d.currentPrice} r={4} fill={depthColor(d.currentDD)} stroke={C.bg} strokeWidth={2} />}
+      {withBrush && <Brush dataKey="date" height={26} stroke={C.teal} fill={C.panel2} tickFormatter={(dt) => fmtAxisDate(new Date(dt), rangeDays)} travellerWidth={8} />}
+    </ComposedChart>
+  );
+}
+function DDChartModalContent({ chartData, rangeDays, d, hidden, toggle, period, setPeriod }) {
+  return (
+    <div className="h-full flex flex-col">
+      <div className="flex items-center gap-3 mb-3 flex-wrap">
+        <ClickLegend items={[{ key: "price", label: "評価額 / ATH", color: C.teal }, { key: "dd", label: "DD%", color: C.rust }]} hidden={hidden} onToggle={toggle} />
+        <div className="flex gap-0.5">{PERIODS.map((p) => (<button key={p.key} onClick={() => setPeriod(p.key)} className="text-[11px] px-2 py-1 rounded" style={{ color: period === p.key ? C.bg : C.textMuted, background: period === p.key ? C.teal : "transparent", fontWeight: period === p.key ? 700 : 400 }}>{p.label}</button>))}</div>
+      </div>
+      <div style={{ height: "min(70vh, 640px)" }}>
+        <ResponsiveContainer width="100%" height="100%" key={period}>
+          <EvalDDChartBody chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} withBrush fontSize={12} />
+        </ResponsiveContainer>
+      </div>
+      <div className="mt-3 text-[10px]" style={{ color: C.textDim }}>下部のスクロールバーをドラッグして期間を絞り込み（ズーム）できます。グラフ上にカーソルを合わせるとツールチップが表示されます。</div>
+    </div>
+  );
+}
+
 /* ---------------- depth gauge ---------------- */
 function DepthGauge({ dd }) {
   const marks = [0, ...MILESTONES]; const top = 0, bottom = -55;
@@ -297,13 +337,15 @@ function DepthGauge({ dd }) {
 }
 
 /* ---------------- atoms ---------------- */
-function Panel({ title, action, children, className = "", style }) {
+function Panel({ title, action, children, className = "", style, hideHeader = false }) {
   return (
     <div className={`rounded-lg flex flex-col ${className}`} style={{ background: C.panel, border: `1px solid ${C.border}`, ...style }}>
-      <div className="flex items-center justify-between px-4 py-2" style={{ borderBottom: `1px solid ${C.borderSoft}` }}>
-        <span className="text-xs font-medium tracking-wide" style={{ color: C.textMuted }}>{title}</span>
-        {action}
-      </div>
+      {!hideHeader && (
+        <div className="flex items-center justify-between px-4 py-2" style={{ borderBottom: `1px solid ${C.borderSoft}` }}>
+          <span className="text-xs font-medium tracking-wide" style={{ color: C.textMuted }}>{title}</span>
+          {action}
+        </div>
+      )}
       <div className="flex-1 min-h-0">{children}</div>
     </div>
   );
@@ -345,7 +387,7 @@ function SortableTable({ columns, rows, defaultSortKey, defaultDir = "desc" }) {
 /* ---------------- status panel ---------------- */
 function StatusPanel({ d, onOpenTrackRecord }) {
   return (
-    <Panel title="現在のステータス">
+    <Panel title="現在のステータス" hideHeader>
       <div className="flex h-full">
         <div className="flex-1 px-4 py-2 flex flex-col justify-center" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
           <div className="text-[10px] mb-0.5" style={{ color: C.textDim }}>評価額（VOO終値）</div>
@@ -379,15 +421,15 @@ function PortfolioPie({ view, holdings, onOpen }) {
   const total = useMemo(() => holdingsTotal(holdings), [holdings]);
   const data = useMemo(() => groupByField(holdings, field).sort((a, b) => b.value - a.value), [holdings, field]);
   return (
-    <div onClick={onOpen} className="h-full flex cursor-pointer" style={{ padding: "8px 4px" }}>
-      <div className="relative" style={{ width: "48%" }}>
+    <div onClick={onOpen} className="h-full flex items-center cursor-pointer" style={{ padding: "6px 8px", gap: 6 }}>
+      <div className="relative shrink-0" style={{ width: "40%", height: "92%" }}>
         <ResponsiveContainer width="100%" height="100%">
           <PieChart><Pie data={data} dataKey="value" nameKey="name" innerRadius="55%" outerRadius="88%" paddingAngle={2} stroke={C.panel} strokeWidth={2} isAnimationActive={false}>{data.map((d, i) => (<Cell key={i} fill={colorForView(view, d.name)} />))}</Pie><Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} formatter={(v, n) => [`¥${v.toLocaleString()}`, n]} /></PieChart>
         </ResponsiveContainer>
-        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none"><span className="text-[9px]" style={{ color: C.textDim }}>合計評価額</span><span className="mono text-sm font-bold">¥{Math.round(total / 10000).toLocaleString()}万</span></div>
+        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none"><span className="text-[9px]" style={{ color: C.textDim }}>合計評価額</span><span className="mono text-xs font-bold">¥{Math.round(total / 10000).toLocaleString()}万</span></div>
       </div>
-      <div className="flex-1 pl-3 flex flex-col justify-center gap-1.5 overflow-y-auto">
-        {data.map((d) => (<div key={d.name} className="flex items-center gap-1.5 text-[11px]"><span style={{ width: 8, height: 8, borderRadius: 2, background: colorForView(view, d.name), flexShrink: 0 }} /><span style={{ color: C.textMuted }} className="flex-1 truncate">{d.name}</span><span className="mono" style={{ color: C.text }}>{((d.value / total) * 100).toFixed(1)}%</span></div>))}
+      <div className="flex-1 min-w-0 flex flex-col justify-center gap-1 overflow-y-auto">
+        {data.map((d) => (<div key={d.name} className="flex items-center gap-1 text-[10px]"><span style={{ width: 7, height: 7, borderRadius: 2, background: colorForView(view, d.name), flexShrink: 0 }} /><span style={{ color: C.textMuted }} className="flex-1 truncate">{d.name}</span><span className="mono shrink-0" style={{ color: C.text }}>{((d.value / total) * 100).toFixed(1)}%</span></div>))}
       </div>
     </div>
   );
@@ -825,6 +867,7 @@ export default function DDDashboard() {
       {modal?.type === "ddTable" && <FullScreenModal title="DD毎のA〜E配分表" onClose={() => setModal(null)}><DDTableContent modelRow={d.modelRow} /></FullScreenModal>}
       {modal?.type === "rank" && <FullScreenModal title={`${modal.rank}ランクの保有銘柄`} onClose={() => setModal(null)}><RankHoldingsContent rank={modal.rank} holdings={holdings} /></FullScreenModal>}
       {modal?.type === "crash" && <FullScreenModal title={`${modal.crash.name}（${modal.crash.start} 〜）と現状の比較`} onClose={() => setModal(null)}><CrashModalContent crash={modal.crash} daysSinceDDStart={d.daysSinceDDStart} currentDD={d.currentDD} currentEpisodeCurve={d.currentEpisodeCurve} /></FullScreenModal>}
+      {modal?.type === "ddChart" && <FullScreenModal title="評価額（左軸） / DD%（右軸）" onClose={() => setModal(null)}><DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} /></FullScreenModal>}
       {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} onBackfill={handleBackfill} source={dataSource} holdings={holdings} onImportHoldings={handleImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} />}
 
       <div className="flex items-center justify-between px-5 py-3 shrink-0" style={{ borderBottom: `1px solid ${C.border}`, background: C.panel2 }}>
@@ -841,9 +884,10 @@ export default function DDDashboard() {
         <DepthGauge dd={d.currentDD} />
 
         <div className="flex-1 flex flex-col gap-3 p-3 min-w-0">
-          <div style={{ height: 100, flexShrink: 0 }}><StatusPanel d={d} onOpenTrackRecord={() => setModal({ type: "trackRecord" })} /></div>
+          <div style={{ height: 130, flexShrink: 0 }}><StatusPanel d={d} onOpenTrackRecord={() => setModal({ type: "trackRecord" })} /></div>
 
-          <div className="flex-1" style={{ display: "grid", gridTemplateColumns: "1fr 380px", gridTemplateRows: "1fr 1fr", gap: 10, minHeight: 0 }}>
+          <div className="flex-1 flex flex-col" style={{ gap: 10, minHeight: 0 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 380px", gap: 10, flex: 1, minHeight: 0 }}>
             {/* top-left: chart */}
             <div style={{ minHeight: 0 }}>
               <Panel
@@ -857,25 +901,13 @@ export default function DDDashboard() {
                 className="h-full"
               >
                 {chartTab === "normal" ? (
-                  <ResponsiveContainer width="100%" height="100%" key={period}>
-                    <ComposedChart data={chartData} margin={{ top: 12, right: 44, left: 0, bottom: 0 }}>
-                      <defs>
-                        <linearGradient id="ddFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={C.rust} stopOpacity={0} /><stop offset="100%" stopColor={C.rust} stopOpacity={0.32} /></linearGradient>
-                        <linearGradient id="priceFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={C.teal} stopOpacity={0.22} /><stop offset="100%" stopColor={C.teal} stopOpacity={0} /></linearGradient>
-                      </defs>
-                      <CartesianGrid stroke={C.borderSoft} vertical={false} />
-                      <XAxis dataKey="date" tickFormatter={(dt) => fmtAxisDate(dt, rangeDays)} tick={{ fill: C.textDim, fontSize: 10 }} axisLine={{ stroke: C.border }} tickLine={false} minTickGap={40} />
-                      <YAxis yAxisId="price" domain={["auto", "auto"]} tick={{ fill: C.textDim, fontSize: 10 }} axisLine={false} tickLine={false} width={48} label={{ value: "評価額", angle: -90, position: "insideLeft", fill: C.textDim, fontSize: 10 }} />
-                      <YAxis yAxisId="dd" orientation="right" domain={["dataMin", 2]} tick={{ fill: C.textDim, fontSize: 10 }} axisLine={false} tickLine={false} width={46} label={{ value: "DD%", angle: 90, position: "insideRight", fill: C.textDim, fontSize: 10 }} />
-                      <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} labelStyle={{ color: C.textMuted }} labelFormatter={(dt) => dt.toLocaleDateString("ja-JP")} formatter={(v, name) => [name === "dd" ? `${v}%` : `$${v}`, name === "dd" ? "DD" : name === "ath" ? "ATH" : "評価額"]} />
-                      {MILESTONES.map((t) => (<ReferenceLine key={t} yAxisId="dd" y={t} stroke={C.borderSoft} strokeDasharray="2 3" label={{ value: `${t}%`, position: "left", fill: C.textDim, fontSize: 8 }} />))}
-                      {chartData[0].date < VOO_LISTING_DATE && chartData[chartData.length - 1].date > VOO_LISTING_DATE && (<ReferenceLine yAxisId="price" x={VOO_LISTING_DATE} stroke={C.violet} strokeDasharray="3 3" label={{ value: "VOO上場", fill: C.violet, fontSize: 9, position: "top" }} />)}
-                      <Area yAxisId="dd" type="monotone" dataKey="dd" stroke={C.rust} fill="url(#ddFill)" strokeWidth={1.3} dot={false} isAnimationActive={false} fillOpacity={hidden.dd ? 0 : 1} strokeOpacity={hidden.dd ? 0 : 1} />
-                      <Area yAxisId="price" type="monotone" dataKey="price" stroke={C.teal} fill="url(#priceFill)" strokeWidth={1.8} dot={false} isAnimationActive={false} fillOpacity={hidden.price ? 0 : 1} strokeOpacity={hidden.price ? 0 : 1} />
-                      <Line yAxisId="price" type="monotone" dataKey="ath" stroke={C.textDim} strokeDasharray="3 4" strokeWidth={1} dot={false} isAnimationActive={false} strokeOpacity={hidden.price ? 0 : 1} />
-                      {!hidden.price && <ReferenceDot yAxisId="price" x={chartData[chartData.length - 1].date} y={d.currentPrice} r={4} fill={depthColor(d.currentDD)} stroke={C.bg} strokeWidth={2} />}
-                    </ComposedChart>
-                  </ResponsiveContainer>
+                  <div className="h-full flex flex-col cursor-zoom-in" title="クリックで拡大表示" onClick={() => setModal({ type: "ddChart" })}>
+                    <div className="flex-1 min-h-0">
+                      <ResponsiveContainer width="100%" height="100%" key={period}>
+                        <EvalDDChartBody chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} />
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
                 ) : (
                   <div className="h-full flex flex-col">
                     <div className="flex-1 min-h-0">
@@ -900,7 +932,7 @@ export default function DDDashboard() {
 
             {/* top-right: AI advice */}
             <div style={{ minHeight: 0 }}>
-              <Panel title="現在のアドバイス（AI）" className="h-full">
+              <Panel title="現在のアドバイス（AI）" className="h-full" hideHeader>
                 <div className="p-3 flex flex-col gap-2.5 overflow-hidden h-full">
                   <div>
                     <div className="text-[10px] mb-1" style={{ color: C.textDim }}>現在の判断</div>
@@ -921,7 +953,9 @@ export default function DDDashboard() {
                 </div>
               </Panel>
             </div>
+          </div>
 
+          <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 10, flex: 1, minHeight: 0 }}>
             {/* bottom-left: portfolio pie */}
             <div style={{ minHeight: 0 }}>
               <Panel title="ポートフォリオ構成" action={<div className="flex gap-1">{[{ k: "category", l: "カテゴリー別" }, { k: "currency", l: "為替別" }, { k: "rank", l: "A〜Eランク" }].map((t) => (<button key={t.k} onClick={() => setPieView(t.k)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: pieView === t.k ? C.bg : C.textMuted, background: pieView === t.k ? C.teal : "transparent", fontWeight: pieView === t.k ? 700 : 400 }}>{t.l}</button>))}</div>} className="h-full">
@@ -935,11 +969,12 @@ export default function DDDashboard() {
                 <div className="overflow-hidden h-full">
                   {CATS.map((cat) => (<DiffBar key={cat} cat={cat} current={currentHoldingPct[cat]} target={d.modelRow[cat]} onClick={() => setModal({ type: "rank", rank: cat })} />))}
                   <div className="px-3 py-2 grid grid-cols-3 gap-2">
-                    {[{ label: "A+B", ...blocks.AB }, { label: "C", ...blocks.Cb }, { label: "D+E", ...blocks.DE }].map((b) => { const diff = Number((b.cur - b.tgt).toFixed(1)); return (<div key={b.label} className="rounded px-2 py-1.5 text-center" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}><div className="text-[10px]" style={{ color: C.textDim }}>{b.label}</div><div className="mono text-xs font-semibold">{b.cur}%</div><div className="mono text-[10px]" style={{ color: Math.abs(diff) >= 4 ? C.rust : C.textMuted }}>{diff > 0 ? "+" : ""}{diff}pt</div></div>); })}
+                    {[{ label: "A+B", ...blocks.AB }, { label: "C", ...blocks.Cb }, { label: "D+E", ...blocks.DE }].map((b) => { const diff = Number((b.cur - b.tgt).toFixed(1)); return (<div key={b.label} className="rounded px-2 py-1.5 text-center" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}><div className="text-[10px]" style={{ color: C.textDim }}>{b.label}</div><div className="mono text-xs font-semibold">{Number(b.cur.toFixed(1))}%</div><div className="mono text-[10px]" style={{ color: Math.abs(diff) >= 4 ? C.rust : C.textMuted }}>{diff > 0 ? "+" : ""}{diff}pt</div></div>); })}
                   </div>
                 </div>
               </Panel>
             </div>
+          </div>
           </div>
         </div>
       </div>
