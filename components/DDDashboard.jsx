@@ -387,7 +387,7 @@ function SortableTable({ columns, rows, defaultSortKey, defaultDir = "desc" }) {
 /* ---------------- status panel ---------------- */
 function StatusPanel({ d, onOpenTrackRecord }) {
   return (
-    <Panel title="現在のステータス" hideHeader>
+    <Panel title="現在のステータス" hideHeader className="h-full">
       <div className="flex h-full">
         <div className="flex-1 px-4 py-2 flex flex-col justify-center" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
           <div className="text-[10px] mb-0.5" style={{ color: C.textDim }}>評価額（VOO終値）</div>
@@ -883,11 +883,11 @@ export default function DDDashboard() {
       <div className="flex flex-1 min-h-0">
         <DepthGauge dd={d.currentDD} />
 
-        <div className="flex-1 flex flex-col gap-2 p-2 min-w-0">
-          <div style={{ height: 130, flexShrink: 0 }}><StatusPanel d={d} onOpenTrackRecord={() => setModal({ type: "trackRecord" })} /></div>
+        <div className="flex-1 flex flex-col gap-0 p-2 min-w-0">
+          <div style={{ height: 104, flexShrink: 0 }}><StatusPanel d={d} onOpenTrackRecord={() => setModal({ type: "trackRecord" })} /></div>
 
-          <div className="flex-1 flex flex-col" style={{ gap: 8, minHeight: 0 }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 380px", gap: 8, flex: 1, minHeight: 0 }}>
+          <div className="flex-1 flex flex-col" style={{ gap: 0, minHeight: 0 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 380px", gap: 4, flex: 1, minHeight: 0 }}>
             {/* top-left: chart */}
             <div style={{ minHeight: 0 }}>
               <Panel
@@ -955,7 +955,7 @@ export default function DDDashboard() {
             </div>
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 8, flex: 1, minHeight: 0 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 4, flex: 1, minHeight: 0 }}>
             {/* bottom-left: portfolio pie */}
             <div style={{ minHeight: 0 }}>
               <Panel title="ポートフォリオ構成" action={<div className="flex gap-1">{[{ k: "category", l: "カテゴリー別" }, { k: "currency", l: "為替別" }, { k: "rank", l: "A〜Eランク" }].map((t) => (<button key={t.k} onClick={() => setPieView(t.k)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: pieView === t.k ? C.bg : C.textMuted, background: pieView === t.k ? C.teal : "transparent", fontWeight: pieView === t.k ? 700 : 400 }}>{t.l}</button>))}</div>} className="h-full">
