@@ -173,43 +173,73 @@ function splitCsvLine(line) {
   return out.map((s) => s.trim());
 }
 function parseYen(s) { if (s == null) return NaN; return parseFloat(String(s).replace(/[,¥\s]/g, "")); }
+function toHalfWidth(s) { return String(s ?? "").normalize("NFKC"); }
 const RANK_KEYWORDS = [
-  { rank: "C", category: "SP500", keys: ["S&P500", "SP500", "米国株式", "VOO", "SPY", "楽天SP500", "2521"] },
+  { rank: "C", category: "SP500", keys: ["S&P500", "SP500", "VOO", "SPY", "楽天SP500"] },
+  { rank: "B", category: "SP500", keys: ["円ヘッジ", "2521"] },
   { rank: "D", category: "Nasdaq", keys: ["NASDAQ", "ナスダック", "QQQ", "FANG", "テック指数", "Zテック"] },
-  { rank: "E", category: "テック系ETF・投信", keys: ["SPXL", "SPUU", "SOXL", "MSFU", "METU"] },
-  { rank: "B", category: "ゴールド", keys: ["GLD", "ITA", "防衛", "円ヘッジ"] },
+  { rank: "E", category: "テック系ETF・投信", keys: ["SPXL", "SPUU", "SOXL", "MSFU", "METU", "モメンタム", "トレンドランキング"] },
+  { rank: "B", category: "ゴールド", keys: ["GLD", "ゴールド", "金プラス", "プラチナ"] },
+  { rank: "B", category: "その他", keys: ["ITA", "防衛"] },
   { rank: "A", category: "その他", keys: ["HDV", "高配当", "2013", "399A"] },
 ];
-function guessCategoryRank(name) {
-  for (const g of RANK_KEYWORDS) if (g.keys.some((k) => name.includes(k))) return { rank: g.rank, category: g.category };
-  if (/ゴールド|金/.test(name)) return { rank: "A", category: "ゴールド" };
-  if (/現金|MRF|預り金/.test(name)) return { rank: "A", category: "現金" };
-  if (/日本|日経|TOPIX/.test(name)) return { rank: "A", category: "日本株" };
+// 種別(国内株式/米国株式/投資信託/外貨預り金)とティッカー・銘柄名から、A〜Eランクとカテゴリーを推定する。
+// 楽天のCSVはティッカーと日本語の銘柄名が別列のため、両方を正規化して突き合わせる。
+function guessCategoryRank(rawName, ticker, assetType) {
+  if (assetType === "外貨預り金") return { rank: "A", category: "現金" };
+  const norm = toHalfWidth(`${ticker ?? ""} ${rawName ?? ""}`);
+  for (const g of RANK_KEYWORDS) if (g.keys.some((k) => norm.includes(k))) return { rank: g.rank, category: g.category };
+  if (/ゴールド|金/.test(norm)) return { rank: "A", category: "ゴールド" };
+  if (/現金|MRF|預り金/.test(norm)) return { rank: "A", category: "現金" };
+  if (/日本|日経|TOPIX|JPX/.test(norm)) return { rank: "A", category: "日本株" };
+  if (assetType === "国内株式") return { rank: "D", category: "日本株" };
   return { rank: "D", category: "その他" };
 }
-function guessCurrency(name) { return /^[A-Z0-9.]{2,6}$/.test(name.trim()) ? "ドル" : "円"; }
+// 単位列（円/USD）から通貨を判定する。銘柄名の見た目からの推測は実データ（日本語の説明的な名称）では機能しないため使わない。
+function pickCurrency(...units) {
+  for (const u of units) { if (u === "USD") return "ドル"; if (u === "円") return "円"; }
+  return "円";
+}
+function normalizeAccount(a) {
+  if (a === "-" || a === "‐" || a === "―") return "—";
+  return a.replace(/投資枠$/, "");
+}
 function parseRakutenCSV(text) {
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   let headerIdx = -1, cols = null;
   for (let i = 0; i < lines.length; i++) {
     const c = splitCsvLine(lines[i]);
-    if (c.some((x) => x.includes("銘柄") || x.includes("名称")) && c.some((x) => x.includes("評価額"))) { headerIdx = i; cols = c; break; }
+    if (c.some((x) => x === "銘柄") && c.some((x) => x === "口座") && c.some((x) => x.includes("評価額"))) { headerIdx = i; cols = c; break; }
   }
   if (headerIdx === -1) return [];
-  const nameIdx = cols.findIndex((x) => x.includes("銘柄") || x.includes("名称"));
-  const accountIdx = cols.findIndex((x) => x.includes("口座"));
-  const amountIdx = cols.findIndex((x) => x.includes("評価額"));
+  const typeIdx = cols.findIndex((x) => x === "種別");
+  const tickerIdx = cols.findIndex((x) => x.includes("銘柄コード"));
+  const nameIdx = cols.findIndex((x) => x === "銘柄");
+  const accountIdx = cols.findIndex((x) => x === "口座");
+  const qtyIdx = cols.findIndex((x) => x === "保有数量");
+  const avgCostIdx = cols.findIndex((x) => x === "平均取得価額");
+  const curValIdx = cols.findIndex((x) => x === "現在値");
+  const amountIdx = cols.findIndex((x) => x.includes("時価評価額[円]"));
+  if (nameIdx === -1 || amountIdx === -1) return [];
   const rows = [];
   for (let i = headerIdx + 1; i < lines.length; i++) {
     const c = splitCsvLine(lines[i]);
     if (c.length <= amountIdx || !c[nameIdx]) continue;
-    const name = c[nameIdx];
-    if (!name || name.includes("合計")) continue;
+    const rawName = c[nameIdx];
+    if (!rawName || rawName.includes("合計")) continue;
     const amount = parseYen(c[amountIdx]);
-    if (isNaN(amount)) continue;
-    const account = accountIdx !== -1 && c[accountIdx] ? c[accountIdx] : "特定";
-    const guess = guessCategoryRank(name);
-    rows.push({ name, account, amount, category: guess.category, rank: guess.rank, currency: guessCurrency(name) });
+    if (isNaN(amount) || amount === 0) continue;
+    const assetType = typeIdx !== -1 ? c[typeIdx] : "";
+    const ticker = tickerIdx !== -1 ? c[tickerIdx] : "";
+    const name = ticker ? `${ticker} ${rawName}` : rawName;
+    const account = normalizeAccount(accountIdx !== -1 && c[accountIdx] ? c[accountIdx] : "特定");
+    const currency = pickCurrency(
+      avgCostIdx !== -1 ? c[avgCostIdx + 1] : null,
+      curValIdx !== -1 ? c[curValIdx + 1] : null,
+      qtyIdx !== -1 ? c[qtyIdx + 1] : null,
+    );
+    const guess = guessCategoryRank(rawName, ticker, assetType);
+    rows.push({ name, account, amount, category: guess.category, rank: guess.rank, currency });
   }
   return rows;
 }

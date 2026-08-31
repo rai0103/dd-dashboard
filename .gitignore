@@ -17,3 +17,6 @@ out/
 .env.production.local
 
 npm-debug.log*
+
+# personal financial data (never commit)
+sample-data/
