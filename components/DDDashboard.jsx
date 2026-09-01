@@ -5,7 +5,7 @@ import {
   ComposedChart, LineChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ReferenceLine, ReferenceDot, ResponsiveContainer, PieChart, Pie, Cell, Brush,
 } from "recharts";
-import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Database } from "lucide-react";
+import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Database, Trash2 } from "lucide-react";
 import { storage } from "@/lib/storage";
 
 /* ---------------- design tokens ---------------- */
@@ -103,7 +103,8 @@ function computeAll(rawSeries) {
   const currentLevelP = currentTLabel === "-3%" ? 100 : (FINAL_REACH_DATA.find((r) => r.label === currentTLabel)?.p ?? null);
   const currentFreqLabel = currentLevelP !== null ? freqLabelFromP(currentLevelP) : null;
   const athDate = FULL[episode.athIdx].date; // 直近の下落局面の起点となった最高値更新日
-  return { FULL, last, currentDD, currentPrice, currentATH, isDrawdown, mode, episode, ddStartIdx, daysSinceDDStart, daysSinceCurrentThreshold, legDays, isEntryLeg, currentTLabel, currentEpisodeCurve, speedCategory, nextProg, modelRow, currentLevelP, currentFreqLabel, athDate };
+  const daysSinceATH = last.i - FULL[episode.athIdx].i; // 前回最高値（DD3%後）からの経過日数
+  return { FULL, last, currentDD, currentPrice, currentATH, isDrawdown, mode, episode, ddStartIdx, daysSinceDDStart, daysSinceCurrentThreshold, legDays, isEntryLeg, currentTLabel, currentEpisodeCurve, speedCategory, nextProg, modelRow, currentLevelP, currentFreqLabel, athDate, daysSinceATH };
 }
 
 const PROGRESSION_DATA = [
@@ -198,6 +199,16 @@ function splitCsvLine(line) {
 function parseYen(s) { if (s == null) return NaN; return parseFloat(String(s).replace(/[,¥\s]/g, "")); }
 function toHalfWidth(s) { return String(s ?? "").normalize("NFKC"); }
 function genId() { try { return crypto.randomUUID(); } catch (e) { return `id-${Date.now()}-${Math.random().toString(36).slice(2)}`; } }
+// ゴールドプラス系の分割銘柄名（末尾の「（ゴールド）」「（テックETF・投信（米）」等）から元の銘柄名を取り出す。
+// カテゴリー名自体に括弧を含むもの（例：「テックETF・投信（米）」）があるため、既知のカテゴリー一覧に対する完全一致で末尾を判定する（単純な正規表現では入れ子の括弧を検出できない）。
+function baseHoldingName(name) {
+  const s = String(name ?? "");
+  for (const cat of CATEGORIES) {
+    const suffix = `（${cat}）`;
+    if (s.endsWith(suffix)) return s.slice(0, -suffix.length);
+  }
+  return s;
+}
 // 種別(国内株式/米国株式/投資信託/外貨預り金)とティッカー・銘柄名から、CATEGORIES（固定14分類）のいずれかを推定する。
 // 楽天のCSVはティッカーと日本語の銘柄名が別列のため、両方を正規化して突き合わせる。
 // テーマ別カテゴリー（高配当/テック/その他ETF）は米国・日本の2種類に分かれるため、名称に「米国」等があるかで判定する。
@@ -476,14 +487,14 @@ function DiffBar({ cat, current, target, onClick }) {
 }
 
 /* ---------------- sortable table ---------------- */
-function SortableTable({ columns, rows, defaultSortKey, defaultDir = "desc", onEditCell }) {
+function SortableTable({ columns, rows, defaultSortKey, defaultDir = "desc", onEditCell, onDeleteRow }) {
   const [sortKey, setSortKey] = useState(defaultSortKey);
   const [dir, setDir] = useState(defaultDir);
   const sorted = useMemo(() => { const copy = [...rows]; copy.sort((a, b) => { const av = a[sortKey], bv = b[sortKey]; if (typeof av === "number") return dir === "asc" ? av - bv : bv - av; return dir === "asc" ? String(av).localeCompare(String(bv), "ja") : String(bv).localeCompare(String(av), "ja"); }); return copy; }, [rows, sortKey, dir]);
   const headerClick = (key) => { if (key === sortKey) setDir((d) => (d === "asc" ? "desc" : "asc")); else { setSortKey(key); setDir("desc"); } };
   return (
     <table className="w-full text-xs mono">
-      <thead><tr style={{ color: C.textDim }}>{columns.map((col) => (<th key={col.key} onClick={() => headerClick(col.key)} className={`font-normal py-1 select-none ${col.align === "right" ? "text-right" : "text-left"}`} style={{ cursor: "pointer", color: sortKey === col.key ? C.textMuted : C.textDim }}>{col.label}{sortKey === col.key ? (dir === "asc" ? " ▲" : " ▼") : ""}</th>))}</tr></thead>
+      <thead><tr style={{ color: C.textDim }}>{columns.map((col) => (<th key={col.key} onClick={() => headerClick(col.key)} className={`font-normal py-1 select-none ${col.align === "right" ? "text-right" : "text-left"}`} style={{ cursor: "pointer", color: sortKey === col.key ? C.textMuted : C.textDim }}>{col.label}{sortKey === col.key ? (dir === "asc" ? " ▲" : " ▼") : ""}</th>))}{onDeleteRow && <th style={{ width: 24 }} />}</tr></thead>
       <tbody>{sorted.map((row, i) => (<tr key={row.id ?? i} style={{ borderTop: `1px solid ${C.borderSoft}` }}>{columns.map((col) => (
         <td key={col.key} className={col.align === "right" ? "text-right" : ""} style={{ color: col.emphasize ? C.text : C.textMuted, padding: "4px 4px" }}>
           {col.editable ? (
@@ -497,7 +508,13 @@ function SortableTable({ columns, rows, defaultSortKey, defaultDir = "desc", onE
             </select>
           ) : (col.format ? col.format(row[col.key], row) : row[col.key])}
         </td>
-      ))}</tr>))}</tbody>
+      ))}{onDeleteRow && (
+        <td className="text-right" style={{ padding: "4px 4px" }}>
+          <button onClick={() => onDeleteRow(row)} title="この銘柄を削除" style={{ background: "transparent", border: "none", cursor: "pointer", color: C.textDim, display: "inline-flex" }}>
+            <Trash2 size={12} />
+          </button>
+        </td>
+      )}</tr>))}</tbody>
     </table>
   );
 }
@@ -510,7 +527,8 @@ function StatusPanel({ d, onOpenTrackRecord }) {
         <div className="flex-1 px-4 py-2 flex flex-col justify-center" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
           <div className="text-[10px] mb-0.5" style={{ color: C.textDim }}>評価額（VOO終値）</div>
           <div className="mono text-xl font-bold">${d.currentPrice.toFixed(2)}</div>
-          <div className="text-[10px] mt-0.5" style={{ color: C.textDim }}>ATH ${d.currentATH.toFixed(2)}</div>
+          <div className="text-[10px] mt-0.5" style={{ color: C.textDim }}>データ日付：{fmtYMD(d.last.date)}</div>
+          <div className="text-[10px] mt-0.5" style={{ color: C.textDim }}>ATH ${d.currentATH.toFixed(2)}（{fmtYMD(d.athDate)}）{d.currentDD.toFixed(1)}%</div>
         </div>
         <div className="flex-1 px-4 py-2 flex flex-col justify-center" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
           <div className="flex items-center gap-1.5 mb-0.5">{d.isDrawdown ? <TrendingDown size={11} style={{ color: depthColor(d.currentDD) }} /> : <TrendingUp size={11} style={{ color: C.teal }} />}<span className="text-[10px]" style={{ color: C.textDim }}>{d.isDrawdown ? "最高値比" : "前回最高値（DD3％後）比"}</span></div>
@@ -520,7 +538,11 @@ function StatusPanel({ d, onOpenTrackRecord }) {
         <div className="flex-1 px-4 py-2 flex flex-col justify-center" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
           <div className="flex items-center gap-1.5 mb-1"><Clock size={11} style={{ color: C.textDim }} /><span className="text-[10px]" style={{ color: C.textDim }}>経過日数</span></div>
           <div className="flex items-baseline justify-between text-xs mb-0.5"><span style={{ color: C.textMuted }}>DD開始（-3%）から</span><span className="mono font-semibold">{d.daysSinceDDStart ?? "—"}日</span></div>
-          <div className="flex items-baseline justify-between text-xs"><span style={{ color: C.textMuted }}>前節目（{d.currentTLabel}）通過から</span><span className="mono font-semibold">{d.daysSinceCurrentThreshold ?? "—"}日</span></div>
+          {d.isDrawdown ? (
+            <div className="flex items-baseline justify-between text-xs"><span style={{ color: C.textMuted }}>前節目（{d.currentTLabel}）通過から</span><span className="mono font-semibold">{d.daysSinceCurrentThreshold ?? "—"}日</span></div>
+          ) : (
+            <div className="flex items-baseline justify-between text-xs"><span style={{ color: C.textMuted }}>前回最高値（DD3％後）から</span><span className="mono font-semibold">{d.daysSinceATH}日</span></div>
+          )}
         </div>
         <button onClick={onOpenTrackRecord} className="flex-1 px-4 py-2 flex flex-col justify-center text-left cursor-pointer" style={{ background: "transparent", border: "none" }}>
           <div className="flex items-center gap-1.5 mb-1"><AlertTriangle size={11} style={{ color: C.amber }} /><span className="text-[10px]" style={{ color: C.textDim }}>その後の下落確率</span><ChevronRight size={11} style={{ color: C.textDim, marginLeft: "auto" }} /></div>
@@ -594,7 +616,7 @@ function TrackRecordContent({ currentT }) {
   );
 }
 
-function PortfolioTableContent({ view, holdings, onEditHolding }) {
+function PortfolioTableContent({ view, holdings, onEditHolding, onDeleteHolding }) {
   const field = fieldForView(view);
   const total = holdingsTotal(holdings);
   const grouped = groupByField(holdings, field).sort((a, b) => b.value - a.value);
@@ -616,8 +638,8 @@ function PortfolioTableContent({ view, holdings, onEditHolding }) {
         <div className="text-xs mb-3" style={{ color: C.textDim }}>内訳（{viewLabel}）</div>
         {grouped.map((g) => (<div key={g.name} className="flex items-center gap-2 mb-1.5"><span style={{ width: 10, height: 10, borderRadius: 2, background: colorForView(view, g.name), flexShrink: 0 }} /><span className="text-xs w-32 truncate" style={{ color: C.textMuted }}>{g.name}</span><div className="flex-1 h-2 rounded-full" style={{ background: C.panel2 }}><div className="h-2 rounded-full" style={{ width: `${(g.value / total) * 100}%`, background: colorForView(view, g.name) }} /></div><span className="mono text-xs w-14 text-right">{((g.value / total) * 100).toFixed(1)}%</span><span className="mono text-xs w-28 text-right" style={{ color: C.textMuted }}>¥{g.value.toLocaleString()}</span></div>))}
       </div>
-      <div className="text-xs mb-2" style={{ color: C.textDim }}>保有銘柄一覧（列見出しクリックでソート・カテゴリー/ランク/口座主は変更可）</div>
-      <SortableTable columns={columns} rows={rows} defaultSortKey="amount" onEditCell={(row, key, value) => onEditHolding && onEditHolding(row.id, key, value)} />
+      <div className="text-xs mb-2" style={{ color: C.textDim }}>保有銘柄一覧（列見出しクリックでソート・カテゴリー/ランク/口座主は変更可・右端の🗑で削除）</div>
+      <SortableTable columns={columns} rows={rows} defaultSortKey="amount" onEditCell={(row, key, value) => onEditHolding && onEditHolding(row.id, key, value)} onDeleteRow={(row) => onDeleteHolding && onDeleteHolding(row.id)} />
     </div>
   );
 }
@@ -670,7 +692,7 @@ function DDTableContent({ modelRow }) {
   );
 }
 
-function RankHoldingsContent({ rank, holdings, onEditHolding }) {
+function RankHoldingsContent({ rank, holdings, onEditHolding, onDeleteHolding }) {
   const items = holdings.filter((h) => h.rank === rank);
   const total = items.reduce((s, h) => s + h.amount, 0);
   const rows = items.map((h) => ({ ...h, share: (h.amount / total) * 100 }));
@@ -683,7 +705,7 @@ function RankHoldingsContent({ rank, holdings, onEditHolding }) {
     { key: "amount", label: "金額", align: "right", format: (v) => `¥${v.toLocaleString()}` },
     { key: "share", label: "構成比", align: "right", format: (v) => `${v.toFixed(1)}%` },
   ];
-  return (<div><div className="text-xs mb-3" style={{ color: C.textDim }}>{rank}（{CAT_LABEL[rank]}） 合計 ¥{total.toLocaleString()}　（列見出しクリックでソート・カテゴリー/ランク/口座主は変更可）</div><SortableTable columns={columns} rows={rows} defaultSortKey="amount" onEditCell={(row, key, value) => onEditHolding && onEditHolding(row.id, key, value)} /></div>);
+  return (<div><div className="text-xs mb-3" style={{ color: C.textDim }}>{rank}（{CAT_LABEL[rank]}） 合計 ¥{total.toLocaleString()}　（列見出しクリックでソート・カテゴリー/ランク/口座主は変更可・右端の🗑で削除）</div><SortableTable columns={columns} rows={rows} defaultSortKey="amount" onEditCell={(row, key, value) => onEditHolding && onEditHolding(row.id, key, value)} onDeleteRow={(row) => onDeleteHolding && onDeleteHolding(row.id)} /></div>);
 }
 
 function CrashModalContent({ crash, daysSinceDDStart, currentDD, currentEpisodeCurve }) {
@@ -1069,6 +1091,33 @@ export default function DDDashboard() {
       });
     }
   }
+  // 銘柄を削除する。ゴールドプラス系などの分割銘柄（同じ元銘柄名・同じ口座主で、末尾の（カテゴリー）表記だけが異なる対の行）は
+  // 片方だけ消すと合計評価額が半分になってしまうため、対になる行があれば両方まとめて消すかどうかを確認する。
+  function handleDeleteHolding(id) {
+    const target = holdings.find((h) => h.id === id);
+    if (!target) return;
+    const base = baseHoldingName(target.name);
+    const sibling = base !== target.name
+      ? holdings.find((h) => h.id !== id && h.owner === target.owner && baseHoldingName(h.name) === base && h.name !== target.name)
+      : null;
+    if (sibling) {
+      const ok = window.confirm(`「${base}」はゴールドプラス系などの分割銘柄です。対になるもう一方の行（${sibling.category}・¥${sibling.amount.toLocaleString()}）も一緒に削除しますか？\n\nOK：2行とも削除　／　キャンセル：削除しない（片方だけの削除は行いません）`);
+      if (!ok) return;
+      setHoldings((prev) => {
+        const next = prev.filter((h) => h.id !== id && h.id !== sibling.id);
+        persistHoldings(next);
+        return next;
+      });
+    } else {
+      const ok = window.confirm(`「${target.name}」（¥${target.amount.toLocaleString()}）を削除しますか？`);
+      if (!ok) return;
+      setHoldings((prev) => {
+        const next = prev.filter((h) => h.id !== id);
+        persistHoldings(next);
+        return next;
+      });
+    }
+  }
 
   const d = useMemo(() => computeAll(rawSeries), [rawSeries]);
   const chartData = useMemo(() => sliceForPeriod(d.FULL, d.last, period), [d.FULL, d.last, period]);
@@ -1100,9 +1149,9 @@ export default function DDDashboard() {
       <style>{`.mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }`}</style>
 
       {modal?.type === "trackRecord" && <FullScreenModal title="過去のトラックレコード（1957–2026・69年）" onClose={() => setModal(null)}><TrackRecordContent currentT={d.episode.currentT} /></FullScreenModal>}
-      {modal?.type === "portfolio" && <FullScreenModal title="ポートフォリオ構成表" onClose={() => setModal(null)}><PortfolioTableContent view={pieView} holdings={holdings} onEditHolding={handleHoldingFieldEdit} /></FullScreenModal>}
+      {modal?.type === "portfolio" && <FullScreenModal title="ポートフォリオ構成表" onClose={() => setModal(null)}><PortfolioTableContent view={pieView} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
       {modal?.type === "ddTable" && <FullScreenModal title="DD毎のA〜E配分表" onClose={() => setModal(null)}><DDTableContent modelRow={d.modelRow} /></FullScreenModal>}
-      {modal?.type === "rank" && <FullScreenModal title={`${modal.rank}ランクの保有銘柄`} onClose={() => setModal(null)}><RankHoldingsContent rank={modal.rank} holdings={holdings} onEditHolding={handleHoldingFieldEdit} /></FullScreenModal>}
+      {modal?.type === "rank" && <FullScreenModal title={`${modal.rank}ランクの保有銘柄`} onClose={() => setModal(null)}><RankHoldingsContent rank={modal.rank} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
       {modal?.type === "crash" && <FullScreenModal title={`${modal.crash.name}（${modal.crash.start} 〜）と現状の比較`} onClose={() => setModal(null)}><CrashModalContent crash={modal.crash} daysSinceDDStart={d.daysSinceDDStart} currentDD={d.currentDD} currentEpisodeCurve={d.currentEpisodeCurve} /></FullScreenModal>}
       {modal?.type === "ddChart" && <FullScreenModal title="評価額（左軸） / DD%（右軸）" onClose={() => setModal(null)}><DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} /></FullScreenModal>}
       {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} onBackfill={handleBackfill} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} />}
