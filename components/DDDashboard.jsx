@@ -168,21 +168,24 @@ const CAT_LABEL = { A: "現金・高配当・金", B: "金・ヘッジ・防衛"
 const CATEGORIES = [
   "SP500", "Nasdaq", "日本（N225・Topix）", "個別（米）", "個別（日）", "ゴールド", "現金",
   "テックETF・投信（米）", "テックETF・投信（日）", "高配当ETF・投信（米）", "高配当ETF・投信（日）",
-  "その他ETF・投信（米）", "その他ETF・投信（日）", "その他",
+  "その他ETF・投信（米）", "その他ETF・投信（日）", "レバレッジETF（米）", "レバレッジETF（日）", "その他",
 ];
 const CATEGORY_COLORS = {
   "SP500": C.teal, "Nasdaq": C.blue, "日本（N225・Topix）": "#BE7A63",
   "個別（米）": "#7C8DB0", "個別（日）": "#C9A06A", "ゴールド": C.amber, "現金": "#7FA37A",
   "テックETF・投信（米）": C.violet, "テックETF・投信（日）": "#C77FB0",
   "高配当ETF・投信（米）": "#4FA0A6", "高配当ETF・投信（日）": "#A3A24B",
-  "その他ETF・投信（米）": "#7B9BC7", "その他ETF・投信（日）": "#B98F6A", "その他": C.textDim,
+  "その他ETF・投信（米）": "#7B9BC7", "その他ETF・投信（日）": "#B98F6A",
+  "レバレッジETF（米）": C.rust, "レバレッジETF（日）": "#D98F7A", "その他": C.textDim,
 };
-// カテゴリー別のデフォルトA〜Eランク（自動推定・分割時に使用。ユーザーは行ごとに自由に上書き可能）
+// カテゴリー別のデフォルトA〜Eランク（自動推定・分割時に使用。ユーザーは行ごとに自由に上書き可能。
+// データ入力画面の「カテゴリー別ランク設定」で変更でき、その場合はここでの値より優先される）
 const CATEGORY_DEFAULT_RANK = {
   "SP500": "C", "Nasdaq": "D", "日本（N225・Topix）": "A", "個別（米）": "D", "個別（日）": "D",
   "ゴールド": "B", "現金": "A", "テックETF・投信（米）": "D", "テックETF・投信（日）": "D",
   "高配当ETF・投信（米）": "A", "高配当ETF・投信（日）": "A",
-  "その他ETF・投信（米）": "D", "その他ETF・投信（日）": "D", "その他": "D",
+  "その他ETF・投信（米）": "D", "その他ETF・投信（日）": "D",
+  "レバレッジETF（米）": "E", "レバレッジETF（日）": "E", "その他": "D",
 };
 
 /* ---------------- portfolio holdings (default/seed — replaced once real data is imported) ---------------- */
@@ -210,6 +213,22 @@ function groupByField(holdings, field) { const map = {}; for (const h of holding
 function sortGroupedForView(data, view) {
   if (view === "rank") { const order = CATS; return [...data].sort((a, b) => order.indexOf(a.name) - order.indexOf(b.name)); }
   return [...data].sort((a, b) => b.value - a.value);
+}
+// カテゴリー数が多い円グラフを見やすくするため、構成比thresholdPct%未満のカテゴリーは「その他」にまとめる
+// （既存の「その他」カテゴリーがあればそこに合算し、円グラフ上で「その他」が重複しないようにする）。
+function aggregateSmallGroups(data, total, thresholdPct = 2) {
+  if (!total) return data;
+  const big = []; let smallSum = 0;
+  for (const g of data) {
+    if (g.name !== "その他" && (g.value / total) * 100 < thresholdPct) smallSum += g.value;
+    else big.push(g);
+  }
+  if (smallSum > 0) {
+    const idx = big.findIndex((g) => g.name === "その他");
+    if (idx !== -1) big[idx] = { ...big[idx], value: big[idx].value + smallSum };
+    else big.push({ name: "その他", value: smallSum });
+  }
+  return big;
 }
 function holdingsTotal(holdings) { return holdings.reduce((s, h) => s + h.amount, 0); }
 function currentHoldingPctFromHoldings(holdings) {
@@ -260,7 +279,8 @@ function guessCategory(rawName, ticker, assetType) {
   const isJP = mentionsJP || (assetType === "国内株式" && !mentionsUS);
   if (mentionsJP && !/高配当|テック|モメンタム/.test(norm)) return "日本（N225・Topix）";
   if (/高配当|HDV/.test(norm)) return isJP ? "高配当ETF・投信（日）" : "高配当ETF・投信（米）";
-  if (/FANG|テック指数|Zテック|SPXL|SPUU|SOXL|MSFU|METU/.test(norm)) return isJP ? "テックETF・投信（日）" : "テックETF・投信（米）";
+  if (/レバレッジ|ブル|SPXL|SPUU|SOXL|MSFU|METU|TQQQ|LABU|TECL|FAS|SSO|UPRO|3倍|2倍/.test(norm)) return isJP ? "レバレッジETF（日）" : "レバレッジETF（米）";
+  if (/FANG|テック指数|Zテック/.test(norm)) return isJP ? "テックETF・投信（日）" : "テックETF・投信（米）";
   if (/モメンタム|トレンドランキング|ITA|防衛/.test(norm)) return isJP ? "その他ETF・投信（日）" : "その他ETF・投信（米）";
   if (assetType === "国内株式") return isJP ? "個別（日）" : "個別（米）";
   if (assetType === "米国株式") return "個別（米）";
@@ -272,7 +292,7 @@ function guessCategoryRank(rawName, ticker, assetType) {
 }
 // 米国株指数・米国株連動の資産は、円建て（国内上場ETF/投信）でも為替はドルの影響を受けるため「ドル」扱いにする。
 // カテゴリーが米国系（SP500/Nasdaq/個別（米）等）であるか、銘柄名に米国関連キーワードが含まれる場合に該当。
-const USD_EXPOSURE_CATEGORIES = new Set(["SP500", "Nasdaq", "個別（米）", "テックETF・投信（米）", "高配当ETF・投信（米）", "その他ETF・投信（米）"]);
+const USD_EXPOSURE_CATEGORIES = new Set(["SP500", "Nasdaq", "個別（米）", "テックETF・投信（米）", "高配当ETF・投信（米）", "その他ETF・投信（米）", "レバレッジETF（米）"]);
 function isUsdExposure(rawName, ticker, category) {
   if (USD_EXPOSURE_CATEGORIES.has(category)) return true;
   const norm = toHalfWidth(`${ticker ?? ""} ${rawName ?? ""}`);
@@ -690,7 +710,10 @@ function StatusPanel({ d, onOpenTrackRecord }) {
 function PortfolioPie({ view, holdings, onOpen }) {
   const field = fieldForView(view);
   const total = useMemo(() => holdingsTotal(holdings), [holdings]);
-  const data = useMemo(() => sortGroupedForView(groupByField(holdings, field), view), [holdings, field, view]);
+  const data = useMemo(() => {
+    const grouped = sortGroupedForView(groupByField(holdings, field), view);
+    return view === "category" ? sortGroupedForView(aggregateSmallGroups(grouped, total, 2), view) : grouped;
+  }, [holdings, field, view, total]);
   return (
     <div onClick={onOpen} className="h-full flex items-center cursor-pointer" style={{ padding: "6px 8px", gap: 6 }}>
       <div className="relative shrink-0" style={{ width: "40%", height: "92%" }}>
@@ -747,10 +770,15 @@ function TrackRecordContent({ currentT }) {
   );
 }
 
+const BREAKDOWN_COLLAPSE_LIMIT = 10;
 function PortfolioTableContent({ view, holdings, onEditHolding, onDeleteHolding }) {
+  const [showAllBreakdown, setShowAllBreakdown] = useState(false);
+  useEffect(() => { setShowAllBreakdown(false); }, [view]);
   const field = fieldForView(view);
   const total = holdingsTotal(holdings);
   const grouped = sortGroupedForView(groupByField(holdings, field), view);
+  const hasMore = grouped.length > BREAKDOWN_COLLAPSE_LIMIT;
+  const visibleGrouped = showAllBreakdown ? grouped : grouped.slice(0, BREAKDOWN_COLLAPSE_LIMIT);
   const viewLabel = view === "category" ? "カテゴリー別" : view === "currency" ? "為替別" : view === "owner" ? "口座別" : "A〜Eランク別";
   const rows = holdings.map((h) => ({ ...h, share: (h.amount / total) * 100 }));
   const columns = [
@@ -767,7 +795,12 @@ function PortfolioTableContent({ view, holdings, onEditHolding, onDeleteHolding 
     <div>
       <div className="mb-6">
         <div className="text-xs mb-3" style={{ color: C.textDim }}>内訳（{viewLabel}）</div>
-        {grouped.map((g) => (<div key={g.name} className="flex items-center gap-2 mb-1.5"><span style={{ width: 10, height: 10, borderRadius: 2, background: colorForView(view, g.name), flexShrink: 0 }} /><span className="text-xs w-32 truncate" style={{ color: C.textMuted }}>{g.name}</span><div className="flex-1 h-2 rounded-full" style={{ background: C.panel2 }}><div className="h-2 rounded-full" style={{ width: `${(g.value / total) * 100}%`, background: colorForView(view, g.name) }} /></div><span className="mono text-xs w-14 text-right">{((g.value / total) * 100).toFixed(1)}%</span><span className="mono text-xs w-28 text-right" style={{ color: C.textMuted }}>¥{g.value.toLocaleString()}</span></div>))}
+        {visibleGrouped.map((g) => (<div key={g.name} className="flex items-center gap-2 mb-1.5"><span style={{ width: 10, height: 10, borderRadius: 2, background: colorForView(view, g.name), flexShrink: 0 }} /><span className="text-xs w-32 truncate" style={{ color: C.textMuted }}>{g.name}</span><div className="flex-1 h-2 rounded-full" style={{ background: C.panel2 }}><div className="h-2 rounded-full" style={{ width: `${(g.value / total) * 100}%`, background: colorForView(view, g.name) }} /></div><span className="mono text-xs w-14 text-right">{((g.value / total) * 100).toFixed(1)}%</span><span className="mono text-xs w-28 text-right" style={{ color: C.textMuted }}>¥{g.value.toLocaleString()}</span></div>))}
+        {hasMore && (
+          <button onClick={() => setShowAllBreakdown((v) => !v)} className="text-[11px] mt-1 flex items-center gap-1" style={{ color: C.textMuted, background: "transparent", border: "none", cursor: "pointer" }}>
+            {showAllBreakdown ? "▲ 閉じる" : `▼ もっと見る（他${grouped.length - BREAKDOWN_COLLAPSE_LIMIT}件）`}
+          </button>
+        )}
       </div>
       <div className="text-xs mb-2" style={{ color: C.textDim }}>保有銘柄一覧（列見出しクリックでソート・カテゴリー/ランク/口座主は変更可・右端の🗑で削除）</div>
       <SortableTable columns={columns} rows={rows} defaultSortKey="amount" onEditCell={(row, key, value) => onEditHolding && onEditHolding(row.id, key, value)} onDeleteRow={(row) => onDeleteHolding && onDeleteHolding(row.id)} />
@@ -882,7 +915,7 @@ function CrashModalContent({ crash, daysSinceDDStart, currentDD, currentEpisodeC
 }
 
 /* ---------------- data input modal ---------------- */
-function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, onBackfill, source, holdings, onUpdateHoldings, onResetAndImportHoldings, onResetHoldings, holdingsSource, overrides }) {
+function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, onBackfill, source, holdings, onUpdateHoldings, onResetAndImportHoldings, onResetHoldings, holdingsSource, overrides, categoryDefaultRanks, onCategoryDefaultRankChange }) {
   const [dataset, setDataset] = useState("voo"); // "voo" | "holdings"
   const [tab, setTab] = useState("csv");
   const [manualDate, setManualDate] = useState(new Date().toISOString().slice(0, 10));
@@ -896,6 +929,7 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, onBa
   const [preview, setPreview] = useState(null); // rows pending confirmation
   const [previewOwner, setPreviewOwner] = useState("shin");
   const [ownerAutoDetected, setOwnerAutoDetected] = useState(false);
+  const [showCategoryRankSettings, setShowCategoryRankSettings] = useState(false);
 
   const handleFile = (e) => {
     const file = e.target.files[0];
@@ -941,7 +975,9 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, onBa
     reader.onload = (ev) => {
       const text = decodeShiftJIS(ev.target.result);
       const parsed = expandGoldPlusSplits(parseRakutenCSV(text));
-      const rows = parsed.map((r) => (overrides[r.name] ? { ...r, ...overrides[r.name] } : r));
+      // カテゴリー別ランク設定（ユーザーがカスタマイズ済みならそれを優先）→ 銘柄名ごとの個別修正、の順で上書きする。
+      const withDefaultRanks = parsed.map((r) => ({ ...r, rank: categoryDefaultRanks[r.category] ?? r.rank }));
+      const rows = withDefaultRanks.map((r) => (overrides[r.name] ? { ...r, ...overrides[r.name] } : r));
       if (rows.length) setPreview(rows);
       else setRakutenMsg("銘柄・評価額の列が見つかりませんでした。楽天証券の残高CSV（Shift-JIS）か確認してください。");
     };
@@ -1050,6 +1086,30 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, onBa
                 </div>
                 <button onClick={onResetHoldings} className="text-xs px-2 py-1 rounded" style={{ color: C.textMuted, background: "transparent", border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>初期データにリセット</button>
               </div>
+
+              <div className="mt-4 pt-4" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+                <button onClick={() => setShowCategoryRankSettings((v) => !v)} className="text-xs flex items-center gap-1.5 mb-1" style={{ color: C.textMuted, background: "transparent", border: "none", cursor: "pointer" }}>
+                  {showCategoryRankSettings ? "▲" : "▼"} カテゴリー別ランク設定
+                </button>
+                <p className="text-[10px] mb-3 leading-relaxed" style={{ color: C.textDim }}>カテゴリーごとのデフォルトA〜Eランクです。銘柄のカテゴリーを変更すると、ここで設定したランクが自動で割り当てられます（個別銘柄ごとにさらに手動で上書き可能）。</p>
+                {showCategoryRankSettings && (
+                  <div className="grid grid-cols-2 gap-x-6 gap-y-1.5">
+                    {CATEGORIES.map((cat) => (
+                      <div key={cat} className="flex items-center justify-between gap-2 text-xs">
+                        <span className="truncate" style={{ color: C.textMuted }}>{cat}</span>
+                        <select
+                          value={categoryDefaultRanks[cat] ?? "D"}
+                          onChange={(e) => onCategoryDefaultRankChange && onCategoryDefaultRankChange(cat, e.target.value)}
+                          className="text-xs rounded"
+                          style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text, padding: "1px 4px" }}
+                        >
+                          {CATS.map((c) => (<option key={c} value={c}>{c}</option>))}
+                        </select>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </>
           ) : (
             <>
@@ -1116,6 +1176,7 @@ export default function DDDashboard() {
   const [holdings, setHoldings] = useState(HOLDINGS_DEFAULT);
   const [holdingsSource, setHoldingsSource] = useState("seed");
   const [overrides, setOverrides] = useState({});
+  const [categoryDefaultRanks, setCategoryDefaultRanks] = useState(CATEGORY_DEFAULT_RANK);
   const [period, setPeriod] = useState("1Y");
   const [hidden, setHidden] = useState({});
   const [hiddenCrash, setHiddenCrash] = useState({});
@@ -1146,6 +1207,10 @@ export default function DDDashboard() {
         const res3 = await storage.get("classification_overrides");
         if (res3 && res3.value) setOverrides(JSON.parse(res3.value));
       } catch (e) { /* no saved overrides yet */ }
+      try {
+        const res4 = await storage.get("category_default_ranks");
+        if (res4 && res4.value) setCategoryDefaultRanks((prev) => ({ ...prev, ...JSON.parse(res4.value) }));
+      } catch (e) { /* no saved category default ranks yet — keep built-in defaults */ }
       setHydrated(true);
     })();
   }, []);
@@ -1158,6 +1223,16 @@ export default function DDDashboard() {
   }
   async function persistOverrides(map) {
     try { await storage.set("classification_overrides", JSON.stringify(map)); } catch (e) { /* storage unavailable */ }
+  }
+  async function persistCategoryDefaultRanks(map) {
+    try { await storage.set("category_default_ranks", JSON.stringify(map)); } catch (e) { /* storage unavailable */ }
+  }
+  function handleCategoryDefaultRankChange(category, rank) {
+    setCategoryDefaultRanks((prev) => {
+      const next = { ...prev, [category]: rank };
+      persistCategoryDefaultRanks(next);
+      return next;
+    });
   }
   function handleReplace(parsed) { setRawSeries(parsed); setDataSource("imported"); persist(parsed); }
   function handleAppend(entry) {
@@ -1211,17 +1286,19 @@ export default function DDDashboard() {
   function handleHoldingFieldEdit(id, field, value) {
     const target = holdings.find((h) => h.id === id);
     if (!target) return;
+    // カテゴリーを変更した場合、ランクは「カテゴリー別ランク設定」のデフォルト値を自動で割り当てる（個別にさらに手動上書き可）。
+    const autoRank = field === "category" ? (categoryDefaultRanks[value] ?? CATEGORY_DEFAULT_RANK[value] ?? "D") : null;
     setHoldings((prev) => {
       const next = field === "owner"
         ? prev.map((h) => (h.id === id ? { ...h, owner: value } : h))
-        : prev.map((h) => (h.name === target.name ? { ...h, [field]: value } : h));
+        : prev.map((h) => (h.name === target.name ? { ...h, [field]: value, ...(field === "category" ? { rank: autoRank } : {}) } : h));
       persistHoldings(next);
       return next;
     });
     if (field === "category" || field === "rank" || field === "currency") {
       setOverrides((prev) => {
         const prior = prev[target.name] || { category: target.category, rank: target.rank, currency: target.currency };
-        const next = { ...prev, [target.name]: { ...prior, [field]: value } };
+        const next = { ...prev, [target.name]: { ...prior, [field]: value, ...(field === "category" ? { rank: autoRank } : {}) } };
         persistOverrides(next);
         return next;
       });
@@ -1290,7 +1367,7 @@ export default function DDDashboard() {
       {modal?.type === "rank" && <FullScreenModal title={`${modal.rank}ランクの保有銘柄`} onClose={() => setModal(null)}><RankHoldingsContent rank={modal.rank} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
       {modal?.type === "crash" && <FullScreenModal title={`${modal.crash.name}（${modal.crash.start} 〜）と現状の比較`} onClose={() => setModal(null)}><CrashModalContent crash={modal.crash} daysSinceDDStart={d.daysSinceDDStart} currentDD={d.currentDD} currentEpisodeCurve={d.currentEpisodeCurve} /></FullScreenModal>}
       {modal?.type === "ddChart" && <FullScreenModal title="評価額（左軸） / DD%（右軸）" onClose={() => setModal(null)}><DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} /></FullScreenModal>}
-      {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} onBackfill={handleBackfill} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} />}
+      {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} onBackfill={handleBackfill} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} />}
 
       <div className="flex items-center justify-between px-5 py-3 shrink-0" style={{ borderBottom: `1px solid ${C.border}`, background: C.panel2 }}>
         <div className="flex items-center gap-3"><span className="text-sm font-bold tracking-wide">DD戦略ダッシュボード</span><span className="text-[11px]" style={{ color: C.textDim }}>VOO・日次</span></div>
