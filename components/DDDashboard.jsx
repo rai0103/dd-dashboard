@@ -22,7 +22,18 @@ function lerpColor(a, b, t) { const pa = hexToRgb(a), pb = hexToRgb(b); return `
 function rankColor(rank) { const order = ["A", "B", "C", "D", "E"]; const idx = order.indexOf(rank); const t = idx / (order.length - 1); return t <= 0.5 ? lerpColor(C.teal, C.amber, t / 0.5) : lerpColor(C.amber, C.rust, (t - 0.5) / 0.5); }
 
 const MILESTONES = [-3, -5, -8, -10, -12, -15, -18, -20, -25, -30, -35, -40, -45, -50];
-const DD_AXIS_TICKS = [-3, -5, -8, -10, -12, -15, -20, -30, -50]; // 評価額/DDチャートのDD%軸目盛りをDD基準値で固定
+// 表示期間内の最大DD%（最も深い下落）に応じてDD%軸の目盛りを動的に切り替える。
+// 浅い局面ではDD3%等の初期リバランスポイントが見やすいよう細かく、深い局面では10%刻みに広げる。
+function ddAxisTicksForMaxDrawdown(maxDrawdownPct) {
+  const abs = Math.abs(maxDrawdownPct);
+  if (abs <= 5) return [0, -3, -5];
+  if (abs <= 10) return [0, -3, -5, -8, -10];
+  if (abs <= 20) return [0, -5, -10, -15, -20];
+  const top = Math.ceil(abs / 10) * 10;
+  const ticks = [0];
+  for (let t = -10; t >= -top; t -= 10) ticks.push(t);
+  return ticks;
+}
 
 /* ---------------- bundled seed data (~31y), used until real data is imported ---------------- */
 function mulberry32(a) { return function () { let t = (a += 0x6d588f5); t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
@@ -553,6 +564,8 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, withBrush = false, f
   const chartFirst = chartData[0].date, chartLast = chartData[chartData.length - 1].date;
   const markerFontSize = Math.max(8, fontSize - 1);
   const isShortTerm = rangeDays <= 200; // 1・3・6ヶ月＝ラベル常時表示、1年以上＝点のみ＋ホバーで詳細
+  const maxDrawdownInView = Math.min(0, ...chartData.map((p) => p.dd)); // 表示期間内の最大DD%（最も深い下落）
+  const ddTicks = ddAxisTicksForMaxDrawdown(maxDrawdownInView);
   const markerPoints = [];
   if (!hidden.price) {
     const seenIdx = new Set();
@@ -587,7 +600,7 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, withBrush = false, f
       <CartesianGrid stroke={C.borderSoft} vertical={false} />
       <XAxis dataKey="date" tickFormatter={(dt) => fmtAxisDate(dt, rangeDays)} tick={{ fill: C.textDim, fontSize }} axisLine={{ stroke: C.border }} tickLine={false} minTickGap={40} />
       <YAxis yAxisId="price" domain={["auto", "auto"]} tick={{ fill: C.teal, fontSize }} axisLine={false} tickLine={false} width={48} label={{ value: "評価額", angle: -90, position: "insideLeft", fill: C.teal, fontSize }} />
-      <YAxis yAxisId="dd" orientation="right" domain={["dataMin", 2]} ticks={DD_AXIS_TICKS} tick={{ fill: C.rust, fontSize }} axisLine={false} tickLine={false} width={46} label={{ value: "DD%", angle: 90, position: "insideRight", fill: C.rust, fontSize }} />
+      <YAxis yAxisId="dd" orientation="right" domain={["dataMin", 2]} ticks={ddTicks} tick={{ fill: C.rust, fontSize }} axisLine={false} tickLine={false} width={46} label={{ value: "DD%", angle: 90, position: "insideRight", fill: C.rust, fontSize }} />
       <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} labelStyle={{ color: C.textMuted }} labelFormatter={(dt) => dt.toLocaleDateString("ja-JP")} formatter={(v, name) => [name === "dd" ? `${v}%` : `$${v}`, name === "dd" ? "DD" : name === "ath" ? "ATH" : "評価額"]} />
       {MILESTONES.map((t) => (<ReferenceLine key={t} yAxisId="dd" y={t} stroke={C.borderSoft} strokeDasharray="2 3" label={{ value: `${t}%`, position: "left", fill: C.textDim, fontSize: Math.max(8, fontSize - 2) }} />))}
       {chartData[0].date < VOO_LISTING_DATE && chartData[chartData.length - 1].date > VOO_LISTING_DATE && (<ReferenceLine yAxisId="price" x={VOO_LISTING_DATE} stroke={C.violet} strokeDasharray="3 3" label={{ value: "VOO上場", fill: C.violet, fontSize: Math.max(9, fontSize - 1), position: "top" }} />)}
