@@ -253,6 +253,32 @@ const CATEGORY_DEFAULT_RANK = {
   "レバレッジETF（米）": "E", "レバレッジETF（日）": "E", "その他": "D",
 };
 
+/* ---------------- checkpoints (DD戦略とは別に、ユーザーが任意に設定する保有比率の基準。最大5件) ---------------- */
+const CHECKPOINT_SLOTS = 5;
+function emptyCheckpoint() { return { enabled: false, label: "", targetType: "category", targetValues: [], direction: "max", thresholdPct: 5 }; }
+const DEFAULT_CHECKPOINTS = [
+  { enabled: true, label: "レバレッジETF", targetType: "category", targetValues: ["レバレッジETF（米）", "レバレッジETF（日）"], direction: "max", thresholdPct: 5 },
+  emptyCheckpoint(), emptyCheckpoint(), emptyCheckpoint(), emptyCheckpoint(),
+];
+// チェックポイント1件を実際の保有銘柄に対して評価し、判定文を生成する（基準を満たしていればnullではなく「基準内」の文を返す）。
+function evaluateCheckpoint(cp, holdings, totalValue) {
+  if (!cp || !cp.enabled || !cp.targetValues || cp.targetValues.length === 0 || !totalValue) return null;
+  const field = cp.targetType === "rank" ? "rank" : "category";
+  const matchSum = holdings.reduce((s, h) => (cp.targetValues.includes(h[field]) ? s + h.amount : s), 0);
+  const actualPct = (matchSum / totalValue) * 100;
+  const threshold = Number(cp.thresholdPct) || 0;
+  const isMax = cp.direction === "max";
+  const overBy = isMax ? actualPct - threshold : threshold - actualPct;
+  const label = cp.label?.trim() || cp.targetValues.join("+");
+  const directionLabel = isMax ? "以内" : "以上";
+  if (overBy <= 0) {
+    return { ok: true, text: `${label}は全体の${threshold}%${directionLabel}で、現在${actualPct.toFixed(1)}%です（基準内）。` };
+  }
+  const diffAmountMan = Math.round((totalValue * overBy) / 100 / 10000);
+  const verb = isMax ? "超過" : "不足";
+  return { ok: false, text: `${label}は全体の${threshold}%${directionLabel}：現在${actualPct.toFixed(1)}%なので${overBy.toFixed(1)}%（約${diffAmountMan.toLocaleString()}万円）${verb}しています。` };
+}
+
 /* ---------------- portfolio holdings (default/seed — replaced once real data is imported) ---------------- */
 const HOLDINGS_DEFAULT = [
   { id: "seed-1", name: "eMAXIS Slim 米国株式(S&P500)", category: "SP500", currency: "円", rank: "C", account: "特定", owner: "shin", amount: 8200000 },
@@ -985,7 +1011,7 @@ function CrashModalContent({ crash, daysSinceDDStart, currentDD, currentEpisodeC
 }
 
 /* ---------------- data input modal ---------------- */
-function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, onBackfill, source, holdings, onUpdateHoldings, onResetAndImportHoldings, onResetHoldings, holdingsSource, overrides, categoryDefaultRanks, onCategoryDefaultRankChange }) {
+function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, onBackfill, source, holdings, onUpdateHoldings, onResetAndImportHoldings, onResetHoldings, holdingsSource, overrides, categoryDefaultRanks, onCategoryDefaultRankChange, checkpoints, onCheckpointChange }) {
   const [dataset, setDataset] = useState("voo"); // "voo" | "holdings"
   const [tab, setTab] = useState("csv");
   const [manualDate, setManualDate] = useState(new Date().toISOString().slice(0, 10));
@@ -1000,6 +1026,7 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, onBa
   const [previewOwner, setPreviewOwner] = useState("shin");
   const [ownerAutoDetected, setOwnerAutoDetected] = useState(false);
   const [showCategoryRankSettings, setShowCategoryRankSettings] = useState(false);
+  const [showCheckpointSettings, setShowCheckpointSettings] = useState(false);
 
   const handleFile = (e) => {
     const file = e.target.files[0];
@@ -1180,6 +1207,81 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, onBa
                   </div>
                 )}
               </div>
+
+              <div className="mt-4 pt-4" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+                <button onClick={() => setShowCheckpointSettings((v) => !v)} className="text-xs flex items-center gap-1.5 mb-1" style={{ color: C.textMuted, background: "transparent", border: "none", cursor: "pointer" }}>
+                  {showCheckpointSettings ? "▲" : "▼"} チェックポイント設定
+                </button>
+                <p className="text-[10px] mb-3 leading-relaxed" style={{ color: C.textDim }}>DD戦略のA〜Eモデルとは別に、任意の基準（最大{CHECKPOINT_SLOTS}件）を保有ポートフォリオに対して評価し、「現状分析」パネルのチェックポイントに表示します。例：「レバレッジETFは全体の5%以内」。</p>
+                {showCheckpointSettings && (
+                  <div>
+                    {checkpoints.map((cp, i) => (
+                      <div key={i} className="rounded p-2 mb-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
+                        <div className="flex items-center gap-2 mb-1.5">
+                          <input type="checkbox" checked={cp.enabled} onChange={(e) => onCheckpointChange(i, "enabled", e.target.checked)} />
+                          <input
+                            type="text"
+                            placeholder={`チェックポイント${i + 1}のラベル（任意・例：レバレッジETF）`}
+                            value={cp.label}
+                            onChange={(e) => onCheckpointChange(i, "label", e.target.value)}
+                            className="text-xs rounded flex-1"
+                            style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, color: C.text, padding: "2px 6px" }}
+                          />
+                        </div>
+                        <div className="flex flex-wrap items-start gap-3">
+                          <div>
+                            <label className="text-[9px] block mb-0.5" style={{ color: C.textDim }}>対象</label>
+                            <select
+                              value={cp.targetType}
+                              onChange={(e) => { onCheckpointChange(i, "targetType", e.target.value); onCheckpointChange(i, "targetValues", []); }}
+                              className="text-xs rounded"
+                              style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, color: C.text, padding: "1px 4px" }}
+                            >
+                              <option value="category">カテゴリー</option>
+                              <option value="rank">ランク（A〜E）</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="text-[9px] block mb-0.5" style={{ color: C.textDim }}>対象項目（複数選択可）</label>
+                            <select
+                              multiple
+                              size={3}
+                              value={cp.targetValues}
+                              onChange={(e) => onCheckpointChange(i, "targetValues", Array.from(e.target.selectedOptions).map((o) => o.value))}
+                              className="text-xs rounded"
+                              style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, color: C.text, padding: "1px 4px", minWidth: 160 }}
+                            >
+                              {(cp.targetType === "rank" ? CATS : CATEGORIES).map((v) => (<option key={v} value={v}>{v}</option>))}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="text-[9px] block mb-0.5" style={{ color: C.textDim }}>条件</label>
+                            <select
+                              value={cp.direction}
+                              onChange={(e) => onCheckpointChange(i, "direction", e.target.value)}
+                              className="text-xs rounded"
+                              style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, color: C.text, padding: "1px 4px" }}
+                            >
+                              <option value="max">以内（上限）</option>
+                              <option value="min">以上（下限）</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="text-[9px] block mb-0.5" style={{ color: C.textDim }}>基準%</label>
+                            <input
+                              type="number" min="0" max="100" step="0.5"
+                              value={cp.thresholdPct}
+                              onChange={(e) => onCheckpointChange(i, "thresholdPct", e.target.value === "" ? "" : parseFloat(e.target.value))}
+                              className="text-xs rounded"
+                              style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, color: C.text, padding: "2px 6px", width: 64 }}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </>
           ) : (
             <>
@@ -1247,6 +1349,7 @@ export default function DDDashboard() {
   const [holdingsSource, setHoldingsSource] = useState("seed");
   const [overrides, setOverrides] = useState({});
   const [categoryDefaultRanks, setCategoryDefaultRanks] = useState(CATEGORY_DEFAULT_RANK);
+  const [checkpoints, setCheckpoints] = useState(DEFAULT_CHECKPOINTS);
   const [period, setPeriod] = useState("1Y");
   const [hidden, setHidden] = useState({});
   const [hiddenCrash, setHiddenCrash] = useState({});
@@ -1281,6 +1384,10 @@ export default function DDDashboard() {
         const res4 = await storage.get("category_default_ranks");
         if (res4 && res4.value) setCategoryDefaultRanks((prev) => ({ ...prev, ...JSON.parse(res4.value) }));
       } catch (e) { /* no saved category default ranks yet — keep built-in defaults */ }
+      try {
+        const res5 = await storage.get("portfolio_checkpoints");
+        if (res5 && res5.value) setCheckpoints(JSON.parse(res5.value));
+      } catch (e) { /* no saved checkpoints yet — keep built-in default */ }
       setHydrated(true);
     })();
   }, []);
@@ -1301,6 +1408,16 @@ export default function DDDashboard() {
     setCategoryDefaultRanks((prev) => {
       const next = { ...prev, [category]: rank };
       persistCategoryDefaultRanks(next);
+      return next;
+    });
+  }
+  async function persistCheckpoints(list) {
+    try { await storage.set("portfolio_checkpoints", JSON.stringify(list)); } catch (e) { /* storage unavailable */ }
+  }
+  function handleCheckpointChange(index, field, value) {
+    setCheckpoints((prev) => {
+      const next = prev.map((cp, i) => (i === index ? { ...cp, [field]: value } : cp));
+      persistCheckpoints(next);
       return next;
     });
   }
@@ -1420,6 +1537,10 @@ export default function DDDashboard() {
 
   const crashLegendItems = [...CRASHES.map((c) => ({ key: c.id, label: c.name, color: c.color })), { key: "current", label: "現在", color: C.teal }];
   const analysisText = useMemo(() => buildAnalysisText(d, currentHoldingPct, holdingsTotal(holdings)), [d, currentHoldingPct, holdings]);
+  const checkpointResults = useMemo(() => {
+    const total = holdingsTotal(holdings);
+    return checkpoints.map((cp) => evaluateCheckpoint(cp, holdings, total)).filter(Boolean);
+  }, [checkpoints, holdings]);
 
   if (!hydrated) {
     return (
@@ -1439,7 +1560,7 @@ export default function DDDashboard() {
       {modal?.type === "rank" && <FullScreenModal title={`${modal.rank}ランクの保有銘柄`} onClose={() => setModal(null)}><RankHoldingsContent rank={modal.rank} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
       {modal?.type === "crash" && <FullScreenModal title={`${modal.crash.name}（${modal.crash.start} 〜）と現状の比較`} onClose={() => setModal(null)}><CrashModalContent crash={modal.crash} daysSinceDDStart={d.daysSinceDDStart} currentDD={d.currentDD} currentEpisodeCurve={d.currentEpisodeCurve} /></FullScreenModal>}
       {modal?.type === "ddChart" && <FullScreenModal title="評価額（左軸） / DD%（右軸）" onClose={() => setModal(null)}><DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} /></FullScreenModal>}
-      {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} onBackfill={handleBackfill} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} />}
+      {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} onBackfill={handleBackfill} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} checkpoints={checkpoints} onCheckpointChange={handleCheckpointChange} />}
 
       <div className="flex items-center justify-between px-5 py-3 shrink-0" style={{ borderBottom: `1px solid ${C.border}`, background: C.panel2 }}>
         <div className="flex items-center gap-3"><span className="text-sm font-bold tracking-wide">DD戦略ダッシュボード</span><span className="text-[11px]" style={{ color: C.textDim }}>VOO・日次</span></div>
@@ -1509,14 +1630,15 @@ export default function DDDashboard() {
                     <div className="text-[10px] mb-0.5" style={{ color: C.textDim }}>現状分析</div>
                     <div className="text-[11px] leading-tight" style={{ color: C.text }}>{analysisText}</div>
                   </div>
-                  <div><div className="text-[10px] mb-0.5" style={{ color: C.textDim }}>推奨アクション</div>
-                    <ul className="text-[11px] leading-tight list-disc pl-3" style={{ color: C.textMuted }}>
-                      <li>レバレッジ枠(E)を5%枠まで刈り込み済みか確認</li>
-                      <li>C(SP500)が目標比+6pt過多 — 新規買付は一旦停止</li>
-                      <li>A・Bが計-8pt不足 — 押し目で現金・ヘッジ資産を優先補充</li>
-                    </ul>
+                  <div><div className="text-[10px] mb-0.5" style={{ color: C.textDim }}>チェックポイント</div>
+                    {checkpointResults.length > 0 ? (
+                      <ul className="text-[11px] leading-tight list-disc pl-3" style={{ color: C.textMuted }}>
+                        {checkpointResults.map((r, i) => (<li key={i} style={{ color: r.ok ? C.textMuted : C.rust }}>{r.text}</li>))}
+                      </ul>
+                    ) : (
+                      <div className="text-[11px] leading-tight" style={{ color: C.textDim }}>チェックポイントが設定されていません。「データ入力」→「保有資産データ」から設定できます。</div>
+                    )}
                   </div>
-                  <div><div className="text-[10px] mb-0.5" style={{ color: C.textDim }}>取り崩し・現金バッファ</div><div className="text-[11px] leading-tight" style={{ color: C.textMuted }}>年480万取り崩し想定。生活費2-3年分(約1,000-1,440万)を目安に現金比率を維持。</div></div>
                   <div className="mt-auto flex gap-1.5 text-[10px] leading-tight" style={{ color: C.textDim }}><Info size={11} style={{ flexShrink: 0, marginTop: 1 }} /><span>投資助言ではなく可視化・判断補助です。過去確率は将来を保証しません。</span></div>
                 </div>
               </Panel>
