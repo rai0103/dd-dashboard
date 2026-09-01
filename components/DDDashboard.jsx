@@ -1010,8 +1010,103 @@ function CrashModalContent({ crash, daysSinceDDStart, currentDD, currentEpisodeC
   );
 }
 
+/* ---------------- checkpoint settings (add / edit) ---------------- */
+function CheckpointSettingsContent({ checkpoints, onCheckpointChange, holdings }) {
+  const total = holdingsTotal(holdings);
+  return (
+    <div>
+      <p className="text-xs mb-5 leading-relaxed" style={{ color: C.textDim }}>
+        DD戦略のA〜Eモデルとは別に、任意の基準（最大{CHECKPOINT_SLOTS}件）を保有ポートフォリオに対して評価します。例：「レバレッジETFは全体の5%以内」。
+        有効にしたチェックポイントは「現状分析」パネルに表示されます。
+      </p>
+      {checkpoints.map((cp, i) => {
+        const preview = evaluateCheckpoint(cp, holdings, total);
+        const options = cp.targetType === "rank" ? CATS : CATEGORIES;
+        return (
+          <div key={i} className="rounded p-3 mb-3" style={{ background: C.panel2, border: `1px solid ${cp.enabled ? C.teal : C.borderSoft}` }}>
+            <div className="flex items-center gap-2 mb-2.5">
+              <input type="checkbox" checked={cp.enabled} onChange={(e) => onCheckpointChange(i, "enabled", e.target.checked)} />
+              <span className="text-xs font-semibold shrink-0" style={{ color: cp.enabled ? C.teal : C.textDim }}>チェックポイント{i + 1}</span>
+              <input
+                type="text"
+                placeholder="ラベル（任意・例：レバレッジETF）"
+                value={cp.label}
+                onChange={(e) => onCheckpointChange(i, "label", e.target.value)}
+                className="text-xs rounded flex-1"
+                style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, color: C.text, padding: "3px 8px" }}
+              />
+            </div>
+
+            <div className="flex flex-wrap items-center gap-4 mb-2.5">
+              <div className="flex items-center gap-1.5">
+                <label className="text-[10px]" style={{ color: C.textDim }}>対象</label>
+                <select
+                  value={cp.targetType}
+                  onChange={(e) => { onCheckpointChange(i, "targetType", e.target.value); onCheckpointChange(i, "targetValues", []); }}
+                  className="text-xs rounded"
+                  style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, color: C.text, padding: "2px 5px" }}
+                >
+                  <option value="category">カテゴリー</option>
+                  <option value="rank">ランク（A〜E）</option>
+                </select>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <label className="text-[10px]" style={{ color: C.textDim }}>条件</label>
+                <select
+                  value={cp.direction}
+                  onChange={(e) => onCheckpointChange(i, "direction", e.target.value)}
+                  className="text-xs rounded"
+                  style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, color: C.text, padding: "2px 5px" }}
+                >
+                  <option value="max">以内（上限）</option>
+                  <option value="min">以上（下限）</option>
+                </select>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <label className="text-[10px]" style={{ color: C.textDim }}>基準</label>
+                <input
+                  type="number" min="0" max="100" step="0.5"
+                  value={cp.thresholdPct}
+                  onChange={(e) => onCheckpointChange(i, "thresholdPct", e.target.value === "" ? "" : parseFloat(e.target.value))}
+                  className="text-xs rounded"
+                  style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, color: C.text, padding: "3px 6px", width: 60 }}
+                />
+                <span className="text-[10px]" style={{ color: C.textDim }}>%</span>
+              </div>
+            </div>
+
+            <label className="text-[10px] block mb-1" style={{ color: C.textDim }}>対象項目（複数選択可）</label>
+            <div className="flex flex-wrap gap-x-3 gap-y-1 p-2 rounded" style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, maxHeight: 90, overflowY: "auto" }}>
+              {options.map((v) => (
+                <label key={v} className="flex items-center gap-1 text-[11px]" style={{ color: C.textMuted, cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={cp.targetValues.includes(v)}
+                    onChange={(e) => {
+                      const next = e.target.checked ? [...cp.targetValues, v] : cp.targetValues.filter((x) => x !== v);
+                      onCheckpointChange(i, "targetValues", next);
+                    }}
+                  />
+                  {v}
+                </label>
+              ))}
+            </div>
+
+            {preview && (
+              <div className="mt-2 text-[11px] leading-relaxed" style={{ color: preview.ok ? C.teal : C.rust }}>プレビュー：{preview.text}</div>
+            )}
+            {cp.enabled && !preview && (
+              <div className="mt-2 text-[11px]" style={{ color: C.textDim }}>対象項目を選択するとプレビューが表示されます。</div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 /* ---------------- data input modal ---------------- */
-function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, onBackfill, source, holdings, onUpdateHoldings, onResetAndImportHoldings, onResetHoldings, holdingsSource, overrides, categoryDefaultRanks, onCategoryDefaultRankChange, checkpoints, onCheckpointChange }) {
+function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, onBackfill, source, holdings, onUpdateHoldings, onResetAndImportHoldings, onResetHoldings, holdingsSource, overrides, categoryDefaultRanks, onCategoryDefaultRankChange }) {
   const [dataset, setDataset] = useState("voo"); // "voo" | "holdings"
   const [tab, setTab] = useState("csv");
   const [manualDate, setManualDate] = useState(new Date().toISOString().slice(0, 10));
@@ -1026,7 +1121,6 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, onBa
   const [previewOwner, setPreviewOwner] = useState("shin");
   const [ownerAutoDetected, setOwnerAutoDetected] = useState(false);
   const [showCategoryRankSettings, setShowCategoryRankSettings] = useState(false);
-  const [showCheckpointSettings, setShowCheckpointSettings] = useState(false);
 
   const handleFile = (e) => {
     const file = e.target.files[0];
@@ -1208,80 +1302,6 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, onBa
                 )}
               </div>
 
-              <div className="mt-4 pt-4" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
-                <button onClick={() => setShowCheckpointSettings((v) => !v)} className="text-xs flex items-center gap-1.5 mb-1" style={{ color: C.textMuted, background: "transparent", border: "none", cursor: "pointer" }}>
-                  {showCheckpointSettings ? "▲" : "▼"} チェックポイント設定
-                </button>
-                <p className="text-[10px] mb-3 leading-relaxed" style={{ color: C.textDim }}>DD戦略のA〜Eモデルとは別に、任意の基準（最大{CHECKPOINT_SLOTS}件）を保有ポートフォリオに対して評価し、「現状分析」パネルのチェックポイントに表示します。例：「レバレッジETFは全体の5%以内」。</p>
-                {showCheckpointSettings && (
-                  <div>
-                    {checkpoints.map((cp, i) => (
-                      <div key={i} className="rounded p-2 mb-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
-                        <div className="flex items-center gap-2 mb-1.5">
-                          <input type="checkbox" checked={cp.enabled} onChange={(e) => onCheckpointChange(i, "enabled", e.target.checked)} />
-                          <input
-                            type="text"
-                            placeholder={`チェックポイント${i + 1}のラベル（任意・例：レバレッジETF）`}
-                            value={cp.label}
-                            onChange={(e) => onCheckpointChange(i, "label", e.target.value)}
-                            className="text-xs rounded flex-1"
-                            style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, color: C.text, padding: "2px 6px" }}
-                          />
-                        </div>
-                        <div className="flex flex-wrap items-start gap-3">
-                          <div>
-                            <label className="text-[9px] block mb-0.5" style={{ color: C.textDim }}>対象</label>
-                            <select
-                              value={cp.targetType}
-                              onChange={(e) => { onCheckpointChange(i, "targetType", e.target.value); onCheckpointChange(i, "targetValues", []); }}
-                              className="text-xs rounded"
-                              style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, color: C.text, padding: "1px 4px" }}
-                            >
-                              <option value="category">カテゴリー</option>
-                              <option value="rank">ランク（A〜E）</option>
-                            </select>
-                          </div>
-                          <div>
-                            <label className="text-[9px] block mb-0.5" style={{ color: C.textDim }}>対象項目（複数選択可）</label>
-                            <select
-                              multiple
-                              size={3}
-                              value={cp.targetValues}
-                              onChange={(e) => onCheckpointChange(i, "targetValues", Array.from(e.target.selectedOptions).map((o) => o.value))}
-                              className="text-xs rounded"
-                              style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, color: C.text, padding: "1px 4px", minWidth: 160 }}
-                            >
-                              {(cp.targetType === "rank" ? CATS : CATEGORIES).map((v) => (<option key={v} value={v}>{v}</option>))}
-                            </select>
-                          </div>
-                          <div>
-                            <label className="text-[9px] block mb-0.5" style={{ color: C.textDim }}>条件</label>
-                            <select
-                              value={cp.direction}
-                              onChange={(e) => onCheckpointChange(i, "direction", e.target.value)}
-                              className="text-xs rounded"
-                              style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, color: C.text, padding: "1px 4px" }}
-                            >
-                              <option value="max">以内（上限）</option>
-                              <option value="min">以上（下限）</option>
-                            </select>
-                          </div>
-                          <div>
-                            <label className="text-[9px] block mb-0.5" style={{ color: C.textDim }}>基準%</label>
-                            <input
-                              type="number" min="0" max="100" step="0.5"
-                              value={cp.thresholdPct}
-                              onChange={(e) => onCheckpointChange(i, "thresholdPct", e.target.value === "" ? "" : parseFloat(e.target.value))}
-                              className="text-xs rounded"
-                              style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, color: C.text, padding: "2px 6px", width: 64 }}
-                            />
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
             </>
           ) : (
             <>
@@ -1560,7 +1580,8 @@ export default function DDDashboard() {
       {modal?.type === "rank" && <FullScreenModal title={`${modal.rank}ランクの保有銘柄`} onClose={() => setModal(null)}><RankHoldingsContent rank={modal.rank} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
       {modal?.type === "crash" && <FullScreenModal title={`${modal.crash.name}（${modal.crash.start} 〜）と現状の比較`} onClose={() => setModal(null)}><CrashModalContent crash={modal.crash} daysSinceDDStart={d.daysSinceDDStart} currentDD={d.currentDD} currentEpisodeCurve={d.currentEpisodeCurve} /></FullScreenModal>}
       {modal?.type === "ddChart" && <FullScreenModal title="評価額（左軸） / DD%（右軸）" onClose={() => setModal(null)}><DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} /></FullScreenModal>}
-      {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} onBackfill={handleBackfill} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} checkpoints={checkpoints} onCheckpointChange={handleCheckpointChange} />}
+      {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} onBackfill={handleBackfill} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} />}
+      {modal?.type === "checkpointSettings" && <FullScreenModal title="チェックポイント設定" onClose={() => setModal(null)}><CheckpointSettingsContent checkpoints={checkpoints} onCheckpointChange={handleCheckpointChange} holdings={holdings} /></FullScreenModal>}
 
       <div className="flex items-center justify-between px-5 py-3 shrink-0" style={{ borderBottom: `1px solid ${C.border}`, background: C.panel2 }}>
         <div className="flex items-center gap-3"><span className="text-sm font-bold tracking-wide">DD戦略ダッシュボード</span><span className="text-[11px]" style={{ color: C.textDim }}>VOO・日次</span></div>
@@ -1630,13 +1651,17 @@ export default function DDDashboard() {
                     <div className="text-[10px] mb-0.5" style={{ color: C.textDim }}>現状分析</div>
                     <div className="text-[11px] leading-tight" style={{ color: C.text }}>{analysisText}</div>
                   </div>
-                  <div><div className="text-[10px] mb-0.5" style={{ color: C.textDim }}>チェックポイント</div>
+                  <div>
+                    <div className="flex items-center justify-between mb-0.5">
+                      <span className="text-[10px]" style={{ color: C.textDim }}>チェックポイント</span>
+                      <button onClick={() => setModal({ type: "checkpointSettings" })} className="text-[9px] underline" style={{ color: C.textDim, background: "transparent", border: "none", cursor: "pointer" }}>新設・変更</button>
+                    </div>
                     {checkpointResults.length > 0 ? (
                       <ul className="text-[11px] leading-tight list-disc pl-3" style={{ color: C.textMuted }}>
                         {checkpointResults.map((r, i) => (<li key={i} style={{ color: r.ok ? C.textMuted : C.rust }}>{r.text}</li>))}
                       </ul>
                     ) : (
-                      <div className="text-[11px] leading-tight" style={{ color: C.textDim }}>チェックポイントが設定されていません。「データ入力」→「保有資産データ」から設定できます。</div>
+                      <div className="text-[11px] leading-tight" style={{ color: C.textDim }}>チェックポイントが設定されていません。「新設・変更」から設定できます。</div>
                     )}
                   </div>
                   <div className="mt-auto flex gap-1.5 text-[10px] leading-tight" style={{ color: C.textDim }}><Info size={11} style={{ flexShrink: 0, marginTop: 1 }} /><span>投資助言ではなく可視化・判断補助です。過去確率は将来を保証しません。</span></div>
