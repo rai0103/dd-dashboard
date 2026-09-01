@@ -182,7 +182,9 @@ function currentHoldingPctFromHoldings(holdings) {
   return pct;
 }
 const CURRENCY_COLORS = { "ドル": C.teal, "円": C.amber };
-function colorForView(view, key) { return view === "category" ? (CATEGORY_COLORS[key] || C.textDim) : view === "currency" ? CURRENCY_COLORS[key] : rankColor(key); }
+const OWNER_COLORS = { "shin": C.blue, "saki": C.violet };
+function colorForView(view, key) { return view === "category" ? (CATEGORY_COLORS[key] || C.textDim) : view === "currency" ? CURRENCY_COLORS[key] : view === "owner" ? (OWNER_COLORS[key] || C.textDim) : rankColor(key); }
+function fieldForView(view) { return view === "category" ? "category" : view === "currency" ? "currency" : view === "owner" ? "owner" : "rank"; }
 
 /* ---------------- Rakuten Securities CSV (Shift-JIS) ---------------- */
 function decodeShiftJIS(buffer) { try { return new TextDecoder("shift-jis").decode(buffer); } catch (e) { return new TextDecoder("utf-8").decode(buffer); } }
@@ -248,6 +250,13 @@ function expandGoldPlusSplits(rows) {
 function pickCurrency(...units) {
   for (const u of units) { if (u === "USD") return "ドル"; if (u === "円") return "円"; }
   return "円";
+}
+// ファイル名（例: assetbalance(all)_20260831_shin.csv）に含まれる "shin"/"saki" から口座主を判定する。
+function detectOwnerFromFileName(name) {
+  const lower = String(name ?? "").toLowerCase();
+  if (/saki/.test(lower)) return "saki";
+  if (/shin/.test(lower)) return "shin";
+  return null;
 }
 function normalizeAccount(a) {
   if (a === "-" || a === "‐" || a === "―") return "—";
@@ -524,7 +533,7 @@ function StatusPanel({ d, onOpenTrackRecord }) {
 
 /* ---------------- portfolio pie panel ---------------- */
 function PortfolioPie({ view, holdings, onOpen }) {
-  const field = view === "category" ? "category" : view === "currency" ? "currency" : "rank";
+  const field = fieldForView(view);
   const total = useMemo(() => holdingsTotal(holdings), [holdings]);
   const data = useMemo(() => groupByField(holdings, field).sort((a, b) => b.value - a.value), [holdings, field]);
   return (
@@ -584,10 +593,10 @@ function TrackRecordContent({ currentT }) {
 }
 
 function PortfolioTableContent({ view, holdings, onEditHolding }) {
-  const field = view === "category" ? "category" : view === "currency" ? "currency" : "rank";
+  const field = fieldForView(view);
   const total = holdingsTotal(holdings);
   const grouped = groupByField(holdings, field).sort((a, b) => b.value - a.value);
-  const viewLabel = view === "category" ? "カテゴリー別" : view === "currency" ? "為替別" : "A〜Eランク別";
+  const viewLabel = view === "category" ? "カテゴリー別" : view === "currency" ? "為替別" : view === "owner" ? "口座別" : "A〜Eランク別";
   const rows = holdings.map((h) => ({ ...h, share: (h.amount / total) * 100 }));
   const columns = [
     { key: "name", label: "銘柄" },
@@ -692,6 +701,7 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, onBa
   const [rakutenMsg, setRakutenMsg] = useState(null);
   const [preview, setPreview] = useState(null); // rows pending confirmation
   const [previewOwner, setPreviewOwner] = useState("shin");
+  const [ownerAutoDetected, setOwnerAutoDetected] = useState(false);
 
   const handleFile = (e) => {
     const file = e.target.files[0];
@@ -730,6 +740,9 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, onBa
     if (!file) return;
     setRakutenFileName(file.name);
     setRakutenMsg(null);
+    const detectedOwner = detectOwnerFromFileName(file.name);
+    setOwnerAutoDetected(!!detectedOwner);
+    if (detectedOwner) setPreviewOwner(detectedOwner);
     const reader = new FileReader();
     reader.onload = (ev) => {
       const text = decodeShiftJIS(ev.target.result);
@@ -815,8 +828,8 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, onBa
               <p className="text-xs mb-4 leading-relaxed" style={{ color: C.textDim }}>「銘柄」「口座」「評価額」を含む表形式に対応。カテゴリー・A〜Eランク・為替は名称から自動推定するので、次の画面で内容を確認・修正してから反映します。</p>
               <div className="flex items-end gap-3 mb-2">
                 <div>
-                  <label className="text-[10px] block mb-1" style={{ color: C.textDim }}>このCSVの口座主</label>
-                  <select value={previewOwner} onChange={(e) => setPreviewOwner(e.target.value)} className="text-xs px-2 py-1.5 rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }}>
+                  <label className="text-[10px] block mb-1" style={{ color: C.textDim }}>このCSVの口座主{ownerAutoDetected && <span style={{ color: C.teal }}>（ファイル名から自動判定）</span>}</label>
+                  <select value={previewOwner} onChange={(e) => { setPreviewOwner(e.target.value); setOwnerAutoDetected(false); }} className="text-xs px-2 py-1.5 rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }}>
                     <option value="shin">shin</option><option value="saki">saki</option>
                   </select>
                 </div>
@@ -1034,7 +1047,7 @@ export default function DDDashboard() {
         <div className="flex items-center gap-3"><span className="text-sm font-bold tracking-wide">DD戦略ダッシュボード</span><span className="text-[11px]" style={{ color: C.textDim }}>VOO・日次</span></div>
         <div className="flex items-center gap-3">
           <button onClick={() => setModal({ type: "dataInput" })} className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
-            <Database size={12} /> データ入力 {dataSource === "seed" && <span style={{ color: C.textDim }}>（初期データ）</span>}
+            <Database size={12} /> データ入力
           </button>
           <span className="flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full" style={{ color: depthColor(d.currentDD), background: `${depthColor(d.currentDD)}1a`, border: `1px solid ${depthColor(d.currentDD)}44` }}>{d.isDrawdown ? <TrendingDown size={12} /> : <TrendingUp size={12} />} {d.mode}</span>
         </div>
@@ -1118,7 +1131,7 @@ export default function DDDashboard() {
           <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 4, flex: 1, minHeight: 0 }}>
             {/* bottom-left: portfolio pie */}
             <div style={{ minHeight: 0 }}>
-              <Panel title="ポートフォリオ構成" action={<div className="flex gap-1">{[{ k: "category", l: "カテゴリー別" }, { k: "currency", l: "為替別" }, { k: "rank", l: "A〜Eランク" }].map((t) => (<button key={t.k} onClick={() => setPieView(t.k)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: pieView === t.k ? C.bg : C.textMuted, background: pieView === t.k ? C.teal : "transparent", fontWeight: pieView === t.k ? 700 : 400 }}>{t.l}</button>))}</div>} className="h-full">
+              <Panel title="ポートフォリオ構成" action={<div className="flex gap-1">{[{ k: "category", l: "カテゴリー別" }, { k: "currency", l: "為替別" }, { k: "rank", l: "A〜Eランク" }, { k: "owner", l: "口座別" }].map((t) => (<button key={t.k} onClick={() => setPieView(t.k)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: pieView === t.k ? C.bg : C.textMuted, background: pieView === t.k ? C.teal : "transparent", fontWeight: pieView === t.k ? 700 : 400 }}>{t.l}</button>))}</div>} className="h-full">
                 <PortfolioPie view={pieView} holdings={holdings} onOpen={() => setModal({ type: "portfolio" })} />
               </Panel>
             </div>
