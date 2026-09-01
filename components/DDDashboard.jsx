@@ -90,7 +90,8 @@ function analyzeEpisode(series) {
   for (const t of MILESTONES) { if (crossIdx[t] !== -1) { prevT = currentT; prevIdx = currentIdx; currentT = t; currentIdx = crossIdx[t]; } }
   return { athIdx, crossIdx, currentT, currentIdx, prevT, prevIdx };
 }
-function nearestModelRow(dd) { let closest = MODEL_ROWS[0], bestDist = Infinity; for (const r of MODEL_ROWS) { const dist = Math.abs(r.v - dd); if (dist < bestDist) { bestDist = dist; closest = r; } } return closest; }
+// 現在のDD%が到達済みの節目のうち最も深いものを選ぶ（例：DD-2%はまだ-3%未到達なのでATH、DD-6%は-5%到達済み・-8%未到達なのでDD-5%）。
+function nearestModelRow(dd) { const reached = MODEL_ROWS.filter((r) => r.v <= 0 && dd <= r.v); return reached.length ? reached.reduce((deepest, r) => (r.v < deepest.v ? r : deepest)) : MODEL_ROWS.find((r) => r.v === 0); }
 // 全期間から「ATH→底値→回復（新ATH）」の下落局面を全て抽出する（DD%がminDD以下に達したもののみ、ノイズ除去）。
 // 最後の局面が未回復（現在も下落中/回復モード）の場合は isOngoing:true として含める。
 function findDDEpisodes(FULL, minDD) {
@@ -177,7 +178,12 @@ function computeAll(rawSeries) {
   for (let k = episode.athIdx; k <= last.i; k++) { if (FULL[k].price < FULL[troughIdx].price) troughIdx = k; }
   const trough = FULL[troughIdx];
   const episodes = findDDEpisodes(FULL, -3); // 過去も含む全DD局面（チャートの重要ポイント表示用）
-  return { FULL, last, currentDD, currentPrice, currentATH, isDrawdown, mode, episode, ddStartIdx, daysSinceDDStart, daysSinceCurrentThreshold, legDays, isEntryLeg, currentTLabel, currentEpisodeCurve, speedCategory, nextProg, modelRow, currentLevelP, currentFreqLabel, athDate, daysSinceATH, trough, episodes };
+  const nextMilestone = MILESTONES.find((t) => currentDD > t) ?? null; // 現在のDD%からまだ到達していない直近の節目
+  const distanceToNextMilestone = nextMilestone !== null ? Number((nextMilestone - currentDD).toFixed(1)) : null;
+  const nextMilestonePrice = nextMilestone !== null ? currentATH * (1 + nextMilestone / 100) : null;
+  const lastCompletedEpisode = [...episodes].reverse().find((e) => !e.isOngoing) ?? null; // 前回DD3%到達から回復した日（＝前回最高値）
+  const prevATHRatio = lastCompletedEpisode ? Number((((currentPrice / lastCompletedEpisode.recoveryPrice) - 1) * 100).toFixed(1)) : null;
+  return { FULL, last, currentDD, currentPrice, currentATH, isDrawdown, mode, episode, ddStartIdx, daysSinceDDStart, daysSinceCurrentThreshold, legDays, isEntryLeg, currentTLabel, currentEpisodeCurve, speedCategory, nextProg, modelRow, currentLevelP, currentFreqLabel, athDate, daysSinceATH, trough, episodes, nextMilestone, distanceToNextMilestone, nextMilestonePrice, lastCompletedEpisode, prevATHRatio };
 }
 
 const PROGRESSION_DATA = [
@@ -772,12 +778,19 @@ function StatusPanel({ d, onOpenTrackRecord }) {
           <div className="text-[9px] mt-0.5 whitespace-nowrap" style={{ color: C.textDim }}>ATH ${d.currentATH.toFixed(2)}（{fmtYMD(d.athDate)}）{d.currentDD.toFixed(1)}%</div>
         </div>
         <div className="flex-1 px-4 py-2 flex flex-col justify-center" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
-          <div className="flex items-center gap-1.5 mb-0.5">{d.isDrawdown ? <TrendingDown size={11} style={{ color: depthColor(d.currentDD) }} /> : <TrendingUp size={11} style={{ color: C.teal }} />}<span className="text-[10px]" style={{ color: C.textDim }}>{d.isDrawdown ? "最高値比" : "前回最高値（DD3％後）比"}</span></div>
-          <div className="mono text-xl font-bold" style={{ color: depthColor(d.currentDD) }}>{d.isDrawdown ? `${d.currentDD.toFixed(1)}%` : `+${(-d.currentDD).toFixed(1)}%`}<span className="mono text-xs font-normal ml-1" style={{ color: C.textDim }}>（ATH：{fmtYMD(d.isDrawdown ? d.athDate : d.last.date)}）</span></div>
-          {!d.isDrawdown && (
-            <div className="text-[10px] mt-0.5" style={{ color: C.textDim }}>現在のATHからのDD：<span className="mono font-semibold" style={{ color: depthColor(d.currentDD) }}>{d.currentDD.toFixed(1)}%</span></div>
+          <div className="flex items-center gap-1.5 mb-0.5"><TrendingDown size={11} style={{ color: C.rust }} /><span className="text-[10px] font-bold" style={{ color: C.rust }}>最高値比</span></div>
+          <div className="mono text-xl font-bold" style={{ color: C.rust }}>{d.currentDD.toFixed(1)}%<span className="mono text-xs font-bold ml-1" style={{ color: C.rust }}>（更新日：{fmtYMD(d.athDate)}）</span></div>
+          {d.nextMilestone !== null && (
+            <div className="text-[10px] mt-0.5" style={{ color: C.textDim }}>次の基準（{d.nextMilestone}%）まで：<span className="mono font-semibold">{d.distanceToNextMilestone.toFixed(1)}%</span>（<span className="mono">${d.nextMilestonePrice.toFixed(2)}</span>）</div>
           )}
-          <div className="text-[10px] mt-0.5" style={{ color: C.textDim }}>DD3%到達でリセット</div>
+          <div className="mt-1.5 pt-1" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+            <div className="text-[10px]" style={{ color: C.textDim }}>前回最高値比</div>
+            {d.lastCompletedEpisode ? (
+              <div className="mono text-sm font-semibold" style={{ color: d.prevATHRatio >= 0 ? C.teal : C.rust }}>{d.prevATHRatio >= 0 ? "+" : ""}{d.prevATHRatio.toFixed(1)}%<span className="mono text-[10px] font-normal ml-1" style={{ color: C.textDim }}>（{fmtYMD(d.lastCompletedEpisode.recoveryDate)}）</span></div>
+            ) : (
+              <div className="text-xs" style={{ color: C.textDim }}>—（DD3%到達履歴なし）</div>
+            )}
+          </div>
         </div>
         <div className="flex-1 px-4 py-2 flex flex-col justify-center" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
           <div className="flex items-center gap-1.5 mb-1"><Clock size={11} style={{ color: C.textDim }} /><span className="text-[10px]" style={{ color: C.textDim }}>経過日数</span></div>
@@ -1373,6 +1386,7 @@ export default function DDDashboard() {
   const [hidden, setHidden] = useState({});
   const [hiddenCrash, setHiddenCrash] = useState({});
   const [pieView, setPieView] = useState("rank");
+  const [modelOverride, setModelOverride] = useState(null); // null = 自動（現在の評価額に応じて選択）
   const [chartTab, setChartTab] = useState("normal");
   const [modal, setModal] = useState(null);
   const [hydrated, setHydrated] = useState(false);
@@ -1547,12 +1561,13 @@ export default function DDDashboard() {
 
   const currentHoldingPct = useMemo(() => currentHoldingPctFromHoldings(holdings), [holdings]);
   const rankLabels = useMemo(() => rankCategoryLabels(holdings), [holdings]);
+  const effectiveModelRow = modelOverride ? (MODEL_ROWS.find((r) => r.label === modelOverride) ?? d.modelRow) : d.modelRow;
   const blocks = useMemo(() => {
-    const AB = { cur: currentHoldingPct.A + currentHoldingPct.B, tgt: d.modelRow.A + d.modelRow.B };
-    const Cb = { cur: currentHoldingPct.C, tgt: d.modelRow.C };
-    const DE = { cur: currentHoldingPct.D + currentHoldingPct.E, tgt: d.modelRow.D + d.modelRow.E };
+    const AB = { cur: currentHoldingPct.A + currentHoldingPct.B, tgt: effectiveModelRow.A + effectiveModelRow.B };
+    const Cb = { cur: currentHoldingPct.C, tgt: effectiveModelRow.C };
+    const DE = { cur: currentHoldingPct.D + currentHoldingPct.E, tgt: effectiveModelRow.D + effectiveModelRow.E };
     return { AB, Cb, DE };
-  }, [currentHoldingPct, d.modelRow]);
+  }, [currentHoldingPct, effectiveModelRow]);
 
   const crashLegendItems = [...CRASHES.map((c) => ({ key: c.id, label: c.name, color: c.color })), { key: "current", label: "現在", color: C.teal }];
   const analysisText = useMemo(() => buildAnalysisText(d, currentHoldingPct, holdingsTotal(holdings)), [d, currentHoldingPct, holdings]);
@@ -1679,9 +1694,14 @@ export default function DDDashboard() {
 
             {/* bottom-right: A-E diff */}
             <div style={{ minHeight: 0 }}>
-              <Panel title={`A〜E 配分乖離（モデル: ${d.modelRow.label}）`} action={<div className="flex items-center gap-2"><span className="flex items-center gap-1 text-[9px]" style={{ color: C.textMuted }}><span style={{ width: 8, height: 8, borderRadius: 2, background: C.textMuted, display: "inline-block" }} />実績<span style={{ width: 8, height: 8, borderRadius: 2, background: C.borderSoft, display: "inline-block", marginLeft: 4 }} />モデル</span><button onClick={() => setModal({ type: "ddTable" })} title="DD毎の配分表を表示" style={{ background: "transparent", border: "none", cursor: "pointer" }}><Info size={14} style={{ color: C.textDim }} /></button></div>} className="h-full">
+              <Panel title="A〜E 配分乖離" action={<div className="flex items-center gap-2">
+                <select value={modelOverride ?? ""} onChange={(e) => setModelOverride(e.target.value || null)} className="text-[10px] rounded px-1 py-0.5" style={{ background: C.panel2, color: C.text, border: `1px solid ${C.borderSoft}` }}>
+                  <option value="">自動（{d.modelRow.label}）</option>
+                  {MODEL_ROWS.map((r) => (<option key={r.label} value={r.label}>{r.label}</option>))}
+                </select>
+                <span className="flex items-center gap-1 text-[9px]" style={{ color: C.textMuted }}><span style={{ width: 8, height: 8, borderRadius: 2, background: C.textMuted, display: "inline-block" }} />実績<span style={{ width: 8, height: 8, borderRadius: 2, background: C.borderSoft, display: "inline-block", marginLeft: 4 }} />モデル</span><button onClick={() => setModal({ type: "ddTable" })} title="DD毎の配分表を表示" style={{ background: "transparent", border: "none", cursor: "pointer" }}><Info size={14} style={{ color: C.textDim }} /></button></div>} className="h-full">
                 <div className="overflow-y-auto h-full">
-                  {CATS.map((cat) => (<DiffBar key={cat} cat={cat} current={currentHoldingPct[cat]} target={d.modelRow[cat]} label={rankLabels[cat]} onClick={() => setModal({ type: "rank", rank: cat })} />))}
+                  {CATS.map((cat) => (<DiffBar key={cat} cat={cat} current={currentHoldingPct[cat]} target={effectiveModelRow[cat]} label={rankLabels[cat]} onClick={() => setModal({ type: "rank", rank: cat })} />))}
                   <div className="px-3 py-0.5 grid grid-cols-3 gap-1.5">
                     {[{ label: "A+B", ...blocks.AB }, { label: "C", ...blocks.Cb }, { label: "D+E", ...blocks.DE }].map((b) => { const diff = Number((b.cur - b.tgt).toFixed(1)); return (<div key={b.label} className="rounded px-2 py-0.5 text-center" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}><div className="text-[10px]" style={{ color: C.textDim }}>{b.label}</div><div className="mono text-xs font-semibold">{Number(b.cur.toFixed(1))}%</div><div className="mono text-[10px]" style={{ color: Math.abs(diff) >= 4 ? C.rust : C.textMuted }}>{diff > 0 ? "+" : ""}{diff}pt</div></div>); })}
                   </div>
