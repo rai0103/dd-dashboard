@@ -624,7 +624,7 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, withBrush = false, f
       if (ep.isOngoing) continue;
       addPt(ep.athIdx, ep.athDate, ep.athPrice, C.teal, `$${ep.athPrice.toFixed(2)}（${fmtYMD(ep.athDate)}）`);
       if (ep.troughIdx !== ep.athIdx) addPt(ep.troughIdx, ep.troughDate, ep.troughPrice, C.rust, `$${ep.troughPrice.toFixed(2)}（${fmtYMD(ep.troughDate)}）DD${ep.troughDD.toFixed(1)}%`);
-      if (ep.recoveryIdx !== ep.troughIdx) addPt(ep.recoveryIdx, ep.recoveryDate, ep.recoveryPrice, C.teal, `$${ep.recoveryPrice.toFixed(2)}（${fmtYMD(ep.recoveryDate)}）`);
+      if (ep.recoveryIdx !== ep.troughIdx) addPt(ep.recoveryIdx, ep.recoveryDate, ep.recoveryPrice, C.blue, `$${ep.recoveryPrice.toFixed(2)}（${fmtYMD(ep.recoveryDate)}）`);
     }
     // 現在進行中の局面（ATH→底値→現在）
     addPt(d.episode.athIdx, d.athDate, d.currentATH, C.teal, `$${d.currentATH.toFixed(2)}（${fmtYMD(d.athDate)}）`);
@@ -644,9 +644,10 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, withBrush = false, f
       <CartesianGrid stroke={C.borderSoft} vertical={false} />
       <XAxis dataKey="date" tickFormatter={(dt) => fmtAxisDate(dt, rangeDays)} tick={{ fill: C.textDim, fontSize }} axisLine={{ stroke: C.border }} tickLine={false} minTickGap={40} />
       <YAxis yAxisId="price" domain={["auto", "auto"]} tick={{ fill: C.teal, fontSize }} axisLine={false} tickLine={false} width={48} label={{ value: "評価額", angle: -90, position: "insideLeft", fill: C.teal, fontSize }} />
-      <YAxis yAxisId="dd" orientation="right" domain={["dataMin", 2]} ticks={ddTicks} tick={{ fill: C.rust, fontSize }} axisLine={false} tickLine={false} width={46} label={{ value: "DD%", angle: 90, position: "insideRight", fill: C.rust, fontSize }} />
+      <YAxis yAxisId="dd" orientation="right" domain={[ddTicks[ddTicks.length - 1], 0]} ticks={ddTicks} tick={{ fill: C.rust, fontSize }} axisLine={false} tickLine={false} width={46} label={{ value: "DD%", angle: 90, position: "insideRight", fill: C.rust, fontSize }} />
       <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} labelStyle={{ color: C.textMuted }} labelFormatter={(dt) => dt.toLocaleDateString("ja-JP")} formatter={(v, name) => [name === "dd" ? `${v}%` : `$${v}`, name === "dd" ? "DD" : name === "ath" ? "ATH" : "評価額"]} />
-      {MILESTONES.map((t) => (<ReferenceLine key={t} yAxisId="dd" y={t} stroke={C.borderSoft} strokeDasharray="2 3" label={{ value: `${t}%`, position: "left", fill: C.textDim, fontSize: Math.max(8, fontSize - 2) }} />))}
+      {MILESTONES.filter((t) => t !== -3).map((t) => (<ReferenceLine key={t} yAxisId="dd" y={t} stroke={C.borderSoft} strokeDasharray="2 3" label={{ value: `${t}%`, position: "left", fill: C.textDim, fontSize: Math.max(8, fontSize - 2) }} />))}
+      <ReferenceLine yAxisId="dd" y={-3} stroke={C.rust} strokeDasharray="4 3" strokeWidth={1.3} label={{ value: "-3%", position: "left", fill: C.rust, fontSize: Math.max(8, fontSize - 2) }} />
       {chartData[0].date < VOO_LISTING_DATE && chartData[chartData.length - 1].date > VOO_LISTING_DATE && (<ReferenceLine yAxisId="price" x={VOO_LISTING_DATE} stroke={C.violet} strokeDasharray="3 3" label={{ value: "VOO上場", fill: C.violet, fontSize: Math.max(9, fontSize - 1), position: "top" }} />)}
       <Area yAxisId="dd" type="monotone" dataKey="dd" stroke={C.rust} fill="url(#ddFill)" strokeWidth={1.3} dot={false} isAnimationActive={false} fillOpacity={hidden.dd ? 0 : 1} strokeOpacity={hidden.dd ? 0 : 1} />
       <Area yAxisId="price" type="monotone" dataKey="price" stroke={C.teal} fill="url(#priceFill)" strokeWidth={1.8} dot={false} isAnimationActive={false} fillOpacity={hidden.price ? 0 : 1} strokeOpacity={hidden.price ? 0 : 1} />
@@ -767,12 +768,15 @@ function StatusPanel({ d, onOpenTrackRecord }) {
         <div className="flex-1 px-4 py-2 flex flex-col justify-center" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
           <div className="text-[10px] mb-0.5" style={{ color: C.textDim }}>評価額（VOO終値）</div>
           <div className="mono text-xl font-bold">${d.currentPrice.toFixed(2)}</div>
-          <div className="text-[9px] mt-0.5 whitespace-nowrap" style={{ color: C.textDim }}>データ日付：{fmtYMD(d.last.date)}</div>
+          <div className="text-[9px] mt-0.5 whitespace-nowrap" style={{ color: C.textDim }}>データ日付：{fmtYMD(d.last.date)}（米国時間）</div>
           <div className="text-[9px] mt-0.5 whitespace-nowrap" style={{ color: C.textDim }}>ATH ${d.currentATH.toFixed(2)}（{fmtYMD(d.athDate)}）{d.currentDD.toFixed(1)}%</div>
         </div>
         <div className="flex-1 px-4 py-2 flex flex-col justify-center" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
           <div className="flex items-center gap-1.5 mb-0.5">{d.isDrawdown ? <TrendingDown size={11} style={{ color: depthColor(d.currentDD) }} /> : <TrendingUp size={11} style={{ color: C.teal }} />}<span className="text-[10px]" style={{ color: C.textDim }}>{d.isDrawdown ? "最高値比" : "前回最高値（DD3％後）比"}</span></div>
           <div className="mono text-xl font-bold" style={{ color: depthColor(d.currentDD) }}>{d.isDrawdown ? `${d.currentDD.toFixed(1)}%` : `+${(-d.currentDD).toFixed(1)}%`}<span className="mono text-xs font-normal ml-1" style={{ color: C.textDim }}>（ATH：{fmtYMD(d.isDrawdown ? d.athDate : d.last.date)}）</span></div>
+          {!d.isDrawdown && (
+            <div className="text-[10px] mt-0.5" style={{ color: C.textDim }}>現在のATHからのDD：<span className="mono font-semibold" style={{ color: depthColor(d.currentDD) }}>{d.currentDD.toFixed(1)}%</span></div>
+          )}
           <div className="text-[10px] mt-0.5" style={{ color: C.textDim }}>DD3%到達でリセット</div>
         </div>
         <div className="flex-1 px-4 py-2 flex flex-col justify-center" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
