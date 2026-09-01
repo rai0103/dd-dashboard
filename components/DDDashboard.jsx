@@ -204,7 +204,30 @@ const MODEL_ROWS = [
   { label: "DD-30%", v: -30, A: 10, B: 12, C: 38, D: 22, E: 18 }, { label: "DD-50%", v: -50, A: 6, B: 9, C: 33, D: 25, E: 27 },
 ];
 const CATS = ["A", "B", "C", "D", "E"];
-const CAT_LABEL = { A: "現金・高配当・金", B: "金・ヘッジ・防衛", C: "SP500", D: "NASDAQ/テック指数", E: "レバ・モメンタム" };
+// 表示スペース節約用のカテゴリー短縮名（A〜Eランクの説明文生成に使用）。
+const CATEGORY_SHORT_LABEL = {
+  "SP500": "SP500", "Nasdaq": "Nasdaq", "日本（N225・Topix）": "日本株",
+  "個別（米）": "個別（米）", "個別（日）": "個別（日）", "ゴールド": "ゴールド", "現金": "現金",
+  "テックETF・投信（米）": "テック投信（米）", "テックETF・投信（日）": "テック投信（日）",
+  "高配当ETF・投信（米）": "高配当投信（米）", "高配当ETF・投信（日）": "高配当投信（日）",
+  "その他ETF・投信（米）": "その他投信（米）", "その他ETF・投信（日）": "その他投信（日）",
+  "レバレッジETF（米）": "レバ（米）", "レバレッジETF（日）": "レバ（日）", "その他": "その他",
+};
+// 保有銘柄を実際に走査し、A〜E各ランクに含まれるカテゴリー（評価額の大きい順・重複排除）から説明文を動的に生成する。
+function rankCategoryLabels(holdings) {
+  const sums = { A: {}, B: {}, C: {}, D: {}, E: {} };
+  for (const h of holdings) {
+    if (!sums[h.rank]) continue;
+    sums[h.rank][h.category] = (sums[h.rank][h.category] || 0) + h.amount;
+  }
+  const result = {};
+  for (const rank of CATS) {
+    const catSums = sums[rank];
+    const cats = Object.keys(catSums).sort((a, b) => catSums[b] - catSums[a]);
+    result[rank] = cats.length ? cats.map((c) => CATEGORY_SHORT_LABEL[c] ?? c).join("・") : "該当なし";
+  }
+  return result;
+}
 
 /* ---------------- category taxonomy (fixed list) ---------------- */
 const CATEGORIES = [
@@ -661,14 +684,14 @@ function Panel({ title, action, children, className = "", style, hideHeader = fa
     </div>
   );
 }
-function DiffBar({ cat, current, target, onClick }) {
+function DiffBar({ cat, current, target, onClick, label }) {
   const diff = Number((current - target).toFixed(1)); const max = 50; const emphasize = Math.abs(diff) >= 4;
   const catColor = rankColor(cat); // ポートフォリオ構成（A〜Eランク）の円グラフと同じ配色に統一
   return (
     <div onClick={onClick} className="px-3 py-0.5 flex items-center gap-2" style={{ borderBottom: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline justify-between">
-          <div className="flex items-baseline gap-1.5 min-w-0"><span className="text-xs font-semibold shrink-0" style={{ color: catColor }}>{cat}</span><span className="text-[10px] truncate" style={{ color: C.textDim }}>{CAT_LABEL[cat]}</span></div>
+          <div className="flex items-baseline gap-1.5 min-w-0"><span className="text-xs font-semibold shrink-0" style={{ color: catColor }}>{cat}</span><span className="text-[10px] truncate" style={{ color: C.textDim }} title={label}>{label}</span></div>
           <div className="flex items-baseline gap-1 font-mono text-[10px] shrink-0 ml-2"><span style={{ color: C.textMuted }}>実績{current}%</span><span style={{ color: C.textDim }}>モデル{target}%</span><span className="font-semibold px-1 rounded" style={{ color: emphasize ? C.rust : C.textMuted, background: emphasize ? C.rustSoft : "transparent" }}>{diff > 0 ? "+" : ""}{diff}</span></div>
         </div>
         <div className="relative h-1 rounded-full" style={{ background: C.panel2 }}>
@@ -854,14 +877,15 @@ function PortfolioTableContent({ view, holdings, onEditHolding, onDeleteHolding 
 }
 
 const AXIS_TICKS = [0, 20, 40, 60, 80, 100];
-function DDTableContent({ modelRow }) {
+function DDTableContent({ modelRow, holdings }) {
+  const rankLabels = useMemo(() => rankCategoryLabels(holdings), [holdings]);
   return (
     <div>
       <div className="flex items-center gap-4 mb-4 flex-wrap">
         {CATS.map((cat) => (
           <div key={cat} className="flex items-center gap-1.5 text-[11px]">
             <span style={{ width: 10, height: 10, borderRadius: 2, background: rankColor(cat), flexShrink: 0 }} />
-            <span style={{ color: C.textMuted }}>{cat}（{CAT_LABEL[cat]}）</span>
+            <span style={{ color: C.textMuted }}>{cat}（{rankLabels[cat]}）</span>
           </div>
         ))}
       </div>
@@ -887,7 +911,7 @@ function DDTableContent({ modelRow }) {
               {CATS.map((cat) => {
                 const v = r[cat];
                 return (
-                  <div key={cat} title={`${cat}（${CAT_LABEL[cat]}）: ${v}%`} className="flex items-center justify-center mono font-semibold" style={{ width: `${v}%`, background: rankColor(cat), color: C.bg, fontSize: 10 }}>
+                  <div key={cat} title={`${cat}（${rankLabels[cat]}）: ${v}%`} className="flex items-center justify-center mono font-semibold" style={{ width: `${v}%`, background: rankColor(cat), color: C.bg, fontSize: 10 }}>
                     {v >= 8 ? `${cat} ${v}%` : ""}
                   </div>
                 );
@@ -904,6 +928,7 @@ function DDTableContent({ modelRow }) {
 function RankHoldingsContent({ rank, holdings, onEditHolding, onDeleteHolding }) {
   const items = holdings.filter((h) => h.rank === rank);
   const total = items.reduce((s, h) => s + h.amount, 0);
+  const rankLabel = useMemo(() => rankCategoryLabels(holdings)[rank], [holdings, rank]);
   const rows = items.map((h) => ({ ...h, share: (h.amount / total) * 100 }));
   const columns = [
     { key: "name", label: "銘柄" },
@@ -914,7 +939,7 @@ function RankHoldingsContent({ rank, holdings, onEditHolding, onDeleteHolding })
     { key: "amount", label: "金額", align: "right", format: (v) => `¥${v.toLocaleString()}` },
     { key: "share", label: "構成比", align: "right", format: (v) => `${v.toFixed(1)}%` },
   ];
-  return (<div><div className="text-xs mb-3" style={{ color: C.textDim }}>{rank}（{CAT_LABEL[rank]}） 合計 ¥{total.toLocaleString()}　（列見出しクリックでソート・カテゴリー/ランク/口座主は変更可・右端の🗑で削除）</div><SortableTable columns={columns} rows={rows} defaultSortKey="amount" onEditCell={(row, key, value) => onEditHolding && onEditHolding(row.id, key, value)} onDeleteRow={(row) => onDeleteHolding && onDeleteHolding(row.id)} /></div>);
+  return (<div><div className="text-xs mb-3" style={{ color: C.textDim }}>{rank}（{rankLabel}） 合計 ¥{total.toLocaleString()}　（列見出しクリックでソート・カテゴリー/ランク/口座主は変更可・右端の🗑で削除）</div><SortableTable columns={columns} rows={rows} defaultSortKey="amount" onEditCell={(row, key, value) => onEditHolding && onEditHolding(row.id, key, value)} onDeleteRow={(row) => onDeleteHolding && onDeleteHolding(row.id)} /></div>);
 }
 
 function CrashModalContent({ crash, daysSinceDDStart, currentDD, currentEpisodeCurve }) {
@@ -1385,6 +1410,7 @@ export default function DDDashboard() {
   const toggleCrash = (k) => setHiddenCrash((p) => ({ ...p, [k]: !p[k] }));
 
   const currentHoldingPct = useMemo(() => currentHoldingPctFromHoldings(holdings), [holdings]);
+  const rankLabels = useMemo(() => rankCategoryLabels(holdings), [holdings]);
   const blocks = useMemo(() => {
     const AB = { cur: currentHoldingPct.A + currentHoldingPct.B, tgt: d.modelRow.A + d.modelRow.B };
     const Cb = { cur: currentHoldingPct.C, tgt: d.modelRow.C };
@@ -1409,7 +1435,7 @@ export default function DDDashboard() {
 
       {modal?.type === "trackRecord" && <FullScreenModal title="過去のトラックレコード（1957–2026・69年）" onClose={() => setModal(null)}><TrackRecordContent currentT={d.episode.currentT} /></FullScreenModal>}
       {modal?.type === "portfolio" && <FullScreenModal title="ポートフォリオ構成表" onClose={() => setModal(null)}><PortfolioTableContent view={pieView} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
-      {modal?.type === "ddTable" && <FullScreenModal title="DD毎のA〜E配分表" onClose={() => setModal(null)}><DDTableContent modelRow={d.modelRow} /></FullScreenModal>}
+      {modal?.type === "ddTable" && <FullScreenModal title="DD毎のA〜E配分表" onClose={() => setModal(null)}><DDTableContent modelRow={d.modelRow} holdings={holdings} /></FullScreenModal>}
       {modal?.type === "rank" && <FullScreenModal title={`${modal.rank}ランクの保有銘柄`} onClose={() => setModal(null)}><RankHoldingsContent rank={modal.rank} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
       {modal?.type === "crash" && <FullScreenModal title={`${modal.crash.name}（${modal.crash.start} 〜）と現状の比較`} onClose={() => setModal(null)}><CrashModalContent crash={modal.crash} daysSinceDDStart={d.daysSinceDDStart} currentDD={d.currentDD} currentEpisodeCurve={d.currentEpisodeCurve} /></FullScreenModal>}
       {modal?.type === "ddChart" && <FullScreenModal title="評価額（左軸） / DD%（右軸）" onClose={() => setModal(null)}><DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} /></FullScreenModal>}
@@ -1509,7 +1535,7 @@ export default function DDDashboard() {
             <div style={{ minHeight: 0 }}>
               <Panel title={`A〜E 配分乖離（モデル: ${d.modelRow.label}）`} action={<div className="flex items-center gap-2"><span className="flex items-center gap-1 text-[9px]" style={{ color: C.textMuted }}><span style={{ width: 8, height: 8, borderRadius: 2, background: C.textMuted, display: "inline-block" }} />実績<span style={{ width: 8, height: 8, borderRadius: 2, background: C.borderSoft, display: "inline-block", marginLeft: 4 }} />モデル</span><button onClick={() => setModal({ type: "ddTable" })} title="DD毎の配分表を表示" style={{ background: "transparent", border: "none", cursor: "pointer" }}><Info size={14} style={{ color: C.textDim }} /></button></div>} className="h-full">
                 <div className="overflow-y-auto h-full">
-                  {CATS.map((cat) => (<DiffBar key={cat} cat={cat} current={currentHoldingPct[cat]} target={d.modelRow[cat]} onClick={() => setModal({ type: "rank", rank: cat })} />))}
+                  {CATS.map((cat) => (<DiffBar key={cat} cat={cat} current={currentHoldingPct[cat]} target={d.modelRow[cat]} label={rankLabels[cat]} onClick={() => setModal({ type: "rank", rank: cat })} />))}
                   <div className="px-3 py-0.5 grid grid-cols-3 gap-1.5">
                     {[{ label: "A+B", ...blocks.AB }, { label: "C", ...blocks.Cb }, { label: "D+E", ...blocks.DE }].map((b) => { const diff = Number((b.cur - b.tgt).toFixed(1)); return (<div key={b.label} className="rounded px-2 py-0.5 text-center" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}><div className="text-[10px]" style={{ color: C.textDim }}>{b.label}</div><div className="mono text-xs font-semibold">{Number(b.cur.toFixed(1))}%</div><div className="mono text-[10px]" style={{ color: Math.abs(diff) >= 4 ? C.rust : C.textMuted }}>{diff > 0 ? "+" : ""}{diff}pt</div></div>); })}
                   </div>
