@@ -102,7 +102,8 @@ function computeAll(rawSeries) {
   const modelRow = nearestModelRow(currentDD);
   const currentLevelP = currentTLabel === "-3%" ? 100 : (FINAL_REACH_DATA.find((r) => r.label === currentTLabel)?.p ?? null);
   const currentFreqLabel = currentLevelP !== null ? freqLabelFromP(currentLevelP) : null;
-  return { FULL, last, currentDD, currentPrice, currentATH, isDrawdown, mode, episode, ddStartIdx, daysSinceDDStart, daysSinceCurrentThreshold, legDays, isEntryLeg, currentTLabel, currentEpisodeCurve, speedCategory, nextProg, modelRow, currentLevelP, currentFreqLabel };
+  const athDate = FULL[episode.athIdx].date; // 直近の下落局面の起点となった最高値更新日
+  return { FULL, last, currentDD, currentPrice, currentATH, isDrawdown, mode, episode, ddStartIdx, daysSinceDDStart, daysSinceCurrentThreshold, legDays, isEntryLeg, currentTLabel, currentEpisodeCurve, speedCategory, nextProg, modelRow, currentLevelP, currentFreqLabel, athDate };
 }
 
 const PROGRESSION_DATA = [
@@ -380,6 +381,7 @@ function sliceForPeriod(FULL, last, key) {
   return out;
 }
 function fmtAxisDate(d, rangeDays) { if (rangeDays > 900) return `${d.getFullYear()}`; if (rangeDays > 120) return `${d.getFullYear()}/${d.getMonth() + 1}`; return `${d.getMonth() + 1}/${d.getDate()}`; }
+function fmtYMD(d) { return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`; }
 
 /* ---------------- reusable evaluation/DD composed chart ---------------- */
 function EvalDDChartBody({ chartData, rangeDays, d, hidden, withBrush = false, fontSize = 10, width, height }) {
@@ -511,8 +513,8 @@ function StatusPanel({ d, onOpenTrackRecord }) {
           <div className="text-[10px] mt-0.5" style={{ color: C.textDim }}>ATH ${d.currentATH.toFixed(2)}</div>
         </div>
         <div className="flex-1 px-4 py-2 flex flex-col justify-center" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
-          <div className="flex items-center gap-1.5 mb-0.5">{d.isDrawdown ? <TrendingDown size={11} style={{ color: depthColor(d.currentDD) }} /> : <TrendingUp size={11} style={{ color: C.teal }} />}<span className="text-[10px]" style={{ color: C.textDim }}>{d.isDrawdown ? "DD（ATH比）" : "上昇（直近安値比）"}</span></div>
-          <div className="mono text-xl font-bold" style={{ color: depthColor(d.currentDD) }}>{d.isDrawdown ? `${d.currentDD.toFixed(1)}%` : `+${(-d.currentDD).toFixed(1)}%`}</div>
+          <div className="flex items-center gap-1.5 mb-0.5">{d.isDrawdown ? <TrendingDown size={11} style={{ color: depthColor(d.currentDD) }} /> : <TrendingUp size={11} style={{ color: C.teal }} />}<span className="text-[10px]" style={{ color: C.textDim }}>{d.isDrawdown ? "最高値比" : "前回最高値（DD3％後）比"}</span></div>
+          <div className="mono text-xl font-bold" style={{ color: depthColor(d.currentDD) }}>{d.isDrawdown ? `${d.currentDD.toFixed(1)}%` : `+${(-d.currentDD).toFixed(1)}%`}<span className="mono text-xs font-normal ml-1" style={{ color: C.textDim }}>（ATH：{fmtYMD(d.isDrawdown ? d.athDate : d.last.date)}）</span></div>
           <div className="text-[10px] mt-0.5" style={{ color: C.textDim }}>DD3%到達でリセット</div>
         </div>
         <div className="flex-1 px-4 py-2 flex flex-col justify-center" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
