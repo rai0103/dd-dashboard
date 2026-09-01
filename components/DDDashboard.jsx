@@ -620,12 +620,51 @@ function PortfolioTableContent({ view, holdings, onEditHolding }) {
   );
 }
 
+const AXIS_TICKS = [0, 20, 40, 60, 80, 100];
 function DDTableContent({ modelRow }) {
   return (
-    <table className="w-full text-sm mono">
-      <thead><tr style={{ color: C.textDim }}><th className="text-left font-normal py-1.5">局面（VOO DD）</th><th>A</th><th>B</th><th>C</th><th>D</th><th>E</th></tr></thead>
-      <tbody>{MODEL_ROWS.map((r) => (<tr key={r.label} style={{ borderTop: `1px solid ${C.borderSoft}`, background: r.label === modelRow.label ? `${C.teal}14` : "transparent" }}><td className="py-1.5" style={{ color: r.label === modelRow.label ? C.teal : C.text, fontWeight: r.label === modelRow.label ? 700 : 400 }}>{r.label}{r.label === modelRow.label ? " ← 現在" : ""}</td><td className="text-center">{r.A}%</td><td className="text-center">{r.B}%</td><td className="text-center">{r.C}%</td><td className="text-center">{r.D}%</td><td className="text-center">{r.E}%</td></tr>))}</tbody>
-    </table>
+    <div>
+      <div className="flex items-center gap-4 mb-4 flex-wrap">
+        {CATS.map((cat) => (
+          <div key={cat} className="flex items-center gap-1.5 text-[11px]">
+            <span style={{ width: 10, height: 10, borderRadius: 2, background: rankColor(cat), flexShrink: 0 }} />
+            <span style={{ color: C.textMuted }}>{cat}（{CAT_LABEL[cat]}）</span>
+          </div>
+        ))}
+      </div>
+
+      <div className="flex items-center gap-3 mb-1">
+        <div style={{ width: 96, flexShrink: 0 }} />
+        <div className="flex-1 relative" style={{ height: 14 }}>
+          {AXIS_TICKS.map((t) => (
+            <span key={t} className="absolute mono text-[9px]" style={{ left: `${t}%`, top: 0, transform: t === 100 ? "translateX(-100%)" : t === 0 ? "translateX(0)" : "translateX(-50%)", color: C.textDim }}>{t}%</span>
+          ))}
+        </div>
+      </div>
+
+      {MODEL_ROWS.map((r) => {
+        const isCurrent = r.label === modelRow.label;
+        return (
+          <div key={r.label} className="flex items-center gap-3 mb-1.5">
+            <div className="mono text-xs text-right shrink-0 whitespace-nowrap" style={{ width: 96, color: isCurrent ? C.teal : C.textMuted, fontWeight: isCurrent ? 700 : 400 }}>
+              {r.label}{isCurrent && " ←現在"}
+            </div>
+            <div className="flex-1 relative flex rounded overflow-hidden" style={{ height: 22, background: C.panel2, outline: isCurrent ? `1.5px solid ${C.teal}` : "none", outlineOffset: 1 }}>
+              {AXIS_TICKS.slice(1, -1).map((t) => (<div key={t} className="absolute top-0 bottom-0" style={{ left: `${t}%`, width: 1, background: C.borderSoft, opacity: 0.6 }} />))}
+              {CATS.map((cat) => {
+                const v = r[cat];
+                return (
+                  <div key={cat} title={`${cat}（${CAT_LABEL[cat]}）: ${v}%`} className="flex items-center justify-center mono font-semibold" style={{ width: `${v}%`, background: rankColor(cat), color: C.bg, fontSize: 10 }}>
+                    {v >= 8 ? `${cat} ${v}%` : ""}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+      <div className="text-[10px] mt-3" style={{ color: C.textDim }}>各行は横棒の合計が100%（A〜Eの構成比の目安）。バーにマウスを乗せると各セグメントの詳細を確認できます。</div>
+    </div>
   );
 }
 
