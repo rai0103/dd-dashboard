@@ -108,6 +108,37 @@ function findDDEpisodes(FULL, minDD) {
 }
 const DD3_FREQ_PER_YEAR = 3.5; // 過去傾向として、DD3%級の押し目は年に約3.5回発生する前提(目安値)
 function freqLabelFromP(p) { const perYear = DD3_FREQ_PER_YEAR * (p / 100); if (perYear >= 1) return `年に${perYear.toFixed(1)}回`; const years = 1 / perYear; return `${years < 10 ? years.toFixed(1) : Math.round(years)}年に1度`; }
+function freqPerYearFromP(p) { return DD3_FREQ_PER_YEAR * (p / 100); }
+function freqPerYearForLabel(label) { const row = FINAL_REACH_DATA.find((r) => r.label === label); return row ? freqPerYearFromP(row.p) : null; }
+function correctionType(dd) { const abs = Math.abs(dd); if (abs < 10) return "浅い調整"; if (abs < 20) return "中程度の調整"; return "深い調整"; }
+// 「現状分析」パネルの自動生成テキスト（毎日データ更新の都度、最新の状況から再計算される）。
+function buildAnalysisText(d, currentHoldingPct, totalValue) {
+  const athStr = fmtYMD(d.athDate);
+  const ddStr = `${d.currentDD.toFixed(1)}%`;
+  const perYear = d.currentLevelP !== null ? freqPerYearFromP(d.currentLevelP) : null;
+  const freqStr = perYear !== null ? `${perYear.toFixed(1)}回` : "算出不可の水準（過去データの範囲外）";
+  const typeStr = correctionType(d.currentDD);
+
+  let maxCat = "A", maxDiff = 0;
+  for (const cat of CATS) {
+    const diff = Number((currentHoldingPct[cat] - d.modelRow[cat]).toFixed(1));
+    if (Math.abs(diff) > Math.abs(maxDiff)) { maxDiff = diff; maxCat = cat; }
+  }
+  const maxDiffAmount = Math.round((totalValue * maxDiff) / 100);
+  const direction = maxDiff >= 0 ? "過多" : "不足";
+  const verdict = Math.abs(maxDiff) >= 4 ? "リバランスを推奨します" : "現状のバランスは良好です";
+  const rebalanceSentence = `${d.modelRow.label}の推奨ポートフォリオと比較して、${maxCat}クラスが${Math.abs(maxDiff).toFixed(1)}%（${maxDiffAmount >= 0 ? "+" : "-"}¥${Math.abs(maxDiffAmount).toLocaleString()}）${direction}しており、${verdict}。`;
+
+  if (d.isDrawdown && d.nextProg) {
+    const nextFreqPerYear = freqPerYearForLabel(`${d.nextProg.to}%`);
+    const nextFreqStr = nextFreqPerYear !== null ? `${nextFreqPerYear.toFixed(1)}回` : "算出不可";
+    return `ATHが${athStr}で現在は${ddStr}です。${ddStr}は${perYear !== null ? `年に${freqStr}程度発生する` : `${freqStr}`}${typeStr}です。ATHから${d.daysSinceATH}日間経過しており、次の節目である${d.nextProg.to}%まで下落する確率は${d.nextProg.p}%で、発生した場合は年に${nextFreqStr}程度の下落相場となります。${rebalanceSentence}`;
+  }
+  if (d.isDrawdown) {
+    return `ATHが${athStr}で現在は${ddStr}です。${ddStr}は${perYear !== null ? `年に${freqStr}程度発生する` : `${freqStr}`}${typeStr}です。ATHから${d.daysSinceATH}日間経過しています。${rebalanceSentence}`;
+  }
+  return `ATHが${athStr}で、現在は前回のATHから${d.daysSinceATH}日で新高値圏（${ddStr}）にあります。${rebalanceSentence}`;
+}
 
 function computeAll(rawSeries) {
   let ath = 0;
@@ -619,16 +650,17 @@ function Panel({ title, action, children, className = "", style, hideHeader = fa
 }
 function DiffBar({ cat, current, target, onClick }) {
   const diff = Number((current - target).toFixed(1)); const max = 50; const emphasize = Math.abs(diff) >= 4;
+  const catColor = rankColor(cat); // ポートフォリオ構成（A〜Eランク）の円グラフと同じ配色に統一
   return (
     <div onClick={onClick} className="px-3 py-1 flex items-center gap-2" style={{ borderBottom: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline justify-between mb-0.5">
-          <div className="flex items-baseline gap-1.5 min-w-0"><span className="text-xs font-semibold shrink-0" style={{ color: C.text }}>{cat}</span><span className="text-[10px] truncate" style={{ color: C.textDim }}>{CAT_LABEL[cat]}</span></div>
-          <div className="flex items-baseline gap-1.5 font-mono text-[11px] shrink-0 ml-2"><span style={{ color: C.textMuted }}>{current}%</span><span style={{ color: C.textDim }}>→{target}%</span><span className="font-semibold px-1 rounded" style={{ color: emphasize ? C.rust : C.textMuted, background: emphasize ? C.rustSoft : "transparent" }}>{diff > 0 ? "+" : ""}{diff}</span></div>
+          <div className="flex items-baseline gap-1.5 min-w-0"><span className="text-xs font-semibold shrink-0" style={{ color: catColor }}>{cat}</span><span className="text-[10px] truncate" style={{ color: C.textDim }}>{CAT_LABEL[cat]}</span></div>
+          <div className="flex items-baseline gap-1 font-mono text-[10px] shrink-0 ml-2"><span style={{ color: C.textMuted }}>実績{current}%</span><span style={{ color: C.textDim }}>モデル{target}%</span><span className="font-semibold px-1 rounded" style={{ color: emphasize ? C.rust : C.textMuted, background: emphasize ? C.rustSoft : "transparent" }}>{diff > 0 ? "+" : ""}{diff}</span></div>
         </div>
         <div className="relative h-1 rounded-full" style={{ background: C.panel2 }}>
           <div className="absolute top-0 h-1 rounded-full" style={{ width: `${(target / max) * 100}%`, background: C.borderSoft }} />
-          <div className="absolute top-0 h-1 rounded-full" style={{ width: `${(current / max) * 100}%`, background: emphasize ? C.rust : C.teal }} />
+          <div className="absolute top-0 h-1 rounded-full" style={{ width: `${(current / max) * 100}%`, background: catColor, opacity: emphasize ? 1 : 0.75 }} />
           <div className="absolute" style={{ left: `${(target / max) * 100}%`, top: -2.5, width: 2, height: 10, background: C.text, opacity: 0.6 }} />
         </div>
       </div>
@@ -1348,6 +1380,7 @@ export default function DDDashboard() {
   }, [currentHoldingPct, d.modelRow]);
 
   const crashLegendItems = [...CRASHES.map((c) => ({ key: c.id, label: c.name, color: c.color })), { key: "current", label: "現在", color: C.teal }];
+  const analysisText = useMemo(() => buildAnalysisText(d, currentHoldingPct, holdingsTotal(holdings)), [d, currentHoldingPct, holdings]);
 
   if (!hydrated) {
     return (
@@ -1431,14 +1464,11 @@ export default function DDDashboard() {
 
             {/* top-right: AI advice */}
             <div style={{ minHeight: 0 }}>
-              <Panel title="現在のアドバイス（AI）" className="h-full" hideHeader>
-                <div className="p-2.5 flex flex-col gap-1.5 overflow-hidden h-full">
+              <Panel title="現状分析（AI）" className="h-full" hideHeader>
+                <div className="p-2.5 flex flex-col gap-1.5 overflow-y-auto h-full">
                   <div>
-                    <div className="text-[10px] mb-0.5" style={{ color: C.textDim }}>現在の判断</div>
-                    <div className="text-[11px] leading-tight" style={{ color: C.text }}>
-                      現状のDD（{d.currentTLabel}）は{d.currentFreqLabel ? `${d.currentFreqLabel}発生する水準` : "過去データの範囲外の水準"}。
-                      {d.nextProg && (<> さらに{d.nextProg.to}%まで下落する確率は<b style={{ color: d.nextProg.watershed ? C.rust : C.text }}>{d.nextProg.p}%</b>{d.nextProg.watershed ? "（分水嶺）" : ""}。</>)}
-                    </div>
+                    <div className="text-[10px] mb-0.5" style={{ color: C.textDim }}>現状分析</div>
+                    <div className="text-[11px] leading-tight" style={{ color: C.text }}>{analysisText}</div>
                   </div>
                   <div><div className="text-[10px] mb-0.5" style={{ color: C.textDim }}>推奨アクション</div>
                     <ul className="text-[11px] leading-tight list-disc pl-3" style={{ color: C.textMuted }}>
@@ -1464,8 +1494,8 @@ export default function DDDashboard() {
 
             {/* bottom-right: A-E diff */}
             <div style={{ minHeight: 0 }}>
-              <Panel title={`A〜E 配分乖離（モデル: ${d.modelRow.label}）`} action={<button onClick={() => setModal({ type: "ddTable" })} title="DD毎の配分表を表示" style={{ background: "transparent", border: "none", cursor: "pointer" }}><Info size={14} style={{ color: C.textDim }} /></button>} className="h-full">
-                <div className="overflow-hidden h-full">
+              <Panel title={`A〜E 配分乖離（モデル: ${d.modelRow.label}）`} action={<div className="flex items-center gap-2"><span className="flex items-center gap-1 text-[9px]" style={{ color: C.textMuted }}><span style={{ width: 8, height: 8, borderRadius: 2, background: C.textMuted, display: "inline-block" }} />実績<span style={{ width: 8, height: 8, borderRadius: 2, background: C.borderSoft, display: "inline-block", marginLeft: 4 }} />モデル</span><button onClick={() => setModal({ type: "ddTable" })} title="DD毎の配分表を表示" style={{ background: "transparent", border: "none", cursor: "pointer" }}><Info size={14} style={{ color: C.textDim }} /></button></div>} className="h-full">
+                <div className="overflow-y-auto h-full">
                   {CATS.map((cat) => (<DiffBar key={cat} cat={cat} current={currentHoldingPct[cat]} target={d.modelRow[cat]} onClick={() => setModal({ type: "rank", rank: cat })} />))}
                   <div className="px-3 py-1 grid grid-cols-3 gap-2">
                     {[{ label: "A+B", ...blocks.AB }, { label: "C", ...blocks.Cb }, { label: "D+E", ...blocks.DE }].map((b) => { const diff = Number((b.cur - b.tgt).toFixed(1)); return (<div key={b.label} className="rounded px-2 py-1 text-center" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}><div className="text-[10px]" style={{ color: C.textDim }}>{b.label}</div><div className="mono text-xs font-semibold">{Number(b.cur.toFixed(1))}%</div><div className="mono text-[10px]" style={{ color: Math.abs(diff) >= 4 ? C.rust : C.textMuted }}>{diff > 0 ? "+" : ""}{diff}pt</div></div>); })}
