@@ -729,7 +729,7 @@ function CrashModalContent({ crash, daysSinceDDStart, currentDD, currentEpisodeC
 }
 
 /* ---------------- data input modal ---------------- */
-function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, onBackfill, source, holdings, onImportHoldings, onResetHoldings, holdingsSource, overrides }) {
+function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, onBackfill, source, holdings, onUpdateHoldings, onResetAndImportHoldings, onResetHoldings, holdingsSource, overrides }) {
   const [dataset, setDataset] = useState("voo"); // "voo" | "holdings"
   const [tab, setTab] = useState("csv");
   const [manualDate, setManualDate] = useState(new Date().toISOString().slice(0, 10));
@@ -804,16 +804,24 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, onBa
     next.splice(i, 1, rowA, rowB);
     return next;
   });
-  const confirmImport = () => {
-    onImportHoldings(previewOwner, preview);
-    setRakutenMsg(`${preview.length}件を${previewOwner}のデータとして反映しました。修正内容は銘柄名ごとに記憶され、次回以降は自動で適用されます。`);
+  const confirmUpdate = () => {
+    onUpdateHoldings(previewOwner, preview);
+    setRakutenMsg(`${preview.length}件を${previewOwner}の既存データに更新しました（新CSVに無い既存銘柄は保持、重複銘柄は新データで上書き）。修正内容は銘柄名ごとに記憶され、次回以降は自動で適用されます。`);
+    setPreview(null);
+  };
+  const confirmResetImport = () => {
+    onResetAndImportHoldings(previewOwner, preview);
+    setRakutenMsg(`既存の保有資産データと分類の記憶を全て削除し、${preview.length}件を${previewOwner}のデータとして新規登録しました。`);
     setPreview(null);
   };
 
   const tabBtn = (val, setter, key, label) => (<button onClick={() => setter(key)} className="text-xs px-3 py-1.5 rounded" style={{ color: val === key ? C.bg : C.textMuted, background: val === key ? C.teal : "transparent", border: `1px solid ${val === key ? C.teal : C.borderSoft}`, fontWeight: val === key ? 700 : 400, cursor: "pointer" }}>{label}</button>);
 
+  // モーダル右上の×：プレビュー画面（下位階層）にいる場合はアップロード画面（データ入力パネル）に戻るだけにし、それ以外ではダッシュボードへ戻る。
+  const handleModalClose = () => { if (preview) { setPreview(null); return; } onClose(); };
+
   return (
-    <FullScreenModal title="データの入力" onClose={onClose}>
+    <FullScreenModal title="データの入力" onClose={handleModalClose}>
       <div className="flex gap-2 mb-3">{tabBtn(dataset, setDataset, "voo", "VOO価格データ")}{tabBtn(dataset, setDataset, "holdings", "保有資産データ（ポートフォリオ）")}</div>
 
       {dataset === "voo" ? (
@@ -892,7 +900,8 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, onBa
             </>
           ) : (
             <>
-              <p className="text-sm mb-1" style={{ color: C.textMuted }}>取り込み内容を確認してください。カテゴリー・ランクは自動推定です。誤りがあればここで修正できます。「反映する」を押すと、口座主「{previewOwner}」の既存データがこの内容で置き換わります。</p>
+              <p className="text-sm mb-1" style={{ color: C.textMuted }}>取り込み内容を確認してください。カテゴリー・ランクは自動推定です。誤りがあればここで修正できます。</p>
+              <p className="text-xs mb-1 leading-relaxed" style={{ color: C.textDim }}><b style={{ color: C.textMuted }}>更新</b>：口座主「{previewOwner}」の既存銘柄のうちこのCSVにあるものは新データで上書きし、CSVに無い既存銘柄（手入力分など）はそのまま残します。／<b style={{ color: C.textMuted }}>初期化</b>：既存の保有資産データと分類の記憶を全て削除し、このCSVの内容だけで作り直します。</p>
               <p className="text-xs mb-3" style={{ color: C.textDim }}>ここでの修正は銘柄名ごとに記憶され、次回以降の取り込みでは自動的に同じ分類が適用されます（毎回直す必要はありません）。</p>
               <div className="overflow-y-auto" style={{ maxHeight: 380 }}>
                 <table className="w-full text-xs mono">
@@ -921,7 +930,8 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, onBa
                 </table>
               </div>
               <div className="flex gap-2 mt-4">
-                <button onClick={confirmImport} className="text-xs px-4 py-1.5 rounded" style={{ background: C.teal, color: C.bg, fontWeight: 700, border: "none", cursor: "pointer" }}>この内容を反映する</button>
+                <button onClick={confirmUpdate} className="text-xs px-4 py-1.5 rounded" style={{ background: C.teal, color: C.bg, fontWeight: 700, border: "none", cursor: "pointer" }}>更新（既存データにマージ）</button>
+                <button onClick={confirmResetImport} className="text-xs px-4 py-1.5 rounded" style={{ background: C.rust, color: C.bg, fontWeight: 700, border: "none", cursor: "pointer" }}>初期化（全削除して読み込み）</button>
                 <button onClick={() => setPreview(null)} className="text-xs px-4 py-1.5 rounded" style={{ color: C.textMuted, background: "transparent", border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>キャンセル</button>
               </div>
             </>
@@ -1008,10 +1018,12 @@ export default function DDDashboard() {
     if (added > 0) { setRawSeries(merged); setDataSource("imported"); persist(merged); }
     return { added, scale };
   }
-  function handleImportHoldings(owner, previewRows) {
+  // 「更新」：この口座主の既存銘柄のうち新CSVに含まれるものは新データで上書き、CSVに無い既存銘柄（手入力分等）はそのまま保持、新規銘柄は追加。
+  function handleUpdateHoldings(owner, previewRows) {
     setHoldings((prev) => {
-      const kept = prev.filter((h) => h.owner !== owner);
       const incoming = previewRows.map((r) => ({ ...r, owner, id: r.id ?? genId() }));
+      const incomingNames = new Set(incoming.map((r) => r.name));
+      const kept = prev.filter((h) => !(h.owner === owner && incomingNames.has(h.name)));
       const merged = [...kept, ...incoming];
       persistHoldings(merged);
       return merged;
@@ -1023,6 +1035,17 @@ export default function DDDashboard() {
       persistOverrides(next);
       return next;
     });
+  }
+  // 「初期化」：既存の保有資産データ・分類の記憶（overrides）を全て消去し、このCSVの内容のみで作り直す。
+  function handleResetAndImportHoldings(owner, previewRows) {
+    const incoming = previewRows.map((r) => ({ ...r, owner, id: r.id ?? genId() }));
+    setHoldings(incoming);
+    persistHoldings(incoming);
+    setHoldingsSource("imported");
+    const next = {};
+    for (const r of previewRows) next[r.name] = { category: r.category, rank: r.rank, currency: r.currency };
+    setOverrides(next);
+    persistOverrides(next);
   }
   function handleResetHoldings() { setHoldings(HOLDINGS_DEFAULT); setHoldingsSource("seed"); storage.delete("portfolio_holdings").catch(() => {}); }
   // カテゴリー/ランクは銘柄名ごとに（同じ銘柄が複数口座・口座主にあっても揃うよう）まとめて更新し、overridesにも記憶する。
@@ -1082,7 +1105,7 @@ export default function DDDashboard() {
       {modal?.type === "rank" && <FullScreenModal title={`${modal.rank}ランクの保有銘柄`} onClose={() => setModal(null)}><RankHoldingsContent rank={modal.rank} holdings={holdings} onEditHolding={handleHoldingFieldEdit} /></FullScreenModal>}
       {modal?.type === "crash" && <FullScreenModal title={`${modal.crash.name}（${modal.crash.start} 〜）と現状の比較`} onClose={() => setModal(null)}><CrashModalContent crash={modal.crash} daysSinceDDStart={d.daysSinceDDStart} currentDD={d.currentDD} currentEpisodeCurve={d.currentEpisodeCurve} /></FullScreenModal>}
       {modal?.type === "ddChart" && <FullScreenModal title="評価額（左軸） / DD%（右軸）" onClose={() => setModal(null)}><DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} /></FullScreenModal>}
-      {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} onBackfill={handleBackfill} source={dataSource} holdings={holdings} onImportHoldings={handleImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} />}
+      {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} onBackfill={handleBackfill} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} />}
 
       <div className="flex items-center justify-between px-5 py-3 shrink-0" style={{ borderBottom: `1px solid ${C.border}`, background: C.panel2 }}>
         <div className="flex items-center gap-3"><span className="text-sm font-bold tracking-wide">DD戦略ダッシュボード</span><span className="text-[11px]" style={{ color: C.textDim }}>VOO・日次</span></div>
