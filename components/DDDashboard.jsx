@@ -175,6 +175,11 @@ const HOLDINGS_DEFAULT = [
   { id: "seed-17", name: "現金(ドル)", category: "現金", currency: "ドル", rank: "A", account: "—", owner: "saki", amount: 2200000 },
 ];
 function groupByField(holdings, field) { const map = {}; for (const h of holdings) { map[h[field]] = (map[h[field]] || 0) + h.amount; } return Object.entries(map).map(([k, v]) => ({ name: k, value: v })); }
+// A〜Eランク別表示は割合に関わらずA→B→C→D→Eの固定順、それ以外の表示は構成比の大きい順（降順）。
+function sortGroupedForView(data, view) {
+  if (view === "rank") { const order = CATS; return [...data].sort((a, b) => order.indexOf(a.name) - order.indexOf(b.name)); }
+  return [...data].sort((a, b) => b.value - a.value);
+}
 function holdingsTotal(holdings) { return holdings.reduce((s, h) => s + h.amount, 0); }
 function currentHoldingPctFromHoldings(holdings) {
   const total = holdingsTotal(holdings) || 1;
@@ -559,7 +564,7 @@ function StatusPanel({ d, onOpenTrackRecord }) {
 function PortfolioPie({ view, holdings, onOpen }) {
   const field = fieldForView(view);
   const total = useMemo(() => holdingsTotal(holdings), [holdings]);
-  const data = useMemo(() => groupByField(holdings, field).sort((a, b) => b.value - a.value), [holdings, field]);
+  const data = useMemo(() => sortGroupedForView(groupByField(holdings, field), view), [holdings, field, view]);
   return (
     <div onClick={onOpen} className="h-full flex items-center cursor-pointer" style={{ padding: "6px 8px", gap: 6 }}>
       <div className="relative shrink-0" style={{ width: "40%", height: "92%" }}>
@@ -619,7 +624,7 @@ function TrackRecordContent({ currentT }) {
 function PortfolioTableContent({ view, holdings, onEditHolding, onDeleteHolding }) {
   const field = fieldForView(view);
   const total = holdingsTotal(holdings);
-  const grouped = groupByField(holdings, field).sort((a, b) => b.value - a.value);
+  const grouped = sortGroupedForView(groupByField(holdings, field), view);
   const viewLabel = view === "category" ? "カテゴリー別" : view === "currency" ? "為替別" : view === "owner" ? "口座別" : "A〜Eランク別";
   const rows = holdings.map((h) => ({ ...h, share: (h.amount / total) * 100 }));
   const columns = [
