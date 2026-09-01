@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   ComposedChart, LineChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip,
-  ReferenceLine, ReferenceDot, ResponsiveContainer, PieChart, Pie, Cell, Brush,
+  ReferenceLine, ReferenceDot, ResponsiveContainer, PieChart, Pie, Cell, Brush, Customized,
 } from "recharts";
 import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Database, Trash2 } from "lucide-react";
 import { storage } from "@/lib/storage";
@@ -104,7 +104,10 @@ function computeAll(rawSeries) {
   const currentFreqLabel = currentLevelP !== null ? freqLabelFromP(currentLevelP) : null;
   const athDate = FULL[episode.athIdx].date; // 直近の下落局面の起点となった最高値更新日
   const daysSinceATH = last.i - FULL[episode.athIdx].i; // 前回最高値（DD3%後）からの経過日数
-  return { FULL, last, currentDD, currentPrice, currentATH, isDrawdown, mode, episode, ddStartIdx, daysSinceDDStart, daysSinceCurrentThreshold, legDays, isEntryLeg, currentTLabel, currentEpisodeCurve, speedCategory, nextProg, modelRow, currentLevelP, currentFreqLabel, athDate, daysSinceATH };
+  let troughIdx = episode.athIdx; // 前回ATHから現在までの局面における底値（最安値）
+  for (let k = episode.athIdx; k <= last.i; k++) { if (FULL[k].price < FULL[troughIdx].price) troughIdx = k; }
+  const trough = FULL[troughIdx];
+  return { FULL, last, currentDD, currentPrice, currentATH, isDrawdown, mode, episode, ddStartIdx, daysSinceDDStart, daysSinceCurrentThreshold, legDays, isEntryLeg, currentTLabel, currentEpisodeCurve, speedCategory, nextProg, modelRow, currentLevelP, currentFreqLabel, athDate, daysSinceATH, trough };
 }
 
 const PROGRESSION_DATA = [
@@ -398,9 +401,64 @@ function sliceForPeriod(FULL, last, key) {
 }
 function fmtAxisDate(d, rangeDays) { if (rangeDays > 900) return `${d.getFullYear()}`; if (rangeDays > 120) return `${d.getFullYear()}/${d.getMonth() + 1}`; return `${d.getMonth() + 1}/${d.getDate()}`; }
 function fmtYMD(d) { return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`; }
+// チャートのX軸はcategory軸のため、ReferenceDotのxはchartData内の実際の点と一致している必要がある。
+// 間引き表示で厳密な日付が省略されている場合があるため、表示中の点のうち最も日付が近いものにスナップする。
+function nearestChartPoint(chartData, targetDate) {
+  let best = chartData[0], bestDiff = Math.abs(chartData[0].date - targetDate);
+  for (const p of chartData) { const diff = Math.abs(p.date - targetDate); if (diff < bestDiff) { best = p; bestDiff = diff; } }
+  return best;
+}
+
+// Rechartsの<ReferenceDot>はx値がnumber/stringでないと描画されず(Date型のcategory軸では使えない)、
+// このアプリの日付軸(dataKey="date"がDateオブジェクト)とは相性が悪い。
+// そのためxAxisMap/yAxisMapの実スケール関数を<Customized>経由で直接使い、マーカーを自前のSVGで描画する。
+function ChartMarkers({ xAxisMap, yAxisMap, points }) {
+  const xAxis = xAxisMap && xAxisMap[Object.keys(xAxisMap)[0]];
+  const yAxis = yAxisMap && yAxisMap.price;
+  if (!xAxis || !yAxis) return null;
+  const xScale = xAxis.scale, yScale = yAxis.scale;
+  const bandOffset = xScale && xScale.bandwidth ? xScale.bandwidth() / 2 : 0;
+  const positioned = points
+    .map((pt) => ({ ...pt, cx: xScale(pt.date) + bandOffset, cy: yScale(pt.price) }))
+    .filter((pt) => pt.cx != null && pt.cy != null && !Number.isNaN(pt.cx) && !Number.isNaN(pt.cy));
+  // ラベル同士が近接して重なる場合は、後の点（x座標が右側）のラベルを上に積んでずらす。
+  const sorted = [...positioned].sort((a, b) => a.cx - b.cx);
+  let labelOffset = 0;
+  for (let i = 1; i < sorted.length; i++) {
+    if (sorted[i].cx - sorted[i - 1].cx < 70) { labelOffset += 12; sorted[i].labelOffset = labelOffset; } else { labelOffset = 0; }
+  }
+  return (
+    <g>
+      {sorted.map((pt, i) => (
+        <g key={i}>
+          <circle cx={pt.cx} cy={pt.cy} r={4} fill={pt.color} stroke={C.bg} strokeWidth={1.5} />
+          <text x={pt.cx} y={pt.cy - 8 - (pt.labelOffset || 0)} textAnchor={pt.anchor || "middle"} fontSize={pt.fontSize} fill={pt.color} className="mono">{pt.label}</text>
+        </g>
+      ))}
+    </g>
+  );
+}
 
 /* ---------------- reusable evaluation/DD composed chart ---------------- */
 function EvalDDChartBody({ chartData, rangeDays, d, hidden, withBrush = false, fontSize = 10, width, height }) {
+  const chartFirst = chartData[0].date, chartLast = chartData[chartData.length - 1].date;
+  const markerFontSize = Math.max(8, fontSize - 1);
+  const markerPoints = [];
+  if (!hidden.price) {
+    if (chartFirst <= d.athDate && d.athDate <= chartLast) {
+      const p = nearestChartPoint(chartData, d.athDate);
+      markerPoints.push({ date: p.date, price: p.price, color: C.teal, anchor: "middle", fontSize: markerFontSize, label: `$${d.currentATH.toFixed(2)}（${fmtYMD(d.athDate)}）` });
+    }
+    const troughIsToday = d.trough.i === d.last.i; // 底値がまだ今日（未回復）の場合は現在値マーカーと重なるため統合する
+    if (!troughIsToday && d.trough.i !== d.episode.athIdx && chartFirst <= d.trough.date && d.trough.date <= chartLast) {
+      const p = nearestChartPoint(chartData, d.trough.date);
+      markerPoints.push({ date: p.date, price: p.price, color: C.rust, anchor: "middle", fontSize: markerFontSize, label: `$${d.trough.price.toFixed(2)}（${fmtYMD(d.trough.date)}）DD${d.trough.dd.toFixed(1)}%` });
+    }
+    const currentLabel = troughIsToday
+      ? `$${d.currentPrice.toFixed(2)}（${fmtYMD(d.last.date)}）DD${d.currentDD.toFixed(1)}%`
+      : `$${d.currentPrice.toFixed(2)}（${fmtYMD(d.last.date)}）`;
+    markerPoints.push({ date: chartLast, price: d.currentPrice, color: depthColor(d.currentDD), anchor: "end", fontSize: markerFontSize, label: currentLabel });
+  }
   return (
     <ComposedChart width={width} height={height} data={chartData} margin={{ top: 12, right: 44, left: 0, bottom: withBrush ? 0 : 0 }}>
       <defs>
@@ -417,7 +475,7 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, withBrush = false, f
       <Area yAxisId="dd" type="monotone" dataKey="dd" stroke={C.rust} fill="url(#ddFill)" strokeWidth={1.3} dot={false} isAnimationActive={false} fillOpacity={hidden.dd ? 0 : 1} strokeOpacity={hidden.dd ? 0 : 1} />
       <Area yAxisId="price" type="monotone" dataKey="price" stroke={C.teal} fill="url(#priceFill)" strokeWidth={1.8} dot={false} isAnimationActive={false} fillOpacity={hidden.price ? 0 : 1} strokeOpacity={hidden.price ? 0 : 1} />
       <Line yAxisId="price" type="monotone" dataKey="ath" stroke={C.textDim} strokeDasharray="3 4" strokeWidth={1} dot={false} isAnimationActive={false} strokeOpacity={hidden.price ? 0 : 1} />
-      {!hidden.price && <ReferenceDot yAxisId="price" x={chartData[chartData.length - 1].date} y={d.currentPrice} r={4} fill={depthColor(d.currentDD)} stroke={C.bg} strokeWidth={2} />}
+      {markerPoints.length > 0 && <Customized component={<ChartMarkers points={markerPoints} />} />}
       {withBrush && <Brush dataKey="date" height={26} stroke={C.teal} fill={C.panel2} tickFormatter={(dt) => fmtAxisDate(new Date(dt), rangeDays)} travellerWidth={8} />}
     </ComposedChart>
   );
@@ -930,6 +988,11 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, onBa
               <p className="text-sm mb-1" style={{ color: C.textMuted }}>取り込み内容を確認してください。カテゴリー・ランクは自動推定です。誤りがあればここで修正できます。</p>
               <p className="text-xs mb-1 leading-relaxed" style={{ color: C.textDim }}><b style={{ color: C.textMuted }}>更新</b>：口座主「{previewOwner}」の保有データをこのCSVの内容に同期します（重複銘柄は新データで上書き、新規銘柄は追加、CSVに無くなった銘柄＝売却済み等は削除。他の口座主のデータは変更されません）。／<b style={{ color: C.textMuted }}>初期化</b>：既存の保有資産データと分類の記憶を全て削除し、このCSVの内容だけで作り直します。</p>
               <p className="text-xs mb-3" style={{ color: C.textDim }}>ここでの修正は銘柄名ごとに記憶され、次回以降の取り込みでは自動的に同じ分類が適用されます（毎回直す必要はありません）。</p>
+              <div className="flex gap-2 mb-4">
+                <button onClick={confirmUpdate} className="text-xs px-4 py-1.5 rounded" style={{ background: C.teal, color: C.bg, fontWeight: 700, border: "none", cursor: "pointer" }}>更新（この口座主のデータをCSVに同期）</button>
+                <button onClick={confirmResetImport} className="text-xs px-4 py-1.5 rounded" style={{ background: C.rust, color: C.bg, fontWeight: 700, border: "none", cursor: "pointer" }}>初期化（全削除して読み込み）</button>
+                <button onClick={() => setPreview(null)} className="text-xs px-4 py-1.5 rounded" style={{ color: C.textMuted, background: "transparent", border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>キャンセル</button>
+              </div>
               <div className="overflow-y-auto" style={{ maxHeight: 380 }}>
                 <table className="w-full text-xs mono">
                   <thead><tr style={{ color: C.textDim }}><th className="text-left font-normal py-1">銘柄</th><th className="text-left font-normal">口座</th><th className="text-left font-normal">カテゴリー</th><th className="text-left font-normal">為替</th><th className="text-left font-normal">ランク</th><th className="text-right font-normal">評価額</th><th className="text-left font-normal">分割候補</th></tr></thead>
