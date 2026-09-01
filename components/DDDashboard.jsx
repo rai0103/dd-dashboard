@@ -48,20 +48,40 @@ function buildSeedSeries() {
 const SEED_SERIES = buildSeedSeries();
 
 /* ---------------- CSV parsing (Stooq: Date,Open,High,Low,Close,Volume) ---------------- */
+const BOM_RE = new RegExp("^" + String.fromCharCode(0xfeff)); // Excel等で保存されたUTF-8 CSV先頭のBOMを除去するため（コードポイント指定で明示、ソース上に不可視文字を埋め込まない）
 function findCol(header, candidates) { for (const c of candidates) { const idx = header.indexOf(c); if (idx !== -1) return idx; } return -1; }
+// 引用符で囲まれたフィールド内のカンマ（例: "5,480.22" のような桁区切り）を誤って列区切りとして分割しないCSV行パーサー。
+// 単純な line.split(",") だと桁区切りカンマ入りの値で列がずれ、Close列に別の値が混入する不具合があったため導入。
+function parseCSVLine(line) {
+  const out = [];
+  let cur = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else inQuotes = false; }
+      else cur += ch;
+    } else if (ch === '"') inQuotes = true;
+    else if (ch === ",") { out.push(cur); cur = ""; }
+    else cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
 function parseStooqCSV(text) {
-  const lines = text.trim().split(/\r?\n/);
+  const normalized = text.replace(BOM_RE, "").trim(); // 先頭BOM・前後の空白を除去
+  const lines = normalized.split(/\r?\n/).filter((l) => l.trim() !== ""); // \r\n(Windows)・\n(Unix)いずれも対応し、空行は除外
   if (!lines.length) return [];
-  const header = lines[0].split(",").map((h) => h.trim().toLowerCase());
+  const header = parseCSVLine(lines[0]).map((h) => h.trim().toLowerCase());
   const dateIdx = findCol(header, ["date", "日付"]);
   const closeIdx = findCol(header, ["close", "終値"]);
   if (dateIdx === -1 || closeIdx === -1) return [];
   const rows = [];
   for (let i = 1; i < lines.length; i++) {
-    const cols = lines[i].split(",");
+    const cols = parseCSVLine(lines[i]);
     if (cols.length <= Math.max(dateIdx, closeIdx)) continue;
-    const d = new Date(cols[dateIdx]);
-    const c = parseFloat(String(cols[closeIdx]).replace(/[",]/g, ""));
+    const d = new Date(cols[dateIdx].trim());
+    const c = parseFloat(String(cols[closeIdx]).replace(/,/g, "").trim());
     if (!isNaN(d.getTime()) && !isNaN(c)) rows.push({ date: d, price: c });
   }
   rows.sort((a, b) => a.date - b.date);
