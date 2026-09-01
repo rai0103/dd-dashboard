@@ -22,6 +22,7 @@ function lerpColor(a, b, t) { const pa = hexToRgb(a), pb = hexToRgb(b); return `
 function rankColor(rank) { const order = ["A", "B", "C", "D", "E"]; const idx = order.indexOf(rank); const t = idx / (order.length - 1); return t <= 0.5 ? lerpColor(C.teal, C.amber, t / 0.5) : lerpColor(C.amber, C.rust, (t - 0.5) / 0.5); }
 
 const MILESTONES = [-3, -5, -8, -10, -12, -15, -18, -20, -25, -30, -35, -40, -45, -50];
+const DD_AXIS_TICKS = [-3, -5, -8, -10, -12, -15, -20, -30, -50]; // 評価額/DDチャートのDD%軸目盛りをDD基準値で固定
 
 /* ---------------- bundled seed data (~31y), used until real data is imported ---------------- */
 function mulberry32(a) { return function () { let t = (a += 0x6d588f5); t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
@@ -79,6 +80,32 @@ function analyzeEpisode(series) {
   return { athIdx, crossIdx, currentT, currentIdx, prevT, prevIdx };
 }
 function nearestModelRow(dd) { let closest = MODEL_ROWS[0], bestDist = Infinity; for (const r of MODEL_ROWS) { const dist = Math.abs(r.v - dd); if (dist < bestDist) { bestDist = dist; closest = r; } } return closest; }
+// 全期間から「ATH→底値→回復（新ATH）」の下落局面を全て抽出する（DD%がminDD以下に達したもののみ、ノイズ除去）。
+// 最後の局面が未回復（現在も下落中/回復モード）の場合は isOngoing:true として含める。
+function findDDEpisodes(FULL, minDD) {
+  const raw = [];
+  let athIdx = 0;
+  for (let i = 1; i < FULL.length; i++) {
+    if (FULL[i].dd === 0) {
+      let troughIdx = athIdx;
+      for (let k = athIdx; k <= i; k++) { if (FULL[k].price < FULL[troughIdx].price) troughIdx = k; }
+      if (FULL[troughIdx].dd <= minDD) raw.push({ athIdx, troughIdx, recoveryIdx: i, isOngoing: false });
+      athIdx = i;
+    }
+  }
+  const lastIdx = FULL.length - 1;
+  if (athIdx < lastIdx) {
+    let troughIdx = athIdx;
+    for (let k = athIdx; k <= lastIdx; k++) { if (FULL[k].price < FULL[troughIdx].price) troughIdx = k; }
+    if (FULL[troughIdx].dd <= minDD) raw.push({ athIdx, troughIdx, recoveryIdx: null, isOngoing: true });
+  }
+  return raw.map((e) => ({
+    athIdx: e.athIdx, athDate: FULL[e.athIdx].date, athPrice: FULL[e.athIdx].price,
+    troughIdx: e.troughIdx, troughDate: FULL[e.troughIdx].date, troughPrice: FULL[e.troughIdx].price, troughDD: FULL[e.troughIdx].dd,
+    recoveryIdx: e.recoveryIdx, recoveryDate: e.recoveryIdx != null ? FULL[e.recoveryIdx].date : null, recoveryPrice: e.recoveryIdx != null ? FULL[e.recoveryIdx].price : null,
+    isOngoing: e.isOngoing,
+  }));
+}
 const DD3_FREQ_PER_YEAR = 3.5; // 過去傾向として、DD3%級の押し目は年に約3.5回発生する前提(目安値)
 function freqLabelFromP(p) { const perYear = DD3_FREQ_PER_YEAR * (p / 100); if (perYear >= 1) return `年に${perYear.toFixed(1)}回`; const years = 1 / perYear; return `${years < 10 ? years.toFixed(1) : Math.round(years)}年に1度`; }
 
@@ -107,7 +134,8 @@ function computeAll(rawSeries) {
   let troughIdx = episode.athIdx; // 前回ATHから現在までの局面における底値（最安値）
   for (let k = episode.athIdx; k <= last.i; k++) { if (FULL[k].price < FULL[troughIdx].price) troughIdx = k; }
   const trough = FULL[troughIdx];
-  return { FULL, last, currentDD, currentPrice, currentATH, isDrawdown, mode, episode, ddStartIdx, daysSinceDDStart, daysSinceCurrentThreshold, legDays, isEntryLeg, currentTLabel, currentEpisodeCurve, speedCategory, nextProg, modelRow, currentLevelP, currentFreqLabel, athDate, daysSinceATH, trough };
+  const episodes = findDDEpisodes(FULL, -3); // 過去も含む全DD局面（チャートの重要ポイント表示用）
+  return { FULL, last, currentDD, currentPrice, currentATH, isDrawdown, mode, episode, ddStartIdx, daysSinceDDStart, daysSinceCurrentThreshold, legDays, isEntryLeg, currentTLabel, currentEpisodeCurve, speedCategory, nextProg, modelRow, currentLevelP, currentFreqLabel, athDate, daysSinceATH, trough, episodes };
 }
 
 const PROGRESSION_DATA = [
@@ -242,6 +270,14 @@ function guessCategoryRank(rawName, ticker, assetType) {
   const category = guessCategory(rawName, ticker, assetType);
   return { category, rank: CATEGORY_DEFAULT_RANK[category] ?? "D" };
 }
+// 米国株指数・米国株連動の資産は、円建て（国内上場ETF/投信）でも為替はドルの影響を受けるため「ドル」扱いにする。
+// カテゴリーが米国系（SP500/Nasdaq/個別（米）等）であるか、銘柄名に米国関連キーワードが含まれる場合に該当。
+const USD_EXPOSURE_CATEGORIES = new Set(["SP500", "Nasdaq", "個別（米）", "テックETF・投信（米）", "高配当ETF・投信（米）", "その他ETF・投信（米）"]);
+function isUsdExposure(rawName, ticker, category) {
+  if (USD_EXPOSURE_CATEGORIES.has(category)) return true;
+  const norm = toHalfWidth(`${ticker ?? ""} ${rawName ?? ""}`);
+  return /S&P\s*500|SP500|NASDAQ|ナスダック|米国|アメリカ|USA?\b/i.test(norm);
+}
 // 「ゴールドプラス」系の複合ファンド（ゴールド＋株価指数）を検出し、判明しているものは自動でペア先カテゴリーを返す。
 function detectKnownGoldPlusPair(normName) {
   if (normName.includes("FANG") && normName.includes("ゴールド")) return "テックETF・投信（米）";
@@ -262,7 +298,8 @@ function expandGoldPlusSplits(rows) {
     if (!pair) { out.push({ ...r, splitCandidate: true, suggestedPairCategory: "その他" }); continue; }
     const half = Math.round(r.amount / 2);
     out.push({ ...r, name: `${r.name}（ゴールド）`, category: "ゴールド", rank: CATEGORY_DEFAULT_RANK["ゴールド"], amount: half });
-    out.push({ ...r, name: `${r.name}（${pair}）`, category: pair, rank: CATEGORY_DEFAULT_RANK[pair], amount: r.amount - half });
+    const pairCurrency = isUsdExposure(r.name, "", pair) ? "ドル" : r.currency;
+    out.push({ ...r, name: `${r.name}（${pair}）`, category: pair, rank: CATEGORY_DEFAULT_RANK[pair], amount: r.amount - half, currency: pairCurrency });
   }
   return out;
 }
@@ -321,12 +358,13 @@ function parseRakutenCSV(text) {
     const ticker = tickerIdx !== -1 ? c[tickerIdx] : "";
     const name = ticker ? `${ticker} ${rawName}` : rawName;
     const account = normalizeAccount(accountIdx !== -1 && c[accountIdx] ? c[accountIdx] : "特定");
-    const currency = pickCurrency(
+    const rawCurrency = pickCurrency(
       avgCostIdx !== -1 ? c[avgCostIdx + 1] : null,
       curValIdx !== -1 ? c[curValIdx + 1] : null,
       qtyIdx !== -1 ? c[qtyIdx + 1] : null,
     );
     const guess = guessCategoryRank(rawName, ticker, assetType);
+    const currency = isUsdExposure(rawName, ticker, guess.category) ? "ドル" : rawCurrency;
     rows.push({ name, account, amount, category: guess.category, rank: guess.rank, currency });
   }
   const summaryLines = lines.slice(0, headerIdx);
@@ -412,7 +450,9 @@ function nearestChartPoint(chartData, targetDate) {
 // Rechartsの<ReferenceDot>はx値がnumber/stringでないと描画されず(Date型のcategory軸では使えない)、
 // このアプリの日付軸(dataKey="date"がDateオブジェクト)とは相性が悪い。
 // そのためxAxisMap/yAxisMapの実スケール関数を<Customized>経由で直接使い、マーカーを自前のSVGで描画する。
-function ChartMarkers({ xAxisMap, yAxisMap, points }) {
+// dotOnly:true の点はラベルを常時表示せず、ホバー時のみ吹き出しツールチップで詳細を表示する（長期チャート向け）。
+function ChartMarkers({ xAxisMap, yAxisMap, points, chartWidth }) {
+  const [hoverIdx, setHoverIdx] = useState(null);
   const xAxis = xAxisMap && xAxisMap[Object.keys(xAxisMap)[0]];
   const yAxis = yAxisMap && yAxisMap.price;
   if (!xAxis || !yAxis) return null;
@@ -421,20 +461,38 @@ function ChartMarkers({ xAxisMap, yAxisMap, points }) {
   const positioned = points
     .map((pt) => ({ ...pt, cx: xScale(pt.date) + bandOffset, cy: yScale(pt.price) }))
     .filter((pt) => pt.cx != null && pt.cy != null && !Number.isNaN(pt.cx) && !Number.isNaN(pt.cy));
-  // ラベル同士が近接して重なる場合は、後の点（x座標が右側）のラベルを上に積んでずらす。
+  // ラベル同士が近接して重なる場合は、後の点（x座標が右側）のラベルを上に積んでずらす（常時ラベル表示の点のみ対象）。
   const sorted = [...positioned].sort((a, b) => a.cx - b.cx);
   let labelOffset = 0;
   for (let i = 1; i < sorted.length; i++) {
+    if (sorted[i].dotOnly || sorted[i - 1].dotOnly) { labelOffset = 0; continue; }
     if (sorted[i].cx - sorted[i - 1].cx < 70) { labelOffset += 12; sorted[i].labelOffset = labelOffset; } else { labelOffset = 0; }
   }
+  const hovered = hoverIdx != null ? sorted[hoverIdx] : null;
   return (
     <g>
       {sorted.map((pt, i) => (
-        <g key={i}>
-          <circle cx={pt.cx} cy={pt.cy} r={4} fill={pt.color} stroke={C.bg} strokeWidth={1.5} />
-          <text x={pt.cx} y={pt.cy - 8 - (pt.labelOffset || 0)} textAnchor={pt.anchor || "middle"} fontSize={pt.fontSize} fill={pt.color} className="mono">{pt.label}</text>
+        <g key={i}
+          onMouseEnter={pt.dotOnly ? () => setHoverIdx(i) : undefined}
+          onMouseLeave={pt.dotOnly ? () => setHoverIdx((h) => (h === i ? null : h)) : undefined}
+        >
+          <circle cx={pt.cx} cy={pt.cy} r={pt.dotOnly ? 4 : 4} fill={pt.color} stroke={C.bg} strokeWidth={1.5} style={pt.dotOnly ? { cursor: "pointer" } : undefined} />
+          {pt.dotOnly && <circle cx={pt.cx} cy={pt.cy} r={9} fill="transparent" style={{ cursor: "pointer" }} />}
+          {!pt.dotOnly && (
+            <text x={pt.cx} y={pt.cy - 8 - (pt.labelOffset || 0)} textAnchor={pt.anchor || "middle"} fontSize={pt.fontSize} fill={pt.color} className="mono">{pt.label}</text>
+          )}
         </g>
       ))}
+      {hovered && (() => {
+        const w = Math.max(90, hovered.label.length * (hovered.fontSize * 0.62) + 12);
+        const cxClamped = Math.min(Math.max(hovered.cx, w / 2 + 2), (chartWidth ?? 100000) - w / 2 - 2);
+        return (
+          <g style={{ pointerEvents: "none" }}>
+            <rect x={cxClamped - w / 2} y={hovered.cy - 32} width={w} height={18} rx={3} fill={C.panel} stroke={C.border} />
+            <text x={cxClamped} y={hovered.cy - 19} textAnchor="middle" fontSize={hovered.fontSize} fill={hovered.color} className="mono">{hovered.label}</text>
+          </g>
+        );
+      })()}
     </g>
   );
 }
@@ -443,21 +501,31 @@ function ChartMarkers({ xAxisMap, yAxisMap, points }) {
 function EvalDDChartBody({ chartData, rangeDays, d, hidden, withBrush = false, fontSize = 10, width, height }) {
   const chartFirst = chartData[0].date, chartLast = chartData[chartData.length - 1].date;
   const markerFontSize = Math.max(8, fontSize - 1);
+  const isShortTerm = rangeDays <= 200; // 1・3・6ヶ月＝ラベル常時表示、1年以上＝点のみ＋ホバーで詳細
   const markerPoints = [];
   if (!hidden.price) {
-    if (chartFirst <= d.athDate && d.athDate <= chartLast) {
-      const p = nearestChartPoint(chartData, d.athDate);
-      markerPoints.push({ date: p.date, price: p.price, color: C.teal, anchor: "middle", fontSize: markerFontSize, label: `$${d.currentATH.toFixed(2)}（${fmtYMD(d.athDate)}）` });
+    const seenIdx = new Set();
+    const addPt = (idx, date, price, color, label) => {
+      if (seenIdx.has(idx) || !(chartFirst <= date && date <= chartLast)) return;
+      seenIdx.add(idx);
+      const p = nearestChartPoint(chartData, date);
+      markerPoints.push({ date: p.date, price: p.price, color, anchor: "middle", fontSize: markerFontSize, label, dotOnly: !isShortTerm });
+    };
+    // 過去の各DD局面（ATH→底値→回復）
+    for (const ep of d.episodes) {
+      if (ep.isOngoing) continue;
+      addPt(ep.athIdx, ep.athDate, ep.athPrice, C.teal, `$${ep.athPrice.toFixed(2)}（${fmtYMD(ep.athDate)}）`);
+      if (ep.troughIdx !== ep.athIdx) addPt(ep.troughIdx, ep.troughDate, ep.troughPrice, C.rust, `$${ep.troughPrice.toFixed(2)}（${fmtYMD(ep.troughDate)}）DD${ep.troughDD.toFixed(1)}%`);
+      if (ep.recoveryIdx !== ep.troughIdx) addPt(ep.recoveryIdx, ep.recoveryDate, ep.recoveryPrice, C.teal, `$${ep.recoveryPrice.toFixed(2)}（${fmtYMD(ep.recoveryDate)}）`);
     }
+    // 現在進行中の局面（ATH→底値→現在）
+    addPt(d.episode.athIdx, d.athDate, d.currentATH, C.teal, `$${d.currentATH.toFixed(2)}（${fmtYMD(d.athDate)}）`);
     const troughIsToday = d.trough.i === d.last.i; // 底値がまだ今日（未回復）の場合は現在値マーカーと重なるため統合する
-    if (!troughIsToday && d.trough.i !== d.episode.athIdx && chartFirst <= d.trough.date && d.trough.date <= chartLast) {
-      const p = nearestChartPoint(chartData, d.trough.date);
-      markerPoints.push({ date: p.date, price: p.price, color: C.rust, anchor: "middle", fontSize: markerFontSize, label: `$${d.trough.price.toFixed(2)}（${fmtYMD(d.trough.date)}）DD${d.trough.dd.toFixed(1)}%` });
-    }
+    if (!troughIsToday && d.trough.i !== d.episode.athIdx) addPt(d.trough.i, d.trough.date, d.trough.price, C.rust, `$${d.trough.price.toFixed(2)}（${fmtYMD(d.trough.date)}）DD${d.trough.dd.toFixed(1)}%`);
     const currentLabel = troughIsToday
       ? `$${d.currentPrice.toFixed(2)}（${fmtYMD(d.last.date)}）DD${d.currentDD.toFixed(1)}%`
       : `$${d.currentPrice.toFixed(2)}（${fmtYMD(d.last.date)}）`;
-    markerPoints.push({ date: chartLast, price: d.currentPrice, color: depthColor(d.currentDD), anchor: "end", fontSize: markerFontSize, label: currentLabel });
+    markerPoints.push({ date: chartLast, price: d.currentPrice, color: depthColor(d.currentDD), anchor: "end", fontSize: markerFontSize, label: currentLabel, dotOnly: !isShortTerm });
   }
   return (
     <ComposedChart width={width} height={height} data={chartData} margin={{ top: 12, right: 44, left: 0, bottom: withBrush ? 0 : 0 }}>
@@ -467,15 +535,15 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, withBrush = false, f
       </defs>
       <CartesianGrid stroke={C.borderSoft} vertical={false} />
       <XAxis dataKey="date" tickFormatter={(dt) => fmtAxisDate(dt, rangeDays)} tick={{ fill: C.textDim, fontSize }} axisLine={{ stroke: C.border }} tickLine={false} minTickGap={40} />
-      <YAxis yAxisId="price" domain={["auto", "auto"]} tick={{ fill: C.textDim, fontSize }} axisLine={false} tickLine={false} width={48} label={{ value: "評価額", angle: -90, position: "insideLeft", fill: C.textDim, fontSize }} />
-      <YAxis yAxisId="dd" orientation="right" domain={["dataMin", 2]} tick={{ fill: C.textDim, fontSize }} axisLine={false} tickLine={false} width={46} label={{ value: "DD%", angle: 90, position: "insideRight", fill: C.textDim, fontSize }} />
+      <YAxis yAxisId="price" domain={["auto", "auto"]} tick={{ fill: C.teal, fontSize }} axisLine={false} tickLine={false} width={48} label={{ value: "評価額", angle: -90, position: "insideLeft", fill: C.teal, fontSize }} />
+      <YAxis yAxisId="dd" orientation="right" domain={["dataMin", 2]} ticks={DD_AXIS_TICKS} tick={{ fill: C.rust, fontSize }} axisLine={false} tickLine={false} width={46} label={{ value: "DD%", angle: 90, position: "insideRight", fill: C.rust, fontSize }} />
       <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} labelStyle={{ color: C.textMuted }} labelFormatter={(dt) => dt.toLocaleDateString("ja-JP")} formatter={(v, name) => [name === "dd" ? `${v}%` : `$${v}`, name === "dd" ? "DD" : name === "ath" ? "ATH" : "評価額"]} />
       {MILESTONES.map((t) => (<ReferenceLine key={t} yAxisId="dd" y={t} stroke={C.borderSoft} strokeDasharray="2 3" label={{ value: `${t}%`, position: "left", fill: C.textDim, fontSize: Math.max(8, fontSize - 2) }} />))}
       {chartData[0].date < VOO_LISTING_DATE && chartData[chartData.length - 1].date > VOO_LISTING_DATE && (<ReferenceLine yAxisId="price" x={VOO_LISTING_DATE} stroke={C.violet} strokeDasharray="3 3" label={{ value: "VOO上場", fill: C.violet, fontSize: Math.max(9, fontSize - 1), position: "top" }} />)}
       <Area yAxisId="dd" type="monotone" dataKey="dd" stroke={C.rust} fill="url(#ddFill)" strokeWidth={1.3} dot={false} isAnimationActive={false} fillOpacity={hidden.dd ? 0 : 1} strokeOpacity={hidden.dd ? 0 : 1} />
       <Area yAxisId="price" type="monotone" dataKey="price" stroke={C.teal} fill="url(#priceFill)" strokeWidth={1.8} dot={false} isAnimationActive={false} fillOpacity={hidden.price ? 0 : 1} strokeOpacity={hidden.price ? 0 : 1} />
       <Line yAxisId="price" type="monotone" dataKey="ath" stroke={C.textDim} strokeDasharray="3 4" strokeWidth={1} dot={false} isAnimationActive={false} strokeOpacity={hidden.price ? 0 : 1} />
-      {markerPoints.length > 0 && <Customized component={<ChartMarkers points={markerPoints} />} />}
+      {markerPoints.length > 0 && <Customized component={<ChartMarkers points={markerPoints} chartWidth={width} />} />}
       {withBrush && <Brush dataKey="date" height={26} stroke={C.teal} fill={C.panel2} tickFormatter={(dt) => fmtAxisDate(new Date(dt), rangeDays)} travellerWidth={8} />}
     </ComposedChart>
   );
@@ -590,8 +658,8 @@ function StatusPanel({ d, onOpenTrackRecord }) {
         <div className="flex-1 px-4 py-2 flex flex-col justify-center" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
           <div className="text-[10px] mb-0.5" style={{ color: C.textDim }}>評価額（VOO終値）</div>
           <div className="mono text-xl font-bold">${d.currentPrice.toFixed(2)}</div>
-          <div className="text-[10px] mt-0.5" style={{ color: C.textDim }}>データ日付：{fmtYMD(d.last.date)}</div>
-          <div className="text-[10px] mt-0.5" style={{ color: C.textDim }}>ATH ${d.currentATH.toFixed(2)}（{fmtYMD(d.athDate)}）{d.currentDD.toFixed(1)}%</div>
+          <div className="text-[9px] mt-0.5 whitespace-nowrap" style={{ color: C.textDim }}>データ日付：{fmtYMD(d.last.date)}</div>
+          <div className="text-[9px] mt-0.5 whitespace-nowrap" style={{ color: C.textDim }}>ATH ${d.currentATH.toFixed(2)}（{fmtYMD(d.athDate)}）{d.currentDD.toFixed(1)}%</div>
         </div>
         <div className="flex-1 px-4 py-2 flex flex-col justify-center" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
           <div className="flex items-center gap-1.5 mb-0.5">{d.isDrawdown ? <TrendingDown size={11} style={{ color: depthColor(d.currentDD) }} /> : <TrendingUp size={11} style={{ color: C.teal }} />}<span className="text-[10px]" style={{ color: C.textDim }}>{d.isDrawdown ? "最高値比" : "前回最高値（DD3％後）比"}</span></div>
@@ -688,7 +756,7 @@ function PortfolioTableContent({ view, holdings, onEditHolding, onDeleteHolding 
   const columns = [
     { key: "name", label: "銘柄" },
     { key: "category", label: "カテゴリー", editable: true, options: CATEGORIES },
-    { key: "currency", label: "為替" },
+    { key: "currency", label: "為替", editable: true, options: ["円", "ドル"] },
     { key: "rank", label: "ランク", editable: true, options: CATS },
     { key: "account", label: "口座" },
     { key: "owner", label: "口座主", editable: true, options: ["shin", "saki"] },
@@ -1150,7 +1218,7 @@ export default function DDDashboard() {
       persistHoldings(next);
       return next;
     });
-    if (field === "category" || field === "rank") {
+    if (field === "category" || field === "rank" || field === "currency") {
       setOverrides((prev) => {
         const prior = prev[target.name] || { category: target.category, rank: target.rank, currency: target.currency };
         const next = { ...prev, [target.name]: { ...prior, [field]: value } };
@@ -1238,7 +1306,7 @@ export default function DDDashboard() {
         <DepthGauge dd={d.currentDD} />
 
         <div className="flex-1 flex flex-col gap-0 p-2 min-w-0">
-          <div style={{ height: 104, flexShrink: 0 }}><StatusPanel d={d} onOpenTrackRecord={() => setModal({ type: "trackRecord" })} /></div>
+          <div style={{ height: 116, flexShrink: 0 }}><StatusPanel d={d} onOpenTrackRecord={() => setModal({ type: "trackRecord" })} /></div>
 
           <div className="flex-1 flex flex-col" style={{ gap: 0, minHeight: 0 }}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 380px", gap: 4, flex: 1, minHeight: 0 }}>
