@@ -305,21 +305,16 @@ function sortGroupedForView(data, view) {
   if (view === "rank") { const order = CATS; return [...data].sort((a, b) => order.indexOf(a.name) - order.indexOf(b.name)); }
   return [...data].sort((a, b) => b.value - a.value);
 }
-// カテゴリー数が多い円グラフを見やすくするため、構成比thresholdPct%未満のカテゴリーは「その他」にまとめる
-// （既存の「その他」カテゴリーがあればそこに合算し、円グラフ上で「その他」が重複しないようにする）。
-function aggregateSmallGroups(data, total, thresholdPct = 2) {
-  if (!total) return data;
-  const big = []; let smallSum = 0;
-  for (const g of data) {
-    if (g.name !== "その他" && (g.value / total) * 100 < thresholdPct) smallSum += g.value;
-    else big.push(g);
-  }
-  if (smallSum > 0) {
-    const idx = big.findIndex((g) => g.name === "その他");
-    if (idx !== -1) big[idx] = { ...big[idx], value: big[idx].value + smallSum };
-    else big.push({ name: "その他", value: smallSum });
-  }
-  return big;
+// カテゴリー数が多い円グラフを見やすくするため、構成比上位n件のみ表示しそれ以降は「その他」にまとめる
+// （dataは事前に降順ソート済みである前提。既存の「その他」があればそこに合算し重複させない）。
+function aggregateTopN(data, n) {
+  if (data.length <= n) return data;
+  const top = data.slice(0, n).map((g) => ({ ...g }));
+  const restSum = data.slice(n).reduce((s, g) => s + g.value, 0);
+  const idx = top.findIndex((g) => g.name === "その他");
+  if (idx !== -1) top[idx].value += restSum;
+  else top.push({ name: "その他", value: restSum });
+  return top;
 }
 function holdingsTotal(holdings) { return holdings.reduce((s, h) => s + h.amount, 0); }
 function currentHoldingPctFromHoldings(holdings) {
@@ -806,8 +801,8 @@ function PortfolioPie({ view, holdings, onOpen }) {
   const total = useMemo(() => holdingsTotal(holdings), [holdings]);
   const data = useMemo(() => {
     const grouped = sortGroupedForView(groupByField(holdings, field), view);
-    return view === "category" ? sortGroupedForView(aggregateSmallGroups(grouped, total, 2), view) : grouped;
-  }, [holdings, field, view, total]);
+    return view === "category" ? aggregateTopN(grouped, 6) : grouped;
+  }, [holdings, field, view]);
   return (
     <div onClick={onOpen} className="h-full flex items-center cursor-pointer" style={{ padding: "6px 8px", gap: 6 }}>
       <div className="relative shrink-0" style={{ width: "40%", height: "92%" }}>
@@ -1373,7 +1368,7 @@ export default function DDDashboard() {
   const [period, setPeriod] = useState("1Y");
   const [hidden, setHidden] = useState({});
   const [hiddenCrash, setHiddenCrash] = useState({});
-  const [pieView, setPieView] = useState("category");
+  const [pieView, setPieView] = useState("rank");
   const [chartTab, setChartTab] = useState("normal");
   const [modal, setModal] = useState(null);
   const [hydrated, setHydrated] = useState(false);
