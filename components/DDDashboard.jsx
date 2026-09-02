@@ -681,7 +681,7 @@ function buildComparisonData(currentEpisodeCurve) {
 }
 
 /* ---------------- period selector ---------------- */
-const PERIODS = [{ key: "1M", label: "1ヶ月", days: 21 }, { key: "3M", label: "3ヶ月", days: 63 }, { key: "6M", label: "6ヶ月", days: 126 }, { key: "YTD", label: "年初来" }, { key: "1Y", label: "1年", days: 252 }, { key: "3Y", label: "3年", days: 756 }, { key: "5Y", label: "5年", days: 1260 }, { key: "10Y", label: "10年", days: 2520 }, { key: "20Y", label: "20年", days: 5040 }, { key: "30Y", label: "30年", days: 7560 }, { key: "MAX", label: "最長" }];
+const PERIODS = [{ key: "1M", label: "1m", days: 21 }, { key: "3M", label: "3m", days: 63 }, { key: "6M", label: "6m", days: 126 }, { key: "YTD", label: "ytd" }, { key: "1Y", label: "1y", days: 252 }, { key: "3Y", label: "3y", days: 756 }, { key: "5Y", label: "5y", days: 1260 }, { key: "10Y", label: "10y", days: 2520 }, { key: "20Y", label: "20y", days: 5040 }, { key: "30Y", label: "30y", days: 7560 }, { key: "MAX", label: "max" }];
 // 期間キーから、間引き前（フル解像度）の対象範囲を切り出す。期間の正確な開始・終了日/騰落%等の算出はこちらを使う。
 function periodDateRange(FULL, last, key) {
   let sliced;
@@ -792,15 +792,13 @@ function troughLabel(athIdx, troughIdx, troughDate, troughPrice, troughDD, recov
   const daysToRecovery = recoveryIdx != null ? recoveryIdx - troughIdx : null;
   return `${base}（大底）　DD開始～大底：${daysToTrough}日間、大底～回復：${daysToRecovery !== null ? `${daysToRecovery}日間` : "未回復"}`;
 }
-// 選択期間の要約（DD-3%以上の発生回数・最大DD・評価額の騰落%）を、チャート上に常時表示する固定ウィンドウ。
-function PeriodStatsOverlay({ periodStats }) {
+// 選択期間の要約（DD-3%以上の発生回数・最大DD・評価額の騰落%）。チャートに重ねず、期間選択ボタンの下に常時表示する。
+function PeriodStatsBar({ periodStats }) {
   return (
-    <div className="absolute top-1.5 left-2 rounded px-2 py-1" style={{ background: `${C.panel}dd`, border: `1px solid ${C.borderSoft}`, zIndex: 5, pointerEvents: "none" }}>
-      <div className="mono text-[10px] flex items-center gap-2.5 whitespace-nowrap" style={{ color: C.textMuted }}>
-        <span>この期間 DD-3%以上：<b style={{ color: C.text }}>{periodStats.ddCount}回</b></span>
-        <span>最大DD：<b style={{ color: depthColor(periodStats.maxDD) }}>{periodStats.maxDD.toFixed(1)}%</b></span>
-        <span>騰落：<b style={{ color: periodStats.periodReturn >= 0 ? C.teal : C.rust }}>{periodStats.periodReturn >= 0 ? "+" : ""}{periodStats.periodReturn.toFixed(1)}%</b></span>
-      </div>
+    <div className="mono text-[10px] flex items-center gap-3 px-1 mb-1.5 whitespace-nowrap" style={{ color: C.textMuted, flexShrink: 0 }}>
+      <span>この期間 DD-3%以上：<b style={{ color: C.text }}>{periodStats.ddCount}回</b></span>
+      <span>最大DD：<b style={{ color: depthColor(periodStats.maxDD) }}>{periodStats.maxDD.toFixed(1)}%</b></span>
+      <span>騰落：<b style={{ color: periodStats.periodReturn >= 0 ? C.teal : C.rust }}>{periodStats.periodReturn >= 0 ? "+" : ""}{periodStats.periodReturn.toFixed(1)}%</b></span>
     </div>
   );
 }
@@ -866,12 +864,12 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBru
 function DDChartModalContent({ chartData, rangeDays, d, hidden, toggle, period, setPeriod, periodStats }) {
   return (
     <div className="h-full flex flex-col">
-      <div className="flex items-center gap-3 mb-3 flex-wrap">
+      <div className="flex items-center gap-3 mb-1.5 flex-wrap">
         <ClickLegend items={[{ key: "price", label: "評価額 / ATH", color: C.teal }, { key: "dd", label: "DD%", color: C.rust }]} hidden={hidden} onToggle={toggle} />
         <div className="flex gap-0.5">{PERIODS.map((p) => (<button key={p.key} onClick={() => setPeriod(p.key)} className="text-[11px] px-2 py-1 rounded" style={{ color: period === p.key ? C.bg : C.textMuted, background: period === p.key ? C.teal : "transparent", fontWeight: period === p.key ? 700 : 400 }}>{p.label}</button>))}</div>
       </div>
-      <div className="relative" style={{ height: "min(70vh, 640px)" }}>
-        <PeriodStatsOverlay periodStats={periodStats} />
+      <PeriodStatsBar periodStats={periodStats} />
+      <div style={{ height: "min(70vh, 640px)" }}>
         <ResponsiveContainer width="100%" height="100%" key={period}>
           <EvalDDChartBody chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} periodStats={periodStats} withBrush fontSize={12} />
         </ResponsiveContainer>
@@ -2325,8 +2323,8 @@ export default function DDDashboard() {
               >
                 {chartTab === "normal" ? (
                   <div className="h-full flex flex-col cursor-zoom-in" title="クリックで拡大表示" onClick={() => setModal({ type: "ddChart" })}>
-                    <div className="relative flex-1 min-h-0">
-                      <PeriodStatsOverlay periodStats={periodStats} />
+                    <PeriodStatsBar periodStats={periodStats} />
+                    <div className="flex-1 min-h-0">
                       <ResponsiveContainer width="100%" height="100%" key={period}>
                         <EvalDDChartBody chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} periodStats={periodStats} />
                       </ResponsiveContainer>
