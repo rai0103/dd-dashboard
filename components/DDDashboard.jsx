@@ -565,7 +565,18 @@ function sliceForPeriod(FULL, last, key) {
   else { const days = PERIODS.find((p) => p.key === key).days; sliced = FULL.slice(-days); }
   if (!sliced.length) sliced = FULL;
   const step = Math.max(1, Math.ceil(sliced.length / 260));
-  const out = []; for (let k = 0; k < sliced.length; k += step) out.push(sliced[k]);
+  // 単純な等間隔の間引きだと、バケット内で一瞬だけ付けた高値（ATH更新）や急落の底値がサンプル点から漏れ、
+  // 長期間表示でDD%が実際の値動きより滑らかに（＝評価額の形をなぞっただけのように）見えてしまう。
+  // そのためバケットごとに「評価額のピーク」と「DDの底」を両方残し、実際の高値・安値を欠落させない。
+  const out = [];
+  for (let k = 0; k < sliced.length; k += step) {
+    const end = Math.min(k + step, sliced.length);
+    let peak = sliced[k], trough = sliced[k];
+    for (let j = k + 1; j < end; j++) { if (sliced[j].price > peak.price) peak = sliced[j]; if (sliced[j].dd < trough.dd) trough = sliced[j]; }
+    if (peak === trough) out.push(peak);
+    else if (peak.i < trough.i) out.push(peak, trough);
+    else out.push(trough, peak);
+  }
   if (out[out.length - 1] !== sliced[sliced.length - 1]) out.push(sliced[sliced.length - 1]);
   return out;
 }
