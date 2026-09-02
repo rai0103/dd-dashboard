@@ -1088,8 +1088,8 @@ function TrackRecordContent({ currentT, trackRecord }) {
         {tr.finalReach.map((r) => (
           <div key={r.label} className="grid items-center gap-2 mb-1.5" style={{ gridTemplateColumns: "56px 1fr 76px 76px" }}>
             <span className="mono text-xs" style={{ color: C.textMuted }}>{r.label}</span>
-            <div className="h-2 rounded-full" style={{ background: C.panel2 }}><div className="h-2 rounded-full" style={{ width: `${Math.min(100, (r.p ?? 0) * 2)}%`, background: C.amber }} /></div>
-            <span className="mono text-xs text-right">{pct(r.p, r.hits, tr.n)}</span>
+            <div className="h-2 rounded-full" style={{ background: C.panel2 }}><div className="h-2 rounded-full" style={{ width: `${r.p ?? 0}%`, background: C.amber }} /></div>
+            <span className="mono text-xs text-right">{r.label === "-3%" ? (r.p === null ? "—" : `${r.p}%（${r.hits}）`) : pct(r.p, r.hits, tr.n)}</span>
             <span className="text-[10px] text-right" style={{ color: C.textDim }}>{r.p !== null ? freqLabelFromP(r.p, tr.ddFreqPerYear) : "—"}</span>
           </div>
         ))}
