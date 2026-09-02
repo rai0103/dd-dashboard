@@ -255,11 +255,20 @@ function computeTrackRecordStats(FULL, episodes) {
   const beyond50 = completed.filter((e) => e.troughDD < -50).length;
   finalReach.push({ label: "-50%以上", p: n > 0 ? Number(((beyond50 / n) * 100).toFixed(1)) : null, n: beyond50 });
 
-  const progression = PROGRESSION_PAIRS.map(([from, to]) => {
-    const reachedFrom = from === -3 ? completed : completed.filter((e) => e.troughDD <= from);
-    const reachedTo = reachedFrom.filter((e) => e.troughDD <= to);
-    return { from, to, p: reachedFrom.length > 0 ? Number(((reachedTo.length / reachedFrom.length) * 100).toFixed(1)) : null, n: reachedFrom.length, watershed: from === -8 && to === -10 };
-  });
+  // 深さを問わず「ATH更新→次のATH更新」の間に発生した全ての下落局面（ごく浅い押し目も含む）のうち、-3%まで到達した割合。
+  const allDips = findDDEpisodes(FULL, 0).filter((e) => !e.isOngoing);
+  const dipCount = allDips.length;
+  const dipToD3Count = allDips.filter((e) => e.troughDD <= -3).length;
+  const dipToD3Rate = dipCount > 0 ? Number(((dipToD3Count / dipCount) * 100).toFixed(1)) : null;
+
+  const progression = [
+    { from: "dip", to: -3, label: "下落発生→-3%", p: dipToD3Rate, n: dipCount },
+    ...PROGRESSION_PAIRS.map(([from, to]) => {
+      const reachedFrom = from === -3 ? completed : completed.filter((e) => e.troughDD <= from);
+      const reachedTo = reachedFrom.filter((e) => e.troughDD <= to);
+      return { from, to, p: reachedFrom.length > 0 ? Number(((reachedTo.length / reachedFrom.length) * 100).toFixed(1)) : null, n: reachedFrom.length, watershed: from === -8 && to === -10 };
+    }),
+  ];
 
   const crossings = completed.map((ep) => ({ ep, cross: episodeCrossDays(FULL, ep) }));
   const reachedD5 = crossings.filter((c) => c.cross[-3] !== null && c.cross[-5] !== null).map((c) => ({ ep: c.ep, speed35: c.cross[-5] - c.cross[-3] }));
@@ -282,7 +291,7 @@ function computeTrackRecordStats(FULL, episodes) {
   const fastCrashRate = fastAll.length > 0 ? Math.round((fastAll.filter((r) => r.ep.troughDD <= -15).length / fastAll.length) * 100) : null;
   const fastMissRate = fastCrashRate !== null ? 100 - fastCrashRate : null;
 
-  return { n, totalYears, ddFreqPerYear, finalReach, progression, speed35Backtest, speedTable, reachedD5Count: reachedD5.length, crashEpisodeCount: crashEpisodes.length, crashFastCount, crashFastShare, fastCrashRate, fastMissRate };
+  return { n, totalYears, ddFreqPerYear, finalReach, progression, speed35Backtest, speedTable, reachedD5Count: reachedD5.length, crashEpisodeCount: crashEpisodes.length, crashFastCount, crashFastShare, fastCrashRate, fastMissRate, dipCount, dipToD3Count, dipToD3Rate };
 }
 function speed35Bucket(days, speed35Backtest) { return speed35Backtest.find((r) => days >= r.min && days <= r.max) ?? null; }
 function classifySpeed35(days) { if (days <= 5) return "fast"; if (days >= 21) return "slow"; return "mid"; }
@@ -1024,8 +1033,8 @@ function TrackRecordContent({ currentT, trackRecord }) {
       <div>
         <div className="text-xs mb-3" style={{ color: C.textDim }}>節目間の進行確率<span className="ml-1" style={{ color: C.textDim }}>（実データ n={tr.n}局面）</span></div>
         {tr.progression.map((row) => (
-          <div key={row.from} className="grid items-center gap-2 mb-1.5" style={{ gridTemplateColumns: "72px 1fr 34px 44px" }}>
-            <span className="mono text-xs" style={{ color: row.from === currentT ? C.text : C.textMuted }}>{row.from}%→{row.to}%</span>
+          <div key={row.from} className="grid items-center gap-2 mb-1.5" style={{ gridTemplateColumns: "92px 1fr 34px 44px" }}>
+            <span className="mono text-xs" style={{ color: row.from === currentT ? C.text : C.textMuted }}>{row.label ?? `${row.from}%→${row.to}%`}</span>
             <div className="h-2 rounded-full" style={{ background: C.panel2 }}><div className="h-2 rounded-full" style={{ width: `${row.p ?? 0}%`, background: row.watershed ? C.rust : C.teal }} /></div>
             <span className="mono text-xs text-right">{pct(row.p)}</span>
             <span className="text-[9px]" style={{ color: C.rust }}>{row.watershed ? "分水嶺" : ""}</span>
