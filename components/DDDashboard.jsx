@@ -87,11 +87,11 @@ function parseStooqCSV(text) {
   rows.sort((a, b) => a.date - b.date);
   return rows;
 }
-const VOO_LISTING_DATE = new Date("2010-09-07"); // VOOの実際の設定日（この日以前はVOOの実データが存在しない）
+const SPY_LISTING_DATE = new Date("1993-01-22"); // SPYの実際の設定日（この日以前はSPYの実データが存在しない）
 function backfillFromIndex(vooSeries, indexSeries) {
   if (!vooSeries.length || !indexSeries.length) return { merged: vooSeries, added: 0, scale: null };
   const vooFirst = vooSeries[0];
-  // scale = VOOの最初の終値 ÷ 同日(または直前)のインデックス水準
+  // scale = SPYの最初の終値 ÷ 同日(または直前)のインデックス水準
   const candidates = indexSeries.filter((p) => p.date <= vooFirst.date);
   const matched = candidates.length ? candidates[candidates.length - 1] : indexSeries[0];
   const scale = vooFirst.price / matched.price;
@@ -308,7 +308,7 @@ function evaluateCheckpoint(cp, holdings, totalValue) {
 /* ---------------- portfolio holdings (default/seed — replaced once real data is imported) ---------------- */
 const HOLDINGS_DEFAULT = [
   { id: "seed-1", name: "eMAXIS Slim 米国株式(S&P500)", category: "SP500", currency: "円", rank: "C", account: "特定", owner: "shin", amount: 8200000 },
-  { id: "seed-2", name: "VOO", category: "SP500", currency: "ドル", rank: "C", account: "特定", owner: "saki", amount: 6400000 },
+  { id: "seed-2", name: "SPY", category: "SP500", currency: "ドル", rank: "C", account: "特定", owner: "saki", amount: 6400000 },
   { id: "seed-3", name: "楽天SP500", category: "SP500", currency: "円", rank: "C", account: "NISA成長", owner: "shin", amount: 3100000 },
   { id: "seed-4", name: "2521 円ヘッジSP500", category: "SP500", currency: "円", rank: "B", account: "特定", owner: "saki", amount: 1400000 },
   { id: "seed-5", name: "QQQ", category: "Nasdaq", currency: "ドル", rank: "D", account: "特定", owner: "shin", amount: 4200000 },
@@ -685,7 +685,7 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, withBrush = false, f
       <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} labelStyle={{ color: C.textMuted }} labelFormatter={(dt) => dt.toLocaleDateString("ja-JP")} formatter={(v, name) => [name === "dd" ? `${v}%` : `$${v}`, name === "dd" ? "DD" : name === "ath" ? "ATH" : "評価額"]} />
       {MILESTONES.filter((t) => t !== -3).map((t) => (<ReferenceLine key={t} yAxisId="dd" y={t} stroke={C.borderSoft} strokeDasharray="2 3" label={{ value: `${t}%`, position: "left", fill: C.textDim, fontSize: Math.max(8, fontSize - 2) }} />))}
       <ReferenceLine yAxisId="dd" y={-3} stroke={C.rust} strokeDasharray="4 3" strokeWidth={1.3} label={{ value: "-3%", position: "left", fill: C.rust, fontSize: Math.max(8, fontSize - 2) }} />
-      {chartData[0].date < VOO_LISTING_DATE && chartData[chartData.length - 1].date > VOO_LISTING_DATE && (<ReferenceLine yAxisId="price" x={VOO_LISTING_DATE} stroke={C.violet} strokeDasharray="3 3" label={{ value: "VOO上場", fill: C.violet, fontSize: Math.max(9, fontSize - 1), position: "top" }} />)}
+      {chartData[0].date < SPY_LISTING_DATE && chartData[chartData.length - 1].date > SPY_LISTING_DATE && (<ReferenceLine yAxisId="price" x={SPY_LISTING_DATE} stroke={C.violet} strokeDasharray="3 3" label={{ value: "SPY上場", fill: C.violet, fontSize: Math.max(9, fontSize - 1), position: "top" }} />)}
       <Area yAxisId="dd" type="monotone" dataKey="dd" stroke={C.rust} fill="url(#ddFill)" strokeWidth={1.3} dot={false} isAnimationActive={false} fillOpacity={hidden.dd ? 0 : 1} strokeOpacity={hidden.dd ? 0 : 1} />
       <Area yAxisId="price" type="monotone" dataKey="price" stroke={C.teal} fill="url(#priceFill)" strokeWidth={1.8} dot={false} isAnimationActive={false} fillOpacity={hidden.price ? 0 : 1} strokeOpacity={hidden.price ? 0 : 1} />
       <Line yAxisId="price" type="monotone" dataKey="ath" stroke={C.textDim} strokeDasharray="3 4" strokeWidth={1} dot={false} isAnimationActive={false} strokeOpacity={hidden.price ? 0 : 1} />
@@ -803,7 +803,7 @@ function StatusPanel({ d, onOpenTrackRecord }) {
     <Panel title="現在のステータス" hideHeader className="h-full">
       <div className="flex h-full">
         <div className="flex-1 px-4 py-2 flex flex-col justify-center" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
-          <div className="text-[10px] mb-0.5" style={{ color: C.textDim }}>評価額（VOO終値）</div>
+          <div className="text-[10px] mb-0.5" style={{ color: C.textDim }}>評価額（SPY終値）</div>
           <div className="mono text-xl font-bold">${d.currentPrice.toFixed(2)}</div>
           <div className="text-[9px] mt-0.5 whitespace-nowrap" style={{ color: C.textDim }}>データ日付：{fmtYMD(d.last.date)}（米国時間）</div>
           <div className="text-[9px] mt-0.5 whitespace-nowrap" style={{ color: C.textDim }}>ATH ${d.currentATH.toFixed(2)}（{fmtYMD(d.athDate)}）{d.currentDD.toFixed(1)}%</div>
@@ -1186,8 +1186,8 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, onBa
       const parsed = parseStooqCSV(String(ev.target.result));
       if (!parsed.length) { setSp500Msg("CSVを解析できませんでした。列名(Date/日付, Close/終値)を確認してください。"); return; }
       const { added, scale } = onBackfill(parsed);
-      if (added > 0) setSp500Msg(`VOO上場前(${VOO_LISTING_DATE.toLocaleDateString("ja-JP")}より前)を${added}件、SP500から換算係数${scale.toFixed(4)}(=VOO初値÷同時期SP500水準)で補完しました。`);
-      else setSp500Msg("補完対象の期間がありませんでした（VOOデータの開始日以前のSP500データが見つからないか、既にVOO上場後のデータのみです）。");
+      if (added > 0) setSp500Msg(`SPY上場前(${SPY_LISTING_DATE.toLocaleDateString("ja-JP")}より前)を${added}件、SP500から換算係数${scale.toFixed(4)}(=SPY初値÷同時期SP500水準)で補完しました。`);
+      else setSp500Msg("補完対象の期間がありませんでした（SPYデータの開始日以前のSP500データが見つからないか、既にSPY上場後のデータのみです）。");
     };
     reader.readAsText(file);
   };
@@ -1245,15 +1245,15 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, onBa
 
   return (
     <FullScreenModal title="データの入力" onClose={handleModalClose}>
-      <div className="flex gap-2 mb-3">{tabBtn(dataset, setDataset, "voo", "VOO価格データ")}{tabBtn(dataset, setDataset, "holdings", "保有資産データ（ポートフォリオ）")}</div>
+      <div className="flex gap-2 mb-3">{tabBtn(dataset, setDataset, "voo", "SPY価格データ")}{tabBtn(dataset, setDataset, "holdings", "保有資産データ（ポートフォリオ）")}</div>
 
       {dataset === "voo" ? (
         <>
           <div className="flex gap-2 mb-5">{tabBtn(tab, setTab, "csv", "方式A：CSV取り込み（Stooq）")}{tabBtn(tab, setTab, "manual", "方式B：直接入力")}</div>
           {tab === "csv" ? (
             <div>
-              <p className="text-sm mb-1 leading-relaxed" style={{ color: C.textMuted }}>Stooqからダウンロードした VOO.US の日次CSV（Date,Open,High,Low,Close,Volume・日付昇順）を選択してください。</p>
-              <p className="text-xs mb-4" style={{ color: C.textDim }}>取得元: https://stooq.com/q/d/l/?s=voo.us&i=d</p>
+              <p className="text-sm mb-1 leading-relaxed" style={{ color: C.textMuted }}>Stooqからダウンロードした SPY.US の日次CSV（Date,Open,High,Low,Close,Volume・日付昇順）を選択してください。</p>
+              <p className="text-xs mb-4" style={{ color: C.textDim }}>取得元: https://stooq.com/q/d/l/?s=spy.us&i=d</p>
               <label className="inline-flex items-center gap-2 text-xs px-3 py-2 rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.textMuted, cursor: "pointer" }}>
                 <Upload size={13} /> CSVファイルを選択
                 <input type="file" accept=".csv" onChange={handleFile} style={{ display: "none" }} />
@@ -1262,20 +1262,20 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, onBa
               {fileMsg && <div className="text-xs mt-2" style={{ color: C.teal }}>{fileMsg}</div>}
 
               <div className="mt-8 pt-5" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
-                <p className="text-sm mb-1 leading-relaxed" style={{ color: C.textMuted }}>VOO上場（{VOO_LISTING_DATE.toLocaleDateString("ja-JP")}）より前の期間は、SP500の長期データから概算値を算出して補完できます。</p>
-                <p className="text-xs mb-4 leading-relaxed" style={{ color: C.textDim }}>方法：VOOの最初の終値と同時期のSP500水準から換算係数を計算し、それより前のSP500日次値に係数を掛けて合成します（お手持ちの sp500_daily_1957-2026.xlsx をCSV書き出ししたものなどが使えます。列名は Date/日付, Close/終値 に対応）。</p>
+                <p className="text-sm mb-1 leading-relaxed" style={{ color: C.textMuted }}>SPY上場（{SPY_LISTING_DATE.toLocaleDateString("ja-JP")}）より前の期間は、SP500の長期データから概算値を算出して補完できます。</p>
+                <p className="text-xs mb-4 leading-relaxed" style={{ color: C.textDim }}>方法：SPYの最初の終値と同時期のSP500水準から換算係数を計算し、それより前のSP500日次値に係数を掛けて合成します（お手持ちの sp500_daily_1957-2026.xlsx をCSV書き出ししたものなどが使えます。列名は Date/日付, Close/終値 に対応）。</p>
                 <label className="inline-flex items-center gap-2 text-xs px-3 py-2 rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.textMuted, cursor: "pointer" }}>
                   <Upload size={13} /> SP500長期CSVを選択
                   <input type="file" accept=".csv" onChange={handleSp500File} style={{ display: "none" }} />
                 </label>
                 {sp500FileName && <div className="text-xs mt-2" style={{ color: C.textDim }}>選択中: {sp500FileName}</div>}
                 {sp500Msg && <div className="text-xs mt-2" style={{ color: C.teal }}>{sp500Msg}</div>}
-                <div className="text-[10px] mt-2" style={{ color: C.textDim }}>※ 配当再投資を含まない価格指数としての概算です。VOOの実際の分配落ちとは完全には一致しません。</div>
+                <div className="text-[10px] mt-2" style={{ color: C.textDim }}>※ 配当再投資を含まない価格指数としての概算です。SPYの実際の分配落ちとは完全には一致しません。</div>
               </div>
             </div>
           ) : (
             <div>
-              <p className="text-sm mb-4" style={{ color: C.textMuted }}>毎日の運用でその日のVOO終値だけを入力する簡易方式です。既存データに追記・上書きされます。</p>
+              <p className="text-sm mb-4" style={{ color: C.textMuted }}>毎日の運用でその日のSPY終値だけを入力する簡易方式です。既存データに追記・上書きされます。</p>
               <div className="flex items-end gap-3">
                 <div><label className="text-[10px] block mb-1" style={{ color: C.textDim }}>日付</label><input type="date" value={manualDate} onChange={(e) => setManualDate(e.target.value)} className="text-xs px-2 py-1.5 rounded mono" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }} /></div>
                 <div><label className="text-[10px] block mb-1" style={{ color: C.textDim }}>終値（$）</label><input type="number" step="0.01" value={manualPrice} onChange={(e) => setManualPrice(e.target.value)} placeholder="704.20" className="text-xs px-2 py-1.5 rounded w-28 mono" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }} /></div>
@@ -1629,7 +1629,7 @@ export default function DDDashboard() {
       {modal?.type === "checkpointSettings" && <FullScreenModal title="チェックポイント設定" onClose={() => setModal(null)}><CheckpointSettingsContent checkpoints={checkpoints} onCheckpointChange={handleCheckpointChange} holdings={holdings} /></FullScreenModal>}
 
       <div className="flex items-center justify-between px-5 py-3 shrink-0" style={{ borderBottom: `1px solid ${C.border}`, background: C.panel2 }}>
-        <div className="flex items-center gap-3"><span className="text-sm font-bold tracking-wide">DD戦略ダッシュボード</span><span className="text-[11px]" style={{ color: C.textDim }}>VOO・日次</span></div>
+        <div className="flex items-center gap-3"><span className="text-sm font-bold tracking-wide">DD戦略ダッシュボード</span><span className="text-[11px]" style={{ color: C.textDim }}>SPY・日次</span></div>
         <div className="flex items-center gap-3">
           <button onClick={() => setModal({ type: "dataInput" })} className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
             <Database size={12} /> データ入力
