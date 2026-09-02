@@ -717,7 +717,8 @@ function computePeriodStats(periodRange, episodes) {
   const maxDD = Number(Math.min(...periodRange.map((p) => p.dd)).toFixed(1));
   const eventsInRange = episodes.filter((e) => e.troughDate >= start.date && e.troughDate <= end.date);
   const worstEpisode = eventsInRange.reduce((worst, e) => (!worst || e.troughDD < worst.troughDD ? e : worst), null);
-  return { periodReturn, maxDD, ddCount: eventsInRange.length, worstEpisode };
+  const athUpdateCount = periodRange.filter((p) => p.dd === 0).length; // 期間内でその日の終値が新たな最高値を更新した回数
+  return { periodReturn, maxDD, ddCount: eventsInRange.length, worstEpisode, athUpdateCount };
 }
 function fmtAxisDate(d, rangeDays) { if (rangeDays > 900) return `${d.getFullYear()}`; if (rangeDays > 120) return `${d.getFullYear()}/${d.getMonth() + 1}`; return `${d.getMonth() + 1}/${d.getDate()}`; }
 function fmtYMD(d) { return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`; }
@@ -798,6 +799,7 @@ function PeriodStatsBar({ periodStats }) {
     <div className="mono text-[10px] flex items-center gap-3 px-1 mb-1.5 whitespace-nowrap" style={{ color: C.textMuted, flexShrink: 0 }}>
       <span>この期間 DD-3%以上：<b style={{ color: C.text }}>{periodStats.ddCount}回</b></span>
       <span>最大DD：<b style={{ color: depthColor(periodStats.maxDD) }}>{periodStats.maxDD.toFixed(1)}%</b></span>
+      <span>最高値更新：<b style={{ color: C.teal }}>{periodStats.athUpdateCount}回</b></span>
       <span>騰落：<b style={{ color: periodStats.periodReturn >= 0 ? C.teal : C.rust }}>{periodStats.periodReturn >= 0 ? "+" : ""}{periodStats.periodReturn.toFixed(1)}%</b></span>
     </div>
   );
