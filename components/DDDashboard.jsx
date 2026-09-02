@@ -138,23 +138,29 @@ function findDDEpisodes(FULL, minDD) {
     isOngoing: e.isOngoing,
   }));
 }
-const DD3_FREQ_PER_YEAR = 3.5; // 過去傾向として、DD3%級の押し目は年に約3.5回発生する前提(目安値)
-function freqLabelFromP(p) { const perYear = DD3_FREQ_PER_YEAR * (p / 100); if (perYear >= 1) return `年に${perYear.toFixed(1)}回`; const years = 1 / perYear; return `${years < 10 ? years.toFixed(1) : Math.round(years)}年に1度`; }
-function freqPerYearFromP(p) { return DD3_FREQ_PER_YEAR * (p / 100); }
-function freqPerYearForLabel(label) { const row = FINAL_REACH_DATA.find((r) => r.label === label); return row ? freqPerYearFromP(row.p) : null; }
+// DD3%級の押し目が年に何回発生するか（ddFreqPerYear）は、読み込まれているトラックレコード全体から都度算出される（computeTrackRecordStats参照）。
+function freqPerYearFromP(p, ddFreqPerYear) { return (ddFreqPerYear !== null && ddFreqPerYear !== undefined) ? ddFreqPerYear * (p / 100) : null; }
+function freqLabelFromP(p, ddFreqPerYear) {
+  const perYear = freqPerYearFromP(p, ddFreqPerYear);
+  if (perYear === null || perYear <= 0) return "算出不可";
+  if (perYear >= 1) return `年に${perYear.toFixed(1)}回`;
+  const years = 1 / perYear;
+  return `${years < 10 ? years.toFixed(1) : Math.round(years)}年に1度`;
+}
+function freqPerYearForLabel(label, finalReach, ddFreqPerYear) { const row = finalReach.find((r) => r.label === label); return (row && row.p !== null) ? freqPerYearFromP(row.p, ddFreqPerYear) : null; }
 function correctionType(dd) { const abs = Math.abs(dd); if (abs < 10) return "浅い調整"; if (abs < 20) return "中程度の調整"; return "深い調整"; }
 // 「現状分析」パネルの自動生成テキスト（毎日データ更新の都度、最新の状況から再計算される）。
 // DD加速度アラート（速度・経過日数の法則）の判定結果を、現状分析テキストに差し込む一文に変換する。
 function speedAlertSentence(sa) {
   if (sa.level === "pending5") return `DD3%到達から${sa.daysSinceDD3}営業日が経過し、まだDD5%には未到達です。${sa.hint ? sa.hint + "。" : ""}`;
-  if (sa.level === "confirmed5") return `DD3→5%の速度は${sa.speed35}営業日（${sa.warnLabel}）で、この先DD15%以深まで進む確率は${sa.deepProb["-15"]}%です。推奨：${sa.action}。`;
+  if (sa.level === "confirmed5") { const p15 = sa.deepProb["-15"]; return `DD3→5%の速度は${sa.speed35}営業日（${sa.warnLabel}）で、この先DD15%以深まで進む確率は${p15 !== null ? `${p15}%` : "算出不可（実績データ不足）"}です。推奨：${sa.action}。`; }
   if (sa.level === "deep8") return `DD8%を突破し本格下落局面です（3→8%の速度：${sa.speed38 ?? "算出不可"}営業日・${sa.speed38Category ?? "速度データなし"}）。推奨：${sa.action}。`;
   return "";
 }
 function buildAnalysisText(d, currentHoldingPct, totalValue) {
   const athStr = fmtYMD(d.athDate);
   const ddStr = `${d.currentDD.toFixed(1)}%`;
-  const perYear = d.currentLevelP !== null ? freqPerYearFromP(d.currentLevelP) : null;
+  const perYear = d.currentLevelP !== null ? freqPerYearFromP(d.currentLevelP, d.trackRecord.ddFreqPerYear) : null;
   const freqStr = perYear !== null ? `${perYear.toFixed(1)}回` : "算出不可の水準（過去データの範囲外）";
   const typeStr = correctionType(d.currentDD);
 
@@ -170,7 +176,7 @@ function buildAnalysisText(d, currentHoldingPct, totalValue) {
 
   const speedStr = speedAlertSentence(d.speedAlert);
   if (d.isDrawdown && d.nextProg) {
-    const nextFreqPerYear = freqPerYearForLabel(`${d.nextProg.to}%`);
+    const nextFreqPerYear = freqPerYearForLabel(`${d.nextProg.to}%`, d.trackRecord.finalReach, d.trackRecord.ddFreqPerYear);
     const nextFreqStr = nextFreqPerYear !== null ? `${nextFreqPerYear.toFixed(1)}回` : "算出不可";
     return `ATHが${athStr}で現在は${ddStr}です。${ddStr}は${perYear !== null ? `年に${freqStr}程度発生する` : `${freqStr}`}${typeStr}です。ATHから${d.daysSinceATH}日間経過しており、次の節目である${d.nextProg.to}%まで下落する確率は${d.nextProg.p}%で、発生した場合は年に${nextFreqStr}程度の下落相場となります。${speedStr}${rebalanceSentence}`;
   }
@@ -188,6 +194,8 @@ function computeAll(rawSeries) {
   const isDrawdown = currentDD <= -3;
   const mode = isDrawdown ? "下落モード" : "最高値更新モード";
   const episode = analyzeEpisode(FULL);
+  const episodes = findDDEpisodes(FULL, -3); // 過去も含む全DD局面（チャートの重要ポイント表示・トラックレコード集計用）
+  const trackRecord = computeTrackRecordStats(FULL, episodes); // 読み込まれている実データから都度算出する進行確率・速度統計
   const ddStartIdx = episode.crossIdx[-3];
   const daysSinceDDStart = ddStartIdx !== -1 ? last.i - FULL[ddStartIdx].i : null;
   const daysSinceCurrentThreshold = episode.currentIdx !== -1 ? last.i - FULL[episode.currentIdx].i : null;
@@ -196,61 +204,91 @@ function computeAll(rawSeries) {
   const currentTLabel = currentDD <= -50 ? "-50%以上" : (episode.currentT !== null ? `${episode.currentT}%` : "—");
   const currentEpisodeCurve = ddStartIdx !== -1 ? FULL.slice(ddStartIdx, last.i + 1).map((p, idx) => ({ day: idx, dd: p.dd })) : [];
   const speedCategory = legDays !== null ? (legDays <= 5 ? "急落" : "緩慢") : null;
-  const nextProg = episode.currentT !== null ? PROGRESSION_DATA.find((r) => r.from === episode.currentT) : null;
+  const nextProg = episode.currentT !== null ? trackRecord.progression.find((r) => r.from === episode.currentT) : null;
   const modelRow = nearestModelRow(currentDD);
-  const currentLevelP = currentTLabel === "-3%" ? 100 : (FINAL_REACH_DATA.find((r) => r.label === currentTLabel)?.p ?? null);
-  const currentFreqLabel = currentLevelP !== null ? freqLabelFromP(currentLevelP) : null;
+  const currentLevelP = currentTLabel === "-3%" ? 100 : (trackRecord.finalReach.find((r) => r.label === currentTLabel)?.p ?? null);
+  const currentFreqLabel = currentLevelP !== null ? freqLabelFromP(currentLevelP, trackRecord.ddFreqPerYear) : null;
   const athDate = FULL[episode.athIdx].date; // 直近の下落局面の起点となった最高値更新日
   const daysSinceATH = last.i - FULL[episode.athIdx].i; // 前回最高値（DD3%後）からの経過日数
   let troughIdx = episode.athIdx; // 前回ATHから現在までの局面における底値（最安値）
   for (let k = episode.athIdx; k <= last.i; k++) { if (FULL[k].price < FULL[troughIdx].price) troughIdx = k; }
   const trough = FULL[troughIdx];
-  const episodes = findDDEpisodes(FULL, -3); // 過去も含む全DD局面（チャートの重要ポイント表示用）
   const nextMilestone = MILESTONES.find((t) => currentDD > t) ?? null; // 現在のDD%からまだ到達していない直近の節目
   const distanceToNextMilestone = nextMilestone !== null ? Number((nextMilestone - currentDD).toFixed(1)) : null;
   const nextMilestonePrice = nextMilestone !== null ? currentATH * (1 + nextMilestone / 100) : null;
   const lastCompletedEpisode = [...episodes].reverse().find((e) => !e.isOngoing) ?? null; // 前回DD3%到達から回復した日（＝前回最高値）
   const prevATHRatio = lastCompletedEpisode ? Number((((currentPrice / lastCompletedEpisode.recoveryPrice) - 1) * 100).toFixed(1)) : null;
-  const speedAlert = computeSpeedAlert(FULL, last, episode, currentDD);
-  return { FULL, last, currentDD, currentPrice, currentATH, isDrawdown, mode, episode, ddStartIdx, daysSinceDDStart, daysSinceCurrentThreshold, legDays, isEntryLeg, currentTLabel, currentEpisodeCurve, speedCategory, nextProg, modelRow, currentLevelP, currentFreqLabel, athDate, daysSinceATH, trough, episodes, nextMilestone, distanceToNextMilestone, nextMilestonePrice, lastCompletedEpisode, prevATHRatio, speedAlert };
+  const speedAlert = computeSpeedAlert(FULL, last, episode, currentDD, trackRecord);
+  return { FULL, last, currentDD, currentPrice, currentATH, isDrawdown, mode, episode, ddStartIdx, daysSinceDDStart, daysSinceCurrentThreshold, legDays, isEntryLeg, currentTLabel, currentEpisodeCurve, speedCategory, nextProg, modelRow, currentLevelP, currentFreqLabel, athDate, daysSinceATH, trough, episodes, trackRecord, nextMilestone, distanceToNextMilestone, nextMilestonePrice, lastCompletedEpisode, prevATHRatio, speedAlert };
 }
 
-// 節目間の進行確率：実測値（-3→5/-5→8/-8→10）を対数線形補間・外挿して残り区間を試算した実績値。
-// -20%以深は実測アンカー（-20%:10%, -30%:5%）から導かれる一定比率（5%刻みごとに約70.7%＝10ポイントごとに半減）で外挿。
-const PROGRESSION_DATA = [
-  { from: -3, to: -5, p: 55 }, { from: -5, to: -8, p: 52 }, { from: -8, to: -10, p: 72, watershed: true },
-  { from: -10, to: -12, p: 84 }, { from: -12, to: -15, p: 77 }, { from: -15, to: -18, p: 85 },
-  { from: -18, to: -20, p: 90 }, { from: -20, to: -25, p: 71 }, { from: -25, to: -30, p: 71 },
-  { from: -30, to: -35, p: 71 }, { from: -35, to: -40, p: 71 }, { from: -40, to: -45, p: 71 }, { from: -45, to: -50, p: 71 },
+/* ---------------- トラックレコード統計（読み込まれている実データから都度算出） ---------------- */
+// 節目間の進行確率・DD-3%到達からの最終到達確率で扱う節目の刻み。
+const FINAL_REACH_LEVELS = [-5, -8, -10, -12, -15, -18, -20, -25, -30, -35, -40, -45, -50];
+const PROGRESSION_PAIRS = [[-3, -5], [-5, -8], [-8, -10], [-10, -12], [-12, -15], [-15, -18], [-18, -20], [-20, -25], [-25, -30], [-30, -35], [-35, -40], [-40, -45], [-45, -50]];
+const SPEED_BUCKETS = [
+  { label: "3日以内", min: 0, max: 3 }, { label: "4〜5日", min: 4, max: 5 }, { label: "6〜10日", min: 6, max: 10 },
+  { label: "11〜20日", min: 11, max: 20 }, { label: "21日超", min: 21, max: Infinity },
 ];
-// DD-3%到達からの最終到達確率：実測値（-5/-8/-10/-15/-20/-30%）を対数線形補間・外挿して算出した実績値。
-const FINAL_REACH_DATA = [
-  { label: "-5%", p: 55 }, { label: "-8%", p: 28 }, { label: "-10%", p: 20 }, { label: "-12%", p: 17 },
-  { label: "-15%", p: 13 }, { label: "-18%", p: 11 }, { label: "-20%", p: 10 }, { label: "-25%", p: 7 },
-  { label: "-30%", p: 5 }, { label: "-35%", p: 3.5 }, { label: "-40%", p: 2.5 }, { label: "-45%", p: 1.8 },
-  { label: "-50%", p: 1.3 }, { label: "-50%以上", p: 0.6 },
-];
-const SPEED_TABLE = { fast: { "-8": 56, "-10": 44, "-15": 34, "-20": 25 }, slow: { "-8": 47, "-10": 30, "-15": 13, "-20": 10 } };
+// 局面（ATH→回復、未回復なら現在まで）について、各節目(-3,-5,-8,-10,-15,-20...)への到達までの営業日数を計測する。
+function episodeCrossDays(FULL, ep) {
+  const endIdx = ep.isOngoing ? FULL.length - 1 : ep.recoveryIdx;
+  const cross = {};
+  for (const t of MILESTONES) {
+    let found = null;
+    for (let k = ep.athIdx; k <= endIdx; k++) { if (FULL[k].dd <= t) { found = k - ep.athIdx; break; } }
+    cross[t] = found;
+  }
+  return cross;
+}
+// アップロード・更新された実際の価格推移（トラックレコード）から、進行確率・速度別統計をその都度算出する。
+// 静的な想定値ではなく、読み込まれている全期間のデータに応じて自動的に更新される。
+function computeTrackRecordStats(FULL, episodes) {
+  const completed = episodes.filter((e) => !e.isOngoing); // 未回復（現在進行中）の局面は最終到達点が未確定のため集計対象から除く
+  const n = completed.length;
+  const totalYears = FULL.length > 1 ? (FULL[FULL.length - 1].date - FULL[0].date) / (365.25 * 86400000) : 0;
+  const ddFreqPerYear = (n > 0 && totalYears > 0) ? n / totalYears : null;
 
-/* ---------------- DD加速度アラート（速度・経過日数の法則） ---------------- */
-// S&P500 69年(1957-2026)・113下落局面のバックテスト。DD-3%→5%到達までの営業日数別の内訳（100局面がDD5%到達）。
-const SPEED_35_BACKTEST = [
-  { label: "3日以内", min: 0, max: 3, n: 25, crashRate: 36, avgFinalDD: -15.8 },
-  { label: "4〜5日", min: 4, max: 5, n: 7, crashRate: 30, avgFinalDD: -10.6 },
-  { label: "6〜10日", min: 6, max: 10, n: 15, crashRate: 18, avgFinalDD: null },
-  { label: "11〜20日", min: 11, max: 20, n: 14, crashRate: 14, avgFinalDD: null },
-  { label: "21日超", min: 21, max: Infinity, n: 39, crashRate: 0, avgFinalDD: -4.8 },
-];
-function speed35Bucket(days) { return SPEED_35_BACKTEST.find((r) => days >= r.min && days <= r.max) ?? null; }
+  const reachCount = (t) => completed.filter((e) => e.troughDD <= t).length;
+  const finalReach = [{ label: "-3%", p: n > 0 ? 100 : null, n }];
+  for (const t of FINAL_REACH_LEVELS) finalReach.push({ label: `${t}%`, p: n > 0 ? Number(((reachCount(t) / n) * 100).toFixed(1)) : null, n: reachCount(t) });
+  const beyond50 = completed.filter((e) => e.troughDD < -50).length;
+  finalReach.push({ label: "-50%以上", p: n > 0 ? Number(((beyond50 / n) * 100).toFixed(1)) : null, n: beyond50 });
+
+  const progression = PROGRESSION_PAIRS.map(([from, to]) => {
+    const reachedFrom = from === -3 ? completed : completed.filter((e) => e.troughDD <= from);
+    const reachedTo = reachedFrom.filter((e) => e.troughDD <= to);
+    return { from, to, p: reachedFrom.length > 0 ? Number(((reachedTo.length / reachedFrom.length) * 100).toFixed(1)) : null, n: reachedFrom.length, watershed: from === -8 && to === -10 };
+  });
+
+  const crossings = completed.map((ep) => ({ ep, cross: episodeCrossDays(FULL, ep) }));
+  const reachedD5 = crossings.filter((c) => c.cross[-3] !== null && c.cross[-5] !== null).map((c) => ({ ep: c.ep, speed35: c.cross[-5] - c.cross[-3] }));
+  const speed35Backtest = SPEED_BUCKETS.map((b) => {
+    const inBucket = reachedD5.filter((r) => r.speed35 >= b.min && r.speed35 <= b.max);
+    const crashed = inBucket.filter((r) => r.ep.troughDD <= -15);
+    const avgFinalDD = inBucket.length ? Number((inBucket.reduce((s, r) => s + r.ep.troughDD, 0) / inBucket.length).toFixed(1)) : null;
+    return { label: b.label, min: b.min, max: b.max, n: inBucket.length, crashRate: inBucket.length ? Math.round((crashed.length / inBucket.length) * 100) : null, avgFinalDD };
+  });
+  const deepRatesFor = (group) => {
+    const denom = group.length;
+    const rate = (t) => denom > 0 ? Math.round((group.filter((r) => r.ep.troughDD <= t).length / denom) * 100) : null;
+    return { "-8": rate(-8), "-10": rate(-10), "-15": rate(-15), "-20": rate(-20) };
+  };
+  const speedTable = { fast: deepRatesFor(reachedD5.filter((r) => r.speed35 <= 5)), slow: deepRatesFor(reachedD5.filter((r) => r.speed35 >= 6)) };
+  const crashEpisodes = reachedD5.filter((r) => r.ep.troughDD <= -15);
+  const crashFastCount = crashEpisodes.filter((r) => r.speed35 <= 5).length;
+  const crashFastShare = crashEpisodes.length > 0 ? Math.round((crashFastCount / crashEpisodes.length) * 100) : null;
+  const fastAll = reachedD5.filter((r) => r.speed35 <= 5);
+  const fastCrashRate = fastAll.length > 0 ? Math.round((fastAll.filter((r) => r.ep.troughDD <= -15).length / fastAll.length) * 100) : null;
+  const fastMissRate = fastCrashRate !== null ? 100 - fastCrashRate : null;
+
+  return { n, totalYears, ddFreqPerYear, finalReach, progression, speed35Backtest, speedTable, reachedD5Count: reachedD5.length, crashEpisodeCount: crashEpisodes.length, crashFastCount, crashFastShare, fastCrashRate, fastMissRate };
+}
+function speed35Bucket(days, speed35Backtest) { return speed35Backtest.find((r) => days >= r.min && days <= r.max) ?? null; }
 function classifySpeed35(days) { if (days <= 5) return "fast"; if (days >= 21) return "slow"; return "mid"; }
-// DD加速度アラート専用の節目進行確率（速度と併用、DD8%突破以降は主にこちらが判断材料になる）。
-const SPEED_ALERT_PROGRESSION = [
-  { from: -3, to: -5, p: 55 }, { from: -5, to: -8, p: 52 }, { from: -8, to: -10, p: 72, watershed: true },
-  { from: -10, to: -15, p: 65 }, { from: -15, to: -20, p: 77 },
-];
 // 現在進行中の下落局面について、速度（各節目への到達日数）から警戒度を判定する。
 // 局面はATH更新のたびにリセットされる（episodeが直近ATH起点で再計算されるため、前局面の速度を引きずらない）。
-function computeSpeedAlert(FULL, last, episode, currentDD) {
+function computeSpeedAlert(FULL, last, episode, currentDD, trackRecord) {
   const athIdx = episode.athIdx;
   const idx3 = episode.crossIdx[-3], idx5 = episode.crossIdx[-5], idx8 = episode.crossIdx[-8];
   const d3 = idx3 !== -1 ? idx3 - athIdx : null;
@@ -276,12 +314,12 @@ function computeSpeedAlert(FULL, last, episode, currentDD) {
 
   if (currentDD > -8) {
     const category = speed35 !== null ? classifySpeed35(speed35) : null;
-    const deepProb = SPEED_TABLE[category === "fast" ? "fast" : "slow"]; // 「中間」はデータが無いため緩慢側を目安に流用
+    const deepProb = trackRecord.speedTable[category === "fast" ? "fast" : "slow"]; // 「中間」はデータが無いため緩慢側を目安に流用
     const warnLabel = category === "fast" ? "急落・警戒" : category === "slow" ? "緩慢・安心寄り" : "中間";
     const action = category === "fast" ? "レバを外す/減らす、守りを固める。ただし66%は空振り→全撤退はしない"
       : category === "slow" ? "慌てない、押し目買いを検討（早売り防止）"
       : "通常のDD連動で段階対応";
-    return { level: "confirmed5", currentDD, speed35, category, warnLabel, action, deepProb, d3Date, d5Date, backtestRow: speed35 !== null ? speed35Bucket(speed35) : null };
+    return { level: "confirmed5", currentDD, speed35, category, warnLabel, action, deepProb, d3Date, d5Date, backtestRow: speed35 !== null ? speed35Bucket(speed35, trackRecord.speed35Backtest) : null };
   }
 
   const speed38Category = speed38 !== null ? (speed38 <= 10 ? "急速（V字型）" : "緩慢（2007型）") : null;
@@ -978,42 +1016,44 @@ function FullScreenModal({ title, onClose, children }) {
   );
 }
 
-function TrackRecordContent({ currentT }) {
+function TrackRecordContent({ currentT, trackRecord }) {
+  const tr = trackRecord;
+  const pct = (v) => v === null ? "—" : `${v}%`;
   return (
     <div className="grid grid-cols-2 gap-x-8 gap-y-6">
       <div>
-        <div className="text-xs mb-3" style={{ color: C.textDim }}>節目間の進行確率</div>
-        {PROGRESSION_DATA.map((row) => (
+        <div className="text-xs mb-3" style={{ color: C.textDim }}>節目間の進行確率<span className="ml-1" style={{ color: C.textDim }}>（実データ n={tr.n}局面）</span></div>
+        {tr.progression.map((row) => (
           <div key={row.from} className="grid items-center gap-2 mb-1.5" style={{ gridTemplateColumns: "72px 1fr 34px 44px" }}>
             <span className="mono text-xs" style={{ color: row.from === currentT ? C.text : C.textMuted }}>{row.from}%→{row.to}%</span>
-            <div className="h-2 rounded-full" style={{ background: C.panel2 }}><div className="h-2 rounded-full" style={{ width: `${row.p}%`, background: row.watershed ? C.rust : C.teal }} /></div>
-            <span className="mono text-xs text-right">{row.p}%</span>
+            <div className="h-2 rounded-full" style={{ background: C.panel2 }}><div className="h-2 rounded-full" style={{ width: `${row.p ?? 0}%`, background: row.watershed ? C.rust : C.teal }} /></div>
+            <span className="mono text-xs text-right">{pct(row.p)}</span>
             <span className="text-[9px]" style={{ color: C.rust }}>{row.watershed ? "分水嶺" : ""}</span>
           </div>
         ))}
       </div>
       <div>
-        <div className="text-xs mb-3" style={{ color: C.textDim }}>DD-3%到達からの最終到達確率</div>
-        {FINAL_REACH_DATA.map((r) => (
+        <div className="text-xs mb-3" style={{ color: C.textDim }}>DD-3%到達からの最終到達確率<span className="ml-1" style={{ color: C.textDim }}>（実データ n={tr.n}局面）</span></div>
+        {tr.finalReach.map((r) => (
           <div key={r.label} className="grid items-center gap-2 mb-1.5" style={{ gridTemplateColumns: "56px 1fr 34px 76px" }}>
             <span className="mono text-xs" style={{ color: C.textMuted }}>{r.label}</span>
-            <div className="h-2 rounded-full" style={{ background: C.panel2 }}><div className="h-2 rounded-full" style={{ width: `${Math.min(100, r.p * 2)}%`, background: C.amber }} /></div>
-            <span className="mono text-xs text-right">{r.p}%</span>
-            <span className="text-[10px] text-right" style={{ color: C.textDim }}>{freqLabelFromP(r.p)}</span>
+            <div className="h-2 rounded-full" style={{ background: C.panel2 }}><div className="h-2 rounded-full" style={{ width: `${Math.min(100, (r.p ?? 0) * 2)}%`, background: C.amber }} /></div>
+            <span className="mono text-xs text-right">{pct(r.p)}</span>
+            <span className="text-[10px] text-right" style={{ color: C.textDim }}>{r.p !== null ? freqLabelFromP(r.p, tr.ddFreqPerYear) : "—"}</span>
           </div>
         ))}
-        <div className="text-[9px] mt-2" style={{ color: C.textDim }}>発生頻度はDD3%級の押し目が年{DD3_FREQ_PER_YEAR}回発生する前提での目安換算値です。-12%以深は実測アンカー値からの対数線形補間・外挿による試算値です。</div>
+        <div className="text-[9px] mt-2" style={{ color: C.textDim }}>発生頻度は、読み込まれているデータ全体でDD3%級の押し目が年{tr.ddFreqPerYear !== null ? tr.ddFreqPerYear.toFixed(1) : "—"}回発生している実績に基づく換算値です。</div>
       </div>
       <div className="col-span-2">
-        <div className="text-xs mb-3" style={{ color: C.textDim }}>速度条件付き確率（DD3→5%区間の日数別）</div>
+        <div className="text-xs mb-3" style={{ color: C.textDim }}>速度条件付き確率（DD3→5%区間の日数別・実データ DD5%到達{tr.reachedD5Count}局面）</div>
         <table className="w-full text-xs mono"><thead><tr style={{ color: C.textDim }}><th className="text-left font-normal py-1">区分</th><th>→8%</th><th>→10%</th><th>→15%</th><th>→20%</th></tr></thead>
           <tbody>
-            <tr style={{ borderTop: `1px solid ${C.borderSoft}` }}><td className="py-1" style={{ color: C.textMuted }}>急落（5日以内）</td><td className="text-center">56%</td><td className="text-center">44%</td><td className="text-center">34%</td><td className="text-center">25%</td></tr>
-            <tr style={{ borderTop: `1px solid ${C.borderSoft}` }}><td className="py-1" style={{ color: C.textMuted }}>緩慢（6日以上）</td><td className="text-center">47%</td><td className="text-center">30%</td><td className="text-center">13%</td><td className="text-center">10%</td></tr>
+            <tr style={{ borderTop: `1px solid ${C.borderSoft}` }}><td className="py-1" style={{ color: C.textMuted }}>急落（5日以内）</td><td className="text-center">{pct(tr.speedTable.fast["-8"])}</td><td className="text-center">{pct(tr.speedTable.fast["-10"])}</td><td className="text-center">{pct(tr.speedTable.fast["-15"])}</td><td className="text-center">{pct(tr.speedTable.fast["-20"])}</td></tr>
+            <tr style={{ borderTop: `1px solid ${C.borderSoft}` }}><td className="py-1" style={{ color: C.textMuted }}>緩慢（6日以上）</td><td className="text-center">{pct(tr.speedTable.slow["-8"])}</td><td className="text-center">{pct(tr.speedTable.slow["-10"])}</td><td className="text-center">{pct(tr.speedTable.slow["-15"])}</td><td className="text-center">{pct(tr.speedTable.slow["-20"])}</td></tr>
           </tbody>
         </table>
       </div>
-      <div className="col-span-2 text-[11px] leading-relaxed" style={{ color: C.textDim }}>過去確率は将来を保証しません。</div>
+      <div className="col-span-2 text-[11px] leading-relaxed" style={{ color: C.textDim }}>これらは読み込まれているトラックレコード（約{tr.totalYears.toFixed(0)}年・DD3%到達{tr.n}局面）から都度算出した実績値です。データをアップロード・更新すると自動的に再計算されます。過去確率は将来を保証しません。</div>
     </div>
   );
 }
@@ -1061,7 +1101,7 @@ function SpeedAlertModalContent({ d }) {
           <div className="text-xs mb-2" style={{ color: C.textDim }}>この先の確率（{sa.category === "fast" ? "急落型" : sa.category === "slow" ? "緩慢型" : "中間型（参考として緩慢型の値を表示）"}）</div>
           <table className="w-full text-xs mono"><thead><tr style={{ color: C.textDim }}><th className="text-left font-normal py-1">節目</th><th className="text-right">確率</th><th className="text-left font-normal"></th></tr></thead>
             <tbody>
-              {deepProbRows.map((r) => (<tr key={r.label} style={{ borderTop: `1px solid ${C.borderSoft}` }}><td className="py-1" style={{ color: C.textMuted }}>{r.label}</td><td className="text-right" style={{ color: r.watershed ? C.rust : C.text }}>{r.p}%</td><td className="pl-2 text-[9px] font-normal" style={{ color: C.rust }}>{r.watershed ? "← 本格下落" : ""}</td></tr>))}
+              {deepProbRows.map((r) => (<tr key={r.label} style={{ borderTop: `1px solid ${C.borderSoft}` }}><td className="py-1" style={{ color: C.textMuted }}>{r.label}</td><td className="text-right" style={{ color: r.watershed ? C.rust : C.text }}>{r.p !== null ? `${r.p}%` : "—"}</td><td className="pl-2 text-[9px] font-normal" style={{ color: C.rust }}>{r.watershed ? "← 本格下落" : ""}</td></tr>))}
             </tbody>
           </table>
         </div>
@@ -1075,43 +1115,35 @@ function SpeedAlertModalContent({ d }) {
       )}
 
       <div>
-        <div className="text-xs mb-2" style={{ color: C.textDim }}>バックテスト：DD3→5%の速度別・大暴落率（S&P500 69年・DD5%到達100局面）</div>
+        <div className="text-xs mb-2" style={{ color: C.textDim }}>バックテスト：DD3→5%の速度別・大暴落率（読み込み中のデータ 約{d.trackRecord.totalYears.toFixed(0)}年・DD5%到達{d.trackRecord.reachedD5Count}局面）</div>
         <table className="w-full text-xs mono">
           <thead><tr style={{ color: C.textDim }}><th className="text-left font-normal py-1">速度区分</th><th>件数</th><th>大暴落率<br />（最終DD-15%以上）</th><th>平均最終DD</th></tr></thead>
           <tbody>
-            {SPEED_35_BACKTEST.map((r) => (
+            {d.trackRecord.speed35Backtest.map((r) => (
               <tr key={r.label} style={{ borderTop: `1px solid ${C.borderSoft}`, background: sa.backtestRow?.label === r.label ? `${C.teal}1a` : "transparent" }}>
                 <td className="py-1" style={{ color: C.textMuted }}>{r.label}</td>
                 <td className="text-center">{r.n}</td>
-                <td className="text-center" style={{ color: r.crashRate >= 30 ? C.rust : r.crashRate === 0 ? C.teal : C.text }}>{r.crashRate}%</td>
+                <td className="text-center" style={{ color: r.crashRate === null ? C.textDim : r.crashRate >= 30 ? C.rust : r.crashRate === 0 ? C.teal : C.text }}>{r.crashRate !== null ? `${r.crashRate}%` : "—"}</td>
                 <td className="text-center">{r.avgFinalDD !== null ? `${r.avgFinalDD}%` : "—"}</td>
               </tr>
             ))}
           </tbody>
         </table>
-        <div className="text-[10px] mt-1.5" style={{ color: C.textDim }}>大暴落15件のうち11件（73%）が「5日以内の急落型」で始まりました。</div>
+        <div className="text-[10px] mt-1.5" style={{ color: C.textDim }}>
+          {d.trackRecord.crashEpisodeCount > 0
+            ? `大暴落${d.trackRecord.crashEpisodeCount}件のうち${d.trackRecord.crashFastCount}件（${d.trackRecord.crashFastShare}%）が「5日以内の急落型」で始まりました。`
+            : "読み込まれているデータには最終DD-15%以上に達した局面がまだありません。"}
+        </div>
       </div>
 
-      <div>
-        <div className="text-xs mb-2" style={{ color: C.textDim }}>節目の進行確率（速度と併用、DD8%突破以降はこちらが主役）</div>
-        {SPEED_ALERT_PROGRESSION.map((row) => (
-          <div key={row.from} className="grid items-center gap-2 mb-1.5" style={{ gridTemplateColumns: "72px 1fr 34px 44px" }}>
-            <span className="mono text-xs" style={{ color: C.textMuted }}>{row.from}%→{row.to}%</span>
-            <div className="h-2 rounded-full" style={{ background: C.panel2 }}><div className="h-2 rounded-full" style={{ width: `${row.p}%`, background: row.watershed ? C.rust : C.teal }} /></div>
-            <span className="mono text-xs text-right">{row.p}%</span>
-            <span className="text-[9px]" style={{ color: C.rust }}>{row.watershed ? "分水嶺" : ""}</span>
-          </div>
-        ))}
-      </div>
-
-      <TrackRecordContent currentT={d.episode.currentT} />
+      <TrackRecordContent currentT={d.episode.currentT} trackRecord={d.trackRecord} />
 
       <div className="text-[11px] leading-relaxed rounded px-3 py-2" style={{ color: C.textDim, background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
         <div className="font-semibold mb-1" style={{ color: C.textMuted }}>重要な限界（必ずお読みください）</div>
-        ・急落警報（5日以内）の66%は空振り（浅く終わる）です。「確信」ではなく「警戒レベルを上げる」材料として使ってください。<br />
+        ・急落警報（5日以内）は{d.trackRecord.fastMissRate !== null ? `${d.trackRecord.fastMissRate}%` : "多くの場合"}が空振り（浅く終わる）です。「確信」ではなく「警戒レベルを上げる」材料として使ってください。<br />
         ・緩やかに始まる大暴落もあります（2007年金融危機はspeed_3to5=13日で最終DD-57%でした）。緩慢でも油断しないでください。<br />
         ・DD8%突破後は速度の予測力が落ち、節目の進行確率（上表）が判断の主役になります。<br />
-        ・これらはS&P500 69年（1957–2026）・113下落局面のバックテストに基づく傾向であり、確定予測ではありません。DD深度・金の動き・自己の判断と併用する補助指標です。本ツールは投資助言ではなく判断補助です。
+        ・これらは読み込まれているトラックレコード（約{d.trackRecord.totalYears.toFixed(0)}年・DD3%到達{d.trackRecord.n}局面）から都度算出した傾向であり、確定予測ではありません。データをアップロード・更新すると自動的に再計算されます。DD深度・金の動き・自己の判断と併用する補助指標です。本ツールは投資助言ではなく判断補助です。
       </div>
     </div>
   );
