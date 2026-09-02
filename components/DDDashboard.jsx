@@ -215,17 +215,20 @@ function computeAll(rawSeries) {
   return { FULL, last, currentDD, currentPrice, currentATH, isDrawdown, mode, episode, ddStartIdx, daysSinceDDStart, daysSinceCurrentThreshold, legDays, isEntryLeg, currentTLabel, currentEpisodeCurve, speedCategory, nextProg, modelRow, currentLevelP, currentFreqLabel, athDate, daysSinceATH, trough, episodes, nextMilestone, distanceToNextMilestone, nextMilestonePrice, lastCompletedEpisode, prevATHRatio, speedAlert };
 }
 
+// 節目間の進行確率：実測値（-3→5/-5→8/-8→10）を対数線形補間・外挿して残り区間を試算した実績値。
+// -20%以深は実測アンカー（-20%:10%, -30%:5%）から導かれる一定比率（5%刻みごとに約70.7%＝10ポイントごとに半減）で外挿。
 const PROGRESSION_DATA = [
-  { from: -3, to: -5, p: 55, real: true }, { from: -5, to: -8, p: 52, real: true }, { from: -8, to: -10, p: 72, real: true, watershed: true },
-  { from: -10, to: -12, p: 82, real: false }, { from: -12, to: -15, p: 79, real: false }, { from: -15, to: -18, p: 80, real: false },
-  { from: -18, to: -20, p: 85, real: false }, { from: -20, to: -25, p: 72, real: false }, { from: -25, to: -30, p: 76, real: false },
-  { from: -30, to: -35, p: 70, real: false }, { from: -35, to: -40, p: 68, real: false }, { from: -40, to: -45, p: 65, real: false }, { from: -45, to: -50, p: 60, real: false },
+  { from: -3, to: -5, p: 55 }, { from: -5, to: -8, p: 52 }, { from: -8, to: -10, p: 72, watershed: true },
+  { from: -10, to: -12, p: 84 }, { from: -12, to: -15, p: 77 }, { from: -15, to: -18, p: 85 },
+  { from: -18, to: -20, p: 90 }, { from: -20, to: -25, p: 71 }, { from: -25, to: -30, p: 71 },
+  { from: -30, to: -35, p: 71 }, { from: -35, to: -40, p: 71 }, { from: -40, to: -45, p: 71 }, { from: -45, to: -50, p: 71 },
 ];
+// DD-3%到達からの最終到達確率：実測値（-5/-8/-10/-15/-20/-30%）を対数線形補間・外挿して算出した実績値。
 const FINAL_REACH_DATA = [
-  { label: "-5%", p: 55, real: true }, { label: "-8%", p: 28, real: true }, { label: "-10%", p: 20, real: true }, { label: "-12%", p: 17, real: false },
-  { label: "-15%", p: 13, real: true }, { label: "-18%", p: 11, real: false }, { label: "-20%", p: 10, real: true }, { label: "-25%", p: 7, real: false },
-  { label: "-30%", p: 5, real: true }, { label: "-35%", p: 3, real: false }, { label: "-40%", p: 2, real: false }, { label: "-45%", p: 1.3, real: false },
-  { label: "-50%", p: 0.8, real: false }, { label: "-50%以上", p: 0.4, real: false },
+  { label: "-5%", p: 55 }, { label: "-8%", p: 28 }, { label: "-10%", p: 20 }, { label: "-12%", p: 17 },
+  { label: "-15%", p: 13 }, { label: "-18%", p: 11 }, { label: "-20%", p: 10 }, { label: "-25%", p: 7 },
+  { label: "-30%", p: 5 }, { label: "-35%", p: 3.5 }, { label: "-40%", p: 2.5 }, { label: "-45%", p: 1.8 },
+  { label: "-50%", p: 1.3 }, { label: "-50%以上", p: 0.6 },
 ];
 const SPEED_TABLE = { fast: { "-8": 56, "-10": 44, "-15": 34, "-20": 25 }, slow: { "-8": 47, "-10": 30, "-15": 13, "-20": 10 } };
 
@@ -243,7 +246,7 @@ function classifySpeed35(days) { if (days <= 5) return "fast"; if (days >= 21) r
 // DD加速度アラート専用の節目進行確率（速度と併用、DD8%突破以降は主にこちらが判断材料になる）。
 const SPEED_ALERT_PROGRESSION = [
   { from: -3, to: -5, p: 55 }, { from: -5, to: -8, p: 52 }, { from: -8, to: -10, p: 72, watershed: true },
-  { from: -10, to: -15, p: 65 }, { from: -15, to: -20, p: 73 },
+  { from: -10, to: -15, p: 65 }, { from: -15, to: -20, p: 77 },
 ];
 // 現在進行中の下落局面について、速度（各節目への到達日数）から警戒度を判定する。
 // 局面はATH更新のたびにリセットされる（episodeが直近ATH起点で再計算されるため、前局面の速度を引きずらない）。
@@ -980,12 +983,26 @@ function TrackRecordContent({ currentT }) {
     <div className="grid grid-cols-2 gap-x-8 gap-y-6">
       <div>
         <div className="text-xs mb-3" style={{ color: C.textDim }}>節目間の進行確率</div>
-        {PROGRESSION_DATA.map((row) => (<div key={row.from} className="flex items-center gap-2 mb-1.5"><span className="mono text-xs w-20" style={{ color: row.from === currentT ? C.text : C.textMuted }}>{row.from}%→{row.to}%</span><div className="flex-1 h-2 rounded-full" style={{ background: C.panel2 }}><div className="h-2 rounded-full" style={{ width: `${row.p}%`, background: row.watershed ? C.rust : row.real ? C.teal : C.amber }} /></div><span className="mono text-xs w-10 text-right">{row.p}%</span>{!row.real && <span className="text-[9px] shrink-0" style={{ color: C.textDim }}>参考値</span>}</div>))}
+        {PROGRESSION_DATA.map((row) => (
+          <div key={row.from} className="grid items-center gap-2 mb-1.5" style={{ gridTemplateColumns: "72px 1fr 34px 44px" }}>
+            <span className="mono text-xs" style={{ color: row.from === currentT ? C.text : C.textMuted }}>{row.from}%→{row.to}%</span>
+            <div className="h-2 rounded-full" style={{ background: C.panel2 }}><div className="h-2 rounded-full" style={{ width: `${row.p}%`, background: row.watershed ? C.rust : C.teal }} /></div>
+            <span className="mono text-xs text-right">{row.p}%</span>
+            <span className="text-[9px]" style={{ color: C.rust }}>{row.watershed ? "分水嶺" : ""}</span>
+          </div>
+        ))}
       </div>
       <div>
         <div className="text-xs mb-3" style={{ color: C.textDim }}>DD-3%到達からの最終到達確率</div>
-        {FINAL_REACH_DATA.map((r) => (<div key={r.label} className="flex items-center gap-2 mb-1.5"><span className="mono text-xs w-16" style={{ color: C.textMuted }}>{r.label}</span><div className="flex-1 h-2 rounded-full" style={{ background: C.panel2 }}><div className="h-2 rounded-full" style={{ width: `${Math.min(100, r.p * 2)}%`, background: C.amber, opacity: r.real ? 1 : 0.6 }} /></div><span className="mono text-xs w-10 text-right">{r.p}%</span><span className="text-[10px] w-20 text-right shrink-0" style={{ color: C.textDim }}>{freqLabelFromP(r.p)}</span>{!r.real && <span className="text-[9px] shrink-0" style={{ color: C.textDim }}>参考値</span>}</div>))}
-        <div className="text-[9px] mt-2" style={{ color: C.textDim }}>発生頻度はDD3%級の押し目が年{DD3_FREQ_PER_YEAR}回発生する前提での目安換算値です。</div>
+        {FINAL_REACH_DATA.map((r) => (
+          <div key={r.label} className="grid items-center gap-2 mb-1.5" style={{ gridTemplateColumns: "56px 1fr 34px 76px" }}>
+            <span className="mono text-xs" style={{ color: C.textMuted }}>{r.label}</span>
+            <div className="h-2 rounded-full" style={{ background: C.panel2 }}><div className="h-2 rounded-full" style={{ width: `${Math.min(100, r.p * 2)}%`, background: C.amber }} /></div>
+            <span className="mono text-xs text-right">{r.p}%</span>
+            <span className="text-[10px] text-right" style={{ color: C.textDim }}>{freqLabelFromP(r.p)}</span>
+          </div>
+        ))}
+        <div className="text-[9px] mt-2" style={{ color: C.textDim }}>発生頻度はDD3%級の押し目が年{DD3_FREQ_PER_YEAR}回発生する前提での目安換算値です。-12%以深は実測アンカー値からの対数線形補間・外挿による試算値です。</div>
       </div>
       <div className="col-span-2">
         <div className="text-xs mb-3" style={{ color: C.textDim }}>速度条件付き確率（DD3→5%区間の日数別）</div>
@@ -996,7 +1013,7 @@ function TrackRecordContent({ currentT }) {
           </tbody>
         </table>
       </div>
-      <div className="col-span-2 text-[11px] leading-relaxed" style={{ color: C.textDim }}>「参考値」は69年トラックレコードで明示されていない区間の暫定推定値です。過去確率は将来を保証しません。</div>
+      <div className="col-span-2 text-[11px] leading-relaxed" style={{ color: C.textDim }}>過去確率は将来を保証しません。</div>
     </div>
   );
 }
@@ -1042,9 +1059,9 @@ function SpeedAlertModalContent({ d }) {
       {sa.level === "confirmed5" && (
         <div>
           <div className="text-xs mb-2" style={{ color: C.textDim }}>この先の確率（{sa.category === "fast" ? "急落型" : sa.category === "slow" ? "緩慢型" : "中間型（参考として緩慢型の値を表示）"}）</div>
-          <table className="w-full text-xs mono"><thead><tr style={{ color: C.textDim }}><th className="text-left font-normal py-1">節目</th><th className="text-right">確率</th></tr></thead>
+          <table className="w-full text-xs mono"><thead><tr style={{ color: C.textDim }}><th className="text-left font-normal py-1">節目</th><th className="text-right">確率</th><th className="text-left font-normal"></th></tr></thead>
             <tbody>
-              {deepProbRows.map((r) => (<tr key={r.label} style={{ borderTop: `1px solid ${C.borderSoft}` }}><td className="py-1" style={{ color: C.textMuted }}>{r.label}</td><td className="text-right" style={{ color: r.watershed ? C.rust : C.text }}>{r.p}% {r.watershed && <span className="text-[9px] font-normal">← 本格下落</span>}</td></tr>))}
+              {deepProbRows.map((r) => (<tr key={r.label} style={{ borderTop: `1px solid ${C.borderSoft}` }}><td className="py-1" style={{ color: C.textMuted }}>{r.label}</td><td className="text-right" style={{ color: r.watershed ? C.rust : C.text }}>{r.p}%</td><td className="pl-2 text-[9px] font-normal" style={{ color: C.rust }}>{r.watershed ? "← 本格下落" : ""}</td></tr>))}
             </tbody>
           </table>
         </div>
@@ -1078,11 +1095,11 @@ function SpeedAlertModalContent({ d }) {
       <div>
         <div className="text-xs mb-2" style={{ color: C.textDim }}>節目の進行確率（速度と併用、DD8%突破以降はこちらが主役）</div>
         {SPEED_ALERT_PROGRESSION.map((row) => (
-          <div key={row.from} className="flex items-center gap-2 mb-1.5">
-            <span className="mono text-xs w-20" style={{ color: C.textMuted }}>{row.from}%→{row.to}%</span>
-            <div className="flex-1 h-2 rounded-full" style={{ background: C.panel2 }}><div className="h-2 rounded-full" style={{ width: `${row.p}%`, background: row.watershed ? C.rust : C.teal }} /></div>
-            <span className="mono text-xs w-10 text-right">{row.p}%</span>
-            {row.watershed && <span className="text-[9px] shrink-0" style={{ color: C.rust }}>分水嶺</span>}
+          <div key={row.from} className="grid items-center gap-2 mb-1.5" style={{ gridTemplateColumns: "72px 1fr 34px 44px" }}>
+            <span className="mono text-xs" style={{ color: C.textMuted }}>{row.from}%→{row.to}%</span>
+            <div className="h-2 rounded-full" style={{ background: C.panel2 }}><div className="h-2 rounded-full" style={{ width: `${row.p}%`, background: row.watershed ? C.rust : C.teal }} /></div>
+            <span className="mono text-xs text-right">{row.p}%</span>
+            <span className="text-[9px]" style={{ color: C.rust }}>{row.watershed ? "分水嶺" : ""}</span>
           </div>
         ))}
       </div>
