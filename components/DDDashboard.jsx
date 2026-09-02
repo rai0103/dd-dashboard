@@ -5,7 +5,7 @@ import {
   ComposedChart, LineChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ReferenceLine, ReferenceDot, ResponsiveContainer, PieChart, Pie, Cell, Brush, Customized,
 } from "recharts";
-import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Database, Trash2, Zap } from "lucide-react";
+import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Database, Trash2, Zap, Copy, FileText } from "lucide-react";
 import { storage } from "@/lib/storage";
 
 /* ---------------- design tokens ---------------- */
@@ -1650,9 +1650,336 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, onBa
   );
 }
 
+/* ---------------- 詳細サマリー出力（AI相談用） ---------------- */
+const LIFECYCLE_DEFAULT = { spouseWorking: true, phase: 1, annualWithdrawal: 4800000, returnTargetYears: 5, returnTargetMultiple: 2 };
+// 指数・テーマファンドの主要銘柄組入比率（目安値。実際の構成比・時期により異なる）。実質エクスポージャーの概算に使用。
+const INDEX_COMPOSITION = {
+  "FANG+": { TSLA: 0.10, NVDA: 0.10, MSFT: 0.10, AAPL: 0.10, AMZN: 0.10, GOOGL: 0.10, META: 0.10, NFLX: 0.10, AVGO: 0.10, CRWD: 0.10 },
+  "SP500": { NVDA: 0.07, MSFT: 0.06, AAPL: 0.06, AMZN: 0.04, META: 0.03, GOOGL: 0.02, TSLA: 0.02, AVGO: 0.02 },
+  "Nasdaq": { NVDA: 0.09, MSFT: 0.08, AAPL: 0.08, AMZN: 0.06, META: 0.05, GOOGL: 0.04, TSLA: 0.03, AVGO: 0.04 },
+};
+const EXPOSURE_TICKERS = ["TSLA", "NVDA", "MSFT", "AAPL", "AMZN", "GOOGL", "META", "NFLX", "AVGO", "CRWD"];
+// 個別銘柄の直接保有と、指数・テーマファンド経由の間接保有を合算し、実質エクスポージャー（概算）を銘柄別に算出する。
+function computeRealExposure(holdings) {
+  const total = holdingsTotal(holdings) || 1;
+  const acc = {};
+  const add = (ticker, key, amount) => { acc[ticker] = acc[ticker] || { direct: 0, viaIndex: 0 }; acc[ticker][key] += amount; };
+  for (const h of holdings) {
+    const nameUpper = toHalfWidth(h.name).toUpperCase();
+    for (const t of EXPOSURE_TICKERS) { if (nameUpper.includes(t)) add(t, "direct", h.amount); }
+    const weights = h.name.includes("FANG+") ? INDEX_COMPOSITION["FANG+"] : INDEX_COMPOSITION[h.category];
+    if (weights) { for (const t of EXPOSURE_TICKERS) { if (weights[t]) add(t, "viaIndex", h.amount * weights[t]); } }
+  }
+  return Object.entries(acc)
+    .map(([ticker, v]) => ({ ticker, direct: Math.round(v.direct), viaIndex: Math.round(v.viaIndex), total: Math.round(v.direct + v.viaIndex), pct: Number((((v.direct + v.viaIndex) / total) * 100).toFixed(2)) }))
+    .filter((r) => r.total > 0)
+    .sort((a, b) => b.total - a.total);
+}
+// 直近の値動き（リターン・レンジ・ボラティリティ・移動平均・YTD/1年リターン）を価格系列から算出する。
+function computeRecentStats(FULL) {
+  const n = FULL.length;
+  if (n < 2) return null;
+  const last = FULL[n - 1];
+  const dailyReturns = (arr) => arr.slice(1).map((p, i) => Number((((p.price / arr[i].price) - 1) * 100).toFixed(2)));
+  const last10Returns = dailyReturns(FULL.slice(Math.max(0, n - 11))).slice(-10);
+  const last20 = FULL.slice(Math.max(0, n - 20));
+  const high20 = Math.max(...last20.map((p) => p.price));
+  const low20 = Math.min(...last20.map((p) => p.price));
+  const stdev = (arr) => { if (!arr.length) return null; const mean = arr.reduce((s, v) => s + v, 0) / arr.length; return Math.sqrt(arr.reduce((s, v) => s + (v - mean) ** 2, 0) / arr.length); };
+  const vol20 = stdev(dailyReturns(FULL.slice(Math.max(0, n - 21))));
+  const volFull = stdev(dailyReturns(FULL));
+  const volRatio = (vol20 !== null && volFull) ? vol20 / volFull : null;
+  const volLabel = volRatio === null ? "算出不可" : volRatio >= 1.5 ? "平常より高い" : volRatio <= 0.67 ? "平常より低い" : "平常水準";
+  const ma = (k) => { const arr = FULL.slice(Math.max(0, n - k)); return arr.reduce((s, p) => s + p.price, 0) / arr.length; };
+  const ma20 = n >= 5 ? ma(20) : null;
+  const ma50 = n >= 5 ? ma(50) : null;
+  const year = last.date.getFullYear();
+  const ytdStart = FULL.find((p) => p.date.getFullYear() === year) ?? FULL[0];
+  const ytdReturn = Number((((last.price / ytdStart.price) - 1) * 100).toFixed(1));
+  const oneYearAgo = new Date(last.date); oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+  const oneYearPoint = [...FULL].reverse().find((p) => p.date <= oneYearAgo) ?? FULL[0];
+  const oneYearReturn = Number((((last.price / oneYearPoint.price) - 1) * 100).toFixed(1));
+  return {
+    last10Returns, high20: Number(high20.toFixed(2)), low20: Number(low20.toFixed(2)),
+    vol20: vol20 !== null ? Number(vol20.toFixed(2)) : null, volRatio: volRatio !== null ? Number(volRatio.toFixed(2)) : null, volLabel,
+    ma20: ma20 !== null ? Number(ma20.toFixed(2)) : null, ma50: ma50 !== null ? Number(ma50.toFixed(2)) : null,
+    ma20Diff: ma20 ? Number((((last.price / ma20) - 1) * 100).toFixed(1)) : null,
+    ma50Diff: ma50 ? Number((((last.price / ma50) - 1) * 100).toFixed(1)) : null,
+    ytdReturn, oneYearReturn,
+  };
+}
+// 前回サマリー生成時点の保有スナップショットと今回を比較し、売却・購入・大幅増減（5%超）した銘柄を差分として抽出する。
+function computeHoldingsDiff(prevSnapshot, holdings) {
+  if (!prevSnapshot || !prevSnapshot.holdings) return null;
+  const prevMap = new Map(prevSnapshot.holdings.map((h) => [h.name, h.amount]));
+  const curMap = new Map();
+  for (const h of holdings) curMap.set(h.name, (curMap.get(h.name) || 0) + h.amount);
+  const sold = [], bought = [], changed = [];
+  for (const [name, amount] of prevMap) if (!curMap.has(name)) sold.push({ name, amount });
+  for (const [name, amount] of curMap) {
+    if (!prevMap.has(name)) bought.push({ name, amount });
+    else {
+      const prevAmount = prevMap.get(name);
+      if (Math.abs(amount - prevAmount) / Math.max(prevAmount, 1) > 0.05) changed.push({ name, from: prevAmount, to: amount, diff: amount - prevAmount });
+    }
+  }
+  return { prevDate: prevSnapshot.generatedAt, sold, bought, changed };
+}
+function fmtDateTimeJST(date) {
+  try {
+    const parts = new Intl.DateTimeFormat("ja-JP", { timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(date);
+    const get = (t) => parts.find((p) => p.type === t)?.value;
+    return `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")} JST`;
+  } catch (e) { return date.toISOString(); }
+}
+function buildSummaryMarkdown(ctx) {
+  const { d, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, fixedPositions, recentStats, exposure, diff, consultQuestion, hideAmounts, generatedAt } = ctx;
+  const total = holdingsTotal(holdings);
+  const cashHoldings = holdings.filter((h) => h.category === "現金");
+  const cash = cashHoldings.reduce((s, h) => s + h.amount, 0);
+  const cashByCcy = groupByField(cashHoldings, "currency");
+  const cashJPY = cashByCcy.find((c) => c.name === "円")?.value ?? 0;
+  const cashForeign = cashByCcy.find((c) => c.name === "ドル")?.value ?? 0;
+  const cashYears = lifecycle.annualWithdrawal > 0 ? (cash / lifecycle.annualWithdrawal).toFixed(1) : "—";
+  const yen = (v) => `${Math.round(v / 10000).toLocaleString()}万円`;
+  const amt = (v) => hideAmounts ? `${((v / (total || 1)) * 100).toFixed(1)}%` : yen(v);
+
+  const L = [];
+  L.push("【DD戦略ダッシュボード 詳細サマリー】");
+  L.push(`生成: ${fmtDateTimeJST(generatedAt)} / データ最終日: ${fmtYMD(d.last.date)}（米国時間）`);
+  L.push(`世帯総資産: ${amt(total)}（うち現金${amt(cash)}）`);
+  L.push(`ライフステージ: ${lifecycle.spouseWorking ? "配偶者就労中" : "配偶者非就労"}（フェーズ${lifecycle.phase}）/ 取り崩し年${amt(lifecycle.annualWithdrawal)}`);
+  L.push("");
+  L.push("■ SPY 状況");
+  L.push(`現在値 $${d.currentPrice.toFixed(2)} / ATH $${d.currentATH.toFixed(2)}（${fmtYMD(d.athDate)}） / DD ${d.currentDD.toFixed(1)}%`);
+  L.push(`モード: ${d.mode}${d.isDrawdown ? `（DD開始＝ATH翌日から${d.daysSinceATH}営業日経過）` : ""}`);
+  const sa = d.speedAlert;
+  if (sa.level === "normal") L.push("DD加速度: 待機中（DD3%未到達）");
+  else if (sa.level === "pending5") L.push(`DD加速度: DD3%到達（${sa.d3Date ? fmtYMD(sa.d3Date) : "—"}）後${sa.daysSinceDD3}営業日経過、DD5%未達${sa.hint ? `（${sa.hint}）` : ""}`);
+  else if (sa.level === "confirmed5") L.push(`DD加速度: DD3%到達${sa.d3Date ? fmtYMD(sa.d3Date) : "—"} / DD5%到達${sa.d5Date ? fmtYMD(sa.d5Date) : "—"} / 3→5%速度${sa.speed35}営業日 → 警戒度「${sa.warnLabel}」（この先DD15%到達確率${sa.deepProb["-15"] ?? "—"}%）`);
+  else if (sa.level === "deep8") L.push(`DD加速度: 警戒度「${sa.warnLabel}」（3→8%速度${sa.speed38 ?? "—"}営業日・${sa.speed38Category ?? "—"}）`);
+  L.push("");
+  L.push("【直近の値動き】");
+  if (recentStats) {
+    L.push(`直近10営業日リターン: ${recentStats.last10Returns.map((r) => (r >= 0 ? `+${r}` : `${r}`)).join(", ")}%`);
+    L.push(`直近20営業日レンジ: $${recentStats.low20}〜$${recentStats.high20}`);
+    L.push(`20日ボラティリティ: ${recentStats.vol20 ?? "—"}%（${recentStats.volLabel}）`);
+    L.push(`MA20 $${recentStats.ma20 ?? "—"}（現在値比${recentStats.ma20Diff !== null ? (recentStats.ma20Diff >= 0 ? "+" : "") + recentStats.ma20Diff + "%" : "—"}） / MA50 $${recentStats.ma50 ?? "—"}（現在値比${recentStats.ma50Diff !== null ? (recentStats.ma50Diff >= 0 ? "+" : "") + recentStats.ma50Diff + "%" : "—"}）`);
+    L.push(`YTD ${recentStats.ytdReturn >= 0 ? "+" : ""}${recentStats.ytdReturn}% / 直近1年 ${recentStats.oneYearReturn >= 0 ? "+" : ""}${recentStats.oneYearReturn}%`);
+  } else {
+    L.push("データ不足のため算出できません。");
+  }
+  L.push("");
+  L.push("【トラックレコード要約】");
+  L.push(`読み込み済みトラックレコード: 約${d.trackRecord.totalYears.toFixed(0)}年・DD3%到達${d.trackRecord.n}局面（DD3%は年${d.trackRecord.ddFreqPerYear !== null ? d.trackRecord.ddFreqPerYear.toFixed(1) : "—"}回のペース）`);
+  L.push("");
+
+  L.push(`■ A〜E リスク分類（モデル: ${effectiveModelRow.label}）`);
+  for (const cat of CATS) {
+    const cur = currentHoldingPct[cat];
+    const tgt = effectiveModelRow[cat];
+    const diffPt = Number((cur - tgt).toFixed(1));
+    L.push(`${cat}（${rankLabels[cat]}）: 現状${cur.toFixed(1)}%（目標${tgt}%）${diffPt >= 0 ? "+" : ""}${diffPt}pt`);
+  }
+  L.push(`ブロック: A+B ${blocks.AB.cur.toFixed(1)}%（目標${blocks.AB.tgt}%） / C ${blocks.Cb.cur.toFixed(1)}%（目標${blocks.Cb.tgt}%） / D+E ${blocks.DE.cur.toFixed(1)}%（目標${blocks.DE.tgt}%）`);
+  const fixedNames = Object.keys(fixedPositions);
+  if (fixedNames.length) {
+    L.push("【固定ポジション（調整対象外）】");
+    for (const name of fixedNames) {
+      const amount = holdings.filter((h) => h.name === name).reduce((s, h) => s + h.amount, 0);
+      L.push(`${name}: ${amt(amount)}${fixedPositions[name] ? `（${fixedPositions[name]}）` : ""}`);
+    }
+  }
+  L.push("");
+
+  L.push("■ 保有資産（評価額上位20件）");
+  const sorted = [...holdings].sort((a, b) => b.amount - a.amount).slice(0, 20);
+  for (const h of sorted) L.push(`${h.name} / ${h.account} / ${amt(h.amount)} / ${h.rank}${fixedPositions[h.name] !== undefined ? " / 固定" : ""}`);
+  if (diff) {
+    L.push("");
+    L.push(`【前回サマリー（${fmtDateTimeJST(new Date(diff.prevDate))}）からの変更点】`);
+    if (!diff.sold.length && !diff.bought.length && !diff.changed.length) L.push("変更なし");
+    for (const s of diff.sold) L.push(`売却: ${s.name}（${amt(s.amount)}）`);
+    for (const b of diff.bought) L.push(`購入: ${b.name}（${amt(b.amount)}）`);
+    for (const c of diff.changed) L.push(`変更: ${c.name} ${amt(c.from)}→${amt(c.to)}`);
+  } else {
+    L.push("");
+    L.push("（前回サマリーの記録がないため、変更点は次回から表示されます）");
+  }
+  if (exposure.length) {
+    L.push("");
+    L.push("【実質エクスポージャー（概算・指数組入比率は目安値）】");
+    for (const e of exposure.slice(0, 8)) L.push(`${e.ticker}: 実質${amt(e.total)}（直接${amt(e.direct)} + 指数経由${amt(e.viaIndex)}、世帯${e.pct}%）`);
+  }
+  L.push("");
+
+  L.push("■ カテゴリー / 通貨");
+  const catGroups = sortGroupedForView(groupByField(holdings, "category"), "category");
+  L.push(catGroups.map((g) => `${g.name} ${((g.value / (total || 1)) * 100).toFixed(1)}%`).join(" / "));
+  const ccyGroups = groupByField(holdings, "currency");
+  L.push(ccyGroups.map((g) => `${g.name} ${((g.value / (total || 1)) * 100).toFixed(1)}%`).join(" / "));
+  L.push("");
+
+  L.push("■ 現金・取り崩し・ライフステージ");
+  L.push(`現金: ${amt(cash)}（円${amt(cashJPY)} / 外貨${amt(cashForeign)}）= 生活費${cashYears}年分`);
+  L.push(`年間取り崩し額: ${amt(lifecycle.annualWithdrawal)}`);
+  L.push(`${lifecycle.spouseWorking ? "配偶者就労中" : "配偶者非就労"} / フェーズ${lifecycle.phase}（${lifecycle.phase === 1 ? "攻めOK" : "守り厚く"}）`);
+  L.push("");
+
+  L.push("■ リターン目標");
+  const requiredCagr = lifecycle.returnTargetYears > 0 ? (Math.pow(lifecycle.returnTargetMultiple, 1 / lifecycle.returnTargetYears) - 1) * 100 : null;
+  L.push(`目標: ${lifecycle.returnTargetYears}年で${lifecycle.returnTargetMultiple}倍（必要CAGR ${requiredCagr !== null ? requiredCagr.toFixed(1) : "—"}%）`);
+  L.push("");
+
+  L.push("■ 相談したいこと");
+  L.push(consultQuestion?.trim() || "（空欄）");
+  L.push("");
+  L.push("---");
+  L.push("※本サマリーは判断補助であり投資助言ではありません。過去確率・トラックレコードは傾向であり将来を保証しません。最終判断はご自身で行ってください。");
+  return L.join("\n");
+}
+function buildSummaryJSON(ctx) {
+  const { d, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, fixedPositions, recentStats, exposure, diff, consultQuestion, hideAmounts, generatedAt } = ctx;
+  const total = holdingsTotal(holdings);
+  const cashHoldings = holdings.filter((h) => h.category === "現金");
+  const cash = cashHoldings.reduce((s, h) => s + h.amount, 0);
+  const cashByCcy = groupByField(cashHoldings, "currency");
+  const val = (v) => hideAmounts ? null : Math.round(v);
+  return {
+    generated_at: generatedAt.toISOString(),
+    data_last_date: d.last.date.toISOString().slice(0, 10),
+    amounts_hidden: hideAmounts,
+    household_total: val(total),
+    lifecycle: { spouse_working: lifecycle.spouseWorking, phase: lifecycle.phase, annual_withdrawal: val(lifecycle.annualWithdrawal) },
+    spy: {
+      price: d.currentPrice, ath: d.currentATH, ath_date: fmtYMD(d.athDate), dd_pct: d.currentDD, mode: d.mode,
+      acceleration: { level: d.speedAlert.level, warn_label: d.speedAlert.warnLabel ?? null, speed_3to5: d.speedAlert.speed35 ?? null, d3_date: d.speedAlert.d3Date ? fmtYMD(d.speedAlert.d3Date) : null, d5_date: d.speedAlert.d5Date ? fmtYMD(d.speedAlert.d5Date) : null },
+      recent: recentStats,
+      track_record: { total_years: Number(d.trackRecord.totalYears.toFixed(1)), n_episodes: d.trackRecord.n, freq_per_year: d.trackRecord.ddFreqPerYear },
+    },
+    allocation: Object.fromEntries(CATS.map((cat) => [cat, { value: val((currentHoldingPct[cat] / 100) * total), pct: currentHoldingPct[cat], model_pct: effectiveModelRow[cat], diff_pt: Number((currentHoldingPct[cat] - effectiveModelRow[cat]).toFixed(1)), categories: rankLabels[cat] }])),
+    blocks: { AB: blocks.AB, C: blocks.Cb, DE: blocks.DE },
+    fixed_positions: Object.entries(fixedPositions).map(([name, reason]) => ({ name, reason, value: val(holdings.filter((h) => h.name === name).reduce((s, h) => s + h.amount, 0)) })),
+    holdings: holdings.map((h) => ({ name: h.name, account: h.account, owner: h.owner, category: h.category, currency: h.currency, rank: h.rank, value: val(h.amount), fixed: fixedPositions[h.name] !== undefined })),
+    changes_since_last: diff ? { prev_generated_at: diff.prevDate, sold: diff.sold.map((s) => ({ name: s.name, value: val(s.amount) })), bought: diff.bought.map((b) => ({ name: b.name, value: val(b.amount) })), changed: diff.changed.map((c) => ({ name: c.name, from: val(c.from), to: val(c.to) })) } : null,
+    real_exposure: exposure.map((e) => ({ ticker: e.ticker, direct: val(e.direct), via_index: val(e.viaIndex), total: val(e.total), pct: e.pct })),
+    categories: Object.fromEntries(sortGroupedForView(groupByField(holdings, "category"), "category").map((g) => [g.name, Number(((g.value / (total || 1)) * 100).toFixed(1))])),
+    currency: Object.fromEntries(groupByField(holdings, "currency").map((g) => [g.name, Number(((g.value / (total || 1)) * 100).toFixed(1))])),
+    cash: { total: val(cash), jpy: val(cashByCcy.find((c) => c.name === "円")?.value ?? 0), foreign: val(cashByCcy.find((c) => c.name === "ドル")?.value ?? 0), years_buffer: lifecycle.annualWithdrawal > 0 ? Number((cash / lifecycle.annualWithdrawal).toFixed(1)) : null },
+    return_target: { years: lifecycle.returnTargetYears, multiple: lifecycle.returnTargetMultiple, required_cagr_pct: lifecycle.returnTargetYears > 0 ? Number(((Math.pow(lifecycle.returnTargetMultiple, 1 / lifecycle.returnTargetYears) - 1) * 100).toFixed(1)) : null },
+    user_question: consultQuestion?.trim() || "",
+    disclaimer: "本サマリーは判断補助であり投資助言ではありません。過去確率・トラックレコードは将来を保証しません。最終判断はご自身で行ってください。",
+  };
+}
+
 /* ---------------- legends ---------------- */
 function ClickLegend({ items, hidden, onToggle }) {
   return (<div className="flex items-center gap-3 px-1 flex-wrap">{items.map((it) => (<button key={it.key} onClick={() => onToggle(it.key)} className="flex items-center gap-1.5 text-[11px]" style={{ opacity: hidden[it.key] ? 0.35 : 1, background: "transparent", border: "none", cursor: "pointer" }}><span style={{ width: 10, height: 10, borderRadius: 2, background: it.color }} /><span style={{ color: C.textMuted, textDecoration: hidden[it.key] ? "line-through" : "none" }}>{it.label}</span></button>))}</div>);
+}
+
+/* ---------------- 詳細サマリー出力モーダル ---------------- */
+function SummaryModalContent({ d, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, onLifecycleChange, fixedPositions, onFixedPositionChange, prevSnapshot, onSaveSnapshot }) {
+  const [format, setFormat] = useState("md");
+  const [hideAmounts, setHideAmounts] = useState(false);
+  const [consultQuestion, setConsultQuestion] = useState("");
+  const [copied, setCopied] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const generatedAt = useState(() => new Date())[0];
+
+  const recentStats = useMemo(() => computeRecentStats(d.FULL), [d.FULL]);
+  const exposure = useMemo(() => computeRealExposure(holdings), [holdings]);
+  const diff = useMemo(() => computeHoldingsDiff(prevSnapshot, holdings), [prevSnapshot, holdings]);
+  const uniqueNames = useMemo(() => [...new Set(holdings.map((h) => h.name))], [holdings]);
+
+  // このサマリーを閉じた時点の保有内容を「次回比較用」のスナップショットとして保存する（開いている間は前回分との差分を表示し続ける）。
+  useEffect(() => () => onSaveSnapshot(holdings, generatedAt), []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const ctx = useMemo(() => ({ d, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, fixedPositions, recentStats, exposure, diff, consultQuestion, hideAmounts, generatedAt }),
+    [d, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, fixedPositions, recentStats, exposure, diff, consultQuestion, hideAmounts, generatedAt]);
+  const output = useMemo(() => (format === "md" ? buildSummaryMarkdown(ctx) : JSON.stringify(buildSummaryJSON(ctx), null, 2)), [format, ctx]);
+
+  const handleCopy = async () => {
+    try { await navigator.clipboard.writeText(output); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch (e) { /* クリップボード非対応環境 */ }
+  };
+
+  const inputStyle = { background: C.panel, border: `1px solid ${C.borderSoft}`, color: C.text, padding: "3px 6px" };
+
+  return (
+    <div className="flex flex-col">
+      <p className="text-xs mb-3 leading-relaxed" style={{ color: C.textDim }}>
+        現在の状態を判定根拠・トラックレコード・直近値動きまで含めて書き出します。そのままチャットに貼り付けてClaudeに相談できます。
+      </p>
+      <div className="flex items-center gap-2 mb-3 flex-wrap">
+        <div className="flex gap-0.5">
+          {[{ k: "md", l: "人間可読（Markdown）" }, { k: "json", l: "JSON" }].map((t) => (
+            <button key={t.k} onClick={() => setFormat(t.k)} className="text-[11px] px-2 py-1 rounded" style={{ color: format === t.k ? C.bg : C.textMuted, background: format === t.k ? C.teal : "transparent", fontWeight: format === t.k ? 700 : 400, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>{t.l}</button>
+          ))}
+        </div>
+        <label className="flex items-center gap-1.5 text-xs" style={{ color: C.textMuted, cursor: "pointer" }}>
+          <input type="checkbox" checked={hideAmounts} onChange={(e) => setHideAmounts(e.target.checked)} />金額を非表示（%のみ）
+        </label>
+        <button onClick={() => setShowSettings((s) => !s)} className="text-xs underline ml-auto" style={{ color: C.textDim, background: "transparent", border: "none", cursor: "pointer" }}>{showSettings ? "設定を閉じる" : "ライフステージ・固定ポジション設定"}</button>
+      </div>
+
+      {showSettings && (
+        <div className="rounded p-3 mb-3" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
+          <div className="flex flex-wrap items-center gap-4 mb-3">
+            <label className="flex items-center gap-1.5 text-xs" style={{ color: C.textMuted, cursor: "pointer" }}>
+              <input type="checkbox" checked={lifecycle.spouseWorking} onChange={(e) => onLifecycleChange("spouseWorking", e.target.checked)} />配偶者就労中
+            </label>
+            <div className="flex items-center gap-1.5">
+              <label className="text-[10px]" style={{ color: C.textDim }}>フェーズ</label>
+              <select value={lifecycle.phase} onChange={(e) => onLifecycleChange("phase", Number(e.target.value))} className="text-xs rounded" style={inputStyle}>
+                <option value={1}>1（攻めOK）</option>
+                <option value={2}>2（守り厚く）</option>
+              </select>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <label className="text-[10px]" style={{ color: C.textDim }}>年間取り崩し額</label>
+              <input type="number" min="0" step="10000" value={lifecycle.annualWithdrawal} onChange={(e) => onLifecycleChange("annualWithdrawal", Number(e.target.value) || 0)} className="text-xs rounded" style={{ ...inputStyle, width: 100 }} />
+              <span className="text-[10px]" style={{ color: C.textDim }}>円</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <label className="text-[10px]" style={{ color: C.textDim }}>目標</label>
+              <input type="number" min="1" step="1" value={lifecycle.returnTargetYears} onChange={(e) => onLifecycleChange("returnTargetYears", Number(e.target.value) || 1)} className="text-xs rounded" style={{ ...inputStyle, width: 44 }} />
+              <span className="text-[10px]" style={{ color: C.textDim }}>年で</span>
+              <input type="number" min="1" step="0.1" value={lifecycle.returnTargetMultiple} onChange={(e) => onLifecycleChange("returnTargetMultiple", Number(e.target.value) || 1)} className="text-xs rounded" style={{ ...inputStyle, width: 44 }} />
+              <span className="text-[10px]" style={{ color: C.textDim }}>倍</span>
+            </div>
+          </div>
+          <label className="text-[10px] block mb-1" style={{ color: C.textDim }}>固定ポジション（売らない前提の保有・調整対象外としてサマリーに明示）</label>
+          <div className="flex flex-col gap-1 p-2 rounded" style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, maxHeight: 160, overflowY: "auto" }}>
+            {uniqueNames.map((name) => {
+              const checked = fixedPositions[name] !== undefined;
+              return (
+                <div key={name} className="flex items-center gap-2 text-[11px]">
+                  <label className="flex items-center gap-1.5 shrink-0" style={{ color: C.textMuted, cursor: "pointer", width: 220 }}>
+                    <input type="checkbox" checked={checked} onChange={(e) => onFixedPositionChange(name, e.target.checked, fixedPositions[name] ?? "")} />
+                    <span className="truncate">{name}</span>
+                  </label>
+                  {checked && (
+                    <input type="text" placeholder="理由（例：株主優待目的）" value={fixedPositions[name]} onChange={(e) => onFixedPositionChange(name, true, e.target.value)} className="text-[11px] rounded flex-1" style={inputStyle} />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      <div className="mb-3">
+        <label className="text-[10px] block mb-1" style={{ color: C.textDim }}>相談したいこと（任意・空欄でも可）</label>
+        <textarea value={consultQuestion} onChange={(e) => setConsultQuestion(e.target.value)} rows={2} className="w-full text-xs rounded p-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }} placeholder="例：Cクラスの不足をどう埋めるべきか" />
+      </div>
+
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-[10px]" style={{ color: C.textDim }}>出力（{format === "md" ? "Markdown" : "JSON"}）・クリックで全選択</span>
+        <button onClick={handleCopy} className="text-xs px-3 py-1 rounded flex items-center gap-1.5" style={{ background: copied ? C.teal : C.panel2, color: copied ? C.bg : C.textMuted, border: `1px solid ${C.borderSoft}`, fontWeight: copied ? 700 : 400, cursor: "pointer" }}><Copy size={12} />{copied ? "コピーしました" : "コピー"}</button>
+      </div>
+      <textarea readOnly value={output} onClick={(e) => e.target.select()} className="w-full mono text-[11px] rounded p-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text, height: 380, resize: "vertical" }} />
+      <div className="text-[10px] mt-3 leading-relaxed" style={{ color: C.textDim }}>投資助言ではなく判断補助です。過去確率・トラックレコードは傾向であり将来を保証しません。最終判断はご自身で行ってください。</div>
+    </div>
+  );
 }
 
 /* ---------------- main ---------------- */
@@ -1672,6 +1999,9 @@ export default function DDDashboard() {
   const [chartTab, setChartTab] = useState("normal");
   const [modal, setModal] = useState(null);
   const [hydrated, setHydrated] = useState(false);
+  const [lifecycle, setLifecycle] = useState(LIFECYCLE_DEFAULT);
+  const [fixedPositions, setFixedPositions] = useState({}); // { [銘柄名]: 理由(空文字可) }
+  const [prevSnapshot, setPrevSnapshot] = useState(null); // 詳細サマリー出力の前回スナップショット（差分表示用）
 
   useEffect(() => {
     (async () => {
@@ -1703,6 +2033,18 @@ export default function DDDashboard() {
         const res5 = await storage.get("portfolio_checkpoints");
         if (res5 && res5.value) setCheckpoints(JSON.parse(res5.value));
       } catch (e) { /* no saved checkpoints yet — keep built-in default */ }
+      try {
+        const res6 = await storage.get("lifecycle_settings");
+        if (res6 && res6.value) setLifecycle((prev) => ({ ...prev, ...JSON.parse(res6.value) }));
+      } catch (e) { /* no saved lifecycle settings yet — keep built-in default */ }
+      try {
+        const res7 = await storage.get("fixed_positions");
+        if (res7 && res7.value) setFixedPositions(JSON.parse(res7.value));
+      } catch (e) { /* no saved fixed positions yet */ }
+      try {
+        const res8 = await storage.get("summary_prev_snapshot");
+        if (res8 && res8.value) setPrevSnapshot(JSON.parse(res8.value));
+      } catch (e) { /* no saved summary snapshot yet */ }
       setHydrated(true);
     })();
   }, []);
@@ -1735,6 +2077,30 @@ export default function DDDashboard() {
       persistCheckpoints(next);
       return next;
     });
+  }
+  async function persistLifecycle(next) {
+    try { await storage.set("lifecycle_settings", JSON.stringify(next)); } catch (e) { /* storage unavailable */ }
+  }
+  function handleLifecycleChange(field, value) {
+    setLifecycle((prev) => { const next = { ...prev, [field]: value }; persistLifecycle(next); return next; });
+  }
+  async function persistFixedPositions(next) {
+    try { await storage.set("fixed_positions", JSON.stringify(next)); } catch (e) { /* storage unavailable */ }
+  }
+  function handleFixedPositionChange(name, checked, reason) {
+    setFixedPositions((prev) => {
+      const next = { ...prev };
+      if (checked) next[name] = reason ?? "";
+      else delete next[name];
+      persistFixedPositions(next);
+      return next;
+    });
+  }
+  // 詳細サマリー出力モーダルを閉じた時点の保有内容を「次回比較用」として保存する（次回サマリーの差分表示の基準になる）。
+  function handleSaveSnapshot(snapshotHoldings, generatedAt) {
+    const snapshot = { generatedAt: generatedAt.toISOString(), holdings: snapshotHoldings.map((h) => ({ name: h.name, amount: h.amount })) };
+    setPrevSnapshot(snapshot);
+    storage.set("summary_prev_snapshot", JSON.stringify(snapshot)).catch(() => { /* storage unavailable */ });
   }
   function handleReplace(parsed) { setRawSeries(parsed); setDataSource("imported"); persist(parsed); }
   function handleAppend(entry) {
@@ -1878,10 +2244,14 @@ export default function DDDashboard() {
       {modal?.type === "ddChart" && <FullScreenModal title="評価額（左軸） / DD%（右軸）" onClose={() => setModal(null)}><DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} /></FullScreenModal>}
       {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} onBackfill={handleBackfill} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} />}
       {modal?.type === "checkpointSettings" && <FullScreenModal title="チェックポイント設定" onClose={() => setModal(null)}><CheckpointSettingsContent checkpoints={checkpoints} onCheckpointChange={handleCheckpointChange} holdings={holdings} /></FullScreenModal>}
+      {modal?.type === "summary" && <FullScreenModal title="詳細サマリー出力（AI相談用）" onClose={() => setModal(null)}><SummaryModalContent d={d} holdings={holdings} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} blocks={blocks} rankLabels={rankLabels} lifecycle={lifecycle} onLifecycleChange={handleLifecycleChange} fixedPositions={fixedPositions} onFixedPositionChange={handleFixedPositionChange} prevSnapshot={prevSnapshot} onSaveSnapshot={handleSaveSnapshot} /></FullScreenModal>}
 
       <div className="flex items-center justify-between px-5 py-3 shrink-0" style={{ borderBottom: `1px solid ${C.border}`, background: C.panel2 }}>
         <div className="flex items-center gap-3"><span className="text-sm font-bold tracking-wide">DD戦略ダッシュボード</span><span className="text-[11px]" style={{ color: C.textDim }}>SPY・日次</span></div>
         <div className="flex items-center gap-3">
+          <button onClick={() => setModal({ type: "summary" })} className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+            <FileText size={12} /> 詳細サマリー
+          </button>
           <button onClick={() => setModal({ type: "dataInput" })} className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
             <Database size={12} /> データ入力
           </button>
