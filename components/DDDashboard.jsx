@@ -5,7 +5,7 @@ import {
   ComposedChart, LineChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ReferenceLine, ReferenceDot, ResponsiveContainer, PieChart, Pie, Cell, Brush, Customized,
 } from "recharts";
-import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Database, Trash2 } from "lucide-react";
+import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Database, Trash2, Zap } from "lucide-react";
 import { storage } from "@/lib/storage";
 
 /* ---------------- design tokens ---------------- */
@@ -144,6 +144,13 @@ function freqPerYearFromP(p) { return DD3_FREQ_PER_YEAR * (p / 100); }
 function freqPerYearForLabel(label) { const row = FINAL_REACH_DATA.find((r) => r.label === label); return row ? freqPerYearFromP(row.p) : null; }
 function correctionType(dd) { const abs = Math.abs(dd); if (abs < 10) return "浅い調整"; if (abs < 20) return "中程度の調整"; return "深い調整"; }
 // 「現状分析」パネルの自動生成テキスト（毎日データ更新の都度、最新の状況から再計算される）。
+// DD加速度アラート（速度・経過日数の法則）の判定結果を、現状分析テキストに差し込む一文に変換する。
+function speedAlertSentence(sa) {
+  if (sa.level === "pending5") return `DD3%到達から${sa.daysSinceDD3}営業日が経過し、まだDD5%には未到達です。${sa.hint ? sa.hint + "。" : ""}`;
+  if (sa.level === "confirmed5") return `DD3→5%の速度は${sa.speed35}営業日（${sa.warnLabel}）で、この先DD15%以深まで進む確率は${sa.deepProb["-15"]}%です。推奨：${sa.action}。`;
+  if (sa.level === "deep8") return `DD8%を突破し本格下落局面です（3→8%の速度：${sa.speed38 ?? "算出不可"}営業日・${sa.speed38Category ?? "速度データなし"}）。推奨：${sa.action}。`;
+  return "";
+}
 function buildAnalysisText(d, currentHoldingPct, totalValue) {
   const athStr = fmtYMD(d.athDate);
   const ddStr = `${d.currentDD.toFixed(1)}%`;
@@ -161,13 +168,14 @@ function buildAnalysisText(d, currentHoldingPct, totalValue) {
   const verdict = Math.abs(maxDiff) >= 4 ? "リバランスを推奨します" : "現状のバランスは良好です";
   const rebalanceSentence = `${d.modelRow.label}の推奨ポートフォリオと比較して、${maxCat}クラスが${Math.abs(maxDiff).toFixed(1)}%（${maxDiffAmount >= 0 ? "+" : "-"}¥${Math.abs(maxDiffAmount).toLocaleString()}）${direction}しており、${verdict}。`;
 
+  const speedStr = speedAlertSentence(d.speedAlert);
   if (d.isDrawdown && d.nextProg) {
     const nextFreqPerYear = freqPerYearForLabel(`${d.nextProg.to}%`);
     const nextFreqStr = nextFreqPerYear !== null ? `${nextFreqPerYear.toFixed(1)}回` : "算出不可";
-    return `ATHが${athStr}で現在は${ddStr}です。${ddStr}は${perYear !== null ? `年に${freqStr}程度発生する` : `${freqStr}`}${typeStr}です。ATHから${d.daysSinceATH}日間経過しており、次の節目である${d.nextProg.to}%まで下落する確率は${d.nextProg.p}%で、発生した場合は年に${nextFreqStr}程度の下落相場となります。${rebalanceSentence}`;
+    return `ATHが${athStr}で現在は${ddStr}です。${ddStr}は${perYear !== null ? `年に${freqStr}程度発生する` : `${freqStr}`}${typeStr}です。ATHから${d.daysSinceATH}日間経過しており、次の節目である${d.nextProg.to}%まで下落する確率は${d.nextProg.p}%で、発生した場合は年に${nextFreqStr}程度の下落相場となります。${speedStr}${rebalanceSentence}`;
   }
   if (d.isDrawdown) {
-    return `ATHが${athStr}で現在は${ddStr}です。${ddStr}は${perYear !== null ? `年に${freqStr}程度発生する` : `${freqStr}`}${typeStr}です。ATHから${d.daysSinceATH}日間経過しています。${rebalanceSentence}`;
+    return `ATHが${athStr}で現在は${ddStr}です。${ddStr}は${perYear !== null ? `年に${freqStr}程度発生する` : `${freqStr}`}${typeStr}です。ATHから${d.daysSinceATH}日間経過しています。${speedStr}${rebalanceSentence}`;
   }
   return `ATHが${athStr}で、現在は前回のATHから${d.daysSinceATH}日で新高値圏（${ddStr}）にあります。${rebalanceSentence}`;
 }
@@ -203,7 +211,8 @@ function computeAll(rawSeries) {
   const nextMilestonePrice = nextMilestone !== null ? currentATH * (1 + nextMilestone / 100) : null;
   const lastCompletedEpisode = [...episodes].reverse().find((e) => !e.isOngoing) ?? null; // 前回DD3%到達から回復した日（＝前回最高値）
   const prevATHRatio = lastCompletedEpisode ? Number((((currentPrice / lastCompletedEpisode.recoveryPrice) - 1) * 100).toFixed(1)) : null;
-  return { FULL, last, currentDD, currentPrice, currentATH, isDrawdown, mode, episode, ddStartIdx, daysSinceDDStart, daysSinceCurrentThreshold, legDays, isEntryLeg, currentTLabel, currentEpisodeCurve, speedCategory, nextProg, modelRow, currentLevelP, currentFreqLabel, athDate, daysSinceATH, trough, episodes, nextMilestone, distanceToNextMilestone, nextMilestonePrice, lastCompletedEpisode, prevATHRatio };
+  const speedAlert = computeSpeedAlert(FULL, last, episode, currentDD);
+  return { FULL, last, currentDD, currentPrice, currentATH, isDrawdown, mode, episode, ddStartIdx, daysSinceDDStart, daysSinceCurrentThreshold, legDays, isEntryLeg, currentTLabel, currentEpisodeCurve, speedCategory, nextProg, modelRow, currentLevelP, currentFreqLabel, athDate, daysSinceATH, trough, episodes, nextMilestone, distanceToNextMilestone, nextMilestonePrice, lastCompletedEpisode, prevATHRatio, speedAlert };
 }
 
 const PROGRESSION_DATA = [
@@ -219,6 +228,71 @@ const FINAL_REACH_DATA = [
   { label: "-50%", p: 0.8, real: false }, { label: "-50%以上", p: 0.4, real: false },
 ];
 const SPEED_TABLE = { fast: { "-8": 56, "-10": 44, "-15": 34, "-20": 25 }, slow: { "-8": 47, "-10": 30, "-15": 13, "-20": 10 } };
+
+/* ---------------- DD加速度アラート（速度・経過日数の法則） ---------------- */
+// S&P500 69年(1957-2026)・113下落局面のバックテスト。DD-3%→5%到達までの営業日数別の内訳（100局面がDD5%到達）。
+const SPEED_35_BACKTEST = [
+  { label: "3日以内", min: 0, max: 3, n: 25, crashRate: 36, avgFinalDD: -15.8 },
+  { label: "4〜5日", min: 4, max: 5, n: 7, crashRate: 30, avgFinalDD: -10.6 },
+  { label: "6〜10日", min: 6, max: 10, n: 15, crashRate: 18, avgFinalDD: null },
+  { label: "11〜20日", min: 11, max: 20, n: 14, crashRate: 14, avgFinalDD: null },
+  { label: "21日超", min: 21, max: Infinity, n: 39, crashRate: 0, avgFinalDD: -4.8 },
+];
+function speed35Bucket(days) { return SPEED_35_BACKTEST.find((r) => days >= r.min && days <= r.max) ?? null; }
+function classifySpeed35(days) { if (days <= 5) return "fast"; if (days >= 21) return "slow"; return "mid"; }
+// DD加速度アラート専用の節目進行確率（速度と併用、DD8%突破以降は主にこちらが判断材料になる）。
+const SPEED_ALERT_PROGRESSION = [
+  { from: -3, to: -5, p: 55 }, { from: -5, to: -8, p: 52 }, { from: -8, to: -10, p: 72, watershed: true },
+  { from: -10, to: -15, p: 65 }, { from: -15, to: -20, p: 73 },
+];
+// 現在進行中の下落局面について、速度（各節目への到達日数）から警戒度を判定する。
+// 局面はATH更新のたびにリセットされる（episodeが直近ATH起点で再計算されるため、前局面の速度を引きずらない）。
+function computeSpeedAlert(FULL, last, episode, currentDD) {
+  const athIdx = episode.athIdx;
+  const idx3 = episode.crossIdx[-3], idx5 = episode.crossIdx[-5], idx8 = episode.crossIdx[-8];
+  const d3 = idx3 !== -1 ? idx3 - athIdx : null;
+  const d5 = idx5 !== -1 ? idx5 - athIdx : null;
+  const d8 = idx8 !== -1 ? idx8 - athIdx : null;
+  const speed35 = (d3 !== null && d5 !== null) ? d5 - d3 : null;
+  const speed38 = (d3 !== null && d8 !== null) ? d8 - d3 : null;
+  const d3Date = idx3 !== -1 ? FULL[idx3].date : null;
+  const d5Date = idx5 !== -1 ? FULL[idx5].date : null;
+  const d8Date = idx8 !== -1 ? FULL[idx8].date : null;
+
+  if (currentDD > -3) return { level: "normal", currentDD };
+
+  if (currentDD > -5) {
+    const daysSinceDD3 = idx3 !== -1 ? last.i - idx3 : null;
+    let hint = null;
+    if (daysSinceDD3 !== null) {
+      if (daysSinceDD3 >= 21) hint = "緩慢な滑り出し（大暴落の兆候は薄い）";
+      else if (daysSinceDD3 <= 3) hint = "速い滑り出し、DD5%到達に注意";
+    }
+    return { level: "pending5", currentDD, d3Date, daysSinceDD3, hint };
+  }
+
+  if (currentDD > -8) {
+    const category = speed35 !== null ? classifySpeed35(speed35) : null;
+    const deepProb = SPEED_TABLE[category === "fast" ? "fast" : "slow"]; // 「中間」はデータが無いため緩慢側を目安に流用
+    const warnLabel = category === "fast" ? "急落・警戒" : category === "slow" ? "緩慢・安心寄り" : "中間";
+    const action = category === "fast" ? "レバを外す/減らす、守りを固める。ただし66%は空振り→全撤退はしない"
+      : category === "slow" ? "慌てない、押し目買いを検討（早売り防止）"
+      : "通常のDD連動で段階対応";
+    return { level: "confirmed5", currentDD, speed35, category, warnLabel, action, deepProb, d3Date, d5Date, backtestRow: speed35 !== null ? speed35Bucket(speed35) : null };
+  }
+
+  const speed38Category = speed38 !== null ? (speed38 <= 10 ? "急速（V字型）" : "緩慢（2007型）") : null;
+  return {
+    level: "deep8", currentDD, speed35, speed38, speed38Category, d3Date, d5Date, d8Date,
+    warnLabel: "本格下落・確定", action: "守りを固め切る、レバ外し切る、現金の弾は温存（底はまだ先）",
+  };
+}
+function speedAlertAccent(sa) {
+  if (sa.level === "normal") return C.textDim;
+  if (sa.level === "pending5") return C.amber;
+  if (sa.level === "confirmed5") return sa.category === "fast" ? C.rust : sa.category === "slow" ? C.teal : C.amber;
+  return C.rust;
+}
 
 /* ---------------- allocation model ---------------- */
 const MODEL_ROWS = [
@@ -619,7 +693,11 @@ function ChartMarkers({ xAxisMap, yAxisMap, points, chartWidth }) {
           onMouseEnter={pt.dotOnly ? () => setHoverIdx(i) : undefined}
           onMouseLeave={pt.dotOnly ? () => setHoverIdx((h) => (h === i ? null : h)) : undefined}
         >
-          <circle cx={pt.cx} cy={pt.cy} r={pt.dotOnly ? 4 : 4} fill={pt.color} stroke={C.bg} strokeWidth={1.5} style={pt.dotOnly ? { cursor: "pointer" } : undefined} />
+          {pt.isCurrent ? (
+            <rect x={pt.cx - 4} y={pt.cy - 4} width={8} height={8} fill="#fff" stroke={C.bg} strokeWidth={1.5} style={pt.dotOnly ? { cursor: "pointer" } : undefined} />
+          ) : (
+            <circle cx={pt.cx} cy={pt.cy} r={pt.dotOnly ? 4 : 4} fill={pt.color} stroke={C.bg} strokeWidth={1.5} style={pt.dotOnly ? { cursor: "pointer" } : undefined} />
+          )}
           {pt.dotOnly && <circle cx={pt.cx} cy={pt.cy} r={9} fill="transparent" style={{ cursor: "pointer" }} />}
           {!pt.dotOnly && (
             <text x={pt.cx} y={pt.cy - 8 - (pt.labelOffset || 0)} textAnchor={pt.anchor || "middle"} fontSize={pt.fontSize} fill={pt.color} className="mono">{pt.label}</text>
@@ -670,7 +748,7 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, withBrush = false, f
     const currentLabel = troughIsToday
       ? `$${d.currentPrice.toFixed(2)}（${fmtYMD(d.last.date)}）DD${d.currentDD.toFixed(1)}%`
       : `$${d.currentPrice.toFixed(2)}（${fmtYMD(d.last.date)}）`;
-    markerPoints.push({ date: chartLast, price: d.currentPrice, color: depthColor(d.currentDD), anchor: "end", fontSize: markerFontSize, label: currentLabel, dotOnly: !isShortTerm });
+    markerPoints.push({ date: chartLast, price: d.currentPrice, color: depthColor(d.currentDD), anchor: "end", fontSize: markerFontSize, label: currentLabel, dotOnly: !isShortTerm, isCurrent: true });
   }
   return (
     <ComposedChart width={width} height={height} data={chartData} margin={{ top: 12, right: 44, left: 0, bottom: withBrush ? 0 : 0 }}>
@@ -798,7 +876,7 @@ function SortableTable({ columns, rows, defaultSortKey, defaultDir = "desc", onE
 }
 
 /* ---------------- status panel ---------------- */
-function StatusPanel({ d, onOpenTrackRecord }) {
+function StatusPanel({ d, onOpenSpeedAlert }) {
   return (
     <Panel title="現在のステータス" hideHeader className="h-full">
       <div className="flex h-full">
@@ -825,18 +903,34 @@ function StatusPanel({ d, onOpenTrackRecord }) {
         </div>
         <div className="flex-1 px-4 py-2 flex flex-col justify-center" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
           <div className="flex items-center gap-1.5 mb-1"><Clock size={11} style={{ color: C.textDim }} /><span className="text-[10px]" style={{ color: C.textDim }}>経過日数</span></div>
-          <div className="flex items-baseline justify-between text-xs mb-0.5"><span style={{ color: C.textMuted }}>DD開始（-3%）から</span><span className="mono font-semibold">{d.daysSinceDDStart ?? "—"}日</span></div>
-          {d.isDrawdown ? (
-            <div className="flex items-baseline justify-between text-xs"><span style={{ color: C.textMuted }}>前節目（{d.currentTLabel}）通過から</span><span className="mono font-semibold">{d.daysSinceCurrentThreshold ?? "—"}日</span></div>
-          ) : (
-            <div className="flex items-baseline justify-between text-xs"><span style={{ color: C.textMuted }}>前回最高値（DD3％後）から</span><span className="mono font-semibold">{d.daysSinceATH}日</span></div>
-          )}
+          <div style={{ opacity: d.isDrawdown ? 1 : 0.35 }}>
+            <div className="flex items-baseline justify-between text-xs"><span style={{ color: C.textMuted }}>DD開始から</span><span className="mono font-semibold">{d.daysSinceATH}日</span></div>
+            <div className="text-[10px] mono" style={{ color: C.textDim }}>評価額 ${d.currentPrice.toFixed(2)}（DD{d.currentDD.toFixed(1)}%）</div>
+          </div>
+          <div className="mt-1 pt-1" style={{ borderTop: `1px solid ${C.borderSoft}`, opacity: d.isDrawdown ? 0.35 : 1 }}>
+            <div className="flex items-baseline justify-between text-xs"><span style={{ color: C.textMuted }}>最高値更新から</span><span className="mono font-semibold">{d.daysSinceATH}日</span></div>
+            <div className="text-[10px] mono" style={{ color: C.textDim }}>{fmtYMD(d.athDate)}更新・最高値比{d.currentDD.toFixed(1)}%・${d.currentPrice.toFixed(2)}</div>
+          </div>
         </div>
-        <button onClick={onOpenTrackRecord} className="flex-1 px-4 py-2 flex flex-col justify-center text-left cursor-pointer" style={{ background: "transparent", border: "none" }}>
-          <div className="flex items-center gap-1.5 mb-1"><AlertTriangle size={11} style={{ color: C.amber }} /><span className="text-[10px]" style={{ color: C.textDim }}>その後の下落確率</span><ChevronRight size={11} style={{ color: C.textDim, marginLeft: "auto" }} /></div>
-          {d.isEntryLeg && d.speedCategory ? (<><div className="text-xs mb-0.5" style={{ color: C.textMuted }}>DD3→5%は{d.legDays}日（{d.speedCategory}）</div><div className="mono text-xs" style={{ color: C.text }}>→15%以深 <b style={{ color: C.rust }}>{SPEED_TABLE[d.speedCategory === "急落" ? "fast" : "slow"]["-15"]}%</b>　→20%以深 <b style={{ color: C.rust }}>{SPEED_TABLE[d.speedCategory === "急落" ? "fast" : "slow"]["-20"]}%</b></div></>)
-            : d.nextProg ? (<><div className="text-xs mb-0.5" style={{ color: C.textMuted }}>次の節目（{d.nextProg.to}%）への進行</div><div className="mono text-lg font-bold" style={{ color: d.nextProg.watershed ? C.rust : C.text }}>{d.nextProg.p}% {d.nextProg.watershed && <span className="text-[10px] font-normal">分水嶺</span>}</div></>) : (<div className="text-xs" style={{ color: C.textDim }}>下落モード外</div>)}
-          <div className="text-[9px] mt-0.5 underline" style={{ color: C.textDim }}>クリックで全トラックレコード表示</div>
+        <button onClick={onOpenSpeedAlert} className="flex-1 px-4 py-2 flex flex-col justify-center text-left cursor-pointer" style={{ background: "transparent", border: "none" }}>
+          <div className="flex items-center gap-1.5 mb-1"><Zap size={11} style={{ color: speedAlertAccent(d.speedAlert) }} /><span className="text-[10px]" style={{ color: C.textDim }}>DD加速度アラート</span><ChevronRight size={11} style={{ color: C.textDim, marginLeft: "auto" }} /></div>
+          {d.speedAlert.level === "normal" && (<>
+            <div className="text-xs mb-0.5" style={{ color: C.textMuted }}>待機中（現在ATH圏、DD{d.speedAlert.currentDD.toFixed(1)}%）</div>
+            <div className="text-[10px]" style={{ color: C.textDim }}>次にDD3%到達したら速度を自動計測します</div>
+          </>)}
+          {d.speedAlert.level === "pending5" && (<>
+            <div className="text-xs mb-0.5" style={{ color: C.textMuted }}>DD3%到達後{d.speedAlert.daysSinceDD3}営業日経過、DD5%未達</div>
+            <div className="mono text-xs" style={{ color: C.amber }}>{d.speedAlert.hint ?? "速度計測中"}</div>
+          </>)}
+          {d.speedAlert.level === "confirmed5" && (<>
+            <div className="mono text-sm font-bold" style={{ color: speedAlertAccent(d.speedAlert) }}>{d.speedAlert.warnLabel}</div>
+            <div className="text-xs" style={{ color: C.textMuted }}>3→5%の速度：{d.speedAlert.speed35}営業日</div>
+          </>)}
+          {d.speedAlert.level === "deep8" && (<>
+            <div className="mono text-sm font-bold" style={{ color: speedAlertAccent(d.speedAlert) }}>{d.speedAlert.warnLabel}</div>
+            <div className="text-xs" style={{ color: C.textMuted }}>{d.speedAlert.speed38Category ?? "3→8%速度：計測不可"}</div>
+          </>)}
+          <div className="text-[9px] mt-0.5 underline" style={{ color: C.textDim }}>クリックで詳細・バックテストを表示</div>
         </button>
       </div>
     </Panel>
@@ -903,6 +997,105 @@ function TrackRecordContent({ currentT }) {
         </table>
       </div>
       <div className="col-span-2 text-[11px] leading-relaxed" style={{ color: C.textDim }}>「参考値」は69年トラックレコードで明示されていない区間の暫定推定値です。過去確率は将来を保証しません。</div>
+    </div>
+  );
+}
+
+/* ---------------- DD加速度アラート 詳細モーダル ---------------- */
+function SpeedAlertModalContent({ d }) {
+  const sa = d.speedAlert;
+  const deepProbRows = sa.level === "confirmed5" ? [
+    { label: "DD8%まで", p: sa.deepProb["-8"] }, { label: "DD10%まで", p: sa.deepProb["-10"] },
+    { label: "DD15%まで", p: sa.deepProb["-15"], watershed: true }, { label: "DD20%まで", p: sa.deepProb["-20"] },
+  ] : [];
+  return (
+    <div className="flex flex-col gap-5">
+      <div>
+        <div className="text-xs mb-2" style={{ color: C.textDim }}>現在の状況</div>
+        <div className="flex items-center gap-4 mb-1.5">
+          <span className="mono text-lg font-bold" style={{ color: depthColor(sa.currentDD) }}>DD {sa.currentDD.toFixed(1)}%</span>
+          <span className="text-xs" style={{ color: C.textMuted }}>モード：{d.mode}</span>
+        </div>
+        {sa.level === "normal" && (
+          <div className="text-sm" style={{ color: C.textMuted }}>現在ATH圏内です。DD3%に到達すると、そこからの速度計測が自動的に始まります。</div>
+        )}
+        {sa.level === "pending5" && (
+          <div className="text-sm" style={{ color: C.textMuted }}>
+            DD3%到達：{sa.d3Date ? fmtYMD(sa.d3Date) : "—"}（{sa.daysSinceDD3}営業日経過、DD5%未達）
+            {sa.hint && <div className="mono mt-1" style={{ color: C.amber }}>{sa.hint}</div>}
+          </div>
+        )}
+        {sa.level === "confirmed5" && (
+          <div className="text-sm" style={{ color: C.textMuted }}>
+            DD3%到達：{sa.d3Date ? fmtYMD(sa.d3Date) : "—"}　DD5%到達：{sa.d5Date ? fmtYMD(sa.d5Date) : "—"}
+            <div className="mono mt-1">3→5%の速度：<b>{sa.speed35}営業日</b>{sa.backtestRow && `（${sa.backtestRow.label}区分）`}</div>
+          </div>
+        )}
+        {sa.level === "deep8" && (
+          <div className="text-sm" style={{ color: C.textMuted }}>
+            DD3%到達：{sa.d3Date ? fmtYMD(sa.d3Date) : "—"}　DD5%到達：{sa.d5Date ? fmtYMD(sa.d5Date) : "—"}　DD8%到達：{sa.d8Date ? fmtYMD(sa.d8Date) : "—"}
+            {sa.speed38 !== null && <div className="mono mt-1">3→8%の速度：<b>{sa.speed38}営業日</b>（{sa.speed38Category}）</div>}
+          </div>
+        )}
+      </div>
+
+      {sa.level === "confirmed5" && (
+        <div>
+          <div className="text-xs mb-2" style={{ color: C.textDim }}>この先の確率（{sa.category === "fast" ? "急落型" : sa.category === "slow" ? "緩慢型" : "中間型（参考として緩慢型の値を表示）"}）</div>
+          <table className="w-full text-xs mono"><thead><tr style={{ color: C.textDim }}><th className="text-left font-normal py-1">節目</th><th className="text-right">確率</th></tr></thead>
+            <tbody>
+              {deepProbRows.map((r) => (<tr key={r.label} style={{ borderTop: `1px solid ${C.borderSoft}` }}><td className="py-1" style={{ color: C.textMuted }}>{r.label}</td><td className="text-right" style={{ color: r.watershed ? C.rust : C.text }}>{r.p}% {r.watershed && <span className="text-[9px] font-normal">← 本格下落</span>}</td></tr>))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {(sa.level === "confirmed5" || sa.level === "deep8") && (
+        <div className="rounded px-3 py-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
+          <div className="flex items-center gap-1.5 mb-1"><AlertTriangle size={13} style={{ color: C.rust }} /><span className="text-sm font-bold" style={{ color: C.rust }}>警戒度：{sa.warnLabel}</span></div>
+          <div className="text-xs" style={{ color: C.textMuted }}>推奨：{sa.action}</div>
+        </div>
+      )}
+
+      <div>
+        <div className="text-xs mb-2" style={{ color: C.textDim }}>バックテスト：DD3→5%の速度別・大暴落率（S&P500 69年・DD5%到達100局面）</div>
+        <table className="w-full text-xs mono">
+          <thead><tr style={{ color: C.textDim }}><th className="text-left font-normal py-1">速度区分</th><th>件数</th><th>大暴落率<br />（最終DD-15%以上）</th><th>平均最終DD</th></tr></thead>
+          <tbody>
+            {SPEED_35_BACKTEST.map((r) => (
+              <tr key={r.label} style={{ borderTop: `1px solid ${C.borderSoft}`, background: sa.backtestRow?.label === r.label ? `${C.teal}1a` : "transparent" }}>
+                <td className="py-1" style={{ color: C.textMuted }}>{r.label}</td>
+                <td className="text-center">{r.n}</td>
+                <td className="text-center" style={{ color: r.crashRate >= 30 ? C.rust : r.crashRate === 0 ? C.teal : C.text }}>{r.crashRate}%</td>
+                <td className="text-center">{r.avgFinalDD !== null ? `${r.avgFinalDD}%` : "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div className="text-[10px] mt-1.5" style={{ color: C.textDim }}>大暴落15件のうち11件（73%）が「5日以内の急落型」で始まりました。</div>
+      </div>
+
+      <div>
+        <div className="text-xs mb-2" style={{ color: C.textDim }}>節目の進行確率（速度と併用、DD8%突破以降はこちらが主役）</div>
+        {SPEED_ALERT_PROGRESSION.map((row) => (
+          <div key={row.from} className="flex items-center gap-2 mb-1.5">
+            <span className="mono text-xs w-20" style={{ color: C.textMuted }}>{row.from}%→{row.to}%</span>
+            <div className="flex-1 h-2 rounded-full" style={{ background: C.panel2 }}><div className="h-2 rounded-full" style={{ width: `${row.p}%`, background: row.watershed ? C.rust : C.teal }} /></div>
+            <span className="mono text-xs w-10 text-right">{row.p}%</span>
+            {row.watershed && <span className="text-[9px] shrink-0" style={{ color: C.rust }}>分水嶺</span>}
+          </div>
+        ))}
+      </div>
+
+      <TrackRecordContent currentT={d.episode.currentT} />
+
+      <div className="text-[11px] leading-relaxed rounded px-3 py-2" style={{ color: C.textDim, background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
+        <div className="font-semibold mb-1" style={{ color: C.textMuted }}>重要な限界（必ずお読みください）</div>
+        ・急落警報（5日以内）の66%は空振り（浅く終わる）です。「確信」ではなく「警戒レベルを上げる」材料として使ってください。<br />
+        ・緩やかに始まる大暴落もあります（2007年金融危機はspeed_3to5=13日で最終DD-57%でした）。緩慢でも油断しないでください。<br />
+        ・DD8%突破後は速度の予測力が落ち、節目の進行確率（上表）が判断の主役になります。<br />
+        ・これらはS&P500 69年（1957–2026）・113下落局面のバックテストに基づく傾向であり、確定予測ではありません。DD深度・金の動き・自己の判断と併用する補助指標です。本ツールは投資助言ではなく判断補助です。
+      </div>
     </div>
   );
 }
@@ -1619,7 +1812,7 @@ export default function DDDashboard() {
     <div className="w-full flex flex-col" style={{ background: C.bg, color: C.text, height: "100dvh", overflow: "hidden", fontFamily: "'Zen Kaku Gothic New','Hiragino Kaku Gothic ProN',sans-serif" }}>
       <style>{`.mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }`}</style>
 
-      {modal?.type === "trackRecord" && <FullScreenModal title="過去のトラックレコード（1957–2026・69年）" onClose={() => setModal(null)}><TrackRecordContent currentT={d.episode.currentT} /></FullScreenModal>}
+      {modal?.type === "speedAlert" && <FullScreenModal title="DD加速度アラート（速度・経過日数の法則）" onClose={() => setModal(null)}><SpeedAlertModalContent d={d} /></FullScreenModal>}
       {modal?.type === "portfolio" && <FullScreenModal title="ポートフォリオ構成表" onClose={() => setModal(null)}><PortfolioTableContent view={pieView} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
       {modal?.type === "ddTable" && <FullScreenModal title="DD毎のA〜E配分表" onClose={() => setModal(null)}><DDTableContent modelRow={d.modelRow} holdings={holdings} /></FullScreenModal>}
       {modal?.type === "rank" && <FullScreenModal title={`${modal.rank}ランクの保有銘柄`} onClose={() => setModal(null)}><RankHoldingsContent rank={modal.rank} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
@@ -1642,7 +1835,7 @@ export default function DDDashboard() {
         <DepthGauge dd={d.currentDD} />
 
         <div className="flex-1 flex flex-col gap-0 p-2 min-w-0">
-          <div style={{ height: 116, flexShrink: 0 }}><StatusPanel d={d} onOpenTrackRecord={() => setModal({ type: "trackRecord" })} /></div>
+          <div style={{ height: 116, flexShrink: 0 }}><StatusPanel d={d} onOpenSpeedAlert={() => setModal({ type: "speedAlert" })} /></div>
 
           <div className="flex-1 flex flex-col" style={{ gap: 0, minHeight: 0 }}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 380px", gap: 4, flex: 1, minHeight: 0 }}>
