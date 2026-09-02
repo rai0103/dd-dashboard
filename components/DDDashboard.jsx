@@ -250,10 +250,10 @@ function computeTrackRecordStats(FULL, episodes) {
   const ddFreqPerYear = (n > 0 && totalYears > 0) ? n / totalYears : null;
 
   const reachCount = (t) => completed.filter((e) => e.troughDD <= t).length;
-  const finalReach = [{ label: "-3%", p: n > 0 ? 100 : null, n }];
-  for (const t of FINAL_REACH_LEVELS) finalReach.push({ label: `${t}%`, p: n > 0 ? Number(((reachCount(t) / n) * 100).toFixed(1)) : null, n: reachCount(t) });
+  const finalReach = [{ label: "-3%", p: n > 0 ? 100 : null, hits: n }];
+  for (const t of FINAL_REACH_LEVELS) finalReach.push({ label: `${t}%`, p: n > 0 ? Number(((reachCount(t) / n) * 100).toFixed(1)) : null, hits: reachCount(t) });
   const beyond50 = completed.filter((e) => e.troughDD < -50).length;
-  finalReach.push({ label: "-50%以上", p: n > 0 ? Number(((beyond50 / n) * 100).toFixed(1)) : null, n: beyond50 });
+  finalReach.push({ label: "-50%以上", p: n > 0 ? Number(((beyond50 / n) * 100).toFixed(1)) : null, hits: beyond50 });
 
   // 深さを問わず「ATH更新→次のATH更新」の間に発生した全ての下落局面（ごく浅い押し目も含む）のうち、-3%まで到達した割合。
   const allDips = findDDEpisodes(FULL, 0).filter((e) => !e.isOngoing);
@@ -262,11 +262,11 @@ function computeTrackRecordStats(FULL, episodes) {
   const dipToD3Rate = dipCount > 0 ? Number(((dipToD3Count / dipCount) * 100).toFixed(1)) : null;
 
   const progression = [
-    { from: "dip", to: -3, label: "下落発生→-3%", p: dipToD3Rate, n: dipCount },
+    { from: "dip", to: -3, label: "下落発生→-3%", p: dipToD3Rate, hits: dipToD3Count, n: dipCount },
     ...PROGRESSION_PAIRS.map(([from, to]) => {
       const reachedFrom = from === -3 ? completed : completed.filter((e) => e.troughDD <= from);
       const reachedTo = reachedFrom.filter((e) => e.troughDD <= to);
-      return { from, to, p: reachedFrom.length > 0 ? Number(((reachedTo.length / reachedFrom.length) * 100).toFixed(1)) : null, n: reachedFrom.length, watershed: from === -8 && to === -10 };
+      return { from, to, p: reachedFrom.length > 0 ? Number(((reachedTo.length / reachedFrom.length) * 100).toFixed(1)) : null, hits: reachedTo.length, n: reachedFrom.length, watershed: from === -8 && to === -10 };
     }),
   ];
 
@@ -1069,16 +1069,16 @@ function FullScreenModal({ title, onClose, children }) {
 
 function TrackRecordContent({ currentT, trackRecord }) {
   const tr = trackRecord;
-  const pct = (v) => v === null ? "—" : `${v}%`;
+  const pct = (v, hits, n) => v === null ? "—" : `${v}%${(hits !== undefined && n !== undefined) ? `（${hits}/${n}）` : ""}`;
   return (
     <div className="grid grid-cols-2 gap-x-8 gap-y-6">
       <div>
         <div className="text-xs mb-3" style={{ color: C.textDim }}>節目間の進行確率<span className="ml-1" style={{ color: C.textDim }}>（実データ n={tr.n}局面）</span></div>
         {tr.progression.map((row) => (
-          <div key={row.from} className="grid items-center gap-2 mb-1.5" style={{ gridTemplateColumns: "92px 1fr 34px 44px" }}>
+          <div key={row.from} className="grid items-center gap-2 mb-1.5" style={{ gridTemplateColumns: "92px 1fr 76px 44px" }}>
             <span className="mono text-xs" style={{ color: row.from === currentT ? C.text : C.textMuted }}>{row.label ?? `${row.from}%→${row.to}%`}</span>
             <div className="h-2 rounded-full" style={{ background: C.panel2 }}><div className="h-2 rounded-full" style={{ width: `${row.p ?? 0}%`, background: row.watershed ? C.rust : C.teal }} /></div>
-            <span className="mono text-xs text-right">{pct(row.p)}</span>
+            <span className="mono text-xs text-right">{pct(row.p, row.hits, row.n)}</span>
             <span className="text-[9px]" style={{ color: C.rust }}>{row.watershed ? "分水嶺" : ""}</span>
           </div>
         ))}
@@ -1086,10 +1086,10 @@ function TrackRecordContent({ currentT, trackRecord }) {
       <div>
         <div className="text-xs mb-3" style={{ color: C.textDim }}>DD-3%到達からの最終到達確率<span className="ml-1" style={{ color: C.textDim }}>（実データ n={tr.n}局面）</span></div>
         {tr.finalReach.map((r) => (
-          <div key={r.label} className="grid items-center gap-2 mb-1.5" style={{ gridTemplateColumns: "56px 1fr 34px 76px" }}>
+          <div key={r.label} className="grid items-center gap-2 mb-1.5" style={{ gridTemplateColumns: "56px 1fr 76px 76px" }}>
             <span className="mono text-xs" style={{ color: C.textMuted }}>{r.label}</span>
             <div className="h-2 rounded-full" style={{ background: C.panel2 }}><div className="h-2 rounded-full" style={{ width: `${Math.min(100, (r.p ?? 0) * 2)}%`, background: C.amber }} /></div>
-            <span className="mono text-xs text-right">{pct(r.p)}</span>
+            <span className="mono text-xs text-right">{pct(r.p, r.hits, tr.n)}</span>
             <span className="text-[10px] text-right" style={{ color: C.textDim }}>{r.p !== null ? freqLabelFromP(r.p, tr.ddFreqPerYear) : "—"}</span>
           </div>
         ))}
