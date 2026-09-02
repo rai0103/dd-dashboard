@@ -682,12 +682,17 @@ function buildComparisonData(currentEpisodeCurve) {
 
 /* ---------------- period selector ---------------- */
 const PERIODS = [{ key: "1M", label: "1ヶ月", days: 21 }, { key: "3M", label: "3ヶ月", days: 63 }, { key: "6M", label: "6ヶ月", days: 126 }, { key: "YTD", label: "年初来" }, { key: "1Y", label: "1年", days: 252 }, { key: "3Y", label: "3年", days: 756 }, { key: "5Y", label: "5年", days: 1260 }, { key: "10Y", label: "10年", days: 2520 }, { key: "20Y", label: "20年", days: 5040 }, { key: "30Y", label: "30年", days: 7560 }, { key: "MAX", label: "最長" }];
-function sliceForPeriod(FULL, last, key) {
+// 期間キーから、間引き前（フル解像度）の対象範囲を切り出す。期間の正確な開始・終了日/騰落%等の算出はこちらを使う。
+function periodDateRange(FULL, last, key) {
   let sliced;
   if (key === "MAX") sliced = FULL;
   else if (key === "YTD") { const y = last.date.getFullYear(); sliced = FULL.filter((p) => p.date.getFullYear() === y); }
   else { const days = PERIODS.find((p) => p.key === key).days; sliced = FULL.slice(-days); }
   if (!sliced.length) sliced = FULL;
+  return sliced;
+}
+function sliceForPeriod(FULL, last, key) {
+  const sliced = periodDateRange(FULL, last, key);
   const step = Math.max(1, Math.ceil(sliced.length / 260));
   // 単純な等間隔の間引きだと、バケット内で一瞬だけ付けた高値（ATH更新）や急落の底値がサンプル点から漏れ、
   // 長期間表示でDD%が実際の値動きより滑らかに（＝評価額の形をなぞっただけのように）見えてしまう。
@@ -703,6 +708,16 @@ function sliceForPeriod(FULL, last, key) {
   }
   if (out[out.length - 1] !== sliced[sliced.length - 1]) out.push(sliced[sliced.length - 1]);
   return out;
+}
+// 選択期間内のDD-3%以上の発生回数・最大DD・評価額の騰落%、および期間内に大底が収まっている局面（あれば）を算出する。
+// フル解像度のperiodRange（間引き前）から直接計算するため、チャートの間引き表示の影響を受けない。
+function computePeriodStats(periodRange, episodes) {
+  const start = periodRange[0], end = periodRange[periodRange.length - 1];
+  const periodReturn = Number((((end.price / start.price) - 1) * 100).toFixed(1));
+  const maxDD = Number(Math.min(...periodRange.map((p) => p.dd)).toFixed(1));
+  const eventsInRange = episodes.filter((e) => e.troughDate >= start.date && e.troughDate <= end.date);
+  const worstEpisode = eventsInRange.reduce((worst, e) => (!worst || e.troughDD < worst.troughDD ? e : worst), null);
+  return { periodReturn, maxDD, ddCount: eventsInRange.length, worstEpisode };
 }
 function fmtAxisDate(d, rangeDays) { if (rangeDays > 900) return `${d.getFullYear()}`; if (rangeDays > 120) return `${d.getFullYear()}/${d.getMonth() + 1}`; return `${d.getMonth() + 1}/${d.getDate()}`; }
 function fmtYMD(d) { return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`; }
@@ -768,8 +783,29 @@ function ChartMarkers({ xAxisMap, yAxisMap, points, chartWidth }) {
   );
 }
 
+// 局面の底値マーカー用ラベルを組み立てる。選択期間内で最も深い局面（大底）の場合のみ、末尾に「（大底）」と
+// 「DD開始～大底」「大底～回復」の営業日数を付記する。
+function troughLabel(athIdx, troughIdx, troughDate, troughPrice, troughDD, recoveryIdx, isWorst) {
+  const base = `$${troughPrice.toFixed(2)}（${fmtYMD(troughDate)}）DD${troughDD.toFixed(1)}%`;
+  if (!isWorst) return base;
+  const daysToTrough = troughIdx - athIdx;
+  const daysToRecovery = recoveryIdx != null ? recoveryIdx - troughIdx : null;
+  return `${base}（大底）　DD開始～大底：${daysToTrough}日間、大底～回復：${daysToRecovery !== null ? `${daysToRecovery}日間` : "未回復"}`;
+}
+// 選択期間の要約（DD-3%以上の発生回数・最大DD・評価額の騰落%）を、チャート上に常時表示する固定ウィンドウ。
+function PeriodStatsOverlay({ periodStats }) {
+  return (
+    <div className="absolute top-1.5 left-2 rounded px-2 py-1" style={{ background: `${C.panel}dd`, border: `1px solid ${C.borderSoft}`, zIndex: 5, pointerEvents: "none" }}>
+      <div className="mono text-[10px] flex items-center gap-2.5 whitespace-nowrap" style={{ color: C.textMuted }}>
+        <span>この期間 DD-3%以上：<b style={{ color: C.text }}>{periodStats.ddCount}回</b></span>
+        <span>最大DD：<b style={{ color: depthColor(periodStats.maxDD) }}>{periodStats.maxDD.toFixed(1)}%</b></span>
+        <span>騰落：<b style={{ color: periodStats.periodReturn >= 0 ? C.teal : C.rust }}>{periodStats.periodReturn >= 0 ? "+" : ""}{periodStats.periodReturn.toFixed(1)}%</b></span>
+      </div>
+    </div>
+  );
+}
 /* ---------------- reusable evaluation/DD composed chart ---------------- */
-function EvalDDChartBody({ chartData, rangeDays, d, hidden, withBrush = false, fontSize = 10, width, height }) {
+function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBrush = false, fontSize = 10, width, height }) {
   const chartFirst = chartData[0].date, chartLast = chartData[chartData.length - 1].date;
   const markerFontSize = Math.max(8, fontSize - 1);
   const isShortTerm = rangeDays <= 200; // 1・3・6ヶ月＝ラベル常時表示、1年以上＝点のみ＋ホバーで詳細
@@ -778,27 +814,32 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, withBrush = false, f
   const markerPoints = [];
   if (!hidden.price) {
     const seenIdx = new Set();
-    const addPt = (idx, date, price, color, label) => {
+    const addPt = (idx, date, price, color, label, forceDot) => {
       if (seenIdx.has(idx) || !(chartFirst <= date && date <= chartLast)) return;
       seenIdx.add(idx);
       const p = nearestChartPoint(chartData, date);
-      markerPoints.push({ date: p.date, price: p.price, color, anchor: "middle", fontSize: markerFontSize, label, dotOnly: !isShortTerm });
+      markerPoints.push({ date: p.date, price: p.price, color, anchor: "middle", fontSize: markerFontSize, label, dotOnly: forceDot || !isShortTerm });
     };
     // 過去の各DD局面（ATH→底値→回復）
     for (const ep of d.episodes) {
       if (ep.isOngoing) continue;
       addPt(ep.athIdx, ep.athDate, ep.athPrice, C.teal, `$${ep.athPrice.toFixed(2)}（${fmtYMD(ep.athDate)}）`);
-      if (ep.troughIdx !== ep.athIdx) addPt(ep.troughIdx, ep.troughDate, ep.troughPrice, C.rust, `$${ep.troughPrice.toFixed(2)}（${fmtYMD(ep.troughDate)}）DD${ep.troughDD.toFixed(1)}%`);
+      if (ep.troughIdx !== ep.athIdx) {
+        const isWorst = periodStats?.worstEpisode?.troughIdx === ep.troughIdx;
+        // 大底の詳細（開始～大底・大底～回復の日数）は長くなるため、常時表示ラベルではなくホバー時の吹き出し（幅がクランプされ画面外にはみ出ない）で表示する。
+        addPt(ep.troughIdx, ep.troughDate, ep.troughPrice, C.rust, troughLabel(ep.athIdx, ep.troughIdx, ep.troughDate, ep.troughPrice, ep.troughDD, ep.recoveryIdx, isWorst), isWorst);
+      }
       if (ep.recoveryIdx !== ep.troughIdx) addPt(ep.recoveryIdx, ep.recoveryDate, ep.recoveryPrice, C.blue, `$${ep.recoveryPrice.toFixed(2)}（${fmtYMD(ep.recoveryDate)}）`);
     }
     // 現在進行中の局面（ATH→底値→現在）
     addPt(d.episode.athIdx, d.athDate, d.currentATH, C.teal, `$${d.currentATH.toFixed(2)}（${fmtYMD(d.athDate)}）`);
     const troughIsToday = d.trough.i === d.last.i; // 底値がまだ今日（未回復）の場合は現在値マーカーと重なるため統合する
-    if (!troughIsToday && d.trough.i !== d.episode.athIdx) addPt(d.trough.i, d.trough.date, d.trough.price, C.rust, `$${d.trough.price.toFixed(2)}（${fmtYMD(d.trough.date)}）DD${d.trough.dd.toFixed(1)}%`);
+    const troughIsWorst = periodStats?.worstEpisode?.troughIdx === d.trough.i;
+    if (!troughIsToday && d.trough.i !== d.episode.athIdx) addPt(d.trough.i, d.trough.date, d.trough.price, C.rust, troughLabel(d.episode.athIdx, d.trough.i, d.trough.date, d.trough.price, d.trough.dd, null, troughIsWorst), troughIsWorst);
     const currentLabel = troughIsToday
-      ? `$${d.currentPrice.toFixed(2)}（${fmtYMD(d.last.date)}）DD${d.currentDD.toFixed(1)}%`
+      ? troughLabel(d.episode.athIdx, d.trough.i, d.trough.date, d.trough.price, d.currentDD, null, troughIsWorst)
       : `$${d.currentPrice.toFixed(2)}（${fmtYMD(d.last.date)}）`;
-    markerPoints.push({ date: chartLast, price: d.currentPrice, color: depthColor(d.currentDD), anchor: "end", fontSize: markerFontSize, label: currentLabel, dotOnly: !isShortTerm, isCurrent: true });
+    markerPoints.push({ date: chartLast, price: d.currentPrice, color: depthColor(d.currentDD), anchor: "end", fontSize: markerFontSize, label: currentLabel, dotOnly: (troughIsToday && troughIsWorst) || !isShortTerm, isCurrent: true });
   }
   return (
     <ComposedChart width={width} height={height} data={chartData} margin={{ top: 12, right: 44, left: 0, bottom: withBrush ? 0 : 0 }}>
@@ -822,16 +863,17 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, withBrush = false, f
     </ComposedChart>
   );
 }
-function DDChartModalContent({ chartData, rangeDays, d, hidden, toggle, period, setPeriod }) {
+function DDChartModalContent({ chartData, rangeDays, d, hidden, toggle, period, setPeriod, periodStats }) {
   return (
     <div className="h-full flex flex-col">
       <div className="flex items-center gap-3 mb-3 flex-wrap">
         <ClickLegend items={[{ key: "price", label: "評価額 / ATH", color: C.teal }, { key: "dd", label: "DD%", color: C.rust }]} hidden={hidden} onToggle={toggle} />
         <div className="flex gap-0.5">{PERIODS.map((p) => (<button key={p.key} onClick={() => setPeriod(p.key)} className="text-[11px] px-2 py-1 rounded" style={{ color: period === p.key ? C.bg : C.textMuted, background: period === p.key ? C.teal : "transparent", fontWeight: period === p.key ? 700 : 400 }}>{p.label}</button>))}</div>
       </div>
-      <div style={{ height: "min(70vh, 640px)" }}>
+      <div className="relative" style={{ height: "min(70vh, 640px)" }}>
+        <PeriodStatsOverlay periodStats={periodStats} />
         <ResponsiveContainer width="100%" height="100%" key={period}>
-          <EvalDDChartBody chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} withBrush fontSize={12} />
+          <EvalDDChartBody chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} periodStats={periodStats} withBrush fontSize={12} />
         </ResponsiveContainer>
       </div>
       <div className="mt-3 text-[10px]" style={{ color: C.textDim }}>下部のスクロールバーをドラッグして期間を絞り込み（ズーム）できます。グラフ上にカーソルを合わせるとツールチップが表示されます。</div>
@@ -2203,6 +2245,8 @@ export default function DDDashboard() {
   const d = useMemo(() => computeAll(rawSeries), [rawSeries]);
   const chartData = useMemo(() => sliceForPeriod(d.FULL, d.last, period), [d.FULL, d.last, period]);
   const rangeDays = useMemo(() => { const f = chartData[0].date, l = chartData[chartData.length - 1].date; return Math.round((l - f) / 86400000); }, [chartData]);
+  const periodRange = useMemo(() => periodDateRange(d.FULL, d.last, period), [d.FULL, d.last, period]);
+  const periodStats = useMemo(() => computePeriodStats(periodRange, d.episodes), [periodRange, d.episodes]);
   const comparisonData = useMemo(() => buildComparisonData(d.currentEpisodeCurve), [d.currentEpisodeCurve]);
   const toggle = (k) => setHidden((p) => ({ ...p, [k]: !p[k] }));
   const toggleCrash = (k) => setHiddenCrash((p) => ({ ...p, [k]: !p[k] }));
@@ -2241,7 +2285,7 @@ export default function DDDashboard() {
       {modal?.type === "ddTable" && <FullScreenModal title="DD毎のA〜E配分表" onClose={() => setModal(null)}><DDTableContent modelRow={d.modelRow} holdings={holdings} /></FullScreenModal>}
       {modal?.type === "rank" && <FullScreenModal title={`${modal.rank}ランクの保有銘柄`} onClose={() => setModal(null)}><RankHoldingsContent rank={modal.rank} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
       {modal?.type === "crash" && <FullScreenModal title={`${modal.crash.name}（${modal.crash.start} 〜）と現状の比較`} onClose={() => setModal(null)}><CrashModalContent crash={modal.crash} daysSinceDDStart={d.daysSinceDDStart} currentDD={d.currentDD} currentEpisodeCurve={d.currentEpisodeCurve} /></FullScreenModal>}
-      {modal?.type === "ddChart" && <FullScreenModal title="評価額（左軸） / DD%（右軸）" onClose={() => setModal(null)}><DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} /></FullScreenModal>}
+      {modal?.type === "ddChart" && <FullScreenModal title="評価額（左軸） / DD%（右軸）" onClose={() => setModal(null)}><DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} /></FullScreenModal>}
       {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} onBackfill={handleBackfill} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} />}
       {modal?.type === "checkpointSettings" && <FullScreenModal title="チェックポイント設定" onClose={() => setModal(null)}><CheckpointSettingsContent checkpoints={checkpoints} onCheckpointChange={handleCheckpointChange} holdings={holdings} /></FullScreenModal>}
       {modal?.type === "summary" && <FullScreenModal title="詳細サマリー出力（AI相談用）" onClose={() => setModal(null)}><SummaryModalContent d={d} holdings={holdings} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} blocks={blocks} rankLabels={rankLabels} lifecycle={lifecycle} onLifecycleChange={handleLifecycleChange} fixedPositions={fixedPositions} onFixedPositionChange={handleFixedPositionChange} prevSnapshot={prevSnapshot} onSaveSnapshot={handleSaveSnapshot} /></FullScreenModal>}
@@ -2281,9 +2325,10 @@ export default function DDDashboard() {
               >
                 {chartTab === "normal" ? (
                   <div className="h-full flex flex-col cursor-zoom-in" title="クリックで拡大表示" onClick={() => setModal({ type: "ddChart" })}>
-                    <div className="flex-1 min-h-0">
+                    <div className="relative flex-1 min-h-0">
+                      <PeriodStatsOverlay periodStats={periodStats} />
                       <ResponsiveContainer width="100%" height="100%" key={period}>
-                        <EvalDDChartBody chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} />
+                        <EvalDDChartBody chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} periodStats={periodStats} />
                       </ResponsiveContainer>
                     </div>
                   </div>
