@@ -80,6 +80,12 @@ function parseDateOnly(str) {
   if (!m) return new Date(NaN);
   return new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
 }
+// <input type="date">のデフォルト値用：ブラウザのローカルタイムゾーンの「今日」を"YYYY-MM-DD"で返す。
+// new Date().toISOString()はUTC基準のため、UTCより進んだタイムゾーン（JST等）ではローカルの日付が変わった直後から
+// 最大9時間、UTC側はまだ前日のままで「今日」の初期値が実際の前日になってしまう（気づかず入力すると前日付で記録される）不具合があった。
+function localYMD(date = new Date()) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
 function parseStooqCSV(text) {
   const normalized = text.replace(BOM_RE, "").trim(); // 先頭BOM・前後の空白を除去
   const lines = normalized.split(/\r?\n/).filter((l) => l.trim() !== ""); // \r\n(Windows)・\n(Unix)いずれも対応し、空行は除外
@@ -1522,9 +1528,9 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
   const [dataset, setDataset] = useState("voo"); // "voo" | "holdings"
   const [instrument, setInstrument] = useState("sp500"); // "sp500" | "voo" | "spy"（voo/spyのCSV/手動入力/削除の対象切り替え）
   const [tab, setTab] = useState("csv");
-  const [instrManualDate, setInstrManualDate] = useState(new Date().toISOString().slice(0, 10));
+  const [instrManualDate, setInstrManualDate] = useState(localYMD());
   const [instrManualPrice, setInstrManualPrice] = useState("");
-  const [manualDate, setManualDate] = useState(new Date().toISOString().slice(0, 10));
+  const [manualDate, setManualDate] = useState(localYMD());
   const [manualPrice, setManualPrice] = useState("");
   const [fileName, setFileName] = useState(null);
   const [fileMsg, setFileMsg] = useState(null);
@@ -2277,6 +2283,11 @@ function SummaryModalContent({ d, dVoo, dSpy, holdings, currentHoldingPct, effec
   const exposure = useMemo(() => computeRealExposure(holdings), [holdings]);
   const diff = useMemo(() => computeHoldingsDiff(prevSnapshot, holdings), [prevSnapshot, holdings]);
   const uniqueNames = useMemo(() => [...new Set(holdings.map((h) => h.name))], [holdings]);
+  // 「固定ポジション」の一括選択：条件に合う保有銘柄名（未選択のもののみ）をまとめてチェック状態にする。既にチェック済みの理由欄は上書きしない。
+  const bulkSelectFixedPositions = (predicate) => {
+    const names = new Set(holdings.filter(predicate).map((h) => h.name));
+    names.forEach((name) => { if (fixedPositions[name] === undefined) onFixedPositionChange(name, true, ""); });
+  };
 
   // このサマリーを閉じた時点の保有内容を「次回比較用」のスナップショットとして保存する（開いている間は前回分との差分を表示し続ける）。
   useEffect(() => () => onSaveSnapshot(holdings, generatedAt), []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -2357,7 +2368,20 @@ function SummaryModalContent({ d, dVoo, dSpy, holdings, currentHoldingPct, effec
               <span className="text-[10px]" style={{ color: C.textDim }}>倍</span>
             </div>
           </div>
-          <label className="text-[10px] block mb-1" style={{ color: C.textDim }}>固定ポジション（売らない前提の保有・調整対象外としてサマリーに明示）</label>
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+            <label className="text-[10px]" style={{ color: C.textDim }}>固定ポジション（売らない前提の保有・調整対象外としてサマリーに明示）</label>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[9px]" style={{ color: C.textDim }}>一括選択：</span>
+              {[
+                { label: "shin口座", pred: (h) => h.owner === "shin" },
+                { label: "saki口座", pred: (h) => h.owner === "saki" },
+                { label: "NISA口座", pred: (h) => h.account.includes("NISA") },
+                { label: "特定口座", pred: (h) => h.account === "特定" },
+              ].map(({ label, pred }) => (
+                <button key={label} onClick={() => bulkSelectFixedPositions(pred)} className="text-[10px] px-2 py-0.5 rounded" style={{ color: C.textMuted, background: "transparent", border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>{label}</button>
+              ))}
+            </div>
+          </div>
           <div className="flex flex-col gap-1 p-2 rounded" style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, maxHeight: 160, overflowY: "auto" }}>
             {uniqueNames.map((name) => {
               const checked = fixedPositions[name] !== undefined;
