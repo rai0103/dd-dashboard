@@ -1908,6 +1908,117 @@ function computeHoldingsDiff(prevSnapshot, holdings) {
   }
   return { prevDate: prevSnapshot.generatedAt, sold, bought, changed };
 }
+// DD-3%到達時のリバランス提案：D+EランクがDD-3%モデルの目標比率を超過している分を、
+// Eランク優先・金額降順で売却候補に積み上げ、売却額の半分をSP500カテゴリーへの買付、半分を現金化する前提でシミュレーションする。
+// 固定ポジション（fixedPositions）は売却候補から除外する。現在のDDが実際に-3%以下かどうかに関わらず常に算出する（到達時のプレビュー）。
+function computeDD3RebalancePlan(holdings, currentHoldingPct, fixedPositions) {
+  const total = holdingsTotal(holdings);
+  const target = MODEL_ROWS.find((r) => r.label === "DD-3%");
+  const deTargetPct = target.D + target.E;
+  const deCurrentPct = currentHoldingPct.D + currentHoldingPct.E;
+  const excessPct = deCurrentPct - deTargetPct;
+  if (total <= 0 || excessPct <= 0.05) return { needed: false, target, total, deTargetPct, deCurrentPct };
+
+  const sellGoal = Math.round((excessPct / 100) * total);
+  const rankOrder = { E: 0, D: 1 };
+  const candidates = holdings
+    .filter((h) => (h.rank === "D" || h.rank === "E") && fixedPositions[h.name] === undefined)
+    .slice()
+    .sort((a, b) => (rankOrder[a.rank] - rankOrder[b.rank]) || (b.amount - a.amount));
+
+  let remaining = sellGoal;
+  const picks = [];
+  for (const h of candidates) {
+    if (remaining <= 0) break;
+    const sellAmount = Math.min(h.amount, remaining);
+    picks.push({ name: h.name, rank: h.rank, amount: h.amount, sellAmount });
+    remaining -= sellAmount;
+  }
+  const sellTotal = sellGoal - remaining; // D/E保有だけでは目標額に届かない場合は実際に売却可能な額にとどめる
+  const buySP500 = Math.round(sellTotal / 2);
+  const buyCash = sellTotal - buySP500;
+
+  const sellByRank = { D: 0, E: 0 };
+  for (const p of picks) sellByRank[p.rank] += p.sellAmount;
+
+  const currentAmount = Object.fromEntries(CATS.map((c) => [c, (currentHoldingPct[c] / 100) * total]));
+  const newAmount = {
+    A: currentAmount.A + buyCash,
+    B: currentAmount.B,
+    C: currentAmount.C + buySP500,
+    D: currentAmount.D - sellByRank.D,
+    E: currentAmount.E - sellByRank.E,
+  };
+  // 達成度：この提案の実行で「現状→目標」のギャップ（gapBefore）がどれだけ縮まるか（gapAfter）を割合で示す。
+  const projection = CATS.map((cat) => {
+    const curPct = currentHoldingPct[cat];
+    const newPct = (newAmount[cat] / total) * 100;
+    const tgtPct = target[cat];
+    const gapBefore = curPct - tgtPct;
+    const gapAfter = newPct - tgtPct;
+    const achievement = Math.abs(gapBefore) < 0.05 ? 100 : Math.max(0, Math.min(100, (1 - Math.abs(gapAfter) / Math.abs(gapBefore)) * 100));
+    return { cat, curPct, newPct, tgtPct, achievement };
+  });
+
+  const sp500Candidate = holdings.filter((h) => h.category === "SP500").reduce((best, h) => (!best || h.amount > best.amount ? h : best), null);
+
+  return { needed: true, target, total, deTargetPct, deCurrentPct, sellGoal, sellTotal, shortfall: sellGoal - sellTotal, picks, buySP500, buyCash, projection, sp500Candidate };
+}
+function buildDD3RebalanceLines(plan, amt) {
+  const L = [];
+  L.push("【DD-3%リバランス提案】");
+  if (!plan.needed) {
+    L.push(`現在のD+E配分（${plan.deCurrentPct.toFixed(1)}%）はDD-3%到達時モデルの目標（D+E ${plan.deTargetPct}%）の範囲内のため、追加の売却提案はありません。`);
+    return L;
+  }
+  L.push(`売却対象ランク: D・E ランクから${amt(plan.sellTotal)}を売却（世帯全体の${((plan.sellTotal / plan.total) * 100).toFixed(1)}%）`);
+  if (plan.shortfall > 0) L.push(`※ D・E保有の合計だけでは目標額${amt(plan.sellGoal)}に${amt(plan.shortfall)}不足しています（保有分を全て売却する前提の金額です）。`);
+  L.push("売却銘柄候補（ランク順）:");
+  if (!plan.picks.length) L.push("  （固定ポジション以外にD・E保有がありません）");
+  for (const p of plan.picks) L.push(`  * ${p.name} ${amt(p.amount)}（${p.rank}ランク） → 売却推奨額 ${amt(p.sellAmount)}`);
+  L.push("");
+  L.push("買付提案:");
+  L.push(`  * SP500関連: 売却額の50% = ${amt(plan.buySP500)} 買付推奨${plan.sp500Candidate ? `（例）${plan.sp500Candidate.name} へ追加` : "（既存SP500カテゴリー保有なし・新規検討）"}`);
+  L.push(`  * 現金ストック: 売却額の50% = ${amt(plan.buyCash)} を現金化`);
+  L.push("");
+  L.push("実行後のポートフォリオ（予想）:");
+  for (const p of plan.projection) L.push(`  * ${p.cat}: ${p.curPct.toFixed(1)}% → ${p.newPct.toFixed(1)}%（目標${p.tgtPct}%・達成度${p.achievement.toFixed(0)}%）`);
+  return L;
+}
+// 保有銘柄詳細（楽天証券CSVの内容をテキスト化）：口座主ごとの明細テーブル・ランク別/カテゴリー別サマリー。
+// 銘柄コードはCSVに含まれる場合のみ銘柄名の先頭に付与済み（parseRakutenCSV参照）のため、別列には分けていない。
+// 前日比はCSVから取得できないため「—」表示（Rakuten CSVに前日比列が含まれれば対応可能）。
+function buildHoldingsDetailLines(holdings, amt) {
+  const total = holdingsTotal(holdings);
+  const L = [];
+  L.push("【保有銘柄詳細（楽天証券CSVデータ）】");
+  L.push("");
+  const ownerLabel = { shin: "Shin", saki: "Saki" };
+  const owners = [...new Set(holdings.map((h) => h.owner))];
+  for (const owner of owners) {
+    const rows = [...holdings.filter((h) => h.owner === owner)].sort((a, b) => b.amount - a.amount);
+    const subtotal = rows.reduce((s, h) => s + h.amount, 0);
+    L.push(`■ ${ownerLabel[owner] ?? owner}口座の保有銘柄`);
+    L.push("銘柄名 | カテゴリー | ランク | 口座種別 | 評価額 | 構成比 | 前日比");
+    for (const h of rows) L.push(`${h.name} | ${h.category} | ${h.rank} | ${h.account} | ${amt(h.amount)} | ${((h.amount / (total || 1)) * 100).toFixed(1)}% | —`);
+    L.push(`小計: ${amt(subtotal)}（世帯全体に占める割合: ${((subtotal / (total || 1)) * 100).toFixed(1)}%）`);
+    L.push("");
+  }
+  L.push("※前日比は現在のCSV取り込み内容に含まれないため「—」表示です。");
+  L.push("");
+  L.push("■ ランク別保有銘柄サマリー");
+  for (const cat of CATS) {
+    const rows = holdings.filter((h) => h.rank === cat);
+    L.push(`${cat}: ${rows.length}件 ${amt(rows.reduce((s, h) => s + h.amount, 0))}`);
+  }
+  L.push("");
+  L.push("■ カテゴリー別保有銘柄サマリー");
+  for (const g of sortGroupedForView(groupByField(holdings, "category"), "category")) {
+    const count = holdings.filter((h) => h.category === g.name).length;
+    L.push(`${g.name}: ${count}件 ${amt(g.value)}`);
+  }
+  return L;
+}
 function fmtDateTimeJST(date) {
   try {
     const parts = new Intl.DateTimeFormat("ja-JP", { timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(date);
@@ -1975,6 +2086,11 @@ function buildSummaryMarkdown(ctx) {
   }
   L.push("");
 
+  const dd3Plan = computeDD3RebalancePlan(holdings, currentHoldingPct, fixedPositions);
+  L.push(d.currentDD <= -3 ? "⚠ 現在DD-3%以下です。以下は今すぐ実行を検討できる提案です。" : "（現在DD-3%未到達のため、以下はDD-3%到達時点を想定したシミュレーションです）");
+  for (const line of buildDD3RebalanceLines(dd3Plan, amt)) L.push(line);
+  L.push("");
+
   L.push("■ 保有資産（評価額上位20件）");
   const sorted = [...holdings].sort((a, b) => b.amount - a.amount).slice(0, 20);
   for (const h of sorted) L.push(`${h.name} / ${h.account} / ${amt(h.amount)} / ${h.rank}${fixedPositions[h.name] !== undefined ? " / 固定" : ""}`);
@@ -2017,6 +2133,9 @@ function buildSummaryMarkdown(ctx) {
   L.push("■ 相談したいこと");
   L.push(consultQuestion?.trim() || "（空欄）");
   L.push("");
+
+  for (const line of buildHoldingsDetailLines(holdings, amt)) L.push(line);
+  L.push("");
   L.push("---");
   L.push("※本サマリーは判断補助であり投資助言ではありません。過去確率・トラックレコードは傾向であり将来を保証しません。最終判断はご自身で行ってください。");
   return L.join("\n");
@@ -2043,7 +2162,20 @@ function buildSummaryJSON(ctx) {
     allocation: Object.fromEntries(CATS.map((cat) => [cat, { value: val((currentHoldingPct[cat] / 100) * total), pct: currentHoldingPct[cat], model_pct: effectiveModelRow[cat], diff_pt: Number((currentHoldingPct[cat] - effectiveModelRow[cat]).toFixed(1)), categories: rankLabels[cat] }])),
     blocks: { AB: blocks.AB, C: blocks.Cb, DE: blocks.DE },
     fixed_positions: Object.entries(fixedPositions).map(([name, reason]) => ({ name, reason, value: val(holdings.filter((h) => h.name === name).reduce((s, h) => s + h.amount, 0)) })),
-    holdings: holdings.map((h) => ({ name: h.name, account: h.account, owner: h.owner, category: h.category, currency: h.currency, rank: h.rank, value: val(h.amount), fixed: fixedPositions[h.name] !== undefined })),
+    dd3_rebalance_plan: (() => {
+      const plan = computeDD3RebalancePlan(holdings, currentHoldingPct, fixedPositions);
+      if (!plan.needed) return { needed: false, de_current_pct: plan.deCurrentPct, de_target_pct: plan.deTargetPct };
+      return {
+        needed: true, currently_actionable: d.currentDD <= -3,
+        sell_total: val(plan.sellTotal), sell_goal: val(plan.sellGoal), shortfall: val(plan.shortfall),
+        sell_candidates: plan.picks.map((p) => ({ name: p.name, rank: p.rank, holding_value: val(p.amount), sell_amount: val(p.sellAmount) })),
+        buy_sp500: val(plan.buySP500), buy_sp500_example: plan.sp500Candidate?.name ?? null, buy_cash: val(plan.buyCash),
+        projection: plan.projection.map((p) => ({ cat: p.cat, current_pct: p.curPct, new_pct: Number(p.newPct.toFixed(1)), target_pct: p.tgtPct, achievement_pct: Number(p.achievement.toFixed(0)) })),
+      };
+    })(),
+    holdings: holdings.map((h) => ({ name: h.name, account: h.account, owner: h.owner, category: h.category, currency: h.currency, rank: h.rank, value: val(h.amount), pct_of_total: Number(((h.amount / (total || 1)) * 100).toFixed(1)), day_change_pct: null, fixed: fixedPositions[h.name] !== undefined })),
+    rank_summary: Object.fromEntries(CATS.map((cat) => [cat, { count: holdings.filter((h) => h.rank === cat).length, value: val(holdings.filter((h) => h.rank === cat).reduce((s, h) => s + h.amount, 0)) }])),
+    category_summary: Object.fromEntries(sortGroupedForView(groupByField(holdings, "category"), "category").map((g) => [g.name, { count: holdings.filter((h) => h.category === g.name).length, value: val(g.value) }])),
     changes_since_last: diff ? { prev_generated_at: diff.prevDate, sold: diff.sold.map((s) => ({ name: s.name, value: val(s.amount) })), bought: diff.bought.map((b) => ({ name: b.name, value: val(b.amount) })), changed: diff.changed.map((c) => ({ name: c.name, from: val(c.from), to: val(c.to) })) } : null,
     real_exposure: exposure.map((e) => ({ ticker: e.ticker, direct: val(e.direct), via_index: val(e.viaIndex), total: val(e.total), pct: e.pct })),
     categories: Object.fromEntries(sortGroupedForView(groupByField(holdings, "category"), "category").map((g) => [g.name, Number(((g.value / (total || 1)) * 100).toFixed(1))])),
@@ -2154,6 +2286,12 @@ function SummaryModalContent({ d, holdings, currentHoldingPct, effectiveModelRow
         <label className="text-[10px] block mb-1" style={{ color: C.textDim }}>相談したいこと（任意・空欄でも可）</label>
         <textarea value={consultQuestion} onChange={(e) => setConsultQuestion(e.target.value)} rows={2} className="w-full text-xs rounded p-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }} placeholder="例：Cクラスの不足をどう埋めるべきか" />
       </div>
+
+      {d.currentDD <= -3 && (
+        <div className="text-xs mb-3 px-3 py-2 rounded" style={{ background: C.rustSoft, border: `1px solid ${C.rust}`, color: C.rust, fontWeight: 700 }}>
+          ⚠ 現在DD{d.currentDD.toFixed(1)}%（DD-3%以下）です。出力内の【DD-3%リバランス提案】は今すぐ実行を検討できる内容です。
+        </div>
+      )}
 
       <div className="flex items-center justify-between mb-1">
         <span className="text-[10px]" style={{ color: C.textDim }}>出力（{format === "md" ? "Markdown" : "JSON"}）・クリックで全選択</span>
