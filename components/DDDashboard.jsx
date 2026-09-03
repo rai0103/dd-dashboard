@@ -194,7 +194,7 @@ function computeAll(rawSeries) {
   const legDays = (episode.prevIdx !== -1 && episode.currentIdx !== -1) ? FULL[episode.currentIdx].i - FULL[episode.prevIdx].i : null;
   const isEntryLeg = episode.prevT === -3 && episode.currentT === -5;
   const currentTLabel = currentDD <= -50 ? "-50%以上" : (episode.currentT !== null ? `${episode.currentT}%` : "—");
-  const currentEpisodeCurve = ddStartIdx !== -1 ? FULL.slice(ddStartIdx, last.i + 1).map((p, idx) => ({ day: idx, dd: p.dd })) : [];
+  const currentEpisodeCurve = FULL.slice(episode.athIdx, last.i + 1).map((p, idx) => ({ day: idx, dd: p.dd })); // day=0が直近ATH（DD0%）起点。暴落比較チャートの各局面と同じ基準に揃える
   const speedCategory = legDays !== null ? (legDays <= 5 ? "急落" : "緩慢") : null;
   const nextProg = episode.currentT !== null ? trackRecord.progression.find((r) => r.from === episode.currentT) : null;
   const modelRow = nearestModelRow(currentDD);
@@ -633,20 +633,21 @@ function parseRakutenCSV(text) {
 
 /* ---------------- historical crashes (Yahoo Finance ^GSPCの実日次終値からdd%を算出。合成データではない) ---------------- */
 function fmtDuration(days) { const months = days / 21; if (months >= 12) return `約${(months / 12).toFixed(1)}年`; return `約${Math.round(months)}ヶ月`; }
+function fmtDateSlash(iso) { const [y, m, day] = iso.split("-").map(Number); return `${y}/${m}/${day}`; }
 const CRASHES_META = [
-  { id: "1987", name: "ブラックマンデー", start: "1987-08-25", low: "1987-12-04", athRecovery: "1989年頃", maxDD: -33.51, troughDay: 71, recoveryDay: 485, color: C.violet,
+  { id: "1987", name: "ブラックマンデー", start: "1987-08-25", low: "1987-12-04", athRecovery: "1989年頃", athRecoveryDate: "1989-07-26", maxDD: -33.51, troughDay: 71, recoveryDay: 485, color: C.violet,
     cause: "プログラム売買の連鎖的な自動売り、ポートフォリオインシュアランスの逆機能、投資家心理の急速な悪化。単一の日(10/19)で市場全体が約20%下落。",
     resolution: "FRB(グリーンスパン議長)による迅速な流動性供給の表明、実体経済への波及が限定的だったこと。",
     lesson: "暴落自体は歴史上最も急激だったが、実体経済が堅調であれば株価の回復も比較的早い。市場構造(プログラム売買)が引き金でもファンダメンタルズが崩れていなければ回復力がある。なお終値ベースの真の底は10/19当日ではなく、その後の再下落を経た12月上旬だった。" },
-  { id: "dotcom", name: "ドットコムバブル崩壊", start: "2000-03-24", low: "2002-10-09", athRecovery: "2007年頃", maxDD: -49.15, troughDay: 637, recoveryDay: 1803, color: C.blue,
+  { id: "dotcom", name: "ドットコムバブル崩壊", start: "2000-03-24", low: "2002-10-09", athRecovery: "2007年頃", athRecoveryDate: "2007-05-30", maxDD: -49.15, troughDay: 637, recoveryDay: 1803, color: C.blue,
     cause: "ITバブルの過剰な期待と高PERのハイテク株の急落。2001年の同時多発テロによる景気後退の追い打ち、企業会計不正(エンロン等)による信頼失墜。",
     resolution: "FRBの継続的な利下げ、景気の底打ちと企業収益の回復。",
     lesson: "バブル的な高評価を伴う下落は回復に非常に時間がかかる(今回は約7年)。下落期間中に複数回の戻り相場(ベアマーケットラリー)があり、早期の「底打ち」判断は危険。" },
-  { id: "gfc", name: "リーマンショック(世界金融危機)", start: "2007-10-09", low: "2009-03-09", athRecovery: "2013年頃", maxDD: -56.78, troughDay: 355, recoveryDay: 1376, color: C.rust,
+  { id: "gfc", name: "リーマンショック(世界金融危機)", start: "2007-10-09", low: "2009-03-09", athRecovery: "2013年頃", athRecoveryDate: "2013-03-28", maxDD: -56.78, troughDay: 355, recoveryDay: 1376, color: C.rust,
     cause: "サブプライムローン危機に端を発する金融システム全体の信用収縮。リーマン・ブラザーズ破綻による連鎖的な金融不安。",
     resolution: "各国中央銀行・政府による大規模な金融緩和と公的資金注入、量的緩和(QE)の開始。",
     lesson: "金融システム自体が毀損すると回復に数年単位を要する。政策対応(流動性供給)のスピードと規模が回復ペースを大きく左右する。" },
-  { id: "covid", name: "コロナショック", start: "2020-02-19", low: "2020-03-23", athRecovery: "2020年8月頃", maxDD: -33.92, troughDay: 23, recoveryDay: 126, color: C.amber,
+  { id: "covid", name: "コロナショック", start: "2020-02-19", low: "2020-03-23", athRecovery: "2020年8月頃", athRecoveryDate: "2020-08-18", maxDD: -33.92, troughDay: 23, recoveryDay: 126, color: C.amber,
     cause: "新型コロナウイルスの世界的流行による経済活動の急停止(ロックダウン)。",
     resolution: "各国政府・中央銀行による前例のない規模の財政・金融刺激策、ワクチン開発への期待。",
     lesson: "外生的ショック(感染症等)による暴落は、政策対応が迅速であれば歴史的に見て最も回復が早いパターンになりうる(今回は約半年)。深さだけでなく「原因の性質」が回復速度を左右する。" },
@@ -1319,36 +1320,37 @@ function RankHoldingsContent({ rank, holdings, onEditHolding, onDeleteHolding })
   return (<div><div className="text-xs mb-3" style={{ color: C.textDim }}>{rank}（{rankLabel}） 合計 ¥{total.toLocaleString()}　（列見出しクリックでソート・カテゴリー/ランク/口座主は変更可・右端の🗑で削除）</div><SortableTable columns={columns} rows={rows} defaultSortKey="amount" onEditCell={(row, key, value) => onEditHolding && onEditHolding(row.id, key, value)} onDeleteRow={(row) => onDeleteHolding && onDeleteHolding(row.id)} /></div>);
 }
 
-function CrashModalContent({ crash, daysSinceDDStart, currentDD, currentEpisodeCurve }) {
-  const cmpIdx = Math.min(daysSinceDDStart ?? 0, crash.curve.length - 1);
+function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve }) {
+  const cmpIdx = Math.min(daysSinceATH, crash.curve.length - 1);
   const crashDDatSameDay = crash.curve[cmpIdx].dd;
   const deeper = currentDD < crashDDatSameDay;
+  const recoveryDays = crash.recoveryDay - crash.troughDay;
   return (
     <div>
       <div className="grid grid-cols-4 gap-3 mb-5">
-        <div className="rounded px-3 py-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}><div className="text-[10px]" style={{ color: C.textDim }}>開始</div><div className="mono text-xs">{crash.start}</div></div>
+        <div className="rounded px-3 py-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}><div className="text-[10px]" style={{ color: C.textDim }}>開始（ATH）</div><div className="mono text-xs">{crash.start}</div></div>
         <div className="rounded px-3 py-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}><div className="text-[10px]" style={{ color: C.textDim }}>底値</div><div className="mono text-xs">{crash.low}（最大DD {crash.maxDD}%）</div></div>
-        <div className="rounded px-3 py-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}><div className="text-[10px]" style={{ color: C.textDim }}>下落期間</div><div className="mono text-xs">{fmtDuration(crash.troughDay)}</div></div>
-        <div className="rounded px-3 py-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}><div className="text-[10px]" style={{ color: C.textDim }}>ATH回復まで</div><div className="mono text-xs">{crash.athRecovery}（{fmtDuration(crash.recoveryDay)}）</div></div>
+        <div className="rounded px-3 py-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}><div className="text-[10px]" style={{ color: C.textDim }}>開始～大底</div><div className="mono text-xs">{crash.troughDay}日間（{fmtDateSlash(crash.start)}～{fmtDateSlash(crash.low)}）</div></div>
+        <div className="rounded px-3 py-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}><div className="text-[10px]" style={{ color: C.textDim }}>大底～回復（ATH更新）</div><div className="mono text-xs">{recoveryDays}日間（{fmtDateSlash(crash.low)}～{fmtDateSlash(crash.athRecoveryDate)}）</div></div>
       </div>
       <div style={{ height: 260 }} className="mb-4">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
             <CartesianGrid stroke={C.borderSoft} vertical={false} />
-            <XAxis dataKey="day" type="number" domain={[0, crash.recoveryDay]} allowDuplicatedCategory={false} tick={{ fill: C.textDim, fontSize: 10 }} axisLine={{ stroke: C.border }} tickLine={false} label={{ value: "経過日数（下落開始起点）", position: "insideBottom", offset: -2, fill: C.textDim, fontSize: 10 }} />
-            <YAxis domain={[Math.min(crash.maxDD * 1.1, -20), 2]} tick={{ fill: C.textDim, fontSize: 10 }} axisLine={false} tickLine={false} width={44} />
+            <XAxis dataKey="day" type="number" domain={[0, crash.recoveryDay]} allowDuplicatedCategory={false} tick={{ fill: C.textDim, fontSize: 10 }} axisLine={{ stroke: C.border }} tickLine={false} label={{ value: "経過日数（ATH起点、左端=ATH・右端=次のATH）", position: "insideBottom", offset: -2, fill: C.textDim, fontSize: 10 }} />
+            <YAxis domain={[Math.min(crash.maxDD * 1.1, -20), 2]} tick={{ fill: C.textDim, fontSize: 10 }} axisLine={false} tickLine={false} width={48} tickFormatter={(v) => `${v}%`} label={{ value: "DD%", angle: -90, position: "insideLeft", fill: C.textDim, fontSize: 10 }} />
             <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} formatter={(v, n) => [`${v}%`, n === "dd" ? crash.name : "現在"]} />
             <ReferenceLine x={crash.troughDay} stroke={C.borderSoft} strokeDasharray="2 3" label={{ value: "底値", fill: C.textDim, fontSize: 9, position: "top" }} />
-            {daysSinceDDStart !== null && <ReferenceLine x={daysSinceDDStart} stroke={C.teal} strokeDasharray="2 3" label={{ value: "現在", fill: C.teal, fontSize: 9, position: "top" }} />}
+            <ReferenceLine x={daysSinceATH} stroke={C.teal} strokeDasharray="2 3" label={{ value: "現在", fill: C.teal, fontSize: 9, position: "top" }} />
             <Line data={crash.curve} dataKey="dd" type="monotone" stroke={crash.color} strokeWidth={1.8} dot={false} isAnimationActive={false} name="dd" />
             <Line data={currentEpisodeCurve} dataKey="dd" type="monotone" stroke={C.teal} strokeWidth={2.4} dot={false} isAnimationActive={false} connectNulls={false} name="current" />
             <ReferenceDot x={crash.troughDay} y={crash.maxDD} r={4} fill={crash.color} stroke={C.bg} strokeWidth={2} />
-            {daysSinceDDStart !== null && <ReferenceDot x={daysSinceDDStart} y={currentDD} r={4} fill={C.teal} stroke={C.bg} strokeWidth={2} />}
+            <ReferenceDot x={daysSinceATH} y={currentDD} r={4} fill={C.teal} stroke={C.bg} strokeWidth={2} />
           </LineChart>
         </ResponsiveContainer>
       </div>
       <div className="rounded px-4 py-3 mb-5 text-sm leading-relaxed" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }}>
-        現在はDD開始から{daysSinceDDStart}日目でDD{currentDD.toFixed(1)}%。{crash.name}の同じ経過日数時点ではDD{crashDDatSameDay}%でした
+        現在はATH更新から{daysSinceATH}日目でDD{currentDD.toFixed(1)}%。{crash.name}の同じ経過日数時点ではDD{crashDDatSameDay}%でした
         （現状の方が<span style={{ color: deeper ? C.rust : C.teal, fontWeight: 700 }}>{deeper ? "深い" : "浅い"}</span>ペース）。
       </div>
       <div className="grid grid-cols-1 gap-4">
@@ -2670,7 +2672,7 @@ export default function DDDashboard() {
       {modal?.type === "portfolio" && <FullScreenModal title="ポートフォリオ構成表" onClose={() => setModal(null)}><PortfolioTableContent view={pieView} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
       {modal?.type === "ddTable" && <FullScreenModal title="DD毎のA〜E配分表" onClose={() => setModal(null)}><DDTableContent modelRow={d.modelRow} holdings={holdings} /></FullScreenModal>}
       {modal?.type === "rank" && <FullScreenModal title={`${modal.rank}ランクの保有銘柄`} onClose={() => setModal(null)}><RankHoldingsContent rank={modal.rank} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
-      {modal?.type === "crash" && <FullScreenModal title={`${modal.crash.name}（${modal.crash.start} 〜）と現状の比較`} onClose={() => setModal(null)}><CrashModalContent crash={modal.crash} daysSinceDDStart={d.daysSinceDDStart} currentDD={d.currentDD} currentEpisodeCurve={d.currentEpisodeCurve} /></FullScreenModal>}
+      {modal?.type === "crash" && <FullScreenModal title={`${modal.crash.name}（${modal.crash.start} 〜）と現状の比較`} onClose={() => setModal(null)}><CrashModalContent crash={modal.crash} daysSinceATH={d.daysSinceATH} currentDD={d.currentDD} currentEpisodeCurve={d.currentEpisodeCurve} /></FullScreenModal>}
       {modal?.type === "ddChart" && <FullScreenModal title="評価額（左軸） / DD%（右軸）" onClose={() => setModal(null)}><DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} /></FullScreenModal>}
       {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} spyVooSeries={spyVooSeries} onAppendSpyVoo={handleAppendSpyVoo} onImportSpyVoo={handleImportSpyVoo} onResetSpyVooField={handleResetSpyVooField} />}
       {modal?.type === "checkpointSettings" && <FullScreenModal title="チェックポイント設定" onClose={() => setModal(null)}><CheckpointSettingsContent checkpoints={checkpoints} onCheckpointChange={handleCheckpointChange} holdings={holdings} /></FullScreenModal>}
