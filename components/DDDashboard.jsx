@@ -995,7 +995,10 @@ function StatusPanel({ d, dVoo, dSpy, onOpenSpeedAlert }) {
                 <span className="font-bold text-xs" style={{ display: "inline-block", width: 50, textAlign: "right", color: data.currentDD >= 0 ? C.teal : C.rust }}>{data.currentDD.toFixed(1)}%</span>
                 <span className="text-xs" style={{ display: "inline-block", width: 70, marginLeft: 8, color: C.textMuted }}>DD-3%評価額</span>
                 <span className="font-bold text-xs" style={{ display: "inline-block", width: 80, textAlign: "right", color: C.text }}>（${(data.currentATH * 0.97).toFixed(2)}）</span>
-                {data.nextMilestone !== null && (
+                {data.nextMilestone === -3 && (
+                  <span className="font-bold text-xs" style={{ marginLeft: 4, color: C.text }}>まで{data.distanceToNextMilestone.toFixed(1)}%</span>
+                )}
+                {data.nextMilestone !== null && data.nextMilestone !== -3 && (
                   <span className="font-bold text-xs" style={{ marginLeft: 8, color: C.text }}>DD{data.nextMilestone}%まで {data.distanceToNextMilestone.toFixed(1)}%<span style={{ color: C.textMuted }}>（${data.nextMilestonePrice.toFixed(2)}）</span></span>
                 )}
               </>) : (<span className="text-xs" style={{ color: C.textDim }}>—</span>)}
