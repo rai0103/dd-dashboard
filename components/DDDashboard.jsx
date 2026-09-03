@@ -729,16 +729,9 @@ function computePeriodStats(periodRange, episodes) {
   const eventsInRange = episodes.filter((e) => e.troughDate >= start.date && e.troughDate <= end.date);
   const worstEpisode = eventsInRange.reduce((worst, e) => (!worst || e.troughDD < worst.troughDD ? e : worst), null);
   const athUpdateCount = periodRange.filter((p) => p.dd === 0).length; // 期間内でその日の終値が新たな最高値を更新した回数
-  // 「DD-3%以上：N回」はチャート上でDD%の折れ線が-3%ラインを下回った回数（グラフの見た目と一致させる）。
-  // ATH更新局面（eventsInRange）単位のカウントだと、新ATHに戻らないまま-3%を割って戻ってまた割る「二番底」を1回としてしまい、
-  // チャート上で線が-3%ラインを跨ぐ回数と食い違っていたため、-3%ライン自体の下抜け回数を直接数える方式に変更。
-  let ddCount = 0, belowThreshold = false;
-  for (const p of periodRange) {
-    const isBelow = p.dd <= -3;
-    if (isBelow && !belowThreshold) ddCount++;
-    belowThreshold = isBelow;
-  }
-  return { periodReturn, maxDD, ddCount, worstEpisode, athUpdateCount };
+  // 「DD-3%以上：N回」は、ATHとその次のATHの間で最も低い評価額（=そのATH更新局面の底値）が-3%以下に達した回数。
+  // 同じATH更新局面内で-3%を何度跨いでも（新高値を更新しないまま部分反発→再下落する「二番底」等）1回として数える。
+  return { periodReturn, maxDD, ddCount: eventsInRange.length, worstEpisode, athUpdateCount };
 }
 function fmtAxisDate(d, rangeDays) { if (rangeDays > 900) return `${d.getFullYear()}`; if (rangeDays > 120) return `${d.getFullYear()}/${d.getMonth() + 1}`; return `${d.getMonth() + 1}/${d.getDate()}`; }
 function fmtYMD(d) { return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`; }
