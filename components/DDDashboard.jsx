@@ -71,6 +71,15 @@ function parseCSVLine(line) {
   out.push(cur);
   return out;
 }
+// 日付のみの文字列（"YYYY-MM-DD" or "YYYY/MM/DD" 等）を、実行環境のタイムゾーンに関わらずUTC 0時のDateとして厳密にパースする。
+// new Date(string) はECMAScript仕様上「-」区切りのISO日付のみUTCとして解釈され、「/」区切りなど非ISO形式は実装依存でローカル時刻として
+// 解釈されるため、UTCより進んだタイムゾーン（JST等）の環境では日付が1日前にズレる不具合の原因になっていた（例：CSVの日付欄が"/"区切りの場合）。
+// この関数は区切り文字によらず年月日を直接抽出してUTC基準のDateを作るため、実行環境に関わらず常に同じ日付になる。
+function parseDateOnly(str) {
+  const m = String(str).trim().match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (!m) return new Date(NaN);
+  return new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+}
 function parseStooqCSV(text) {
   const normalized = text.replace(BOM_RE, "").trim(); // 先頭BOM・前後の空白を除去
   const lines = normalized.split(/\r?\n/).filter((l) => l.trim() !== ""); // \r\n(Windows)・\n(Unix)いずれも対応し、空行は除外
@@ -83,7 +92,7 @@ function parseStooqCSV(text) {
   for (let i = 1; i < lines.length; i++) {
     const cols = parseCSVLine(lines[i]);
     if (cols.length <= Math.max(dateIdx, closeIdx)) continue;
-    const d = new Date(cols[dateIdx].trim());
+    const d = parseDateOnly(cols[dateIdx]);
     const c = parseFloat(String(cols[closeIdx]).replace(/,/g, "").trim());
     if (!isNaN(d.getTime()) && !isNaN(c)) rows.push({ date: d, price: c });
   }
@@ -1570,7 +1579,7 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
       if (!res.ok) throw new Error("fetch failed");
       const data = await res.json();
       if (!data || !data.date || typeof data.spy !== "number" || typeof data.voo !== "number") throw new Error("invalid response");
-      const date = new Date(data.date);
+      const date = parseDateOnly(data.date);
       onAppendSpyVoo({ date, spy: data.spy, voo: data.voo });
       setUpdateMsg(`更新完了：${date.toLocaleDateString("ja-JP")} のSPY/VOO終値を記録しました（S&P500はStooq取り込み/直接入力で更新してください）`);
     } catch (e) {
@@ -1624,13 +1633,13 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
   const handleAddManual = () => {
     const price = parseFloat(manualPrice);
     if (!manualDate || isNaN(price)) return;
-    onAppend({ date: new Date(manualDate), price });
+    onAppend({ date: parseDateOnly(manualDate), price });
     setManualPrice("");
   };
   const handleAddInstrManual = () => {
     const price = parseFloat(instrManualPrice);
     if (!instrManualDate || isNaN(price)) return;
-    onImportSpyVoo(instrument, [{ date: new Date(instrManualDate), price }]);
+    onImportSpyVoo(instrument, [{ date: parseDateOnly(instrManualDate), price }]);
     setInstrManualPrice("");
   };
   const handleRakutenFile = (e) => {
@@ -2416,14 +2425,14 @@ export default function DDDashboard() {
       try {
         const res = await storage.get("voo_price_history");
         if (res && res.value) {
-          const parsed = JSON.parse(res.value).map((p) => ({ date: new Date(p.date), price: p.price }));
+          const parsed = JSON.parse(res.value).map((p) => ({ date: parseDateOnly(p.date), price: p.price }));
           if (parsed.length) { setRawSeries(parsed); setDataSource("imported"); }
         }
       } catch (e) { /* no saved data yet — keep bundled seed */ }
       try {
         const resSpyVoo = await storage.get("spy_voo_price_history");
         if (resSpyVoo && resSpyVoo.value) {
-          const parsedSpyVoo = JSON.parse(resSpyVoo.value).map((p) => ({ date: new Date(p.date), spy: p.spy, voo: p.voo }));
+          const parsedSpyVoo = JSON.parse(resSpyVoo.value).map((p) => ({ date: parseDateOnly(p.date), spy: p.spy, voo: p.voo }));
           if (parsedSpyVoo.length) setSpyVooSeries(parsedSpyVoo);
         }
       } catch (e) { /* no saved spy/voo data yet */ }
