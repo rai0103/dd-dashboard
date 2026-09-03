@@ -9,6 +9,9 @@ out/
 .DS_Store
 *.pem
 
+# cloudflare worker local state
+.wrangler/
+
 # local env
 .env
 .env.local
