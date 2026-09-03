@@ -719,6 +719,16 @@ function computePeriodStats(periodRange, episodes) {
 }
 function fmtAxisDate(d, rangeDays) { if (rangeDays > 900) return `${d.getFullYear()}`; if (rangeDays > 120) return `${d.getFullYear()}/${d.getMonth() + 1}`; return `${d.getMonth() + 1}/${d.getDate()}`; }
 function fmtYMD(d) { return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`; }
+// 米国東部時間（NY市場基準）の年月日を "YYYY/M/D" 形式で返す。ヘッダーの日付表示・当日更新判定の基準に使う。
+function usEasternYMD(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric", month: "numeric", day: "numeric" }).formatToParts(date);
+  const get = (t) => parts.find((p) => p.type === t).value;
+  return `${get("year")}/${get("month")}/${get("day")}`;
+}
+// 系列の各日付はUTC0時基準（CSV/API取り込み・手動入力とも "YYYY-MM-DD" をnew Date()した値）で保持されているため、
+// UTC基準の年月日を米国東部時間の「今日」と比較することで、その日の終値が反映済みかを判定する。
+function dateYMD_UTC(d) { return `${d.getUTCFullYear()}/${d.getUTCMonth() + 1}/${d.getUTCDate()}`; }
+function isUpdatedToday(dObj) { return !!dObj && dateYMD_UTC(dObj.last.date) === usEasternYMD(); }
 // チャートのX軸はcategory軸のため、ReferenceDotのxはchartData内の実際の点と一致している必要がある。
 // 間引き表示で厳密な日付が省略されている場合があるため、表示中の点のうち最も日付が近いものにスナップする。
 function nearestChartPoint(chartData, targetDate) {
@@ -974,14 +984,16 @@ function StatusPanel({ d, dVoo, dSpy, onOpenSpeedAlert }) {
           <div className="text-[10px] mb-1" style={{ color: C.textDim }}>評価額 / ATH（{fmtYMD(d.athDate)}）</div>
           {tickers.map(({ label, data }) => {
             const chg = dayChangePct(data);
+            const updated = isUpdatedToday(data);
             return (
               <div key={label} className="text-xs mono whitespace-nowrap flex items-baseline" style={{ height: 20 }}>
                 <span className="font-bold" style={{ color: C.textMuted, display: "inline-block", width: 42 }}>{label}</span>
                 {data ? (<>
-                  <span style={{ display: "inline-block", width: 68, textAlign: "right" }}>${data.currentPrice.toFixed(2)}</span>
-                  {chg !== null && (<span style={{ display: "inline-block", width: 54, textAlign: "right", marginLeft: 4, color: chg >= 0 ? C.teal : C.rust }}>（{chg >= 0 ? "+" : ""}{chg.toFixed(1)}%）</span>)}
+                  <span style={{ display: "inline-block", width: 68, textAlign: "right", color: updated ? C.text : C.textDim }}>${data.currentPrice.toFixed(2)}</span>
+                  {chg !== null && (<span style={{ display: "inline-block", width: 54, textAlign: "right", marginLeft: 4, color: updated ? (chg >= 0 ? C.teal : C.rust) : C.textDim }}>（{chg >= 0 ? "+" : ""}{chg.toFixed(1)}%）</span>)}
                   <span style={{ color: C.textDim, marginLeft: 8 }}>ATH</span>
                   <span style={{ display: "inline-block", width: 68, textAlign: "right", color: C.textDim, marginLeft: 4 }}>${data.currentATH.toFixed(2)}</span>
+                  <span className="text-[9px]" style={{ marginLeft: 6, color: updated ? C.teal : C.textDim }}>{updated ? "●更新済" : "○未更新"}</span>
                 </>) : (<span style={{ color: C.textDim }}>データ未取り込み</span>)}
               </div>
             );
@@ -1465,6 +1477,7 @@ function CheckpointSettingsContent({ checkpoints, onCheckpointChange, holdings }
 function InstrumentPanel({ instrument, spyVooSeries, fileName, fileMsg, onFileChange, manualDate, setManualDate, manualPrice, setManualPrice, onAddManual, onResetField }) {
   const label = instrument === "voo" ? "VOO" : "SPY";
   const entries = spyVooSeries.filter((p) => p[instrument] != null);
+  const prevPrice = entries.length ? entries[entries.length - 1][instrument] : null;
   return (
     <div>
       <p className="text-sm mb-1 leading-relaxed" style={{ color: C.textMuted }}>Stooqからダウンロードした {label}.US の日次CSV（Date,Open,High,Low,Close,Volume・日付昇順）を選択するか、1日分だけ直接入力してください。</p>
@@ -1480,7 +1493,7 @@ function InstrumentPanel({ instrument, spyVooSeries, fileName, fileMsg, onFileCh
         <p className="text-sm mb-4" style={{ color: C.textMuted }}>1日分だけ{label}の終値を直接入力する場合はこちら。既存データに追記・上書きされます。</p>
         <div className="flex items-end gap-3">
           <div><label className="text-[10px] block mb-1" style={{ color: C.textDim }}>日付</label><input type="date" value={manualDate} onChange={(e) => setManualDate(e.target.value)} className="text-xs px-2 py-1.5 rounded mono" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }} /></div>
-          <div><label className="text-[10px] block mb-1" style={{ color: C.textDim }}>終値（$）</label><input type="number" step="0.01" value={manualPrice} onChange={(e) => setManualPrice(e.target.value)} placeholder="704.20" className="text-xs px-2 py-1.5 rounded w-28 mono" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }} /></div>
+          <div><label className="text-[10px] block mb-1" style={{ color: C.textDim }}>終値（$）</label><input type="number" step="0.01" value={manualPrice} onChange={(e) => setManualPrice(e.target.value)} placeholder={prevPrice != null ? prevPrice.toFixed(2) : "704.20"} className="text-xs px-2 py-1.5 rounded w-28 mono" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }} /></div>
           <button onClick={onAddManual} className="text-xs px-4 py-1.5 rounded" style={{ background: C.teal, color: C.bg, fontWeight: 700, border: "none", cursor: "pointer" }}>追加</button>
         </div>
       </div>
@@ -1519,6 +1532,9 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
   const [spyImportMsg, setSpyImportMsg] = useState(null);
   const [vooImportFileName, setVooImportFileName] = useState(null);
   const [vooImportMsg, setVooImportMsg] = useState(null);
+
+  // 「方式B：直接入力」の終値欄のデフォルト表示（プレースホルダー）＝選択中の指数の前日（直近取り込み済み）の評価額。
+  const sp500PrevPrice = rawSeries.length ? rawSeries[rawSeries.length - 1].price : null;
 
   const handleSpyImportFile = (e) => {
     const file = e.target.files[0];
@@ -1669,7 +1685,7 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
 
       {dataset === "voo" ? (
         <>
-          <div className="flex items-center justify-between mb-5">
+          <div className="flex items-center gap-2 mb-5">
             <button onClick={handleUpdatePrices} disabled={updateLoading} className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.textMuted, cursor: updateLoading ? "default" : "pointer", opacity: updateLoading ? 0.6 : 1 }}>
               <RefreshCw size={13} className={updateLoading ? "animate-spin" : ""} /> {updateLoading ? "更新中…" : "データ更新"}
             </button>
@@ -1705,7 +1721,7 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
                   <p className="text-sm mb-4" style={{ color: C.textMuted }}>毎日の運用でその日のS&P500終値だけを入力する簡易方式です。既存データに追記・上書きされます。</p>
                   <div className="flex items-end gap-3">
                     <div><label className="text-[10px] block mb-1" style={{ color: C.textDim }}>日付</label><input type="date" value={manualDate} onChange={(e) => setManualDate(e.target.value)} className="text-xs px-2 py-1.5 rounded mono" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }} /></div>
-                    <div><label className="text-[10px] block mb-1" style={{ color: C.textDim }}>終値（$）</label><input type="number" step="0.01" value={manualPrice} onChange={(e) => setManualPrice(e.target.value)} placeholder="704.20" className="text-xs px-2 py-1.5 rounded w-28 mono" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }} /></div>
+                    <div><label className="text-[10px] block mb-1" style={{ color: C.textDim }}>終値（$）</label><input type="number" step="0.01" value={manualPrice} onChange={(e) => setManualPrice(e.target.value)} placeholder={sp500PrevPrice != null ? sp500PrevPrice.toFixed(2) : "704.20"} className="text-xs px-2 py-1.5 rounded w-28 mono" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }} /></div>
                     <button onClick={handleAddManual} className="text-xs px-4 py-1.5 rounded" style={{ background: C.teal, color: C.bg, fontWeight: 700, border: "none", cursor: "pointer" }}>追加</button>
                   </div>
                 </div>
@@ -2681,13 +2697,13 @@ export default function DDDashboard() {
       {modal?.type === "summary" && <FullScreenModal title="詳細サマリー出力（AI相談用）" onClose={() => setModal(null)}><SummaryModalContent d={d} dVoo={dVoo} dSpy={dSpy} holdings={holdings} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} blocks={blocks} rankLabels={rankLabels} lifecycle={lifecycle} onLifecycleChange={handleLifecycleChange} fixedPositions={fixedPositions} onFixedPositionChange={handleFixedPositionChange} checkpoints={checkpoints} prevSnapshot={prevSnapshot} onSaveSnapshot={handleSaveSnapshot} /></FullScreenModal>}
 
       <div className="flex items-center justify-between px-5 py-3 shrink-0" style={{ borderBottom: `1px solid ${C.border}`, background: C.panel2 }}>
-        <div className="flex items-center gap-3"><span className="text-sm font-bold tracking-wide">DD戦略ダッシュボード</span><span className="text-[11px]" style={{ color: C.textDim }}>S&P500・日次</span></div>
+        <div className="flex items-center gap-3"><span className="text-sm font-bold tracking-wide">DD戦略ダッシュボード　S&P500（VOO/SPY）{usEasternYMD()}（us）</span></div>
         <div className="flex items-center gap-3">
           <button onClick={() => setModal({ type: "summary" })} className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
             <FileText size={12} /> 詳細サマリー
           </button>
           <button onClick={() => setModal({ type: "dataInput" })} className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
-            <Database size={12} /> データ入力
+            <Database size={12} /> データ入力・出力
           </button>
           <span className="flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full" style={{ color: depthColor(d.currentDD), background: `${depthColor(d.currentDD)}1a`, border: `1px solid ${depthColor(d.currentDD)}44` }}>{d.isDrawdown ? <TrendingDown size={12} /> : <TrendingUp size={12} />} {d.mode}</span>
         </div>
