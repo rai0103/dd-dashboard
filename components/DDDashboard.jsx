@@ -1445,7 +1445,7 @@ function CheckpointSettingsContent({ checkpoints, onCheckpointChange, holdings }
 }
 
 /* ---------------- data input modal ---------------- */
-function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, onBackfill, source, holdings, onUpdateHoldings, onResetAndImportHoldings, onResetHoldings, holdingsSource, overrides, categoryDefaultRanks, onCategoryDefaultRankChange }) {
+function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, onBackfill, source, holdings, onUpdateHoldings, onResetAndImportHoldings, onResetHoldings, holdingsSource, overrides, categoryDefaultRanks, onCategoryDefaultRankChange, spyVooSeries, onAppendSpyVoo }) {
   const [dataset, setDataset] = useState("voo"); // "voo" | "holdings"
   const [tab, setTab] = useState("csv");
   const [manualDate, setManualDate] = useState(new Date().toISOString().slice(0, 10));
@@ -1472,10 +1472,10 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, onBa
       const res = await fetch(STOCK_PRICES_API_URL);
       if (!res.ok) throw new Error("fetch failed");
       const data = await res.json();
-      if (!data || !data.date || typeof data.sp500 !== "number") throw new Error("invalid response");
+      if (!data || !data.date || typeof data.spy !== "number" || typeof data.voo !== "number") throw new Error("invalid response");
       const date = new Date(data.date);
-      onAppend({ date, price: data.sp500, spy: data.spy, voo: data.voo });
-      setUpdateMsg(`更新完了：${date.toLocaleDateString("ja-JP")} の終値を記録しました`);
+      onAppendSpyVoo({ date, spy: data.spy, voo: data.voo });
+      setUpdateMsg(`更新完了：${date.toLocaleDateString("ja-JP")} のSPY/VOO終値を記録しました（S&P500はStooq取り込み/直接入力で更新してください）`);
     } catch (e) {
       setUpdateError(true);
       setUpdateMsg("データ取得失敗。稼働時間外の可能性があります");
@@ -1486,12 +1486,19 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, onBa
 
   const handleExportCSV = () => {
     const header = "Date,SP500,SPY,VOO";
-    const rows = rawSeries.map((p) => [
-      p.date.toISOString().slice(0, 10),
-      p.price != null ? p.price : "",
-      p.spy != null ? p.spy : "",
-      p.voo != null ? p.voo : "",
-    ].join(","));
+    const spyVooByDate = new Map(spyVooSeries.map((p) => [p.date.toISOString().slice(0, 10), p]));
+    const allDates = new Set([...rawSeries.map((p) => p.date.toISOString().slice(0, 10)), ...spyVooByDate.keys()]);
+    const sp500ByDate = new Map(rawSeries.map((p) => [p.date.toISOString().slice(0, 10), p]));
+    const rows = Array.from(allDates).sort().map((dateStr) => {
+      const sp500 = sp500ByDate.get(dateStr);
+      const spyVoo = spyVooByDate.get(dateStr);
+      return [
+        dateStr,
+        sp500 && sp500.price != null ? sp500.price : "",
+        spyVoo && spyVoo.spy != null ? spyVoo.spy : "",
+        spyVoo && spyVoo.voo != null ? spyVoo.voo : "",
+      ].join(",");
+    });
     const csv = [header, ...rows].join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
@@ -1597,6 +1604,7 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, onBa
               <Download size={13} /> データ出力
             </button>
           </div>
+          <div className="text-[10px] mb-2" style={{ color: C.textDim }}>※「データ更新」はSPY/VOOのみ自動取得します（記録用途）。S&P500はダッシュボードのDD計算に使う本系列のため、引き続き下記のCSV取り込み・直接入力で更新してください。</div>
           {updateMsg && <div className="text-xs mb-4" style={{ color: updateError ? C.rust : C.teal }}>{updateMsg}</div>}
           <div className="flex gap-2 mb-5">{tabBtn(tab, setTab, "csv", "方式A：CSV取り込み（Stooq）")}{tabBtn(tab, setTab, "manual", "方式B：直接入力")}</div>
           {tab === "csv" ? (
@@ -2100,16 +2108,24 @@ export default function DDDashboard() {
   const [lifecycle, setLifecycle] = useState(LIFECYCLE_DEFAULT);
   const [fixedPositions, setFixedPositions] = useState({}); // { [銘柄名]: 理由(空文字可) }
   const [prevSnapshot, setPrevSnapshot] = useState(null); // 詳細サマリー出力の前回スナップショット（差分表示用）
+  const [spyVooSeries, setSpyVooSeries] = useState([]); // 「データ更新」で取得したSPY/VOO終値（S&P500のDD計算には使わない、CSV出力専用の補助データ）
 
   useEffect(() => {
     (async () => {
       try {
         const res = await storage.get("voo_price_history");
         if (res && res.value) {
-          const parsed = JSON.parse(res.value).map((p) => ({ date: new Date(p.date), price: p.price, spy: p.spy, voo: p.voo }));
+          const parsed = JSON.parse(res.value).map((p) => ({ date: new Date(p.date), price: p.price }));
           if (parsed.length) { setRawSeries(parsed); setDataSource("imported"); }
         }
       } catch (e) { /* no saved data yet — keep bundled seed */ }
+      try {
+        const resSpyVoo = await storage.get("spy_voo_price_history");
+        if (resSpyVoo && resSpyVoo.value) {
+          const parsedSpyVoo = JSON.parse(resSpyVoo.value).map((p) => ({ date: new Date(p.date), spy: p.spy, voo: p.voo }));
+          if (parsedSpyVoo.length) setSpyVooSeries(parsedSpyVoo);
+        }
+      } catch (e) { /* no saved spy/voo data yet */ }
       try {
         const res2 = await storage.get("portfolio_holdings");
         if (res2 && res2.value) {
@@ -2148,7 +2164,19 @@ export default function DDDashboard() {
   }, []);
 
   async function persist(series) {
-    try { await storage.set("voo_price_history", JSON.stringify(series.map((p) => ({ date: p.date.toISOString().slice(0, 10), price: p.price, ...(p.spy != null ? { spy: p.spy } : {}), ...(p.voo != null ? { voo: p.voo } : {}) })))); } catch (e) { /* storage unavailable */ }
+    try { await storage.set("voo_price_history", JSON.stringify(series.map((p) => ({ date: p.date.toISOString().slice(0, 10), price: p.price })))); } catch (e) { /* storage unavailable */ }
+  }
+  async function persistSpyVoo(series) {
+    try { await storage.set("spy_voo_price_history", JSON.stringify(series.map((p) => ({ date: p.date.toISOString().slice(0, 10), spy: p.spy, voo: p.voo })))); } catch (e) { /* storage unavailable */ }
+  }
+  function handleAppendSpyVoo(entry) {
+    setSpyVooSeries((prev) => {
+      const map = new Map(prev.map((p) => [p.date.toISOString().slice(0, 10), p]));
+      map.set(entry.date.toISOString().slice(0, 10), entry);
+      const merged = Array.from(map.values()).sort((a, b) => a.date - b.date);
+      persistSpyVoo(merged);
+      return merged;
+    });
   }
   async function persistHoldings(list) {
     try { await storage.set("portfolio_holdings", JSON.stringify(list)); } catch (e) { /* storage unavailable */ }
@@ -2342,7 +2370,7 @@ export default function DDDashboard() {
       {modal?.type === "rank" && <FullScreenModal title={`${modal.rank}ランクの保有銘柄`} onClose={() => setModal(null)}><RankHoldingsContent rank={modal.rank} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
       {modal?.type === "crash" && <FullScreenModal title={`${modal.crash.name}（${modal.crash.start} 〜）と現状の比較`} onClose={() => setModal(null)}><CrashModalContent crash={modal.crash} daysSinceDDStart={d.daysSinceDDStart} currentDD={d.currentDD} currentEpisodeCurve={d.currentEpisodeCurve} /></FullScreenModal>}
       {modal?.type === "ddChart" && <FullScreenModal title="評価額（左軸） / DD%（右軸）" onClose={() => setModal(null)}><DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} /></FullScreenModal>}
-      {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} onBackfill={handleBackfill} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} />}
+      {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} onBackfill={handleBackfill} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} spyVooSeries={spyVooSeries} onAppendSpyVoo={handleAppendSpyVoo} />}
       {modal?.type === "checkpointSettings" && <FullScreenModal title="チェックポイント設定" onClose={() => setModal(null)}><CheckpointSettingsContent checkpoints={checkpoints} onCheckpointChange={handleCheckpointChange} holdings={holdings} /></FullScreenModal>}
       {modal?.type === "summary" && <FullScreenModal title="詳細サマリー出力（AI相談用）" onClose={() => setModal(null)}><SummaryModalContent d={d} holdings={holdings} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} blocks={blocks} rankLabels={rankLabels} lifecycle={lifecycle} onLifecycleChange={handleLifecycleChange} fixedPositions={fixedPositions} onFixedPositionChange={handleFixedPositionChange} prevSnapshot={prevSnapshot} onSaveSnapshot={handleSaveSnapshot} /></FullScreenModal>}
 
