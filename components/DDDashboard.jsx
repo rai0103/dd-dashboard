@@ -219,10 +219,12 @@ function computeAll(rawSeries) {
   const nextMilestone = MILESTONES.find((t) => currentDD > t) ?? null; // 現在のDD%からまだ到達していない直近の節目
   const distanceToNextMilestone = nextMilestone !== null ? Number((nextMilestone - currentDD).toFixed(1)) : null;
   const nextMilestonePrice = nextMilestone !== null ? currentATH * (1 + nextMilestone / 100) : null;
-  const lastCompletedEpisode = [...episodes].reverse().find((e) => !e.isOngoing) ?? null; // 前回DD3%到達から回復した日（＝前回最高値）
-  const prevATHRatio = lastCompletedEpisode ? Number((((currentPrice / lastCompletedEpisode.recoveryPrice) - 1) * 100).toFixed(1)) : null;
   const speedAlert = computeSpeedAlert(FULL, last, episode, currentDD, trackRecord);
-  return { FULL, last, currentDD, currentPrice, currentATH, isDrawdown, mode, episode, ddStartIdx, daysSinceDDStart, daysSinceCurrentThreshold, legDays, isEntryLeg, currentTLabel, currentEpisodeCurve, speedCategory, nextProg, modelRow, currentLevelP, currentFreqLabel, athDate, daysSinceATH, trough, episodes, trackRecord, nextMilestone, distanceToNextMilestone, nextMilestonePrice, lastCompletedEpisode, prevATHRatio, speedAlert };
+  return { FULL, last, currentDD, currentPrice, currentATH, isDrawdown, mode, episode, ddStartIdx, daysSinceDDStart, daysSinceCurrentThreshold, legDays, isEntryLeg, currentTLabel, currentEpisodeCurve, speedCategory, nextProg, modelRow, currentLevelP, currentFreqLabel, athDate, daysSinceATH, trough, episodes, trackRecord, nextMilestone, distanceToNextMilestone, nextMilestonePrice, speedAlert };
+}
+// spyVooSeries（{date, spy?, voo?}の配列）から指定フィールドのみを抽出し、computeAllにそのまま渡せる{date,price}系列に変換する。
+function seriesFromSpyVoo(spyVooSeries, field) {
+  return spyVooSeries.filter((p) => p[field] != null).map((p) => ({ date: p.date, price: p[field] })).sort((a, b) => a.date - b.date);
 }
 
 /* ---------------- トラックレコード統計（読み込まれている実データから都度算出） ---------------- */
@@ -971,61 +973,65 @@ function SortableTable({ columns, rows, defaultSortKey, defaultDir = "desc", onE
 }
 
 /* ---------------- status panel ---------------- */
-function StatusPanel({ d, onOpenSpeedAlert }) {
+function StatusPanel({ d, dVoo, dSpy, onOpenSpeedAlert }) {
+  const tickers = [{ label: "SP500", data: d }, { label: "VOO", data: dVoo }, { label: "SPY", data: dSpy }];
   return (
     <Panel title="現在のステータス" hideHeader className="h-full">
       <div className="flex h-full">
-        <div className="flex-1 px-4 py-2 flex flex-col justify-center" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
-          <div className="text-[10px] mb-0.5" style={{ color: C.textDim }}>評価額（S&P500終値）</div>
-          <div className="mono text-xl font-bold">${d.currentPrice.toFixed(2)}</div>
-          <div className="text-[9px] mt-0.5 whitespace-nowrap" style={{ color: C.textDim }}>データ日付：{fmtYMD(d.last.date)}（米国時間）</div>
-          <div className="text-[9px] mt-0.5 whitespace-nowrap" style={{ color: C.textDim }}>ATH ${d.currentATH.toFixed(2)}（{fmtYMD(d.athDate)}）{d.currentDD.toFixed(1)}%</div>
+        <div className="flex-1 px-4 py-2 flex flex-col justify-center gap-0.5" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
+          <div className="text-[10px] mb-0.5" style={{ color: C.textDim }}>評価額 / ATH</div>
+          {tickers.map(({ label, data }) => (
+            <div key={label} className="text-[10px] mono whitespace-nowrap">
+              <span className="font-bold" style={{ color: C.textMuted }}>{label}</span>{" "}
+              {data ? (<>${data.currentPrice.toFixed(2)}<span style={{ color: C.textDim }}> ATH ${data.currentATH.toFixed(2)}（{fmtYMD(data.athDate)}）</span></>) : (<span style={{ color: C.textDim }}>データ未取り込み</span>)}
+            </div>
+          ))}
         </div>
-        <div className="flex-1 px-4 py-2 flex flex-col justify-center" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
+        <div className="flex-1 px-4 py-2 flex flex-col justify-center gap-0.5" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
           <div className="flex items-center gap-1.5 mb-0.5"><TrendingDown size={11} style={{ color: C.rust }} /><span className="text-[10px] font-bold" style={{ color: C.rust }}>最高値比</span></div>
-          <div className="mono text-xl font-bold" style={{ color: C.rust }}>{d.currentDD.toFixed(1)}%<span className="mono text-xs font-bold ml-1" style={{ color: C.rust }}>（更新日：{fmtYMD(d.athDate)}）</span></div>
+          {tickers.map(({ label, data }) => (
+            <div key={label} className="mono text-xs whitespace-nowrap">
+              <span className="font-bold" style={{ color: C.textMuted, display: "inline-block", minWidth: 40 }}>{label}</span>
+              {data ? (<span className="font-bold" style={{ color: data.currentDD >= 0 ? C.teal : C.rust }}>{data.currentDD.toFixed(1)}%</span>) : (<span style={{ color: C.textDim }}>—</span>)}
+            </div>
+          ))}
           {d.nextMilestone !== null && (
-            <div className="text-[10px] mt-0.5" style={{ color: C.textDim }}>次の基準（{d.nextMilestone}%）まで：<span className="mono font-semibold">{d.distanceToNextMilestone.toFixed(1)}%</span>（<span className="mono">${d.nextMilestonePrice.toFixed(2)}</span>）</div>
+            <div className="text-[10px] mt-1 pt-1" style={{ color: C.textDim, borderTop: `1px solid ${C.borderSoft}` }}>次の基準（{d.nextMilestone}%）まで：<span className="mono font-semibold">{d.distanceToNextMilestone.toFixed(1)}%</span>（<span className="mono">${d.nextMilestonePrice.toFixed(2)}</span>）</div>
           )}
-          <div className="mt-1.5 pt-1" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
-            <div className="text-[10px]" style={{ color: C.textDim }}>前回最高値比</div>
-            {d.lastCompletedEpisode ? (
-              <div className="mono text-sm font-semibold" style={{ color: d.prevATHRatio >= 0 ? C.teal : C.rust }}>{d.prevATHRatio >= 0 ? "+" : ""}{d.prevATHRatio.toFixed(1)}%<span className="mono text-[10px] font-normal ml-1" style={{ color: C.textDim }}>（{fmtYMD(d.lastCompletedEpisode.recoveryDate)}）</span></div>
-            ) : (
-              <div className="text-xs" style={{ color: C.textDim }}>—（DD3%到達履歴なし）</div>
-            )}
-          </div>
         </div>
         <div className="flex-1 px-4 py-2 flex flex-col justify-center" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
-          <div className="flex items-center gap-1.5 mb-1"><Clock size={11} style={{ color: C.textDim }} /><span className="text-[10px]" style={{ color: C.textDim }}>経過日数</span></div>
-          <div style={{ opacity: d.isDrawdown ? 1 : 0.35 }}>
-            <div className="flex items-baseline justify-between text-xs"><span style={{ color: C.textMuted }}>DD開始から</span><span className="mono font-semibold">{d.daysSinceATH}日</span></div>
-            <div className="text-[10px] mono" style={{ color: C.textDim }}>評価額 ${d.currentPrice.toFixed(2)}（DD{d.currentDD.toFixed(1)}%）</div>
-          </div>
-          <div className="mt-1 pt-1" style={{ borderTop: `1px solid ${C.borderSoft}`, opacity: d.isDrawdown ? 0.35 : 1 }}>
-            <div className="flex items-baseline justify-between text-xs"><span style={{ color: C.textMuted }}>最高値更新から</span><span className="mono font-semibold">{d.daysSinceATH}日</span></div>
-            <div className="text-[10px] mono" style={{ color: C.textDim }}>{fmtYMD(d.athDate)}更新・最高値比{d.currentDD.toFixed(1)}%・${d.currentPrice.toFixed(2)}</div>
-          </div>
+          <div className="flex items-center gap-1.5 mb-1"><Clock size={11} style={{ color: C.textDim }} /><span className="text-[10px]" style={{ color: C.textDim }}>経過日数（VOO基準）</span></div>
+          {dVoo ? (<>
+            <div style={{ opacity: dVoo.isDrawdown ? 1 : 0.35 }}>
+              <div className="flex items-baseline justify-between text-xs"><span style={{ color: C.textMuted }}>DD開始から</span><span className="mono font-semibold">{dVoo.daysSinceATH}日</span></div>
+              <div className="text-[10px] mono" style={{ color: C.textDim }}>評価額 ${dVoo.currentPrice.toFixed(2)}（DD{dVoo.currentDD.toFixed(1)}%）</div>
+            </div>
+            <div className="mt-1 pt-1" style={{ borderTop: `1px solid ${C.borderSoft}`, opacity: dVoo.isDrawdown ? 0.35 : 1 }}>
+              <div className="flex items-baseline justify-between text-xs"><span style={{ color: C.textMuted }}>最高値更新から</span><span className="mono font-semibold">{dVoo.daysSinceATH}日</span></div>
+              <div className="text-[10px] mono" style={{ color: C.textDim }}>{fmtYMD(dVoo.athDate)}更新・最高値比{dVoo.currentDD.toFixed(1)}%・${dVoo.currentPrice.toFixed(2)}</div>
+            </div>
+          </>) : (<div className="text-xs" style={{ color: C.textDim }}>VOOデータ未取り込み</div>)}
         </div>
-        <button onClick={onOpenSpeedAlert} className="flex-1 px-4 py-2 flex flex-col justify-center text-left cursor-pointer" style={{ background: "transparent", border: "none" }}>
-          <div className="flex items-center gap-1.5 mb-1"><Zap size={11} style={{ color: speedAlertAccent(d.speedAlert) }} /><span className="text-[10px]" style={{ color: C.textDim }}>DD加速度アラート</span><ChevronRight size={11} style={{ color: C.textDim, marginLeft: "auto" }} /></div>
-          {d.speedAlert.level === "normal" && (<>
-            <div className="text-xs mb-0.5" style={{ color: C.textMuted }}>待機中（現在ATH圏、DD{d.speedAlert.currentDD.toFixed(1)}%）</div>
+        <button onClick={dVoo ? onOpenSpeedAlert : undefined} disabled={!dVoo} className="flex-1 px-4 py-2 flex flex-col justify-center text-left" style={{ background: "transparent", border: "none", cursor: dVoo ? "pointer" : "default", opacity: dVoo ? 1 : 0.5 }}>
+          <div className="flex items-center gap-1.5 mb-1"><Zap size={11} style={{ color: dVoo ? speedAlertAccent(dVoo.speedAlert) : C.textDim }} /><span className="text-[10px]" style={{ color: C.textDim }}>DD加速度アラート（VOO基準）</span>{dVoo && <ChevronRight size={11} style={{ color: C.textDim, marginLeft: "auto" }} />}</div>
+          {!dVoo && <div className="text-xs" style={{ color: C.textDim }}>VOOデータ未取り込み</div>}
+          {dVoo && dVoo.speedAlert.level === "normal" && (<>
+            <div className="text-xs mb-0.5" style={{ color: C.textMuted }}>待機中（現在ATH圏、DD{dVoo.speedAlert.currentDD.toFixed(1)}%）</div>
             <div className="text-[10px]" style={{ color: C.textDim }}>次にDD3%到達したら速度を自動計測します</div>
           </>)}
-          {d.speedAlert.level === "pending5" && (<>
-            <div className="text-xs mb-0.5" style={{ color: C.textMuted }}>DD3%到達後{d.speedAlert.daysSinceDD3}営業日経過、DD5%未達</div>
-            <div className="mono text-xs" style={{ color: C.amber }}>{d.speedAlert.hint ?? "速度計測中"}</div>
+          {dVoo && dVoo.speedAlert.level === "pending5" && (<>
+            <div className="text-xs mb-0.5" style={{ color: C.textMuted }}>DD3%到達後{dVoo.speedAlert.daysSinceDD3}営業日経過、DD5%未達</div>
+            <div className="mono text-xs" style={{ color: C.amber }}>{dVoo.speedAlert.hint ?? "速度計測中"}</div>
           </>)}
-          {d.speedAlert.level === "confirmed5" && (<>
-            <div className="mono text-sm font-bold" style={{ color: speedAlertAccent(d.speedAlert) }}>{d.speedAlert.warnLabel}</div>
-            <div className="text-xs" style={{ color: C.textMuted }}>3→5%の速度：{d.speedAlert.speed35}営業日</div>
+          {dVoo && dVoo.speedAlert.level === "confirmed5" && (<>
+            <div className="mono text-sm font-bold" style={{ color: speedAlertAccent(dVoo.speedAlert) }}>{dVoo.speedAlert.warnLabel}</div>
+            <div className="text-xs" style={{ color: C.textMuted }}>3→5%の速度：{dVoo.speedAlert.speed35}営業日</div>
           </>)}
-          {d.speedAlert.level === "deep8" && (<>
-            <div className="mono text-sm font-bold" style={{ color: speedAlertAccent(d.speedAlert) }}>{d.speedAlert.warnLabel}</div>
-            <div className="text-xs" style={{ color: C.textMuted }}>{d.speedAlert.speed38Category ?? "3→8%速度：計測不可"}</div>
+          {dVoo && dVoo.speedAlert.level === "deep8" && (<>
+            <div className="mono text-sm font-bold" style={{ color: speedAlertAccent(dVoo.speedAlert) }}>{dVoo.speedAlert.warnLabel}</div>
+            <div className="text-xs" style={{ color: C.textMuted }}>{dVoo.speedAlert.speed38Category ?? "3→8%速度：計測不可"}</div>
           </>)}
-          <div className="text-[9px] mt-0.5 underline" style={{ color: C.textDim }}>クリックで詳細・バックテストを表示</div>
+          {dVoo && <div className="text-[9px] mt-0.5 underline" style={{ color: C.textDim }}>クリックで詳細・バックテストを表示</div>}
         </button>
       </div>
     </Panel>
@@ -2394,6 +2400,10 @@ export default function DDDashboard() {
   }
 
   const d = useMemo(() => computeAll(rawSeries), [rawSeries]);
+  const vooCalcSeries = useMemo(() => seriesFromSpyVoo(spyVooSeries, "voo"), [spyVooSeries]);
+  const spyCalcSeries = useMemo(() => seriesFromSpyVoo(spyVooSeries, "spy"), [spyVooSeries]);
+  const dVoo = useMemo(() => (vooCalcSeries.length ? computeAll(vooCalcSeries) : null), [vooCalcSeries]);
+  const dSpy = useMemo(() => (spyCalcSeries.length ? computeAll(spyCalcSeries) : null), [spyCalcSeries]);
   const chartData = useMemo(() => sliceForPeriod(d.FULL, d.last, period), [d.FULL, d.last, period]);
   const rangeDays = useMemo(() => { const f = chartData[0].date, l = chartData[chartData.length - 1].date; return Math.round((l - f) / 86400000); }, [chartData]);
   const periodRange = useMemo(() => periodDateRange(d.FULL, d.last, period), [d.FULL, d.last, period]);
@@ -2431,7 +2441,7 @@ export default function DDDashboard() {
     <div className="w-full flex flex-col" style={{ background: C.bg, color: C.text, height: "100dvh", overflow: "hidden", fontFamily: "'Zen Kaku Gothic New','Hiragino Kaku Gothic ProN',sans-serif" }}>
       <style>{`.mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }`}</style>
 
-      {modal?.type === "speedAlert" && <FullScreenModal title="DD加速度アラート（速度・経過日数の法則）" onClose={() => setModal(null)}><SpeedAlertModalContent d={d} /></FullScreenModal>}
+      {modal?.type === "speedAlert" && dVoo && <FullScreenModal title="DD加速度アラート（速度・経過日数の法則・VOO基準）" onClose={() => setModal(null)}><SpeedAlertModalContent d={dVoo} /></FullScreenModal>}
       {modal?.type === "portfolio" && <FullScreenModal title="ポートフォリオ構成表" onClose={() => setModal(null)}><PortfolioTableContent view={pieView} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
       {modal?.type === "ddTable" && <FullScreenModal title="DD毎のA〜E配分表" onClose={() => setModal(null)}><DDTableContent modelRow={d.modelRow} holdings={holdings} /></FullScreenModal>}
       {modal?.type === "rank" && <FullScreenModal title={`${modal.rank}ランクの保有銘柄`} onClose={() => setModal(null)}><RankHoldingsContent rank={modal.rank} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
@@ -2458,7 +2468,7 @@ export default function DDDashboard() {
         <DepthGauge dd={d.currentDD} />
 
         <div className="flex-1 flex flex-col gap-0 p-2 min-w-0">
-          <div style={{ height: 116, flexShrink: 0 }}><StatusPanel d={d} onOpenSpeedAlert={() => setModal({ type: "speedAlert" })} /></div>
+          <div style={{ height: 116, flexShrink: 0 }}><StatusPanel d={d} dVoo={dVoo} dSpy={dSpy} onOpenSpeedAlert={() => setModal({ type: "speedAlert" })} /></div>
 
           <div className="flex-1 flex flex-col" style={{ gap: 0, minHeight: 0 }}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 380px", gap: 4, flex: 1, minHeight: 0 }}>
