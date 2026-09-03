@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ComposedChart, LineChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ReferenceLine, ReferenceDot, ResponsiveContainer, PieChart, Pie, Cell, Brush, Customized,
@@ -2211,10 +2211,33 @@ function SummaryModalContent({ d, holdings, currentHoldingPct, effectiveModelRow
 
   const ctx = useMemo(() => ({ d, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, fixedPositions, recentStats, exposure, diff, consultQuestion, hideAmounts, generatedAt }),
     [d, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, fixedPositions, recentStats, exposure, diff, consultQuestion, hideAmounts, generatedAt]);
-  const output = useMemo(() => (format === "md" ? buildSummaryMarkdown(ctx) : JSON.stringify(buildSummaryJSON(ctx), null, 2)), [format, ctx]);
+  // 出力生成中に例外が起きても空文字/undefinedのままコピーされてしまわないよう、失敗時はエラー内容そのものを出力する。
+  const output = useMemo(() => {
+    try { return format === "md" ? buildSummaryMarkdown(ctx) : JSON.stringify(buildSummaryJSON(ctx), null, 2); }
+    catch (e) { return `【生成エラー】サマリーの生成に失敗しました。お手数ですが下記のエラー内容と共にご連絡ください。\n\n${e?.stack || e?.message || String(e)}`; }
+  }, [format, ctx]);
+  const textareaRef = useRef(null);
+  const [copyError, setCopyError] = useState(false);
 
   const handleCopy = async () => {
-    try { await navigator.clipboard.writeText(output); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch (e) { /* クリップボード非対応環境 */ }
+    try {
+      await navigator.clipboard.writeText(output);
+      setCopied(true); setCopyError(false);
+      setTimeout(() => setCopied(false), 2000);
+      return;
+    } catch (e) { /* Clipboard API不可・権限拒否等 → 下のexecCommandフォールバックへ */ }
+    try {
+      const ta = textareaRef.current;
+      if (!ta) throw new Error("textarea not mounted");
+      ta.focus(); ta.select();
+      const ok = document.execCommand("copy");
+      if (!ok) throw new Error("execCommand returned false");
+      setCopied(true); setCopyError(false);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (e2) {
+      setCopyError(true);
+      setTimeout(() => setCopyError(false), 4000);
+    }
   };
 
   const inputStyle = { background: C.panel, border: `1px solid ${C.borderSoft}`, color: C.text, padding: "3px 6px" };
@@ -2294,10 +2317,10 @@ function SummaryModalContent({ d, holdings, currentHoldingPct, effectiveModelRow
       )}
 
       <div className="flex items-center justify-between mb-1">
-        <span className="text-[10px]" style={{ color: C.textDim }}>出力（{format === "md" ? "Markdown" : "JSON"}）・クリックで全選択</span>
-        <button onClick={handleCopy} className="text-xs px-3 py-1 rounded flex items-center gap-1.5" style={{ background: copied ? C.teal : C.panel2, color: copied ? C.bg : C.textMuted, border: `1px solid ${C.borderSoft}`, fontWeight: copied ? 700 : 400, cursor: "pointer" }}><Copy size={12} />{copied ? "コピーしました" : "コピー"}</button>
+        <span className="text-[10px]" style={{ color: C.textDim }}>出力（{format === "md" ? "Markdown" : "JSON"}）・{output.length.toLocaleString()}文字・クリックで全選択</span>
+        <button onClick={handleCopy} className="text-xs px-3 py-1 rounded flex items-center gap-1.5" style={{ background: copied ? C.teal : copyError ? C.rustSoft : C.panel2, color: copied ? C.bg : copyError ? C.rust : C.textMuted, border: `1px solid ${copyError ? C.rust : C.borderSoft}`, fontWeight: copied || copyError ? 700 : 400, cursor: "pointer" }}><Copy size={12} />{copied ? "コピーしました" : copyError ? "コピー失敗（下の欄を選択してCtrl+C）" : "コピー"}</button>
       </div>
-      <textarea readOnly value={output} onClick={(e) => e.target.select()} className="w-full mono text-[11px] rounded p-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text, height: 380, resize: "vertical" }} />
+      <textarea ref={textareaRef} readOnly value={output} onClick={(e) => e.target.select()} className="w-full mono text-[11px] rounded p-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text, height: 380, resize: "vertical" }} />
       <div className="text-[10px] mt-3 leading-relaxed" style={{ color: C.textDim }}>投資助言ではなく判断補助です。過去確率・トラックレコードは傾向であり将来を保証しません。最終判断はご自身で行ってください。</div>
     </div>
   );
