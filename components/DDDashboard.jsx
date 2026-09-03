@@ -2076,6 +2076,20 @@ function buildSummaryMarkdown(ctx) {
     L.push(`${cat}（${rankLabels[cat]}）: 現状${cur.toFixed(1)}%（目標${tgt}%）${diffPt >= 0 ? "+" : ""}${diffPt}pt`);
   }
   L.push(`ブロック: A+B ${blocks.AB.cur.toFixed(1)}%（目標${blocks.AB.tgt}%） / C ${blocks.Cb.cur.toFixed(1)}%（目標${blocks.Cb.tgt}%） / D+E ${blocks.DE.cur.toFixed(1)}%（目標${blocks.DE.tgt}%）`);
+  L.push("");
+  L.push("■ DD戦略モデル：全節目（+15%〜DD-50%）のA〜E目標配分と現状比較");
+  L.push("節目 | A | B | C | D | E （各セルは 現状%→目標%(差pt) ）");
+  for (const row of MODEL_ROWS) {
+    const cells = CATS.map((cat) => { const cur = currentHoldingPct[cat]; const diffPt = Number((cur - row[cat]).toFixed(1)); return `${cat} ${cur.toFixed(1)}→${row[cat]}(${diffPt >= 0 ? "+" : ""}${diffPt})`; });
+    L.push(`${row.label}${row.label === effectiveModelRow.label ? "（現在地）" : ""}: ${cells.join(" / ")}`);
+  }
+  L.push("");
+  L.push("■ 過去のDD局面一覧（読み込み済み全期間・DD3%以上・全件）");
+  if (!d.episodes.length) L.push("該当局面なし");
+  for (const ep of d.episodes) {
+    L.push(`${fmtYMD(ep.athDate)} ATH$${ep.athPrice.toFixed(2)} → 底値${fmtYMD(ep.troughDate)} $${ep.troughPrice.toFixed(2)}（DD${ep.troughDD.toFixed(1)}%） → ${ep.isOngoing ? "未回復（進行中）" : `回復${fmtYMD(ep.recoveryDate)} $${ep.recoveryPrice.toFixed(2)}`}`);
+  }
+  L.push("");
   const fixedNames = Object.keys(fixedPositions);
   if (fixedNames.length) {
     L.push("【固定ポジション（調整対象外）】");
@@ -2140,26 +2154,50 @@ function buildSummaryMarkdown(ctx) {
   L.push("※本サマリーは判断補助であり投資助言ではありません。過去確率・トラックレコードは傾向であり将来を保証しません。最終判断はご自身で行ってください。");
   return L.join("\n");
 }
+// dシェイプ（computeAllの戻り値）から、AI向けJSON出力用の基礎統計＋全履歴トラックレコードを抜き出す（SP500/VOO/SPYで共通利用）。
+function summarizeSeriesForJSON(dObj) {
+  if (!dObj) return null;
+  return {
+    price: dObj.currentPrice, ath: dObj.currentATH, ath_date: fmtYMD(dObj.athDate), dd_pct: dObj.currentDD, mode: dObj.mode,
+    data_last_date: dObj.last.date.toISOString().slice(0, 10), data_points: dObj.FULL.length, data_first_date: dObj.FULL[0].date.toISOString().slice(0, 10),
+    acceleration: { level: dObj.speedAlert.level, warn_label: dObj.speedAlert.warnLabel ?? null, speed_3to5: dObj.speedAlert.speed35 ?? null, d3_date: dObj.speedAlert.d3Date ? fmtYMD(dObj.speedAlert.d3Date) : null, d5_date: dObj.speedAlert.d5Date ? fmtYMD(dObj.speedAlert.d5Date) : null },
+    track_record_full: dObj.trackRecord,
+    dd_episodes: dObj.episodes.map((ep) => ({ ath_date: fmtYMD(ep.athDate), ath_price: ep.athPrice, trough_date: fmtYMD(ep.troughDate), trough_price: ep.troughPrice, trough_dd_pct: ep.troughDD, recovery_date: ep.recoveryDate ? fmtYMD(ep.recoveryDate) : null, recovery_price: ep.recoveryPrice, is_ongoing: ep.isOngoing })),
+  };
+}
 function buildSummaryJSON(ctx) {
-  const { d, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, fixedPositions, recentStats, exposure, diff, consultQuestion, hideAmounts, generatedAt } = ctx;
+  const { d, dVoo, dSpy, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, fixedPositions, checkpoints, recentStats, exposure, diff, consultQuestion, hideAmounts, generatedAt } = ctx;
   const total = holdingsTotal(holdings);
   const cashHoldings = holdings.filter((h) => h.category === "現金");
   const cash = cashHoldings.reduce((s, h) => s + h.amount, 0);
   const cashByCcy = groupByField(cashHoldings, "currency");
   const val = (v) => hideAmounts ? null : Math.round(v);
+  // バックテスト用の生の日次価格系列（[日付, 終値]の配列。長期データを取り込むほど件数が増える＝これが本サマリーの主目的）。
+  const seriesToPairs = (dObj) => dObj.FULL.map((p) => [p.date.toISOString().slice(0, 10), p.price]);
   return {
     generated_at: generatedAt.toISOString(),
     data_last_date: d.last.date.toISOString().slice(0, 10),
     amounts_hidden: hideAmounts,
     household_total: val(total),
     lifecycle: { spouse_working: lifecycle.spouseWorking, phase: lifecycle.phase, annual_withdrawal: val(lifecycle.annualWithdrawal) },
-    spy: {
-      price: d.currentPrice, ath: d.currentATH, ath_date: fmtYMD(d.athDate), dd_pct: d.currentDD, mode: d.mode,
-      acceleration: { level: d.speedAlert.level, warn_label: d.speedAlert.warnLabel ?? null, speed_3to5: d.speedAlert.speed35 ?? null, d3_date: d.speedAlert.d3Date ? fmtYMD(d.speedAlert.d3Date) : null, d5_date: d.speedAlert.d5Date ? fmtYMD(d.speedAlert.d5Date) : null },
-      recent: recentStats,
-      track_record: { total_years: Number(d.trackRecord.totalYears.toFixed(1)), n_episodes: d.trackRecord.n, freq_per_year: d.trackRecord.ddFreqPerYear },
+    sp500: { ...summarizeSeriesForJSON(d), recent: recentStats },
+    voo: dVoo ? summarizeSeriesForJSON(dVoo) : null,
+    spy: dSpy ? summarizeSeriesForJSON(dSpy) : null,
+    price_series: {
+      note: "各配列は[日付, 終値]の全履歴（読み込み済み全期間）。バックテスト・独自分析にそのまま使用可能。",
+      sp500: seriesToPairs(d),
+      voo: dVoo ? seriesToPairs(dVoo) : null,
+      spy: dSpy ? seriesToPairs(dSpy) : null,
+    },
+    dd_strategy: {
+      note: "DD戦略：S&P500がATHから-3%以上下落する節目ごとにA〜E配分をこのモデルに沿って調整する。値は目標構成比(%)。",
+      milestones_pct: MILESTONES,
+      allocation_model: MODEL_ROWS,
+      current_model_row: effectiveModelRow.label,
+      checkpoints: (checkpoints || []).filter((cp) => cp.enabled).map((cp) => ({ label: cp.label, target_type: cp.targetType, target_values: cp.targetValues, direction: cp.direction, threshold_pct: cp.thresholdPct, evaluation: evaluateCheckpoint(cp, holdings, total)?.text ?? null })),
     },
     allocation: Object.fromEntries(CATS.map((cat) => [cat, { value: val((currentHoldingPct[cat] / 100) * total), pct: currentHoldingPct[cat], model_pct: effectiveModelRow[cat], diff_pt: Number((currentHoldingPct[cat] - effectiveModelRow[cat]).toFixed(1)), categories: rankLabels[cat] }])),
+    allocation_vs_all_milestones: MODEL_ROWS.map((row) => ({ milestone: row.label, is_current: row.label === effectiveModelRow.label, cats: Object.fromEntries(CATS.map((cat) => [cat, { current_pct: currentHoldingPct[cat], target_pct: row[cat], diff_pt: Number((currentHoldingPct[cat] - row[cat]).toFixed(1)) }])) })),
     blocks: { AB: blocks.AB, C: blocks.Cb, DE: blocks.DE },
     fixed_positions: Object.entries(fixedPositions).map(([name, reason]) => ({ name, reason, value: val(holdings.filter((h) => h.name === name).reduce((s, h) => s + h.amount, 0)) })),
     dd3_rebalance_plan: (() => {
@@ -2193,8 +2231,8 @@ function ClickLegend({ items, hidden, onToggle }) {
 }
 
 /* ---------------- 詳細サマリー出力モーダル ---------------- */
-function SummaryModalContent({ d, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, onLifecycleChange, fixedPositions, onFixedPositionChange, prevSnapshot, onSaveSnapshot }) {
-  const [format, setFormat] = useState("md");
+function SummaryModalContent({ d, dVoo, dSpy, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, onLifecycleChange, fixedPositions, onFixedPositionChange, checkpoints, prevSnapshot, onSaveSnapshot }) {
+  const [format, setFormat] = useState("json");
   const [hideAmounts, setHideAmounts] = useState(false);
   const [consultQuestion, setConsultQuestion] = useState("");
   const [copied, setCopied] = useState(false);
@@ -2209,8 +2247,8 @@ function SummaryModalContent({ d, holdings, currentHoldingPct, effectiveModelRow
   // このサマリーを閉じた時点の保有内容を「次回比較用」のスナップショットとして保存する（開いている間は前回分との差分を表示し続ける）。
   useEffect(() => () => onSaveSnapshot(holdings, generatedAt), []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const ctx = useMemo(() => ({ d, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, fixedPositions, recentStats, exposure, diff, consultQuestion, hideAmounts, generatedAt }),
-    [d, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, fixedPositions, recentStats, exposure, diff, consultQuestion, hideAmounts, generatedAt]);
+  const ctx = useMemo(() => ({ d, dVoo, dSpy, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, fixedPositions, checkpoints, recentStats, exposure, diff, consultQuestion, hideAmounts, generatedAt }),
+    [d, dVoo, dSpy, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, fixedPositions, checkpoints, recentStats, exposure, diff, consultQuestion, hideAmounts, generatedAt]);
   // 出力生成中に例外が起きても空文字/undefinedのままコピーされてしまわないよう、失敗時はエラー内容そのものを出力する。
   const output = useMemo(() => {
     try { return format === "md" ? buildSummaryMarkdown(ctx) : JSON.stringify(buildSummaryJSON(ctx), null, 2); }
@@ -2245,7 +2283,7 @@ function SummaryModalContent({ d, holdings, currentHoldingPct, effectiveModelRow
   return (
     <div className="flex flex-col">
       <p className="text-xs mb-3 leading-relaxed" style={{ color: C.textDim }}>
-        現在の状態を判定根拠・トラックレコード・直近値動きまで含めて書き出します。そのままチャットに貼り付けてClaudeに相談できます。
+        ポートフォリオ・SP500/VOO/SPYの日次価格系列（バックテスト用の全履歴）・DD戦略モデル（全節目のA〜E目標配分と現状差異）・過去の全DD局面など、AIによる投資判断・分析に必要な情報をできる限り詳細に書き出します。人が読みやすい必要はないため、JSON形式が最も網羅的です。そのままチャットに貼り付けて相談できます。
       </p>
       <div className="flex items-center gap-2 mb-3 flex-wrap">
         <div className="flex gap-0.5">
@@ -2631,7 +2669,7 @@ export default function DDDashboard() {
       {modal?.type === "ddChart" && <FullScreenModal title="評価額（左軸） / DD%（右軸）" onClose={() => setModal(null)}><DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} /></FullScreenModal>}
       {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} spyVooSeries={spyVooSeries} onAppendSpyVoo={handleAppendSpyVoo} onImportSpyVoo={handleImportSpyVoo} onResetSpyVooField={handleResetSpyVooField} />}
       {modal?.type === "checkpointSettings" && <FullScreenModal title="チェックポイント設定" onClose={() => setModal(null)}><CheckpointSettingsContent checkpoints={checkpoints} onCheckpointChange={handleCheckpointChange} holdings={holdings} /></FullScreenModal>}
-      {modal?.type === "summary" && <FullScreenModal title="詳細サマリー出力（AI相談用）" onClose={() => setModal(null)}><SummaryModalContent d={d} holdings={holdings} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} blocks={blocks} rankLabels={rankLabels} lifecycle={lifecycle} onLifecycleChange={handleLifecycleChange} fixedPositions={fixedPositions} onFixedPositionChange={handleFixedPositionChange} prevSnapshot={prevSnapshot} onSaveSnapshot={handleSaveSnapshot} /></FullScreenModal>}
+      {modal?.type === "summary" && <FullScreenModal title="詳細サマリー出力（AI相談用）" onClose={() => setModal(null)}><SummaryModalContent d={d} dVoo={dVoo} dSpy={dSpy} holdings={holdings} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} blocks={blocks} rankLabels={rankLabels} lifecycle={lifecycle} onLifecycleChange={handleLifecycleChange} fixedPositions={fixedPositions} onFixedPositionChange={handleFixedPositionChange} checkpoints={checkpoints} prevSnapshot={prevSnapshot} onSaveSnapshot={handleSaveSnapshot} /></FullScreenModal>}
 
       <div className="flex items-center justify-between px-5 py-3 shrink-0" style={{ borderBottom: `1px solid ${C.border}`, background: C.panel2 }}>
         <div className="flex items-center gap-3"><span className="text-sm font-bold tracking-wide">DD戦略ダッシュボード</span><span className="text-[11px]" style={{ color: C.textDim }}>S&P500・日次</span></div>
