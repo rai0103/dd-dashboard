@@ -1325,6 +1325,7 @@ function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve
   const crashDDatSameDay = crash.curve[cmpIdx].dd;
   const deeper = currentDD < crashDDatSameDay;
   const recoveryDays = crash.recoveryDay - crash.troughDay;
+  const ddTicks = ddAxisTicksForMaxDrawdown(crash.maxDD);
   return (
     <div>
       <div className="grid grid-cols-4 gap-3 mb-5">
@@ -1333,15 +1334,16 @@ function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve
         <div className="rounded px-3 py-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}><div className="text-[10px]" style={{ color: C.textDim }}>開始～大底</div><div className="mono text-xs">{crash.troughDay}日間（{fmtDateSlash(crash.start)}～{fmtDateSlash(crash.low)}）</div></div>
         <div className="rounded px-3 py-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}><div className="text-[10px]" style={{ color: C.textDim }}>大底～回復（ATH更新）</div><div className="mono text-xs">{recoveryDays}日間（{fmtDateSlash(crash.low)}～{fmtDateSlash(crash.athRecoveryDate)}）</div></div>
       </div>
-      <div style={{ height: 260 }} className="mb-4">
+      <div style={{ height: 300 }} className="mb-4">
         <ResponsiveContainer width="100%" height="100%">
-          <LineChart margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+          <LineChart margin={{ top: 22, right: 20, left: 0, bottom: 28 }}>
             <CartesianGrid stroke={C.borderSoft} vertical={false} />
-            <XAxis dataKey="day" type="number" domain={[0, crash.recoveryDay]} allowDuplicatedCategory={false} tick={{ fill: C.textDim, fontSize: 10 }} axisLine={{ stroke: C.border }} tickLine={false} label={{ value: "経過日数（ATH起点、左端=ATH・右端=次のATH）", position: "insideBottom", offset: -2, fill: C.textDim, fontSize: 10 }} />
-            <YAxis domain={[Math.min(crash.maxDD * 1.1, -20), 2]} tick={{ fill: C.textDim, fontSize: 10 }} axisLine={false} tickLine={false} width={48} tickFormatter={(v) => `${v}%`} label={{ value: "DD%", angle: -90, position: "insideLeft", fill: C.textDim, fontSize: 10 }} />
+            <XAxis dataKey="day" type="number" domain={[0, crash.recoveryDay]} allowDuplicatedCategory={false} tick={{ fill: C.textDim, fontSize: 10 }} axisLine={{ stroke: C.border }} tickLine={false} label={{ value: "経過日数（ATH起点、左端=ATH・右端=次のATH）", position: "bottom", offset: 4, fill: C.textDim, fontSize: 10 }} />
+            <YAxis domain={[ddTicks[ddTicks.length - 1], 2]} ticks={ddTicks} tick={{ fill: C.textDim, fontSize: 10 }} axisLine={false} tickLine={false} width={48} tickFormatter={(v) => `${v}%`} label={{ value: "DD%", angle: -90, position: "insideLeft", fill: C.textDim, fontSize: 10 }} />
             <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} formatter={(v, n) => [`${v}%`, n === "dd" ? crash.name : "現在"]} />
-            <ReferenceLine x={crash.troughDay} stroke={C.borderSoft} strokeDasharray="2 3" label={{ value: "底値", fill: C.textDim, fontSize: 9, position: "top" }} />
-            <ReferenceLine x={daysSinceATH} stroke={C.teal} strokeDasharray="2 3" label={{ value: "現在", fill: C.teal, fontSize: 9, position: "top" }} />
+            <ReferenceLine y={-3} stroke={C.rust} strokeDasharray="4 3" strokeWidth={1.3} label={{ value: "-3%", position: "left", fill: C.rust, fontSize: 9 }} />
+            <ReferenceLine x={crash.troughDay} stroke={C.borderSoft} strokeDasharray="2 3" label={{ value: "底値", fill: C.textDim, fontSize: 9, position: "insideTopLeft" }} />
+            <ReferenceLine x={daysSinceATH} stroke={C.teal} strokeDasharray="2 3" label={{ value: "現在", fill: C.teal, fontSize: 9, position: "insideTopRight" }} />
             <Line data={crash.curve} dataKey="dd" type="monotone" stroke={crash.color} strokeWidth={1.8} dot={false} isAnimationActive={false} name="dd" />
             <Line data={currentEpisodeCurve} dataKey="dd" type="monotone" stroke={C.teal} strokeWidth={2.4} dot={false} isAnimationActive={false} connectNulls={false} name="current" />
             <ReferenceDot x={crash.troughDay} y={crash.maxDD} r={4} fill={crash.color} stroke={C.bg} strokeWidth={2} />
