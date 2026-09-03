@@ -866,9 +866,9 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBru
       {MILESTONES.filter((t) => t !== -3).map((t) => (<ReferenceLine key={t} yAxisId="dd" y={t} stroke={C.borderSoft} strokeDasharray="2 3" label={{ value: `${t}%`, position: "left", fill: C.textDim, fontSize: Math.max(8, fontSize - 2) }} />))}
       <ReferenceLine yAxisId="dd" y={-3} stroke={C.rust} strokeDasharray="4 3" strokeWidth={1.3} label={{ value: "-3%", position: "left", fill: C.rust, fontSize: Math.max(8, fontSize - 2) }} />
       {chartData[0].date < SPY_LISTING_DATE && chartData[chartData.length - 1].date > SPY_LISTING_DATE && (<ReferenceLine yAxisId="price" x={SPY_LISTING_DATE} stroke={C.violet} strokeDasharray="3 3" label={{ value: "S&P500上場", fill: C.violet, fontSize: Math.max(9, fontSize - 1), position: "top" }} />)}
-      <Area yAxisId="dd" type="monotone" dataKey="dd" stroke={C.rust} fill="url(#ddFill)" strokeWidth={1.3} dot={false} isAnimationActive={false} fillOpacity={hidden.dd ? 0 : 1} strokeOpacity={hidden.dd ? 0 : 1} />
-      <Area yAxisId="price" type="monotone" dataKey="price" stroke={C.teal} fill="url(#priceFill)" strokeWidth={1.8} dot={false} isAnimationActive={false} fillOpacity={hidden.price ? 0 : 1} strokeOpacity={hidden.price ? 0 : 1} />
-      <Line yAxisId="price" type="monotone" dataKey="ath" stroke={C.textDim} strokeDasharray="3 4" strokeWidth={1} dot={false} isAnimationActive={false} strokeOpacity={hidden.price ? 0 : 1} />
+      <Area yAxisId="dd" type="linear" dataKey="dd" stroke={C.rust} fill="url(#ddFill)" strokeWidth={1.3} dot={false} isAnimationActive={false} fillOpacity={hidden.dd ? 0 : 1} strokeOpacity={hidden.dd ? 0 : 1} />
+      <Area yAxisId="price" type="linear" dataKey="price" stroke={C.teal} fill="url(#priceFill)" strokeWidth={1.8} dot={false} isAnimationActive={false} fillOpacity={hidden.price ? 0 : 1} strokeOpacity={hidden.price ? 0 : 1} />
+      <Line yAxisId="price" type="linear" dataKey="ath" stroke={C.textDim} strokeDasharray="3 4" strokeWidth={1} dot={false} isAnimationActive={false} strokeOpacity={hidden.price ? 0 : 1} />
       {markerPoints.length > 0 && <Customized component={<ChartMarkers points={markerPoints} chartWidth={width} />} />}
       {withBrush && <Brush dataKey="date" height={26} stroke={C.teal} fill={C.panel2} tickFormatter={(dt) => fmtAxisDate(new Date(dt), rangeDays)} travellerWidth={8} />}
     </ComposedChart>
@@ -1009,7 +1009,7 @@ function StatusPanel({ d, dVoo, dSpy, onOpenSpeedAlert }) {
               {data ? (<>
                 <span className="font-bold text-xs" style={{ display: "inline-block", width: 50, textAlign: "right", color: data.currentDD >= 0 ? C.teal : C.rust }}>{data.currentDD.toFixed(1)}%</span>
                 {data.nextMilestone !== null && (
-                  <span className="font-bold text-sm" style={{ marginLeft: 8, color: C.text }}>次{data.nextMilestone}%まで {data.distanceToNextMilestone.toFixed(1)}%<span style={{ color: C.textMuted }}>（${data.nextMilestonePrice.toFixed(2)}）</span></span>
+                  <span className="font-bold text-xs" style={{ marginLeft: 8, color: C.text }}>DD{data.nextMilestone}%まで {data.distanceToNextMilestone.toFixed(1)}%<span style={{ color: C.textMuted }}>（${data.nextMilestonePrice.toFixed(2)}）</span></span>
                 )}
               </>) : (<span className="text-xs" style={{ color: C.textDim }}>—</span>)}
             </div>
