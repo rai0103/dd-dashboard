@@ -978,9 +978,9 @@ function StatusPanel({ d, dVoo, dSpy, onOpenSpeedAlert }) {
                 <span className="font-bold" style={{ color: C.textMuted, display: "inline-block", width: 42 }}>{label}</span>
                 {data ? (<>
                   <span style={{ display: "inline-block", width: 68, textAlign: "right" }}>${data.currentPrice.toFixed(2)}</span>
+                  {chg !== null && (<span style={{ display: "inline-block", width: 54, textAlign: "right", marginLeft: 4, color: chg >= 0 ? C.teal : C.rust }}>（{chg >= 0 ? "+" : ""}{chg.toFixed(1)}%）</span>)}
                   <span style={{ color: C.textDim, marginLeft: 8 }}>ATH</span>
                   <span style={{ display: "inline-block", width: 68, textAlign: "right", color: C.textDim, marginLeft: 4 }}>${data.currentATH.toFixed(2)}</span>
-                  {chg !== null && (<span style={{ display: "inline-block", width: 44, textAlign: "right", marginLeft: 4, color: chg >= 0 ? C.teal : C.rust }}>{chg >= 0 ? "+" : ""}{chg.toFixed(1)}%</span>)}
                 </>) : (<span style={{ color: C.textDim }}>データ未取り込み</span>)}
               </div>
             );
@@ -993,6 +993,8 @@ function StatusPanel({ d, dVoo, dSpy, onOpenSpeedAlert }) {
               <span className="font-bold text-xs" style={{ color: C.textMuted, display: "inline-block", width: 42 }}>{label}</span>
               {data ? (<>
                 <span className="font-bold text-xs" style={{ display: "inline-block", width: 50, textAlign: "right", color: data.currentDD >= 0 ? C.teal : C.rust }}>{data.currentDD.toFixed(1)}%</span>
+                <span className="text-xs" style={{ display: "inline-block", width: 70, marginLeft: 8, color: C.textMuted }}>DD-3%評価額</span>
+                <span className="font-bold text-xs" style={{ display: "inline-block", width: 80, textAlign: "right", color: C.text }}>（${(data.currentATH * 0.97).toFixed(2)}）</span>
                 {data.nextMilestone !== null && (
                   <span className="font-bold text-xs" style={{ marginLeft: 8, color: C.text }}>DD{data.nextMilestone}%まで {data.distanceToNextMilestone.toFixed(1)}%<span style={{ color: C.textMuted }}>（${data.nextMilestonePrice.toFixed(2)}）</span></span>
                 )}
