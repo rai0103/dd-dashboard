@@ -226,6 +226,12 @@ function computeAll(rawSeries) {
 function seriesFromSpyVoo(spyVooSeries, field) {
   return spyVooSeries.filter((p) => p[field] != null).map((p) => ({ date: p.date, price: p[field] })).sort((a, b) => a.date - b.date);
 }
+// 前営業日（系列上の直前の日）比の変化率（%）。系列が2件未満なら算出不可。
+function dayChangePct(dObj) {
+  if (!dObj || dObj.FULL.length < 2) return null;
+  const prevPrice = dObj.FULL[dObj.FULL.length - 2].price;
+  return ((dObj.last.price / prevPrice) - 1) * 100;
+}
 
 /* ---------------- トラックレコード統計（読み込まれている実データから都度算出） ---------------- */
 // 節目間の進行確率・DD-3%到達からの最終到達確率で扱う節目の刻み。
@@ -978,26 +984,36 @@ function StatusPanel({ d, dVoo, dSpy, onOpenSpeedAlert }) {
   return (
     <Panel title="現在のステータス" hideHeader className="h-full">
       <div className="flex h-full">
-        <div className="flex-1 px-4 py-2 flex flex-col justify-center gap-0.5" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
-          <div className="text-[10px] mb-0.5" style={{ color: C.textDim }}>評価額 / ATH</div>
-          {tickers.map(({ label, data }) => (
-            <div key={label} className="text-[10px] mono whitespace-nowrap">
-              <span className="font-bold" style={{ color: C.textMuted }}>{label}</span>{" "}
-              {data ? (<>${data.currentPrice.toFixed(2)}<span style={{ color: C.textDim }}> ATH ${data.currentATH.toFixed(2)}（{fmtYMD(data.athDate)}）</span></>) : (<span style={{ color: C.textDim }}>データ未取り込み</span>)}
-            </div>
-          ))}
+        <div className="flex-1 px-4 py-2 flex flex-col justify-center" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
+          <div className="text-[10px] mb-1" style={{ color: C.textDim }}>評価額 / ATH（{fmtYMD(d.athDate)}）</div>
+          {tickers.map(({ label, data }) => {
+            const chg = dayChangePct(data);
+            return (
+              <div key={label} className="text-xs mono whitespace-nowrap flex items-baseline" style={{ height: 20 }}>
+                <span className="font-bold" style={{ color: C.textMuted, display: "inline-block", width: 42 }}>{label}</span>
+                {data ? (<>
+                  <span style={{ display: "inline-block", width: 68, textAlign: "right" }}>${data.currentPrice.toFixed(2)}</span>
+                  <span style={{ color: C.textDim, marginLeft: 8 }}>ATH</span>
+                  <span style={{ display: "inline-block", width: 68, textAlign: "right", color: C.textDim, marginLeft: 4 }}>${data.currentATH.toFixed(2)}</span>
+                  {chg !== null && (<span style={{ display: "inline-block", width: 44, textAlign: "right", marginLeft: 4, color: chg >= 0 ? C.teal : C.rust }}>{chg >= 0 ? "+" : ""}{chg.toFixed(1)}%</span>)}
+                </>) : (<span style={{ color: C.textDim }}>データ未取り込み</span>)}
+              </div>
+            );
+          })}
         </div>
-        <div className="flex-1 px-4 py-2 flex flex-col justify-center gap-0.5" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
-          <div className="flex items-center gap-1.5 mb-0.5"><TrendingDown size={11} style={{ color: C.rust }} /><span className="text-[10px] font-bold" style={{ color: C.rust }}>最高値比</span></div>
+        <div className="flex-1 px-4 py-2 flex flex-col justify-center" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
+          <div className="flex items-center gap-1.5 mb-1"><TrendingDown size={11} style={{ color: C.rust }} /><span className="text-[10px] font-bold" style={{ color: C.rust }}>最高値比</span></div>
           {tickers.map(({ label, data }) => (
-            <div key={label} className="mono text-xs whitespace-nowrap">
-              <span className="font-bold" style={{ color: C.textMuted, display: "inline-block", minWidth: 40 }}>{label}</span>
-              {data ? (<span className="font-bold" style={{ color: data.currentDD >= 0 ? C.teal : C.rust }}>{data.currentDD.toFixed(1)}%</span>) : (<span style={{ color: C.textDim }}>—</span>)}
+            <div key={label} className="mono whitespace-nowrap flex items-baseline" style={{ height: 20 }}>
+              <span className="font-bold text-xs" style={{ color: C.textMuted, display: "inline-block", width: 42 }}>{label}</span>
+              {data ? (<>
+                <span className="font-bold text-xs" style={{ display: "inline-block", width: 50, textAlign: "right", color: data.currentDD >= 0 ? C.teal : C.rust }}>{data.currentDD.toFixed(1)}%</span>
+                {data.nextMilestone !== null && (
+                  <span className="font-bold text-sm" style={{ marginLeft: 8, color: C.text }}>次{data.nextMilestone}%まで {data.distanceToNextMilestone.toFixed(1)}%<span style={{ color: C.textMuted }}>（${data.nextMilestonePrice.toFixed(2)}）</span></span>
+                )}
+              </>) : (<span className="text-xs" style={{ color: C.textDim }}>—</span>)}
             </div>
           ))}
-          {d.nextMilestone !== null && (
-            <div className="text-[10px] mt-1 pt-1" style={{ color: C.textDim, borderTop: `1px solid ${C.borderSoft}` }}>次の基準（{d.nextMilestone}%）まで：<span className="mono font-semibold">{d.distanceToNextMilestone.toFixed(1)}%</span>（<span className="mono">${d.nextMilestonePrice.toFixed(2)}</span>）</div>
-          )}
         </div>
         <div className="flex-1 px-4 py-2 flex flex-col justify-center" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
           <div className="flex items-center gap-1.5 mb-1"><Clock size={11} style={{ color: C.textDim }} /><span className="text-[10px]" style={{ color: C.textDim }}>経過日数（VOO基準）</span></div>
@@ -1451,9 +1467,47 @@ function CheckpointSettingsContent({ checkpoints, onCheckpointChange, holdings }
 }
 
 /* ---------------- data input modal ---------------- */
-function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, onBackfill, source, holdings, onUpdateHoldings, onResetAndImportHoldings, onResetHoldings, holdingsSource, overrides, categoryDefaultRanks, onCategoryDefaultRankChange, spyVooSeries, onAppendSpyVoo, onImportSpyVoo }) {
+// VOO/SPY単体のデータ管理パネル（CSV一括取り込み・1日分の手動入力・現在のデータ表示・削除）。
+function InstrumentPanel({ instrument, spyVooSeries, fileName, fileMsg, onFileChange, manualDate, setManualDate, manualPrice, setManualPrice, onAddManual, onResetField }) {
+  const label = instrument === "voo" ? "VOO" : "SPY";
+  const entries = spyVooSeries.filter((p) => p[instrument] != null);
+  return (
+    <div>
+      <p className="text-sm mb-1 leading-relaxed" style={{ color: C.textMuted }}>Stooqからダウンロードした {label}.US の日次CSV（Date,Open,High,Low,Close,Volume・日付昇順）を選択するか、1日分だけ直接入力してください。</p>
+      <p className="text-xs mb-4" style={{ color: C.textDim }}>取得元: https://stooq.com/q/d/l/?s={label.toLowerCase()}.us&i=d</p>
+      <label className="inline-flex items-center gap-2 text-xs px-3 py-2 rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.textMuted, cursor: "pointer" }}>
+        <Upload size={13} /> {label} CSVを選択
+        <input type="file" accept=".csv" onChange={onFileChange} style={{ display: "none" }} />
+      </label>
+      {fileName && <div className="text-xs mt-2" style={{ color: C.textDim }}>選択中: {fileName}</div>}
+      {fileMsg && <div className="text-xs mt-2" style={{ color: C.teal }}>{fileMsg}</div>}
+
+      <div className="mt-8 pt-5" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+        <p className="text-sm mb-4" style={{ color: C.textMuted }}>1日分だけ{label}の終値を直接入力する場合はこちら。既存データに追記・上書きされます。</p>
+        <div className="flex items-end gap-3">
+          <div><label className="text-[10px] block mb-1" style={{ color: C.textDim }}>日付</label><input type="date" value={manualDate} onChange={(e) => setManualDate(e.target.value)} className="text-xs px-2 py-1.5 rounded mono" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }} /></div>
+          <div><label className="text-[10px] block mb-1" style={{ color: C.textDim }}>終値（$）</label><input type="number" step="0.01" value={manualPrice} onChange={(e) => setManualPrice(e.target.value)} placeholder="704.20" className="text-xs px-2 py-1.5 rounded w-28 mono" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }} /></div>
+          <button onClick={onAddManual} className="text-xs px-4 py-1.5 rounded" style={{ background: C.teal, color: C.bg, fontWeight: 700, border: "none", cursor: "pointer" }}>追加</button>
+        </div>
+      </div>
+
+      <div className="mt-8 pt-4 flex items-center justify-between" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+        <div className="flex items-center gap-2 text-xs" style={{ color: C.textDim }}>
+          <Database size={13} />
+          <span>現在の{label}データ: {entries.length.toLocaleString()}件{entries.length > 0 && `・最終日 ${entries[entries.length - 1].date.toLocaleDateString("ja-JP")}`}</span>
+        </div>
+        <button onClick={onResetField} className="text-xs px-2 py-1 rounded" style={{ color: C.textMuted, background: "transparent", border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>{label}データを削除</button>
+      </div>
+    </div>
+  );
+}
+
+function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, onBackfill, source, holdings, onUpdateHoldings, onResetAndImportHoldings, onResetHoldings, holdingsSource, overrides, categoryDefaultRanks, onCategoryDefaultRankChange, spyVooSeries, onAppendSpyVoo, onImportSpyVoo, onResetSpyVooField }) {
   const [dataset, setDataset] = useState("voo"); // "voo" | "holdings"
+  const [instrument, setInstrument] = useState("sp500"); // "sp500" | "voo" | "spy"（voo/spyのCSV/手動入力/削除の対象切り替え）
   const [tab, setTab] = useState("csv");
+  const [instrManualDate, setInstrManualDate] = useState(new Date().toISOString().slice(0, 10));
+  const [instrManualPrice, setInstrManualPrice] = useState("");
   const [manualDate, setManualDate] = useState(new Date().toISOString().slice(0, 10));
   const [manualPrice, setManualPrice] = useState("");
   const [fileName, setFileName] = useState(null);
@@ -1579,6 +1633,12 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, onBa
     onAppend({ date: new Date(manualDate), price });
     setManualPrice("");
   };
+  const handleAddInstrManual = () => {
+    const price = parseFloat(instrManualPrice);
+    if (!instrManualDate || isNaN(price)) return;
+    onImportSpyVoo(instrument, [{ date: new Date(instrManualDate), price }]);
+    setInstrManualPrice("");
+  };
   const handleRakutenFile = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -1627,7 +1687,7 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, onBa
 
   return (
     <FullScreenModal title="データの入力" onClose={handleModalClose}>
-      <div className="flex gap-2 mb-3">{tabBtn(dataset, setDataset, "voo", "S&P500価格データ")}{tabBtn(dataset, setDataset, "holdings", "保有資産データ（ポートフォリオ）")}</div>
+      <div className="flex gap-2 mb-3">{tabBtn(dataset, setDataset, "voo", "SP500/VOO/SPY価格データ")}{tabBtn(dataset, setDataset, "holdings", "保有資産データ（ポートフォリオ）")}</div>
 
       {dataset === "voo" ? (
         <>
@@ -1641,72 +1701,73 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, onBa
           </div>
           <div className="text-[10px] mb-2" style={{ color: C.textDim }}>※「データ更新」はSPY/VOOのみ自動取得します（記録用途）。S&P500はダッシュボードのDD計算に使う本系列のため、引き続き下記のCSV取り込み・直接入力で更新してください。</div>
           {updateMsg && <div className="text-xs mb-4" style={{ color: updateError ? C.rust : C.teal }}>{updateMsg}</div>}
-          <div className="flex gap-2 mb-5">{tabBtn(tab, setTab, "csv", "方式A：CSV取り込み（Stooq）")}{tabBtn(tab, setTab, "manual", "方式B：直接入力")}</div>
-          {tab === "csv" ? (
-            <div>
-              <p className="text-sm mb-1 leading-relaxed" style={{ color: C.textMuted }}>Stooqからダウンロードした S&P500.US の日次CSV（Date,Open,High,Low,Close,Volume・日付昇順）を選択してください。</p>
-              <p className="text-xs mb-4" style={{ color: C.textDim }}>取得元: https://stooq.com/q/d/l/?s=spy.us&i=d</p>
-              <label className="inline-flex items-center gap-2 text-xs px-3 py-2 rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.textMuted, cursor: "pointer" }}>
-                <Upload size={13} /> CSVファイルを選択
-                <input type="file" accept=".csv" onChange={handleFile} style={{ display: "none" }} />
-              </label>
-              {fileName && <div className="text-xs mt-2" style={{ color: C.textDim }}>選択中: {fileName}</div>}
-              {fileMsg && <div className="text-xs mt-2" style={{ color: C.teal }}>{fileMsg}</div>}
 
-              <div className="mt-8 pt-5" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
-                <p className="text-sm mb-1 leading-relaxed" style={{ color: C.textMuted }}>S&P500上場（{SPY_LISTING_DATE.toLocaleDateString("ja-JP")}）より前の期間は、SP500の長期データから概算値を算出して補完できます。</p>
-                <p className="text-xs mb-4 leading-relaxed" style={{ color: C.textDim }}>方法：S&P500の最初の終値と同時期のSP500水準から換算係数を計算し、それより前のSP500日次値に係数を掛けて合成します（お手持ちの sp500_daily_1957-2026.xlsx をCSV書き出ししたものなどが使えます。列名は Date/日付, Close/終値 に対応）。</p>
-                <label className="inline-flex items-center gap-2 text-xs px-3 py-2 rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.textMuted, cursor: "pointer" }}>
-                  <Upload size={13} /> SP500長期CSVを選択
-                  <input type="file" accept=".csv" onChange={handleSp500File} style={{ display: "none" }} />
-                </label>
-                {sp500FileName && <div className="text-xs mt-2" style={{ color: C.textDim }}>選択中: {sp500FileName}</div>}
-                {sp500Msg && <div className="text-xs mt-2" style={{ color: C.teal }}>{sp500Msg}</div>}
-                <div className="text-[10px] mt-2" style={{ color: C.textDim }}>※ 配当再投資を含まない価格指数としての概算です。S&P500の実際の分配落ちとは完全には一致しません。</div>
-              </div>
+          <div className="flex gap-2 mb-5">
+            {tabBtn(instrument, setInstrument, "sp500", "SP500（本系列・DD計算に使用）")}
+            {tabBtn(instrument, setInstrument, "voo", "VOO")}
+            {tabBtn(instrument, setInstrument, "spy", "SPY")}
+          </div>
 
-              <div className="mt-8 pt-5" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
-                <p className="text-sm mb-1 leading-relaxed" style={{ color: C.textMuted }}>SPY・VOOの過去データを一括取り込みして、SP500/SPY/VOOのトラックレコードを完成させられます。</p>
-                <p className="text-xs mb-4 leading-relaxed" style={{ color: C.textDim }}>Stooqからダウンロードした SPY.US / VOO.US の日次CSV（Date,Open,High,Low,Close,Volume・日付昇順）を、それぞれ選択してください。既存データと同じ日付は上書きされます。</p>
-                <div className="flex flex-wrap gap-3">
-                  <div>
+          {instrument === "sp500" ? (
+            <>
+              <div className="flex gap-2 mb-5">{tabBtn(tab, setTab, "csv", "方式A：CSV取り込み（Stooq）")}{tabBtn(tab, setTab, "manual", "方式B：直接入力")}</div>
+              {tab === "csv" ? (
+                <div>
+                  <p className="text-sm mb-1 leading-relaxed" style={{ color: C.textMuted }}>Stooqからダウンロードした SPY.US の日次CSV（Date,Open,High,Low,Close,Volume・日付昇順）を選択してください。（この値をダッシュボードでは「S&P500」本系列として表示します。VOO・SPY単体のデータは上のVOO・SPYタブから取り込んでください）</p>
+                  <p className="text-xs mb-4" style={{ color: C.textDim }}>取得元: https://stooq.com/q/d/l/?s=spy.us&i=d</p>
+                  <label className="inline-flex items-center gap-2 text-xs px-3 py-2 rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.textMuted, cursor: "pointer" }}>
+                    <Upload size={13} /> CSVファイルを選択
+                    <input type="file" accept=".csv" onChange={handleFile} style={{ display: "none" }} />
+                  </label>
+                  {fileName && <div className="text-xs mt-2" style={{ color: C.textDim }}>選択中: {fileName}</div>}
+                  {fileMsg && <div className="text-xs mt-2" style={{ color: C.teal }}>{fileMsg}</div>}
+
+                  <div className="mt-8 pt-5" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+                    <p className="text-sm mb-1 leading-relaxed" style={{ color: C.textMuted }}>S&P500上場（{SPY_LISTING_DATE.toLocaleDateString("ja-JP")}）より前の期間は、SP500の長期データから概算値を算出して補完できます。</p>
+                    <p className="text-xs mb-4 leading-relaxed" style={{ color: C.textDim }}>方法：S&P500の最初の終値と同時期のSP500水準から換算係数を計算し、それより前のSP500日次値に係数を掛けて合成します（お手持ちの sp500_daily_1957-2026.xlsx をCSV書き出ししたものなどが使えます。列名は Date/日付, Close/終値 に対応）。</p>
                     <label className="inline-flex items-center gap-2 text-xs px-3 py-2 rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.textMuted, cursor: "pointer" }}>
-                      <Upload size={13} /> SPY CSVを選択
-                      <input type="file" accept=".csv" onChange={handleSpyImportFile} style={{ display: "none" }} />
+                      <Upload size={13} /> SP500長期CSVを選択
+                      <input type="file" accept=".csv" onChange={handleSp500File} style={{ display: "none" }} />
                     </label>
-                    {spyImportFileName && <div className="text-xs mt-2" style={{ color: C.textDim }}>選択中: {spyImportFileName}</div>}
-                    {spyImportMsg && <div className="text-xs mt-2" style={{ color: C.teal }}>{spyImportMsg}</div>}
-                  </div>
-                  <div>
-                    <label className="inline-flex items-center gap-2 text-xs px-3 py-2 rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.textMuted, cursor: "pointer" }}>
-                      <Upload size={13} /> VOO CSVを選択
-                      <input type="file" accept=".csv" onChange={handleVooImportFile} style={{ display: "none" }} />
-                    </label>
-                    {vooImportFileName && <div className="text-xs mt-2" style={{ color: C.textDim }}>選択中: {vooImportFileName}</div>}
-                    {vooImportMsg && <div className="text-xs mt-2" style={{ color: C.teal }}>{vooImportMsg}</div>}
+                    {sp500FileName && <div className="text-xs mt-2" style={{ color: C.textDim }}>選択中: {sp500FileName}</div>}
+                    {sp500Msg && <div className="text-xs mt-2" style={{ color: C.teal }}>{sp500Msg}</div>}
+                    <div className="text-[10px] mt-2" style={{ color: C.textDim }}>※ 配当再投資を含まない価格指数としての概算です。S&P500の実際の分配落ちとは完全には一致しません。</div>
                   </div>
                 </div>
-                <div className="text-[10px] mt-3" style={{ color: C.textDim }}>現在のSPY/VOO記録: {spyVooSeries.length.toLocaleString()}件{spyVooSeries.length > 0 && `（${spyVooSeries[0].date.toLocaleDateString("ja-JP")} 〜 ${spyVooSeries[spyVooSeries.length - 1].date.toLocaleDateString("ja-JP")}）`}</div>
-              </div>
-            </div>
-          ) : (
-            <div>
-              <p className="text-sm mb-4" style={{ color: C.textMuted }}>毎日の運用でその日のS&P500終値だけを入力する簡易方式です。既存データに追記・上書きされます。</p>
-              <div className="flex items-end gap-3">
-                <div><label className="text-[10px] block mb-1" style={{ color: C.textDim }}>日付</label><input type="date" value={manualDate} onChange={(e) => setManualDate(e.target.value)} className="text-xs px-2 py-1.5 rounded mono" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }} /></div>
-                <div><label className="text-[10px] block mb-1" style={{ color: C.textDim }}>終値（$）</label><input type="number" step="0.01" value={manualPrice} onChange={(e) => setManualPrice(e.target.value)} placeholder="704.20" className="text-xs px-2 py-1.5 rounded w-28 mono" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }} /></div>
-                <button onClick={handleAddManual} className="text-xs px-4 py-1.5 rounded" style={{ background: C.teal, color: C.bg, fontWeight: 700, border: "none", cursor: "pointer" }}>追加</button>
-              </div>
-            </div>
-          )}
+              ) : (
+                <div>
+                  <p className="text-sm mb-4" style={{ color: C.textMuted }}>毎日の運用でその日のS&P500終値だけを入力する簡易方式です。既存データに追記・上書きされます。</p>
+                  <div className="flex items-end gap-3">
+                    <div><label className="text-[10px] block mb-1" style={{ color: C.textDim }}>日付</label><input type="date" value={manualDate} onChange={(e) => setManualDate(e.target.value)} className="text-xs px-2 py-1.5 rounded mono" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }} /></div>
+                    <div><label className="text-[10px] block mb-1" style={{ color: C.textDim }}>終値（$）</label><input type="number" step="0.01" value={manualPrice} onChange={(e) => setManualPrice(e.target.value)} placeholder="704.20" className="text-xs px-2 py-1.5 rounded w-28 mono" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }} /></div>
+                    <button onClick={handleAddManual} className="text-xs px-4 py-1.5 rounded" style={{ background: C.teal, color: C.bg, fontWeight: 700, border: "none", cursor: "pointer" }}>追加</button>
+                  </div>
+                </div>
+              )}
 
-          <div className="mt-8 pt-4 flex items-center justify-between" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
-            <div className="flex items-center gap-2 text-xs" style={{ color: C.textDim }}>
-              <Database size={13} />
-              <span>現在のデータ: {rawSeries.length.toLocaleString()}件・最終日 {rawSeries[rawSeries.length - 1]?.date?.toLocaleDateString("ja-JP")}　（{source === "seed" ? "初期バンドルデータ" : "取り込み済みデータ"}）</span>
-            </div>
-            <button onClick={onReset} className="text-xs px-2 py-1 rounded" style={{ color: C.textMuted, background: "transparent", border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>初期データにリセット</button>
-          </div>
+              <div className="mt-8 pt-4 flex items-center justify-between" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+                <div className="flex items-center gap-2 text-xs" style={{ color: C.textDim }}>
+                  <Database size={13} />
+                  <span>現在のデータ: {rawSeries.length.toLocaleString()}件・最終日 {rawSeries[rawSeries.length - 1]?.date?.toLocaleDateString("ja-JP")}　（{source === "seed" ? "初期バンドルデータ" : "取り込み済みデータ"}）</span>
+                </div>
+                <button onClick={onReset} className="text-xs px-2 py-1 rounded" style={{ color: C.textMuted, background: "transparent", border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>初期データにリセット</button>
+              </div>
+            </>
+          ) : (
+            <InstrumentPanel
+              instrument={instrument}
+              spyVooSeries={spyVooSeries}
+              fileName={instrument === "voo" ? vooImportFileName : spyImportFileName}
+              fileMsg={instrument === "voo" ? vooImportMsg : spyImportMsg}
+              onFileChange={instrument === "voo" ? handleVooImportFile : handleSpyImportFile}
+              manualDate={instrManualDate}
+              setManualDate={setInstrManualDate}
+              manualPrice={instrManualPrice}
+              setManualPrice={setInstrManualPrice}
+              onAddManual={handleAddInstrManual}
+              onResetField={() => onResetSpyVooField(instrument)}
+            />
+          )}
         </>
       ) : (
         <div>
@@ -2251,6 +2312,14 @@ export default function DDDashboard() {
       return merged;
     });
   }
+  // kind（"spy"|"voo"）のデータのみ削除する。両方消えた日付のレコードは配列から除去する。
+  function handleResetSpyVooField(kind) {
+    setSpyVooSeries((prev) => {
+      const next = prev.map((p) => { const c = { ...p }; delete c[kind]; return c; }).filter((p) => p.spy != null || p.voo != null);
+      persistSpyVoo(next);
+      return next;
+    });
+  }
   async function persistHoldings(list) {
     try { await storage.set("portfolio_holdings", JSON.stringify(list)); } catch (e) { /* storage unavailable */ }
   }
@@ -2447,7 +2516,7 @@ export default function DDDashboard() {
       {modal?.type === "rank" && <FullScreenModal title={`${modal.rank}ランクの保有銘柄`} onClose={() => setModal(null)}><RankHoldingsContent rank={modal.rank} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
       {modal?.type === "crash" && <FullScreenModal title={`${modal.crash.name}（${modal.crash.start} 〜）と現状の比較`} onClose={() => setModal(null)}><CrashModalContent crash={modal.crash} daysSinceDDStart={d.daysSinceDDStart} currentDD={d.currentDD} currentEpisodeCurve={d.currentEpisodeCurve} /></FullScreenModal>}
       {modal?.type === "ddChart" && <FullScreenModal title="評価額（左軸） / DD%（右軸）" onClose={() => setModal(null)}><DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} /></FullScreenModal>}
-      {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} onBackfill={handleBackfill} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} spyVooSeries={spyVooSeries} onAppendSpyVoo={handleAppendSpyVoo} onImportSpyVoo={handleImportSpyVoo} />}
+      {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} onBackfill={handleBackfill} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} spyVooSeries={spyVooSeries} onAppendSpyVoo={handleAppendSpyVoo} onImportSpyVoo={handleImportSpyVoo} onResetSpyVooField={handleResetSpyVooField} />}
       {modal?.type === "checkpointSettings" && <FullScreenModal title="チェックポイント設定" onClose={() => setModal(null)}><CheckpointSettingsContent checkpoints={checkpoints} onCheckpointChange={handleCheckpointChange} holdings={holdings} /></FullScreenModal>}
       {modal?.type === "summary" && <FullScreenModal title="詳細サマリー出力（AI相談用）" onClose={() => setModal(null)}><SummaryModalContent d={d} holdings={holdings} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} blocks={blocks} rankLabels={rankLabels} lifecycle={lifecycle} onLifecycleChange={handleLifecycleChange} fixedPositions={fixedPositions} onFixedPositionChange={handleFixedPositionChange} prevSnapshot={prevSnapshot} onSaveSnapshot={handleSaveSnapshot} /></FullScreenModal>}
 
