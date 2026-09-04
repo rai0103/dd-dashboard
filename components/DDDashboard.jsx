@@ -193,7 +193,9 @@ function buildAnalysisText(d, currentHoldingPct, totalValue) {
   return `ATHが${athStr}で、現在は前回のATHから${d.daysSinceATH}日で新高値圏（${ddStr}）にあります。${rebalanceSentence}`;
 }
 
-function computeAll(rawSeries) {
+// trackRecordOverride を渡すと、この系列自身の実績ではなく渡された統計（節目間の進行確率・最終到達確率・速度別確率など）を使う。
+// VOO/SPYは track record として使うには期間が短いため、最も長い実績があるSP500（本系列）の統計をVOO/SPYの速度アラートにも流用するために使用する。
+function computeAll(rawSeries, trackRecordOverride) {
   let ath = 0;
   const FULL = rawSeries.map((p, i) => { ath = Math.max(ath, p.price); return { i, date: p.date, price: p.price, ath, dd: Number((((p.price / ath) - 1) * 100).toFixed(2)) }; });
   const last = FULL[FULL.length - 1];
@@ -202,7 +204,7 @@ function computeAll(rawSeries) {
   const mode = isDrawdown ? "下落モード" : "最高値更新モード";
   const episode = analyzeEpisode(FULL);
   const episodes = findDDEpisodes(FULL, -3); // 過去も含む全DD局面（チャートの重要ポイント表示・トラックレコード集計用）
-  const trackRecord = computeTrackRecordStats(FULL, episodes); // 読み込まれている実データから都度算出する進行確率・速度統計
+  const trackRecord = trackRecordOverride ?? computeTrackRecordStats(FULL, episodes); // 読み込まれている実データから都度算出する進行確率・速度統計
   const ddStartIdx = episode.crossIdx[-3];
   const daysSinceDDStart = ddStartIdx !== -1 ? last.i - FULL[ddStartIdx].i : null;
   const daysSinceCurrentThreshold = episode.currentIdx !== -1 ? last.i - FULL[episode.currentIdx].i : null;
@@ -1116,7 +1118,7 @@ function TrackRecordContent({ currentT, trackRecord }) {
   return (
     <div className="grid grid-cols-2 gap-x-8 gap-y-6">
       <div>
-        <div className="text-xs mb-3" style={{ color: C.textDim }}>節目間の進行確率<span className="ml-1" style={{ color: C.textDim }}>（実データ n={tr.n}局面）</span></div>
+        <div className="text-xs mb-3" style={{ color: C.textDim }}>節目間の進行確率<span className="ml-1" style={{ color: C.textDim }}>（SP500実績 n={tr.n}局面）</span></div>
         {tr.progression.map((row) => (
           <div key={row.from} className="grid items-center gap-2 mb-1.5" style={{ gridTemplateColumns: "92px 1fr 76px 44px" }}>
             <span className="mono text-xs" style={{ color: row.from === currentT ? C.text : C.textMuted }}>{row.label ?? `${row.from}%→${row.to}%`}</span>
@@ -1127,7 +1129,7 @@ function TrackRecordContent({ currentT, trackRecord }) {
         ))}
       </div>
       <div>
-        <div className="text-xs mb-3" style={{ color: C.textDim }}>DD-3%到達からの最終到達確率<span className="ml-1" style={{ color: C.textDim }}>（実データ n={tr.n}局面）</span></div>
+        <div className="text-xs mb-3" style={{ color: C.textDim }}>DD-3%到達からの最終到達確率<span className="ml-1" style={{ color: C.textDim }}>（SP500実績 n={tr.n}局面）</span></div>
         {tr.finalReach.map((r) => (
           <div key={r.label} className="grid items-center gap-2 mb-1.5" style={{ gridTemplateColumns: "56px 1fr 76px 76px" }}>
             <span className="mono text-xs" style={{ color: C.textMuted }}>{r.label}</span>
@@ -1136,10 +1138,10 @@ function TrackRecordContent({ currentT, trackRecord }) {
             <span className="text-[10px] text-right" style={{ color: C.textDim }}>{r.p !== null ? freqLabelFromP(r.p, tr.ddFreqPerYear) : "—"}</span>
           </div>
         ))}
-        <div className="text-[9px] mt-2" style={{ color: C.textDim }}>発生頻度は、読み込まれているデータ全体でDD3%級の押し目が年{tr.ddFreqPerYear !== null ? tr.ddFreqPerYear.toFixed(1) : "—"}回発生している実績に基づく換算値です。</div>
+        <div className="text-[9px] mt-2" style={{ color: C.textDim }}>発生頻度は、SP500の実績データ全体でDD3%級の押し目が年{tr.ddFreqPerYear !== null ? tr.ddFreqPerYear.toFixed(1) : "—"}回発生している実績に基づく換算値です。</div>
       </div>
       <div className="col-span-2">
-        <div className="text-xs mb-3" style={{ color: C.textDim }}>速度条件付き確率（DD3→5%区間の日数別・実データ DD5%到達{tr.reachedD5Count}局面）</div>
+        <div className="text-xs mb-3" style={{ color: C.textDim }}>速度条件付き確率（DD3→5%区間の日数別・SP500実績 DD5%到達{tr.reachedD5Count}局面）</div>
         <table className="w-full text-xs mono"><thead><tr style={{ color: C.textDim }}><th className="text-left font-normal py-1">区分</th><th>→8%</th><th>→10%</th><th>→15%</th><th>→20%</th></tr></thead>
           <tbody>
             <tr style={{ borderTop: `1px solid ${C.borderSoft}` }}><td className="py-1" style={{ color: C.textMuted }}>急落（5日以内）</td><td className="text-center">{pct(tr.speedTable.fast["-8"])}</td><td className="text-center">{pct(tr.speedTable.fast["-10"])}</td><td className="text-center">{pct(tr.speedTable.fast["-15"])}</td><td className="text-center">{pct(tr.speedTable.fast["-20"])}</td></tr>
@@ -1147,7 +1149,7 @@ function TrackRecordContent({ currentT, trackRecord }) {
           </tbody>
         </table>
       </div>
-      <div className="col-span-2 text-[11px] leading-relaxed" style={{ color: C.textDim }}>これらは読み込まれているトラックレコード（約{tr.totalYears.toFixed(0)}年・DD3%到達{tr.n}局面）から都度算出した実績値です。データをアップロード・更新すると自動的に再計算されます。過去確率は将来を保証しません。</div>
+      <div className="col-span-2 text-[11px] leading-relaxed" style={{ color: C.textDim }}>これらは最も長い実績があるSP500のトラックレコード（約{tr.totalYears.toFixed(0)}年・DD3%到達{tr.n}局面）から都度算出した実績値です。データをアップロード・更新すると自動的に再計算されます。過去確率は将来を保証しません。</div>
     </div>
   );
 }
@@ -1162,7 +1164,7 @@ function SpeedAlertModalContent({ d }) {
   return (
     <div className="flex flex-col gap-5">
       <div>
-        <div className="text-xs mb-2" style={{ color: C.textDim }}>現在の状況</div>
+        <div className="text-xs mb-2" style={{ color: C.textDim }}>現在の状況（VOOの評価額を参照）</div>
         <div className="flex items-center gap-4 mb-1.5">
           <span className="mono text-lg font-bold" style={{ color: depthColor(sa.currentDD) }}>DD {sa.currentDD.toFixed(1)}%</span>
           <span className="text-xs" style={{ color: C.textMuted }}>モード：{d.mode}</span>
@@ -1209,7 +1211,7 @@ function SpeedAlertModalContent({ d }) {
       )}
 
       <div>
-        <div className="text-xs mb-2" style={{ color: C.textDim }}>バックテスト：DD3→5%の速度別・大暴落率（読み込み中のデータ 約{d.trackRecord.totalYears.toFixed(0)}年・DD5%到達{d.trackRecord.reachedD5Count}局面）</div>
+        <div className="text-xs mb-2" style={{ color: C.textDim }}>バックテスト：DD3→5%の速度別・大暴落率（最も長い実績があるSP500のデータ 約{d.trackRecord.totalYears.toFixed(0)}年・DD5%到達{d.trackRecord.reachedD5Count}局面）</div>
         <table className="w-full text-xs mono">
           <thead><tr style={{ color: C.textDim }}><th className="text-left font-normal py-1">速度区分</th><th>件数</th><th>大暴落率<br />（最終DD-15%以上）</th><th>平均最終DD</th></tr></thead>
           <tbody>
@@ -1237,7 +1239,7 @@ function SpeedAlertModalContent({ d }) {
         ・急落警報（5日以内）は{d.trackRecord.fastMissRate !== null ? `${d.trackRecord.fastMissRate}%` : "多くの場合"}が空振り（浅く終わる）です。「確信」ではなく「警戒レベルを上げる」材料として使ってください。<br />
         ・緩やかに始まる大暴落もあります（2007年金融危機はspeed_3to5=13日で最終DD-57%でした）。緩慢でも油断しないでください。<br />
         ・DD8%突破後は速度の予測力が落ち、節目の進行確率（上表）が判断の主役になります。<br />
-        ・これらは読み込まれているトラックレコード（約{d.trackRecord.totalYears.toFixed(0)}年・DD3%到達{d.trackRecord.n}局面）から都度算出した傾向であり、確定予測ではありません。データをアップロード・更新すると自動的に再計算されます。DD深度・金の動き・自己の判断と併用する補助指標です。本ツールは投資助言ではなく判断補助です。
+        ・現在のDD%・速度計測はVOOの評価額、確率・バックテストは最も長い実績があるSP500のトラックレコード（約{d.trackRecord.totalYears.toFixed(0)}年・DD3%到達{d.trackRecord.n}局面）から都度算出した傾向であり、確定予測ではありません。データをアップロード・更新すると自動的に再計算されます。DD深度・金の動き・自己の判断と併用する補助指標です。本ツールは投資助言ではなく判断補助です。
       </div>
     </div>
   );
@@ -2680,8 +2682,10 @@ export default function DDDashboard() {
   const d = useMemo(() => computeAll(rawSeries), [rawSeries]);
   const vooCalcSeries = useMemo(() => seriesFromSpyVoo(spyVooSeries, "voo"), [spyVooSeries]);
   const spyCalcSeries = useMemo(() => seriesFromSpyVoo(spyVooSeries, "spy"), [spyVooSeries]);
-  const dVoo = useMemo(() => (vooCalcSeries.length ? computeAll(vooCalcSeries) : null), [vooCalcSeries]);
-  const dSpy = useMemo(() => (spyCalcSeries.length ? computeAll(spyCalcSeries) : null), [spyCalcSeries]);
+  // VOO/SPY自身の実績は期間が短いため、進行確率・速度別確率などのトラックレコード統計は最も長い実績があるSP500（d.trackRecord）を使う。
+  // 現在のDD%・経過日数・速度計測（DD3→5%等）はVOO/SPY自身の評価額の動きをそのまま使う（速度アラートはVOOの評価額を参照する仕様）。
+  const dVoo = useMemo(() => (vooCalcSeries.length ? computeAll(vooCalcSeries, d.trackRecord) : null), [vooCalcSeries, d.trackRecord]);
+  const dSpy = useMemo(() => (spyCalcSeries.length ? computeAll(spyCalcSeries, d.trackRecord) : null), [spyCalcSeries, d.trackRecord]);
   const chartData = useMemo(() => sliceForPeriod(d.FULL, d.last, period), [d.FULL, d.last, period]);
   const rangeDays = useMemo(() => { const f = chartData[0].date, l = chartData[chartData.length - 1].date; return Math.round((l - f) / 86400000); }, [chartData]);
   const periodRange = useMemo(() => periodDateRange(d.FULL, d.last, period), [d.FULL, d.last, period]);
