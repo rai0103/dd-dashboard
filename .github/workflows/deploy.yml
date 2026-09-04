@@ -35,6 +35,7 @@ jobs:
         run: npm run build
         env:
           NODE_ENV: production
+          DEPLOY_TARGET: github-pages
 
       - uses: actions/configure-pages@v5
 

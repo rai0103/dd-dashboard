@@ -1,11 +1,11 @@
 import type { NextConfig } from "next";
 
-const isProd = process.env.NODE_ENV === "production";
+const isGithubPages = process.env.DEPLOY_TARGET === "github-pages";
 
 const nextConfig: NextConfig = {
   output: "export",
-  basePath: isProd ? "/dd-dashboard" : "",
-  assetPrefix: isProd ? "/dd-dashboard/" : "",
+  basePath: isGithubPages ? "/dd-dashboard" : "",
+  assetPrefix: isGithubPages ? "/dd-dashboard/" : "",
   images: { unoptimized: true },
   trailingSlash: true,
 };
