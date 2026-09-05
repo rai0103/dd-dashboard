@@ -657,60 +657,153 @@ function yearMonthLabel(iso) { const [y, m] = iso.split("-").map(Number); return
 // 既知の歴史的暴落：自動検出された局面のうちATH到達日がfrom〜toに収まるものに、名称・原因・終息要因・学び・年表イベントを紐付ける。
 // 該当する局面が読み込み中のデータに無ければ単に表示されない（データの取り込み期間に依存）。日次カーブそのものはハードコードせず、
 // 読み込まれている実データ（FULL）からその都度切り出す。
+// featured: trueの銘柄のみ「過去の暴落との比較」ミニウィジェットに既定でパイル表示・同時重ね描きする（8色の判別可能なカテゴリカルパレットの上限に合わせた選定）。
+// featured: false（またはfalse相当の自動検出局面）は「その他の下落」プルダウン、および拡大表示モーダルのジャンプ・比較①②プルダウンから個別に選択する。
 const KNOWN_CRASH_META = [
-  { key: "1987", from: "1987-01-01", to: "1987-12-31", name: "ブラックマンデー", color: C.violet,
-    cause: "プログラム売買の連鎖的な自動売り、ポートフォリオインシュアランスの逆機能、投資家心理の急速な悪化。単一の日(10/19)で市場全体が約20%下落。",
-    resolution: "FRB(グリーンスパン議長)による迅速な流動性供給の表明、実体経済への波及が限定的だったこと。",
-    lesson: "暴落自体は歴史上最も急激だったが、実体経済が堅調であれば株価の回復も比較的早い。市場構造(プログラム売買)が引き金でもファンダメンタルズが崩れていなければ回復力がある。なお終値ベースの真の底は10/19当日ではなく、その後の再下落を経た12月上旬だった。",
+  { key: "1957", from: "1957-01-01", to: "1957-12-31", name: "景気後退と金利上昇懸念",
     annotations: [
-      { date: "1987-10-19", text: "「ブラックマンデー」。NYダウが単日-22.6%と史上最大の下落率を記録。" },
-      { date: "1987-10-20", text: "FRB(グリーンスパン議長)が「必要な流動性供給を約束する」との声明を発表。" },
+      { date: "1957-07-15", text: "米国経済が減速局面へ。消費支出が鈍化し始める" },
+      { date: "1957-07-20", text: "FRBが景気過熱への懸念から金利引き上げを継続" },
+      { date: "1957-07-25", text: "失業率が上昇傾向。企業の採用姿勢が慎重化" },
+      { date: "1957-08-05", text: "インフレ圧力が続く。物価指数が前年同月比3%上昇" },
     ] },
-  { key: "1998", from: "1998-01-01", to: "1998-12-31", name: "ロシア通貨危機・LTCM危機", color: "#7FA37A",
-    cause: "ロシアのルーブル切り下げ・対外債務デフォルトを契機に信用不安が波及、大手ヘッジファンドLTCMが巨額損失で破綻寸前に陥った。",
-    resolution: "NY連銀主導で大手金融機関が協調融資しLTCMを救済、FRBが3会合連続で予防的利下げを実施。",
-    lesson: "個別の金融機関の破綻でもレバレッジ・相互接続性が高いと市場全体に波及しうる。当局が迅速に信用収縮を封じ込めれば下落は比較的短期(数ヶ月)で終わる。",
+  { key: "1959", from: "1959-01-01", to: "1959-12-31", name: "金利上昇と景気鈍化",
     annotations: [
-      { date: "1998-08-17", text: "ロシアがルーブル切り下げと対外債務のデフォルトを発表。" },
-      { date: "1998-09-23", text: "大手金融機関がNY連銀主導でLTCM(ヘッジファンド)への協調融資を実施。" },
-      { date: "1998-09-29", text: "FRBが予防的利下げを開始(以降11月まで3会合連続で計0.75%)。" },
+      { date: "1959-08-10", text: "FRB議長が金利上昇方針を明言。市場が波乱" },
+      { date: "1959-08-15", text: "企業業績見通しが弱まる。投資家心理が悪化" },
+      { date: "1959-08-20", text: "金利上昇でドル買い圧力。国際通貨相場が動揺" },
+      { date: "1959-09-01", text: "景気局面転換への懸念が高まる" },
     ] },
-  { key: "dotcom", from: "2000-01-01", to: "2000-12-31", name: "ドットコムバブル崩壊", color: C.blue,
-    cause: "ITバブルの過剰な期待と高PERのハイテク株の急落。2001年の同時多発テロによる景気後退の追い打ち、企業会計不正(エンロン等)による信頼失墜。",
-    resolution: "FRBの継続的な利下げ、景気の底打ちと企業収益の回復。",
-    lesson: "バブル的な高評価を伴う下落は回復に非常に時間がかかる(今回は約7年)。下落期間中に複数回の戻り相場(ベアマーケットラリー)があり、早期の「底打ち」判断は危険。",
+  { key: "1961", from: "1961-01-01", to: "1961-12-31", name: "ベルリン危機と冷戦緊張",
     annotations: [
-      { date: "2000-03-10", text: "NASDAQ総合指数が史上最高値を記録、その後急落に転じる。" },
-      { date: "2001-09-11", text: "米同時多発テロが発生、株式市場は一時取引停止に。" },
-      { date: "2001-12-02", text: "エネルギー大手エンロンが破綻、大規模な会計不正が表面化。" },
+      { date: "1961-12-05", text: "ベルリンの壁建設後、米ソ緊張が最高潮" },
+      { date: "1961-12-10", text: "ケネディ大統領が軍事費増加を発表" },
+      { date: "1961-12-15", text: "冷戦リスク意識から安全資産へ逃避売却" },
+      { date: "1961-12-20", text: "国際紛争懸念で世界経済への不安が拡大" },
+      { date: "1961-12-28", text: "企業利益予想が引き下げられ始める" },
     ] },
-  { key: "gfc", from: "2007-01-01", to: "2007-12-31", name: "リーマンショック(世界金融危機)", color: C.rust,
-    cause: "サブプライムローン危機に端を発する金融システム全体の信用収縮。リーマン・ブラザーズ破綻による連鎖的な金融不安。",
-    resolution: "各国中央銀行・政府による大規模な金融緩和と公的資金注入、量的緩和(QE)の開始。",
-    lesson: "金融システム自体が毀損すると回復に数年単位を要する。政策対応(流動性供給)のスピードと規模が回復ペースを大きく左右する。",
+  { key: "1966", from: "1966-01-01", to: "1966-12-31", name: "ベトナム戦争費とインフレ",
     annotations: [
-      { date: "2008-03-16", text: "JPモルガンがFRB支援のもとベアー・スターンズを救済買収。" },
-      { date: "2008-09-15", text: "リーマン・ブラザーズが破産申請、金融危機が本格化。" },
-      { date: "2008-10-03", text: "米政府が不良資産救済プログラム(TARP、最大7000億ドル)を可決。" },
-      { date: "2008-11-25", text: "FRBが量的緩和(QE1)の開始を発表。" },
+      { date: "1966-02-05", text: "ベトナム戦争費の大幅増加を発表。財政赤字拡大懸念" },
+      { date: "1966-02-15", text: "FRB金利引き上げ。景気鈍化懸念から市場心理が悪化" },
+      { date: "1966-02-20", text: "コンシューマー物価上昇率が加速。スタグフレーション懸念" },
     ] },
-  { key: "debt2011", from: "2011-01-01", to: "2011-12-31", name: "米国債務上限危機", color: "#C77FB0",
-    cause: "米連邦政府の債務上限引き上げを巡る与野党対立が長期化し、デフォルト懸念と政治不透明感が市場心理を悪化させた。",
-    resolution: "土壇場で議会が債務上限引き上げ法案を可決しデフォルトを回避。ただしS&Pが米国債格付けを史上初めて引き下げた。",
-    lesson: "実際のデフォルトが発生しなくても、政治的な不透明感・信認低下だけで急速かつ深い調整が起こりうる。財政・政治要因が引き金の下落は比較的短期で終わる傾向。",
+  { key: "1967", from: "1967-01-01", to: "1967-12-31", name: "ドル危機",
     annotations: [
-      { date: "2011-08-02", text: "米議会が債務上限引き上げ法案を可決、デフォルトを回避。" },
-      { date: "2011-08-05", text: "S&Pが米国債の格付けを史上初めてAAAからAA+に引き下げ。" },
+      { date: "1967-09-10", text: "インフレ加速で投資家心理悪化。中央銀行の対応遅れ懸念" },
+      { date: "1967-09-18", text: "ドル下落懸念とポンド危機。国際通貨体制の動揺" },
     ] },
-  { key: "covid", from: "2020-01-01", to: "2020-12-31", name: "コロナショック", color: C.amber,
-    cause: "新型コロナウイルスの世界的流行による経済活動の急停止(ロックダウン)。",
-    resolution: "各国政府・中央銀行による前例のない規模の財政・金融刺激策、ワクチン開発への期待。",
-    lesson: "外生的ショック(感染症等)による暴落は、政策対応が迅速であれば歴史的に見て最も回復が早いパターンになりうる(今回は約半年)。深さだけでなく「原因の性質」が回復速度を左右する。",
+  { key: "1968", from: "1968-01-01", to: "1968-12-31", name: "インフレと金利急騰", color: "#3987e5", featured: true,
     annotations: [
-      { date: "2020-03-11", text: "WHOが新型コロナウイルスを「パンデミック」と宣言。" },
-      { date: "2020-03-15", text: "FRBが緊急会合で政策金利をゼロ近辺まで引き下げ、量的緩和を再開。" },
-      { date: "2020-03-23", text: "FRBが無制限の量的緩和を発表。同日、市場は大底を記録。" },
-      { date: "2020-03-27", text: "総額2兆ドル規模の経済対策(CARES法)が成立。" },
+      { date: "1968-11-05", text: "ベトナム戦争費増加。インフレ加速で財政赤字が急拡大" },
+      { date: "1968-11-15", text: "FRB金利急騰。インフレ抑制の強硬姿勢に市場が混乱" },
+      { date: "1968-11-25", text: "ドル防衛のためゴールドプール廃止発表。国際通貨危機へ" },
+    ] },
+  { key: "1973", from: "1973-01-01", to: "1973-12-31", name: "中東戦争・OPEC石油禁輸・スタグフレーション", color: "#d95926", featured: true,
+    annotations: [
+      { date: "1973-01-10", text: "第4次中東戦争でOPEC石油禁輸決定。原油価格が短期で5倍に" },
+      { date: "1973-01-20", text: "スタグフレーション発生。インフレと景気後退が同時進行" },
+      { date: "1973-01-25", text: "ニクソンショック後の混乱。固定為替相場制の完全崩壊継続" },
+      { date: "1973-02-01", text: "OPEC協調価格引き上げ。インフレが加速度的に加速" },
+    ] },
+  { key: "1980", from: "1980-01-01", to: "1980-12-31", name: "イランイスラム革命・ボルカー高金利政策",
+    annotations: [
+      { date: "1980-11-05", text: "イランイスラム革命で原油供給が不安定化。インフレが急騰" },
+      { date: "1980-11-10", text: "ボルカーFRB議長が超高金利政策実行。短期金利が20%超に" },
+      { date: "1980-11-15", text: "ソビエト連邦のアフガニスタン侵攻。冷戦リスクが最高潮に" },
+      { date: "1980-11-20", text: "企業利益が高金利圧迫で悪化。株式配当利回りが金利に負ける" },
+    ] },
+  { key: "1983", from: "1983-01-01", to: "1983-12-31", name: "冷戦緊張（KAL007撃墜・グレナダ侵攻）",
+    annotations: [
+      { date: "1983-10-01", text: "大韓航空KAL007撃墜事件。米ソ冷戦緊張が最高潮" },
+      { date: "1983-10-10", text: "レーガンのSDI（戦略防衛構想）発表。軍事費が急増" },
+      { date: "1983-10-25", text: "米軍がグレナダに侵攻。地政学リスク意識が急速に高まる" },
+    ] },
+  { key: "1987", from: "1987-01-01", to: "1987-12-31", name: "ブラックマンデー（プログラム売却）", color: "#199e70", featured: true,
+    annotations: [
+      { date: "1987-10-15", text: "PER35倍超の過度なバリュエーション。調整の機運が高まる" },
+      { date: "1987-10-19", text: "ブラックマンデー当日。NYダウが1日で22%暴落" },
+      { date: "1987-10-20", text: "プログラム売却による悪循環。機械的自動売却がパニック加速" },
+      { date: "1987-10-25", text: "ドル下落と貿易赤字懸念。G5協調も市場の信頼回復に失敗" },
+    ] },
+  { key: "1989", from: "1989-01-01", to: "1989-12-31", name: "LBOブーム終焉・S&L危機",
+    annotations: [
+      { date: "1989-10-13", text: "UAL買収破談でLBOブーム終焉宣言。レバレッジの逆風本格化" },
+      { date: "1989-10-20", text: "ジャンク債市場が急速に冷え込む。高レバレッジ企業に打撃" },
+      { date: "1989-10-28", text: "S&L危機が本格化。貯蓄貸付組合の破綻が相次ぐ" },
+    ] },
+  { key: "1990", from: "1990-01-01", to: "1990-12-31", name: "湾岸戦争",
+    annotations: [
+      { date: "1990-07-02", text: "イラク・クウェート危機で原油価格が40ドル超に急騰" },
+      { date: "1990-07-10", text: "湾岸戦争勃発懸念。世界経済に対する不安感が拡大" },
+      { date: "1990-07-20", text: "原油供給途絶リスク。インフレ懸念が再び表面化" },
+    ] },
+  { key: "1997", from: "1997-01-01", to: "1997-12-31", name: "アジア通貨危機",
+    annotations: [
+      { date: "1997-10-15", text: "タイ・韓国・インドネシアの通貨危機が米国へ波及" },
+      { date: "1997-10-20", text: "新興国のドル流出加速。先進国市場への逆オイル流入" },
+      { date: "1997-10-27", text: "ロシア国債デフォルト懸念。エマージング市場危機の拡大" },
+    ] },
+  { key: "1998", from: "1998-01-01", to: "1998-12-31", name: "ロシア危機・LTCM救済", color: "#c98500", featured: true,
+    annotations: [
+      { date: "1998-07-15", text: "ロシアが国債支払い延期を宣言。ルーブルが30%以上急落" },
+      { date: "1998-07-23", text: "超大手ヘッジファンドLTCMが経営危機。FRBが救済介入" },
+      { date: "1998-08-01", text: "信用不安が瞬時に拡大。金融市場が流動性危機状態に陥る" },
+      { date: "1998-08-10", text: "アジア危機に続くロシア危機。新興国リスク顕在化の恐怖" },
+    ] },
+  { key: "1999", from: "1999-01-01", to: "1999-12-31", name: "テック調整開始",
+    annotations: [
+      { date: "1999-07-20", text: "テック株の過度な上昇による調整が開始される局面" },
+    ] },
+  { key: "2000", from: "2000-01-01", to: "2000-12-31", name: "ドットコムバブル崩壊", color: "#d55181", featured: true,
+    annotations: [
+      { date: "2000-03-05", text: "ドットコム企業の利益実績が期待を大きく下回る。バブル崩壊開始" },
+      { date: "2000-03-10", text: "テック企業の赤字垂れ流しの正当性が失われる。バリュエーション急落" },
+      { date: "2000-03-20", text: "NASDAQ指数が高値から80%下落。テック中心PFに壊滅的打撃" },
+      { date: "2000-03-28", text: "インターネット企業の生き残り確実性が問われ始める段階" },
+    ] },
+  { key: "2007", from: "2007-01-01", to: "2007-12-31", name: "リーマンショック", color: "#008300", featured: true,
+    annotations: [
+      { date: "2007-10-10", text: "リーマン・ブラザーズが経営破綻。世界金融危機の象徴となる" },
+      { date: "2007-10-15", text: "サブプライムローンの不良債権が金融機関に連鎖破綻をもたらす" },
+      { date: "2007-10-20", text: "AIG・ワコビア・ワシントン・ミューチュアルが救済対象に。金融崩壊" },
+      { date: "2007-10-25", text: "クレジット市場が完全に凍結。企業の資金調達が不可能状態" },
+      { date: "2007-10-30", text: "GDP縮小と失業率急上昇。グレート・リセッション本格化確定" },
+    ] },
+  { key: "2015", from: "2015-01-01", to: "2015-12-31", name: "中国人民元切り下げ",
+    annotations: [
+      { date: "2015-08-11", text: "中国が急に人民元を15%切り下げ。サプライズで市場混乱" },
+      { date: "2015-08-15", text: "中国経済の減速が確実視される。世界成長率への悪影響懸念" },
+    ] },
+  // 2018年は年内に2つの下落局面（ATH1/26とATH9/20）があるため、from/toを前半・後半で分けて実データのATH日を正しく振り分ける。
+  { key: "2018a", from: "2018-01-01", to: "2018-06-30", name: "FRB利上げ加速",
+    annotations: [
+      { date: "2018-01-15", text: "FRB利上げペースの加速化が意識される。インフレ懸念再燃" },
+      { date: "2018-01-20", text: "金利上昇でハイイールド債が同時下落。クレジット懸念" },
+    ] },
+  { key: "2018b", from: "2018-07-01", to: "2018-12-31", name: "米中貿易戦争",
+    annotations: [
+      { date: "2018-09-10", text: "トランプ政権が中国に追加25%の関税を発表し報復" },
+      { date: "2018-09-20", text: "米中貿易戦争が激化。企業利益悪化の懸念が現実化開始" },
+    ] },
+  { key: "2020", from: "2020-01-01", to: "2020-12-31", name: "コロナパンデミック", color: "#9085e9", featured: true,
+    annotations: [
+      { date: "2020-02-24", text: "新型コロナウイルスが世界的にパンデミック化。各国がロックダウン開始" },
+      { date: "2020-03-05", text: "経済活動が停止。企業業績が大きく悪化へと向かう局面" },
+      { date: "2020-03-15", text: "原油価格が20ドル割れ。需要消滅で歴史的下落局面" },
+      { date: "2020-03-26", text: "失業率が急上昇。米国で失業保険申請数が過去最高記録を更新" },
+    ] },
+  { key: "2022", from: "2022-01-01", to: "2022-12-31", name: "インフレ・ウクライナ侵攻", color: "#e66767", featured: true,
+    annotations: [
+      { date: "2022-01-15", text: "インフレ加速でFRBが急速な利上げ路線を明示。グロース株に打撃" },
+      { date: "2022-02-24", text: "ロシアがウクライナに侵攻。エネルギー・食料価格が急騰" },
+      { date: "2022-03-01", text: "テック企業のバリュエーション調整。高成長株から機関投資家が撤退" },
+    ] },
+  { key: "2025", from: "2025-01-01", to: "2025-12-31", name: "中国経済減速・AI調整・トランプ関税",
+    annotations: [
+      { date: "2025-02-15", text: "中国経済の減速が確定的。世界GDP成長率への悪影響顕在化" },
+      { date: "2025-02-20", text: "AI相場の過度な上昇が調整局面へ。グロース株が大きく下落" },
+      { date: "2025-02-28", text: "トランプ関税政策の具体化懸念。世界貿易摩擦リスク上昇" },
     ] },
 ];
 const CRASH_DETECT_MIN_DD = -10; // この閾値以上の下落局面をすべて自動検出する（既知イベントに該当しないものは「その他」に分類）
@@ -730,13 +823,14 @@ function buildHistoricalCrashes(FULL) {
       name: known ? known.name : `DD${maxDD}%（${yearMonthLabel(start)}）`, // 名前不明な暴落の自動ラベル
       start, low, athRecoveryDate, athRecovery: `${e.recoveryDate.getUTCFullYear()}年${e.recoveryDate.getUTCMonth() + 1}月頃`,
       maxDD, troughDay, recoveryDay,
-      color: known ? known.color : OTHER_CRASH_COLORS[idx % OTHER_CRASH_COLORS.length],
-      cause: known?.cause ?? "自動検出された下落局面です（詳細な解説は未登録）。",
+      color: known?.color ?? OTHER_CRASH_COLORS[idx % OTHER_CRASH_COLORS.length],
+      cause: known?.cause ?? (known ? known.name : "自動検出された下落局面です（詳細な解説は未登録）。"),
       resolution: known?.resolution ?? "—",
       lesson: known?.lesson ?? "—",
       annotations: known?.annotations ?? [],
       curve,
       isKnown: !!known,
+      featured: !!known?.featured,
     };
   }).sort((a, b) => a.start.localeCompare(b.start));
 }
@@ -757,14 +851,23 @@ function buildComparisonData(currentEpisodeCurve, crashes) {
   return out;
 }
 // 局面のcurve配列（day・dd・dateを持つ）から、年表イベントの日付に最も近い実データ点を見つけてday/dd座標を確定する。
+// 年表イベントの日付がATH日より前（curveの開始日より前）の場合は全てcurve先頭の点にクランプされるため、
+// 同じ点に複数イベントが解決されるケースがある。マーカーが完全に重なって奥のイベントがホバーできなくなるのを防ぐため、
+// 同じ点（day）に解決されたイベントは1つのマーカーにまとめ、ホバー時に全てのテキストをまとめて表示する。
 function resolveCrashAnnotations(crash) {
   if (!crash.annotations?.length || !crash.curve.length) return [];
-  return crash.annotations.map((a) => {
+  const resolved = crash.annotations.map((a) => {
     const target = parseDateOnly(a.date);
     let best = crash.curve[0], bestDiff = Math.abs(crash.curve[0].date - target);
     for (const p of crash.curve) { const diff = Math.abs(p.date - target); if (diff < bestDiff) { best = p; bestDiff = diff; } }
     return { day: best.day, dd: best.dd, date: a.date, text: a.text };
   });
+  const byDay = new Map();
+  for (const r of resolved) {
+    if (!byDay.has(r.day)) byDay.set(r.day, { day: r.day, dd: r.dd, items: [] });
+    byDay.get(r.day).items.push({ date: r.date, text: r.text });
+  }
+  return Array.from(byDay.values()).sort((a, b) => a.day - b.day);
 }
 function wrapJaLines(text, maxChars) { const lines = []; for (let i = 0; i < text.length; i += maxChars) lines.push(text.slice(i, i + maxChars)); return lines; }
 // 暴落局面の年表イベント（annotations）をチャート上のマーカーとして描画し、ホバー時に吹き出しで詳細を表示する（ChartMarkersと同じCustomizedパターン）。
@@ -785,7 +888,7 @@ function CrashEventMarkers({ xAxisMap, yAxisMap, points, chartWidth }) {
         </g>
       ))}
       {hovered && (() => {
-        const lines = wrapJaLines(`${fmtDateSlash(hovered.date)} ${hovered.text}`, 22);
+        const lines = hovered.items.flatMap((it) => wrapJaLines(`${fmtDateSlash(it.date)} ${it.text}`, 22));
         const w = 216, lineH = 13, h = lines.length * lineH + 10;
         const cxClamped = Math.min(Math.max(hovered.cx, w / 2 + 2), (chartWidth ?? 100000) - w / 2 - 2);
         const boxY = hovered.cy > h + 24 ? hovered.cy - h - 10 : hovered.cy + 12;
@@ -1459,19 +1562,30 @@ function RankHoldingsContent({ rank, holdings, onEditHolding, onDeleteHolding })
 
 // Customized経由でxAxisMap/yAxisMapの実スケール関数を受け取り、Line等と同じチャート内に描画されるReact要素として振る舞う必要があるため、
 // ResponsiveContainerの直接の子として渡す（widthValueがResponsiveContainerから自動注入される）。
-function CrashDetailChart({ crash, daysSinceATH, currentDD, currentEpisodeCurve, annotationPoints, ddTicks, width, height }) {
+function CrashDetailChart({ crash, compareCrashes = [], daysSinceATH, currentDD, currentEpisodeCurve, annotationPoints, ddTicks, maxDay, width, height }) {
+  const nameFor = (id) => {
+    if (id === "current") return "現在";
+    if (id === crash.id) return crash.name;
+    return compareCrashes.find((c) => c.id === id)?.name ?? id;
+  };
   return (
     <LineChart width={width} height={height} margin={{ top: 22, right: 20, left: 0, bottom: 28 }}>
       <CartesianGrid stroke={C.borderSoft} vertical={false} />
-      <XAxis dataKey="day" type="number" domain={[0, crash.recoveryDay]} allowDuplicatedCategory={false} tick={{ fill: C.textDim, fontSize: 10 }} axisLine={{ stroke: C.border }} tickLine={false} label={{ value: "経過日数（ATH起点、左端=ATH・右端=次のATH）", position: "bottom", offset: 4, fill: C.textDim, fontSize: 10 }} />
+      <XAxis dataKey="day" type="number" domain={[0, maxDay ?? crash.recoveryDay]} allowDuplicatedCategory={false} tick={{ fill: C.textDim, fontSize: 10 }} axisLine={{ stroke: C.border }} tickLine={false} label={{ value: "経過日数（ATH起点、左端=ATH・右端=次のATH）", position: "bottom", offset: 4, fill: C.textDim, fontSize: 10 }} />
       <YAxis domain={[ddTicks[ddTicks.length - 1], 2]} ticks={ddTicks} tick={{ fill: C.textDim, fontSize: 10 }} axisLine={false} tickLine={false} width={48} tickFormatter={(v) => `${v}%`} label={{ value: "DD%", angle: -90, position: "insideLeft", fill: C.textDim, fontSize: 10 }} />
-      <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} formatter={(v, n) => [`${v}%`, n === "dd" ? crash.name : "現在"]} />
+      <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} formatter={(v, n) => [`${v}%`, nameFor(n)]} />
       <ReferenceLine y={-3} stroke={C.rust} strokeDasharray="4 3" strokeWidth={1.3} label={{ value: "-3%", position: "left", fill: C.rust, fontSize: 9 }} />
       <ReferenceLine x={crash.troughDay} stroke={C.borderSoft} strokeDasharray="2 3" label={{ value: "底値", fill: C.textDim, fontSize: 9, position: "insideTopLeft" }} />
       <ReferenceLine x={daysSinceATH} stroke={C.teal} strokeDasharray="2 3" label={{ value: "現在", fill: C.teal, fontSize: 9, position: "insideTopRight" }} />
-      <Line data={crash.curve} dataKey="dd" type="monotone" stroke={crash.color} strokeWidth={1.8} dot={false} isAnimationActive={false} name="dd" />
+      <Line data={crash.curve} dataKey="dd" type="monotone" stroke={crash.color} strokeWidth={1.8} dot={false} isAnimationActive={false} name={crash.id} />
+      {compareCrashes.map((c) => (
+        <Line key={c.id} data={c.curve} dataKey="dd" type="monotone" stroke={c.color} strokeWidth={1.5} strokeDasharray="5 3" dot={false} isAnimationActive={false} name={c.id} />
+      ))}
       <Line data={currentEpisodeCurve} dataKey="dd" type="monotone" stroke={C.teal} strokeWidth={2.4} dot={false} isAnimationActive={false} connectNulls={false} name="current" />
       <ReferenceDot x={crash.troughDay} y={crash.maxDD} r={4} fill={crash.color} stroke={C.bg} strokeWidth={2} />
+      {compareCrashes.map((c) => (
+        <ReferenceDot key={c.id} x={c.troughDay} y={c.maxDD} r={3.5} fill={c.color} stroke={C.bg} strokeWidth={1.5} />
+      ))}
       <ReferenceDot x={daysSinceATH} y={currentDD} r={4} fill={C.teal} stroke={C.bg} strokeWidth={2} />
       {annotationPoints.length > 0 && <Customized component={<CrashEventMarkers points={annotationPoints} chartWidth={width} />} />}
     </LineChart>
@@ -1479,13 +1593,32 @@ function CrashDetailChart({ crash, daysSinceATH, currentDD, currentEpisodeCurve,
 }
 function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve, allCrashes, onJump }) {
   const [showDetail, setShowDetail] = useState(false);
-  const cmpIdx = Math.min(daysSinceATH, crash.curve.length - 1);
-  const crashDDatSameDay = crash.curve[cmpIdx].dd;
-  const deeper = currentDD < crashDDatSameDay;
+  // 追加比較①②：メインの下落（crash・上部プルダウンで切替）とは別に、もう2つまで下落局面を選んで同時に重ね描きできるようにする。
+  const [compareId1, setCompareId1] = useState("");
+  const [compareId2, setCompareId2] = useState("");
   const recoveryDays = crash.recoveryDay - crash.troughDay;
-  const ddTicks = ddAxisTicksForMaxDrawdown(crash.maxDD);
+  // crash.id と重複しうる間（プルダウンのstate更新がuseEffectで反映されるまでの1フレーム）も
+  // 重複キーで描画されないよう、選択IDの解決自体でも主要因（crash.id・互いの重複）を除外する。
+  const compare1 = useMemo(() => (compareId1 && compareId1 !== crash.id ? allCrashes?.find((c) => c.id === compareId1) ?? null : null), [allCrashes, compareId1, crash.id]);
+  const compare2 = useMemo(() => (compareId2 && compareId2 !== crash.id && compareId2 !== compareId1 ? allCrashes?.find((c) => c.id === compareId2) ?? null : null), [allCrashes, compareId2, crash.id, compareId1]);
+  const compareCrashes = [compare1, compare2].filter(Boolean);
+  const maxDay = Math.max(crash.recoveryDay, daysSinceATH, ...compareCrashes.map((c) => c.recoveryDay));
+  const ddTicks = ddAxisTicksForMaxDrawdown(Math.min(crash.maxDD, ...compareCrashes.map((c) => c.maxDD)));
   const annotationPoints = useMemo(() => resolveCrashAnnotations(crash), [crash]);
-  useEffect(() => { setShowDetail(false); }, [crash.id]);
+  // メインの下落を切り替えたら詳細解説を閉じ、切替先と重複する比較選択はクリアする。
+  useEffect(() => {
+    setShowDetail(false);
+    setCompareId1((id) => (id === crash.id ? "" : id));
+    setCompareId2((id) => (id === crash.id ? "" : id));
+  }, [crash.id]);
+  useEffect(() => { if (compareId2 && compareId2 === compareId1) setCompareId2(""); }, [compareId1, compareId2]);
+  const compare1Options = allCrashes ? allCrashes.filter((c) => c.id !== crash.id && c.id !== compareId2) : [];
+  const compare2Options = allCrashes ? allCrashes.filter((c) => c.id !== crash.id && c.id !== compareId1) : [];
+  const comparisonRow = (c) => {
+    const idx = Math.min(daysSinceATH, c.curve.length - 1);
+    const ddAtSameDay = c.curve[idx].dd;
+    return { c, ddAtSameDay, isDeeper: currentDD < ddAtSameDay };
+  };
   return (
     <div>
       <div className="flex items-center justify-between gap-3 mb-2 flex-wrap">
@@ -1503,15 +1636,48 @@ function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve
           </select>
         )}
       </div>
+      {allCrashes && allCrashes.length > 1 && (
+        <div className="flex items-center gap-2 mb-2 flex-wrap text-[11px]" style={{ color: C.textDim }}>
+          <span>他の下落と比較：</span>
+          <select
+            value={compareId1}
+            onChange={(e) => setCompareId1(e.target.value)}
+            className="rounded"
+            style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text, padding: "3px 6px", cursor: "pointer" }}
+          >
+            <option value="">比較①を選択…</option>
+            {compare1Options.map((c) => (<option key={c.id} value={c.id}>{crashButtonLabel(c)}</option>))}
+          </select>
+          <select
+            value={compareId2}
+            onChange={(e) => setCompareId2(e.target.value)}
+            className="rounded"
+            style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text, padding: "3px 6px", cursor: "pointer" }}
+          >
+            <option value="">比較②を選択…</option>
+            {compare2Options.map((c) => (<option key={c.id} value={c.id}>{crashButtonLabel(c)}</option>))}
+          </select>
+          <span className="flex items-center gap-1 ml-2"><span style={{ width: 7, height: 7, borderRadius: 2, background: crash.color, flexShrink: 0 }} />{crash.name}</span>
+          {compareCrashes.map((c) => (<span key={c.id} className="flex items-center gap-1"><span style={{ width: 7, height: 7, borderRadius: 2, background: c.color, flexShrink: 0 }} />{c.name}</span>))}
+          <span className="flex items-center gap-1"><span style={{ width: 7, height: 7, borderRadius: 2, background: C.teal, flexShrink: 0 }} />現在</span>
+        </div>
+      )}
       <div style={{ height: 440 }} className="mb-2">
         <ResponsiveContainer width="100%" height="100%">
-          <CrashDetailChart crash={crash} daysSinceATH={daysSinceATH} currentDD={currentDD} currentEpisodeCurve={currentEpisodeCurve} annotationPoints={annotationPoints} ddTicks={ddTicks} />
+          <CrashDetailChart crash={crash} compareCrashes={compareCrashes} daysSinceATH={daysSinceATH} currentDD={currentDD} currentEpisodeCurve={currentEpisodeCurve} annotationPoints={annotationPoints} ddTicks={ddTicks} maxDay={maxDay} />
         </ResponsiveContainer>
       </div>
       {annotationPoints.length > 0 && <div className="text-[10px] mb-3" style={{ color: C.textDim }}>● にカーソルを合わせると当時の出来事を表示します。</div>}
       <div className="rounded px-4 py-3 mb-4 text-sm leading-relaxed" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }}>
-        現在はATH更新から{daysSinceATH}日目でDD{currentDD.toFixed(1)}%。{crash.name}の同じ経過日数時点ではDD{crashDDatSameDay}%でした
-        （現状の方が<span style={{ color: deeper ? C.rust : C.teal, fontWeight: 700 }}>{deeper ? "深い" : "浅い"}</span>ペース）。
+        <div>現在はATH更新から{daysSinceATH}日目でDD{currentDD.toFixed(1)}%。</div>
+        {[crash, ...compareCrashes].map((c) => {
+          const { ddAtSameDay, isDeeper } = comparisonRow(c);
+          return (
+            <div key={c.id}>
+              {c.name}の同じ経過日数時点ではDD{ddAtSameDay}%でした（現状の方が<span style={{ color: isDeeper ? C.rust : C.teal, fontWeight: 700 }}>{isDeeper ? "深い" : "浅い"}</span>ペース）。
+            </div>
+          );
+        })}
       </div>
       {crash.isKnown ? (
         <div>
@@ -1521,8 +1687,8 @@ function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve
           {showDetail && (
             <div className="grid grid-cols-1 gap-4">
               <div><div className="text-[10px] mb-1" style={{ color: C.textDim }}>原因</div><div className="text-sm leading-relaxed" style={{ color: C.textMuted }}>{crash.cause}</div></div>
-              <div><div className="text-[10px] mb-1" style={{ color: C.textDim }}>終息した要因</div><div className="text-sm leading-relaxed" style={{ color: C.textMuted }}>{crash.resolution}</div></div>
-              <div><div className="text-[10px] mb-1" style={{ color: C.textDim }}>その後の学び</div><div className="text-sm leading-relaxed" style={{ color: C.textMuted }}>{crash.lesson}</div></div>
+              {crash.resolution !== "—" && <div><div className="text-[10px] mb-1" style={{ color: C.textDim }}>終息した要因</div><div className="text-sm leading-relaxed" style={{ color: C.textMuted }}>{crash.resolution}</div></div>}
+              {crash.lesson !== "—" && <div><div className="text-[10px] mb-1" style={{ color: C.textDim }}>その後の学び</div><div className="text-sm leading-relaxed" style={{ color: C.textMuted }}>{crash.lesson}</div></div>}
             </div>
           )}
         </div>
@@ -1672,8 +1838,11 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
   const [tab, setTab] = useState("csv");
   const [instrManualDate, setInstrManualDate] = useState(localYMD());
   const [instrManualPrice, setInstrManualPrice] = useState("");
-  const [manualDate, setManualDate] = useState(localYMD());
-  const [manualPrice, setManualPrice] = useState("");
+  // SP500の日付・終値入力欄のデフォルトは「今日（日本時間）」ではなく、直近で入力済みのSP500最終日・その評価額を表示する。
+  // 「今日」をデフォルトにすると、日本時間の日付が米国の実際の取引日とずれていることに気づかず、
+  // ずれた日付でデータを記録してしまい（ステータスの「更新済」判定は米国東部時間基準のため）「値は更新されたのにステータスが未更新のまま」という不具合の原因になっていた。
+  const [manualDate, setManualDate] = useState(() => (rawSeries.length ? rawSeries[rawSeries.length - 1].date.toISOString().slice(0, 10) : localYMD()));
+  const [manualPrice, setManualPrice] = useState(() => (rawSeries.length ? String(rawSeries[rawSeries.length - 1].price) : ""));
   const [fileName, setFileName] = useState(null);
   const [fileMsg, setFileMsg] = useState(null);
   const [rakutenFileName, setRakutenFileName] = useState(null);
@@ -2832,8 +3001,10 @@ export default function DDDashboard() {
   const periodStats = useMemo(() => computePeriodStats(periodRange, d.episodes), [periodRange, d.episodes]);
   // SP500の全期間データ（d.FULL）からATH比-10%以上の下落局面を自動検出。既知の歴史的暴落（curated）はボタン表示、それ以外は「その他」プルダウンへ。
   const historicalCrashes = useMemo(() => buildHistoricalCrashes(d.FULL), [d.FULL]);
-  const primaryCrashes = useMemo(() => historicalCrashes.filter((c) => c.isKnown), [historicalCrashes]);
-  const otherCrashes = useMemo(() => historicalCrashes.filter((c) => !c.isKnown), [historicalCrashes]);
+  // ミニウィジェットの既定パイル・同時重ね描きは featured のみ（8色パレットの上限に合わせた選定）。
+  // isKnown（名称・年表イベント付き）は全23件がtrueなので、featured=false の残りは「その他の下落」プルダウンから個別に選択する。
+  const primaryCrashes = useMemo(() => historicalCrashes.filter((c) => c.featured), [historicalCrashes]);
+  const otherCrashes = useMemo(() => historicalCrashes.filter((c) => !c.featured), [historicalCrashes]);
   const comparisonData = useMemo(() => buildComparisonData(d.currentEpisodeCurve, primaryCrashes), [d.currentEpisodeCurve, primaryCrashes]);
   const toggle = (k) => setHidden((p) => ({ ...p, [k]: !p[k] }));
   const toggleCrash = (k) => setHiddenCrash((p) => ({ ...p, [k]: !p[k] }));
