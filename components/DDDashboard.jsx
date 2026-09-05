@@ -945,7 +945,9 @@ function resolveCrashAnnotations(crash) {
 }
 function wrapJaLines(text, maxChars) { const lines = []; for (let i = 0; i < text.length; i += maxChars) lines.push(text.slice(i, i + maxChars)); return lines; }
 // 暴落局面の年表イベント（annotations）をチャート上のマーカーとして描画し、ホバー時に吹き出しで詳細を表示する（ChartMarkersと同じCustomizedパターン）。
-function CrashEventMarkers({ xAxisMap, yAxisMap, points, chartWidth }) {
+// ニュースの吹き出し表示中はhover位置がRechartsの標準Tooltip（経過日数のポップアップ）とも重なるため、
+// onHoverChangeで親（CrashDetailChart）にホバー状態を伝え、標準Tooltipを非表示にする。
+function CrashEventMarkers({ xAxisMap, yAxisMap, points, chartWidth, onHoverChange }) {
   const [hoverIdx, setHoverIdx] = useState(null);
   const xAxis = xAxisMap && xAxisMap[Object.keys(xAxisMap)[0]];
   const yAxis = yAxisMap && yAxisMap[Object.keys(yAxisMap)[0]];
@@ -953,10 +955,12 @@ function CrashEventMarkers({ xAxisMap, yAxisMap, points, chartWidth }) {
   const xScale = xAxis.scale, yScale = yAxis.scale;
   const positioned = points.map((pt) => ({ ...pt, cx: xScale(pt.day), cy: yScale(pt.dd) })).filter((pt) => Number.isFinite(pt.cx) && Number.isFinite(pt.cy));
   const hovered = hoverIdx != null ? positioned[hoverIdx] : null;
+  const enter = (i) => { setHoverIdx(i); onHoverChange?.(true); };
+  const leave = (i) => { setHoverIdx((h) => (h === i ? null : h)); onHoverChange?.(false); };
   return (
     <g>
       {positioned.map((pt, i) => (
-        <g key={i} onMouseEnter={() => setHoverIdx(i)} onMouseLeave={() => setHoverIdx((h) => (h === i ? null : h))} style={{ cursor: "pointer" }}>
+        <g key={i} onMouseEnter={() => enter(i)} onMouseLeave={() => leave(i)} style={{ cursor: "pointer" }}>
           <circle cx={pt.cx} cy={pt.cy} r={5} fill={C.bg} stroke={C.amber} strokeWidth={1.6} />
           <circle cx={pt.cx} cy={pt.cy} r={10} fill="transparent" />
         </g>
@@ -1639,6 +1643,8 @@ function RankHoldingsContent({ rank, holdings, onEditHolding, onDeleteHolding })
 // メインの暴落＝赤、追加1＝白（細）、追加2＝グレー（細）、現在＝グリーン（通常表示のATH/評価額ラインと同色）。点線は使用しない。
 const COMPARE_COLORS = [C.white, C.gray];
 function CrashDetailChart({ crash, compareCrashes = [], daysSinceATH, currentDD, currentEpisodeCurve, annotationPoints, ddTicks, maxDay, width, height }) {
+  // ニュースの吹き出し表示中は標準Tooltip（経過日数のポップアップ）と重なるため非表示にする。
+  const [newsHover, setNewsHover] = useState(false);
   const nameFor = (id) => {
     if (id === "current") return "現在";
     if (id === crash.id) return crash.name;
@@ -1649,7 +1655,7 @@ function CrashDetailChart({ crash, compareCrashes = [], daysSinceATH, currentDD,
       <CartesianGrid stroke={C.borderSoft} vertical={false} />
       <XAxis dataKey="day" type="number" domain={[0, maxDay ?? crash.recoveryDay]} allowDuplicatedCategory={false} tick={{ fill: C.textDim, fontSize: 10 }} axisLine={{ stroke: C.border }} tickLine={false} label={{ value: "経過日数（ATH起点、左端=ATH・右端=次のATH）", position: "bottom", offset: 4, fill: C.textDim, fontSize: 10 }} />
       <YAxis domain={[ddTicks[ddTicks.length - 1], 2]} ticks={ddTicks} tick={{ fill: C.textDim, fontSize: 10 }} axisLine={false} tickLine={false} width={48} tickFormatter={(v) => `${v}%`} label={{ value: "DD%", angle: -90, position: "insideLeft", fill: C.textDim, fontSize: 10 }} />
-      <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} formatter={(v, n) => [`${v}%`, nameFor(n)]} />
+      <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} formatter={(v, n) => [`${v}%`, nameFor(n)]} wrapperStyle={newsHover ? { visibility: "hidden" } : undefined} />
       <ReferenceLine y={-3} stroke={C.amber} strokeDasharray="4 3" strokeWidth={1.3} label={{ value: "-3%", position: "left", fill: C.amber, fontSize: 9 }} />
       <ReferenceLine y={-5} stroke={C.amber} strokeDasharray="4 3" strokeWidth={1.3} label={{ value: "-5%", position: "left", fill: C.amber, fontSize: 9 }} />
       <ReferenceLine x={crash.troughDay} stroke={C.borderSoft} strokeDasharray="2 3" label={{ value: "底値", fill: C.textDim, fontSize: 9, position: "insideTopLeft" }} />
@@ -1664,7 +1670,7 @@ function CrashDetailChart({ crash, compareCrashes = [], daysSinceATH, currentDD,
         <ReferenceDot key={c.id} x={c.troughDay} y={c.maxDD} r={3.5} fill={COMPARE_COLORS[i] ?? C.gray} stroke={C.bg} strokeWidth={1.5} />
       ))}
       <ReferenceDot x={daysSinceATH} y={currentDD} r={4.5} fill={C.teal} stroke={C.bg} strokeWidth={2} />
-      {annotationPoints.length > 0 && <Customized component={<CrashEventMarkers points={annotationPoints} chartWidth={width} />} />}
+      {annotationPoints.length > 0 && <Customized component={<CrashEventMarkers points={annotationPoints} chartWidth={width} onHoverChange={setNewsHover} />} />}
     </LineChart>
   );
 }
