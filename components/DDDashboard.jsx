@@ -18,6 +18,7 @@ const C = {
   text: "#E7ECF3", textMuted: "#8592AC", textDim: "#56637F",
   teal: "#45C4B0", amber: "#D9A24B", rust: "#C0654B", rustSoft: "rgba(192,101,75,0.16)",
   violet: "#8B7FC7", blue: "#5B90C7",
+  gray: "#7A8499", gray2: "#9CA6BC", gray3: "#C3CBDC", white: "#FFFFFF",
 };
 function depthColor(v) { if (v >= -3) return C.teal; if (v >= -18) return C.amber; return C.rust; }
 function hexToRgb(hex) { const h = hex.replace("#", ""); return { r: parseInt(h.substring(0, 2), 16), g: parseInt(h.substring(2, 4), 16), b: parseInt(h.substring(4, 6), 16) }; }
@@ -1562,6 +1563,8 @@ function RankHoldingsContent({ rank, holdings, onEditHolding, onDeleteHolding })
 
 // Customized経由でxAxisMap/yAxisMapの実スケール関数を受け取り、Line等と同じチャート内に描画されるReact要素として振る舞う必要があるため、
 // ResponsiveContainerの直接の子として渡す（widthValueがResponsiveContainerから自動注入される）。
+// compareCrashes[0]は比較対象2（薄いグレー）、compareCrashes[1]は比較対象3（さらに薄いグレー）に固定色を割り当てる。点線は使用しない。
+const COMPARE_COLORS = [C.gray2, C.gray3];
 function CrashDetailChart({ crash, compareCrashes = [], daysSinceATH, currentDD, currentEpisodeCurve, annotationPoints, ddTicks, maxDay, width, height }) {
   const nameFor = (id) => {
     if (id === "current") return "現在";
@@ -1576,17 +1579,17 @@ function CrashDetailChart({ crash, compareCrashes = [], daysSinceATH, currentDD,
       <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} formatter={(v, n) => [`${v}%`, nameFor(n)]} />
       <ReferenceLine y={-3} stroke={C.rust} strokeDasharray="4 3" strokeWidth={1.3} label={{ value: "-3%", position: "left", fill: C.rust, fontSize: 9 }} />
       <ReferenceLine x={crash.troughDay} stroke={C.borderSoft} strokeDasharray="2 3" label={{ value: "底値", fill: C.textDim, fontSize: 9, position: "insideTopLeft" }} />
-      <ReferenceLine x={daysSinceATH} stroke={C.teal} strokeDasharray="2 3" label={{ value: "現在", fill: C.teal, fontSize: 9, position: "insideTopRight" }} />
-      <Line data={crash.curve} dataKey="dd" type="monotone" stroke={crash.color} strokeWidth={1.8} dot={false} isAnimationActive={false} name={crash.id} />
-      {compareCrashes.map((c) => (
-        <Line key={c.id} data={c.curve} dataKey="dd" type="monotone" stroke={c.color} strokeWidth={1.5} strokeDasharray="5 3" dot={false} isAnimationActive={false} name={c.id} />
+      <ReferenceLine x={daysSinceATH} stroke={C.white} strokeDasharray="2 3" label={{ value: "現在", fill: C.white, fontSize: 9, position: "insideTopRight" }} />
+      <Line data={crash.curve} dataKey="dd" type="monotone" stroke={C.gray} strokeWidth={1.8} dot={false} isAnimationActive={false} name={crash.id} />
+      {compareCrashes.map((c, i) => (
+        <Line key={c.id} data={c.curve} dataKey="dd" type="monotone" stroke={COMPARE_COLORS[i] ?? C.gray3} strokeWidth={1.8} dot={false} isAnimationActive={false} name={c.id} />
       ))}
-      <Line data={currentEpisodeCurve} dataKey="dd" type="monotone" stroke={C.teal} strokeWidth={2.4} dot={false} isAnimationActive={false} connectNulls={false} name="current" />
-      <ReferenceDot x={crash.troughDay} y={crash.maxDD} r={4} fill={crash.color} stroke={C.bg} strokeWidth={2} />
-      {compareCrashes.map((c) => (
-        <ReferenceDot key={c.id} x={c.troughDay} y={c.maxDD} r={3.5} fill={c.color} stroke={C.bg} strokeWidth={1.5} />
+      <Line data={currentEpisodeCurve} dataKey="dd" type="monotone" stroke={C.white} strokeWidth={3.2} dot={false} isAnimationActive={false} connectNulls={false} name="current" />
+      <ReferenceDot x={crash.troughDay} y={crash.maxDD} r={4} fill={C.gray} stroke={C.bg} strokeWidth={2} />
+      {compareCrashes.map((c, i) => (
+        <ReferenceDot key={c.id} x={c.troughDay} y={c.maxDD} r={3.5} fill={COMPARE_COLORS[i] ?? C.gray3} stroke={C.bg} strokeWidth={1.5} />
       ))}
-      <ReferenceDot x={daysSinceATH} y={currentDD} r={4} fill={C.teal} stroke={C.bg} strokeWidth={2} />
+      <ReferenceDot x={daysSinceATH} y={currentDD} r={4.5} fill={C.white} stroke={C.bg} strokeWidth={2} />
       {annotationPoints.length > 0 && <Customized component={<CrashEventMarkers points={annotationPoints} chartWidth={width} />} />}
     </LineChart>
   );
@@ -1596,7 +1599,6 @@ function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve
   // 追加比較①②：メインの下落（crash・上部プルダウンで切替）とは別に、もう2つまで下落局面を選んで同時に重ね描きできるようにする。
   const [compareId1, setCompareId1] = useState("");
   const [compareId2, setCompareId2] = useState("");
-  const recoveryDays = crash.recoveryDay - crash.troughDay;
   // crash.id と重複しうる間（プルダウンのstate更新がuseEffectで反映されるまでの1フレーム）も
   // 重複キーで描画されないよう、選択IDの解決自体でも主要因（crash.id・互いの重複）を除外する。
   const compare1 = useMemo(() => (compareId1 && compareId1 !== crash.id ? allCrashes?.find((c) => c.id === compareId1) ?? null : null), [allCrashes, compareId1, crash.id]);
@@ -1619,50 +1621,65 @@ function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve
     const ddAtSameDay = c.curve[idx].dd;
     return { c, ddAtSameDay, isDeeper: currentDD < ddAtSameDay };
   };
+  const summaryLine = (c) => `${fmtDateSlash(c.start)}（ATH）→ ${fmtDateSlash(c.low)}（底値 DD${c.maxDD}%・${fmtDuration(c.troughDay)}）→ ${fmtDateSlash(c.athRecoveryDate)}（回復・${fmtDuration(c.recoveryDay - c.troughDay)}）`;
   return (
     <div>
-      <div className="flex items-center justify-between gap-3 mb-2 flex-wrap">
-        <div className="mono text-[11px]" style={{ color: C.textMuted }}>
-          {fmtDateSlash(crash.start)}（ATH）→ {fmtDateSlash(crash.low)}（底値 DD{crash.maxDD}%・{fmtDuration(crash.troughDay)}）→ {fmtDateSlash(crash.athRecoveryDate)}（回復・{fmtDuration(recoveryDays)}）
-        </div>
-        {allCrashes && allCrashes.length > 1 && (
-          <select
-            value={crash.id}
-            onChange={(e) => { const next = allCrashes.find((c) => c.id === e.target.value); if (next) onJump(next); }}
-            className="text-[11px] rounded"
-            style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text, padding: "3px 6px", cursor: "pointer" }}
-          >
-            {allCrashes.map((c) => (<option key={c.id} value={c.id}>{crashButtonLabel(c)}</option>))}
-          </select>
-        )}
-      </div>
       {allCrashes && allCrashes.length > 1 && (
-        <div className="flex items-center gap-2 mb-2 flex-wrap text-[11px]" style={{ color: C.textDim }}>
-          <span>他の下落と比較：</span>
-          <select
-            value={compareId1}
-            onChange={(e) => setCompareId1(e.target.value)}
-            className="rounded"
-            style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text, padding: "3px 6px", cursor: "pointer" }}
-          >
-            <option value="">比較①を選択…</option>
-            {compare1Options.map((c) => (<option key={c.id} value={c.id}>{crashButtonLabel(c)}</option>))}
-          </select>
-          <select
-            value={compareId2}
-            onChange={(e) => setCompareId2(e.target.value)}
-            className="rounded"
-            style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text, padding: "3px 6px", cursor: "pointer" }}
-          >
-            <option value="">比較②を選択…</option>
-            {compare2Options.map((c) => (<option key={c.id} value={c.id}>{crashButtonLabel(c)}</option>))}
-          </select>
-          <span className="flex items-center gap-1 ml-2"><span style={{ width: 7, height: 7, borderRadius: 2, background: crash.color, flexShrink: 0 }} />{crash.name}</span>
-          {compareCrashes.map((c) => (<span key={c.id} className="flex items-center gap-1"><span style={{ width: 7, height: 7, borderRadius: 2, background: c.color, flexShrink: 0 }} />{c.name}</span>))}
-          <span className="flex items-center gap-1"><span style={{ width: 7, height: 7, borderRadius: 2, background: C.teal, flexShrink: 0 }} />現在</span>
+        <div className="flex flex-col gap-2 mb-3">
+          <div>
+            <div className="flex items-center gap-2 flex-wrap text-[11px]" style={{ color: C.textDim }}>
+              <span style={{ width: 7, height: 7, borderRadius: 2, background: C.gray, flexShrink: 0 }} />
+              <span style={{ minWidth: 74 }}>メインの暴落</span>
+              <select
+                value={crash.id}
+                onChange={(e) => { const next = allCrashes.find((c) => c.id === e.target.value); if (next) onJump(next); }}
+                className="rounded"
+                style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text, padding: "3px 6px", cursor: "pointer" }}
+              >
+                {allCrashes.map((c) => (<option key={c.id} value={c.id}>{crashButtonLabel(c)}</option>))}
+              </select>
+            </div>
+            <div className="mono text-[11px] mt-1" style={{ color: C.textMuted, paddingLeft: 17 }}>{summaryLine(crash)}</div>
+          </div>
+          <div>
+            <div className="flex items-center gap-2 flex-wrap text-[11px]" style={{ color: C.textDim }}>
+              <span style={{ width: 7, height: 7, borderRadius: 2, background: C.gray2, flexShrink: 0 }} />
+              <span style={{ minWidth: 74 }}>比較対象2</span>
+              <select
+                value={compareId1}
+                onChange={(e) => setCompareId1(e.target.value)}
+                className="rounded"
+                style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text, padding: "3px 6px", cursor: "pointer" }}
+              >
+                <option value="">選択しない</option>
+                {compare1Options.map((c) => (<option key={c.id} value={c.id}>{crashButtonLabel(c)}</option>))}
+              </select>
+            </div>
+            {compare1 && <div className="mono text-[11px] mt-1" style={{ color: C.textMuted, paddingLeft: 17 }}>{summaryLine(compare1)}</div>}
+          </div>
+          <div>
+            <div className="flex items-center gap-2 flex-wrap text-[11px]" style={{ color: C.textDim }}>
+              <span style={{ width: 7, height: 7, borderRadius: 2, background: C.gray3, flexShrink: 0 }} />
+              <span style={{ minWidth: 74 }}>比較対象3</span>
+              <select
+                value={compareId2}
+                onChange={(e) => setCompareId2(e.target.value)}
+                className="rounded"
+                style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text, padding: "3px 6px", cursor: "pointer" }}
+              >
+                <option value="">選択しない</option>
+                {compare2Options.map((c) => (<option key={c.id} value={c.id}>{crashButtonLabel(c)}</option>))}
+              </select>
+            </div>
+            {compare2 && <div className="mono text-[11px] mt-1" style={{ color: C.textMuted, paddingLeft: 17 }}>{summaryLine(compare2)}</div>}
+          </div>
+          <div className="flex items-center gap-2 text-[11px]" style={{ color: C.textDim }}>
+            <span style={{ width: 7, height: 7, borderRadius: 2, background: C.white, flexShrink: 0 }} />
+            <span>現在（ATH更新から{daysSinceATH}日目・DD{currentDD.toFixed(1)}%）</span>
+          </div>
         </div>
       )}
-      <div style={{ height: 440 }} className="mb-2">
+      <div style={{ height: 520 }} className="mb-2">
         <ResponsiveContainer width="100%" height="100%">
           <CrashDetailChart crash={crash} compareCrashes={compareCrashes} daysSinceATH={daysSinceATH} currentDD={currentDD} currentEpisodeCurve={currentEpisodeCurve} annotationPoints={annotationPoints} ddTicks={ddTicks} maxDay={maxDay} />
         </ResponsiveContainer>
@@ -2748,6 +2765,7 @@ export default function DDDashboard() {
   const [pieView, setPieView] = useState("rank");
   const [modelOverride, setModelOverride] = useState(null); // null = 自動（現在の評価額に応じて選択）
   const [chartTab, setChartTab] = useState("normal");
+  const [selectedCrashId, setSelectedCrashId] = useState("2007"); // 「過去の暴落との比較」ミニウィジェットの既定選択＝リーマンショック
   const [modal, setModal] = useState(null);
   const [hydrated, setHydrated] = useState(false);
   const [lifecycle, setLifecycle] = useState(LIFECYCLE_DEFAULT);
@@ -2999,13 +3017,11 @@ export default function DDDashboard() {
   const rangeDays = useMemo(() => { const f = chartData[0].date, l = chartData[chartData.length - 1].date; return Math.round((l - f) / 86400000); }, [chartData]);
   const periodRange = useMemo(() => periodDateRange(d.FULL, d.last, period), [d.FULL, d.last, period]);
   const periodStats = useMemo(() => computePeriodStats(periodRange, d.episodes), [periodRange, d.episodes]);
-  // SP500の全期間データ（d.FULL）からATH比-10%以上の下落局面を自動検出。既知の歴史的暴落（curated）はボタン表示、それ以外は「その他」プルダウンへ。
+  // SP500の全期間データ（d.FULL）からATH比-10%以上の下落局面を自動検出。全23件をドロップダウンで選択可能にする。
   const historicalCrashes = useMemo(() => buildHistoricalCrashes(d.FULL), [d.FULL]);
-  // ミニウィジェットの既定パイル・同時重ね描きは featured のみ（8色パレットの上限に合わせた選定）。
-  // isKnown（名称・年表イベント付き）は全23件がtrueなので、featured=false の残りは「その他の下落」プルダウンから個別に選択する。
-  const primaryCrashes = useMemo(() => historicalCrashes.filter((c) => c.featured), [historicalCrashes]);
-  const otherCrashes = useMemo(() => historicalCrashes.filter((c) => !c.featured), [historicalCrashes]);
-  const comparisonData = useMemo(() => buildComparisonData(d.currentEpisodeCurve, primaryCrashes), [d.currentEpisodeCurve, primaryCrashes]);
+  // ミニウィジェットは常に1件のみ選択（既定：リーマンショック）。データ未読込等でidが見つからない場合は先頭にフォールバック。
+  const selectedCrash = useMemo(() => historicalCrashes.find((c) => c.id === selectedCrashId) ?? historicalCrashes[0] ?? null, [historicalCrashes, selectedCrashId]);
+  const comparisonData = useMemo(() => buildComparisonData(d.currentEpisodeCurve, selectedCrash ? [selectedCrash] : []), [d.currentEpisodeCurve, selectedCrash]);
   const toggle = (k) => setHidden((p) => ({ ...p, [k]: !p[k] }));
   const toggleCrash = (k) => setHiddenCrash((p) => ({ ...p, [k]: !p[k] }));
 
@@ -3019,7 +3035,7 @@ export default function DDDashboard() {
     return { AB, Cb, DE };
   }, [currentHoldingPct, effectiveModelRow]);
 
-  const crashLegendItems = [...primaryCrashes.map((c) => ({ key: c.id, label: c.name, color: c.color })), { key: "current", label: "現在", color: C.teal }];
+  const crashLegendItems = selectedCrash ? [{ key: selectedCrash.id, label: selectedCrash.name, color: C.gray }, { key: "current", label: "現在", color: C.white }] : [];
   const analysisText = useMemo(() => buildAnalysisText(d, currentHoldingPct, holdingsTotal(holdings)), [d, currentHoldingPct, holdings]);
   const checkpointResults = useMemo(() => {
     const total = holdingsTotal(holdings);
@@ -3092,6 +3108,23 @@ export default function DDDashboard() {
                   </div>
                 ) : (
                   <div className="h-full flex flex-col">
+                    <div className="flex items-center gap-2 px-2 pt-1 pb-1.5 flex-wrap shrink-0">
+                      {historicalCrashes.length > 0 && (
+                        <select
+                          value={selectedCrash?.id ?? ""}
+                          onChange={(e) => setSelectedCrashId(e.target.value)}
+                          className="mono text-[11px] rounded px-2 py-1"
+                          style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text, cursor: "pointer" }}
+                        >
+                          {historicalCrashes.map((c) => (<option key={c.id} value={c.id}>{crashButtonLabel(c)}</option>))}
+                        </select>
+                      )}
+                      {selectedCrash && (
+                        <button onClick={() => setModal({ type: "crash", crash: selectedCrash })} className="text-[11px] px-2.5 py-1 rounded" style={{ color: C.bg, background: C.teal, fontWeight: 700, border: "none", cursor: "pointer" }}>
+                          拡大して詳細比較
+                        </button>
+                      )}
+                    </div>
                     <div className="flex-1 min-h-0">
                       <ResponsiveContainer width="100%" height="100%">
                         <LineChart data={comparisonData} margin={{ top: 12, right: 20, left: 0, bottom: 0 }}>
@@ -3099,29 +3132,10 @@ export default function DDDashboard() {
                           <XAxis dataKey="day" tick={{ fill: C.textDim, fontSize: 10 }} axisLine={{ stroke: C.border }} tickLine={false} label={{ value: "経過日数（下落開始起点）", position: "insideBottom", offset: -2, fill: C.textDim, fontSize: 10 }} />
                           <YAxis domain={[-60, 2]} tick={{ fill: C.textDim, fontSize: 10 }} axisLine={false} tickLine={false} width={44} />
                           <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} />
-                          {primaryCrashes.map((c) => (!hiddenCrash[c.id] && <Line key={c.id} type="monotone" dataKey={c.id} stroke={c.color} strokeWidth={1.3} dot={false} isAnimationActive={false} connectNulls={false} name={c.name} />))}
-                          {!hiddenCrash.current && <Line type="monotone" dataKey="current" stroke={C.teal} strokeWidth={2.4} dot={false} isAnimationActive={false} connectNulls={false} name="現在" />}
+                          {selectedCrash && !hiddenCrash[selectedCrash.id] && <Line type="monotone" dataKey={selectedCrash.id} stroke={C.gray} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls={false} name={selectedCrash.name} />}
+                          {!hiddenCrash.current && <Line type="monotone" dataKey="current" stroke={C.white} strokeWidth={3} dot={false} isAnimationActive={false} connectNulls={false} name="現在" />}
                         </LineChart>
                       </ResponsiveContainer>
-                    </div>
-                    <div className="flex gap-1.5 px-2 pb-2 pt-1 flex-wrap shrink-0 items-center">
-                      {primaryCrashes.map((c) => (
-                        <button key={c.id} onClick={() => setModal({ type: "crash", crash: c })} className="flex items-center gap-1.5 rounded px-2 py-1" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
-                          <span style={{ width: 7, height: 7, borderRadius: 2, background: c.color, flexShrink: 0 }} />
-                          <span className="mono text-[10px] whitespace-nowrap" style={{ color: C.text }}>{crashButtonLabel(c)}</span>
-                        </button>
-                      ))}
-                      {otherCrashes.length > 0 && (
-                        <select
-                          value=""
-                          onChange={(e) => { const c = otherCrashes.find((x) => x.id === e.target.value); if (c) setModal({ type: "crash", crash: c }); e.target.value = ""; }}
-                          className="mono text-[10px] rounded px-2 py-1"
-                          style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.textMuted, cursor: "pointer" }}
-                        >
-                          <option value="">その他の下落（{otherCrashes.length}件）▾</option>
-                          {otherCrashes.map((c) => (<option key={c.id} value={c.id}>{crashButtonLabel(c)}</option>))}
-                        </select>
-                      )}
                     </div>
                   </div>
                 )}
