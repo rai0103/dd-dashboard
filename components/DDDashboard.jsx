@@ -1280,6 +1280,78 @@ function SortableTable({ columns, rows, defaultSortKey, defaultDir = "desc", onE
   );
 }
 
+/* ---------------- box zone stats (ATH未更新・DD-3%未到達の滞留日数別・最終到達確率) ---------------- */
+// S&P500実績・過去69年・完了エピソードn=1297件（5日刻みビン・累積条件付き確率）に基づく。
+const BOX_STATS = [
+  { minDays: 5, maxDays: 9, n: 251, athRate: 64.9, dd3Rate: 35.1 },
+  { minDays: 10, maxDays: 14, n: 103, athRate: 62.1, dd3Rate: 37.9 },
+  { minDays: 15, maxDays: 19, n: 45, athRate: 60.0, dd3Rate: 40.0 },
+  { minDays: 20, maxDays: 24, n: 22, athRate: 63.6, dd3Rate: 36.4 },
+  { minDays: 25, maxDays: 29, n: 12, athRate: 66.7, dd3Rate: 33.3 },
+  { minDays: 30, maxDays: 9999, n: 15, athRate: 80.0, dd3Rate: 20.0, lowSample: true },
+];
+const BASE_DD3_RATE = 8.9; // 無条件（通常時）のDD-3%到達率
+function findBoxStat(days) {
+  if (days === null || days === undefined || days < 5) return null;
+  return BOX_STATS.find((s) => days >= s.minDays && days <= s.maxDays) ?? null;
+}
+function boxStatRangeLabel(stat) { return stat.maxDays >= 9999 ? `${stat.minDays}日以上` : `${stat.minDays}〜${stat.maxDays}日`; }
+// compact: ダッシュボード上部の小さいステータス欄用。false: DD加速度アラートモーダル内の詳細カード用。
+function BoxStatsPanel({ days, compact }) {
+  const stat = findBoxStat(days);
+  if (!stat) return null;
+  const rangeLabel = boxStatRangeLabel(stat);
+  const diff = (stat.dd3Rate - BASE_DD3_RATE).toFixed(1);
+  const multiple = (stat.dd3Rate / BASE_DD3_RATE).toFixed(1);
+  if (compact) {
+    return (
+      <div className="mt-1 pt-1" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+        <div className="text-[9px]" style={{ color: C.textDim }}>{rangeLabel}滞留（n={stat.n}{stat.lowSample ? "・参考値" : ""}）</div>
+        <div className="text-[10px] mono">
+          <span style={{ color: C.teal }}>ATH{stat.athRate.toFixed(1)}%</span>
+          <span style={{ color: C.textDim }}> / </span>
+          <span style={{ color: C.rust }}>DD-3% {stat.dd3Rate.toFixed(1)}%</span>
+          <span style={{ color: C.textDim }}>（通常+{diff}pt）</span>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="rounded px-3 py-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
+      <div className="text-xs mb-1.5" style={{ color: C.textDim }}>現在「{rangeLabel}」ゾーン（過去{stat.n}件の実績{stat.lowSample ? "・参考値：サンプル少" : ""}）</div>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm mono mb-1.5">
+        <span>最終的にATH更新：<b style={{ color: C.teal }}>{stat.athRate.toFixed(1)}%</b></span>
+        <span>最終的にDD-3%到達：<b style={{ color: C.rust }}>{stat.dd3Rate.toFixed(1)}%</b><span className="text-xs" style={{ color: C.textDim }}>（通常時{BASE_DD3_RATE}%の約{multiple}倍・+{diff}pt）</span></span>
+      </div>
+      <div className="text-[10px]" style={{ color: C.textDim }}>※統計は過去傾向であり将来を保証するものではありません</div>
+    </div>
+  );
+}
+// 「DD開始から」＝直近ATH更新から「ATH更新中」「ボックス圏」「DD3%以降」の状態を一本化して表示する。
+function ATHProgressBlock({ dVoo }) {
+  if (!dVoo) return <div className="text-xs" style={{ color: C.textDim }}>VOOデータ未取り込み</div>;
+  const { daysSinceATH, athDate, currentPrice, currentDD, isDrawdown } = dVoo;
+  if (daysSinceATH === 0) {
+    return (
+      <div>
+        <div className="text-xs font-bold" style={{ color: C.teal }}>最高値更新</div>
+        <div className="text-[10px] mono" style={{ color: C.textDim }}>{fmtYMD(athDate)}　${currentPrice.toFixed(2)}</div>
+      </div>
+    );
+  }
+  const stat = !isDrawdown ? findBoxStat(daysSinceATH) : null;
+  return (
+    <div>
+      <div className="flex items-baseline justify-between text-xs">
+        <span style={{ color: C.textMuted }}>DD開始から</span>
+        <span className="mono font-semibold">{daysSinceATH}日</span>
+      </div>
+      <div className="text-[10px] mono" style={{ color: C.textDim }}>ATH：{fmtYMD(athDate)}{isDrawdown ? `・DD${currentDD.toFixed(1)}%` : ""}</div>
+      {stat && <BoxStatsPanel days={daysSinceATH} compact />}
+    </div>
+  );
+}
+
 /* ---------------- status panel ---------------- */
 function StatusPanel({ d, dVoo, dSpy, onOpenSpeedAlert }) {
   const tickers = [{ label: "SP500", data: d }, { label: "VOO", data: dVoo }, { label: "SPY", data: dSpy }];
@@ -1326,16 +1398,7 @@ function StatusPanel({ d, dVoo, dSpy, onOpenSpeedAlert }) {
         </div>
         <div className="flex-1 px-4 py-2 flex flex-col justify-center" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
           <div className="flex items-center gap-1.5 mb-1"><Clock size={11} style={{ color: C.textDim }} /><span className="text-[10px]" style={{ color: C.textDim }}>経過日数（VOO基準）</span></div>
-          {dVoo ? (<>
-            <div style={{ opacity: dVoo.isDrawdown ? 1 : 0.35 }}>
-              <div className="flex items-baseline justify-between text-xs"><span style={{ color: C.textMuted }}>DD開始から</span><span className="mono font-semibold">{dVoo.daysSinceATH}日</span></div>
-              <div className="text-[10px] mono" style={{ color: C.textDim }}>評価額 ${dVoo.currentPrice.toFixed(2)}（DD{dVoo.currentDD.toFixed(1)}%）</div>
-            </div>
-            <div className="mt-1 pt-1" style={{ borderTop: `1px solid ${C.borderSoft}`, opacity: dVoo.isDrawdown ? 0.35 : 1 }}>
-              <div className="flex items-baseline justify-between text-xs"><span style={{ color: C.textMuted }}>最高値更新から</span><span className="mono font-semibold">{dVoo.daysSinceATH}日</span></div>
-              <div className="text-[10px] mono" style={{ color: C.textDim }}>{fmtYMD(dVoo.athDate)}更新・最高値比{dVoo.currentDD.toFixed(1)}%・${dVoo.currentPrice.toFixed(2)}</div>
-            </div>
-          </>) : (<div className="text-xs" style={{ color: C.textDim }}>VOOデータ未取り込み</div>)}
+          <ATHProgressBlock dVoo={dVoo} />
         </div>
         <button onClick={dVoo ? onOpenSpeedAlert : undefined} disabled={!dVoo} className="flex-1 px-4 py-2 flex flex-col justify-center text-left" style={{ background: "transparent", border: "none", cursor: dVoo ? "pointer" : "default", opacity: dVoo ? 1 : 0.5 }}>
           <div className="flex items-center gap-1.5 mb-1"><Zap size={11} style={{ color: dVoo ? speedAlertAccent(dVoo.speedAlert) : C.textDim }} /><span className="text-[10px]" style={{ color: C.textDim }}>DD加速度アラート（VOO基準）</span>{dVoo && <ChevronRight size={11} style={{ color: C.textDim, marginLeft: "auto" }} />}</div>
@@ -1459,7 +1522,10 @@ function SpeedAlertModalContent({ d }) {
           <span className="text-xs" style={{ color: C.textMuted }}>モード：{d.mode}</span>
         </div>
         {sa.level === "normal" && (
-          <div className="text-sm" style={{ color: C.textMuted }}>現在ATH圏内です。DD3%に到達すると、そこからの速度計測が自動的に始まります。</div>
+          <div className="text-sm" style={{ color: C.textMuted }}>
+            {d.daysSinceATH === 0 ? "現在ATH更新中です。" : `直近ATH更新（${fmtYMD(d.athDate)}）から${d.daysSinceATH}営業日、まだDD3%には未到達です（ボックス圏）。`}
+            {" "}DD3%に到達すると、そこからの速度計測が自動的に始まります。
+          </div>
         )}
         {sa.level === "pending5" && (
           <div className="text-sm" style={{ color: C.textMuted }}>
@@ -1480,6 +1546,10 @@ function SpeedAlertModalContent({ d }) {
           </div>
         )}
       </div>
+
+      {sa.level === "normal" && d.daysSinceATH > 0 && findBoxStat(d.daysSinceATH) && (
+        <BoxStatsPanel days={d.daysSinceATH} />
+      )}
 
       {sa.level === "confirmed5" && (
         <div>
