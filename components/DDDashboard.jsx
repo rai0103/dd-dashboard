@@ -1241,12 +1241,43 @@ function Panel({ title, action, children, className = "", style, hideHeader = fa
     </div>
   );
 }
+// true=マウスホバーが効く環境（PC等）、false=タッチのみの環境（スマホ等）。
+// SSR/取得失敗時はPC相当（true）を既定値にしておく。
+function useHoverCapable() {
+  const [hoverCapable, setHoverCapable] = useState(true);
+  useEffect(() => {
+    try { setHoverCapable(window.matchMedia("(hover: hover) and (pointer: fine)").matches); } catch (e) { /* keep default */ }
+  }, []);
+  return hoverCapable;
+}
+const NISA_POPUP_FLIP_THRESHOLD = 130; // ポインターがこれより画面上端に近い場合、ポップアップを上→下表示に切り替える
+function NisaPopupContent({ cat, nisa }) {
+  return (
+    <>
+      <div className="font-semibold mb-1.5" style={{ color: C.text }}>{cat}クラス　内訳</div>
+      <div className="flex items-center justify-between gap-4 mb-1 mono"><span style={{ color: C.textMuted }}>NISA</span><span style={{ color: C.text }}>{Math.round(nisa.nisaValue).toLocaleString()}円（{nisa.nisaPct.toFixed(1)}%）</span></div>
+      <div className="flex items-center justify-between gap-4 pb-1.5 mono" style={{ borderBottom: `1px solid ${C.borderSoft}` }}><span style={{ color: C.textMuted }}>特定</span><span style={{ color: C.text }}>{Math.round(nisa.tokuteiValue).toLocaleString()}円（{nisa.tokuteiPct.toFixed(1)}%）</span></div>
+      <div className="flex items-center justify-between gap-4 mt-1.5 mono"><span style={{ color: C.textDim }}>合計</span><span className="font-semibold" style={{ color: C.text }}>{Math.round(nisa.total).toLocaleString()}円</span></div>
+    </>
+  );
+}
 function DiffBar({ cat, current, target, onClick, label, holdings }) {
   const diff = Number((current - target).toFixed(1)); const max = 50; const emphasize = Math.abs(diff) >= 4;
   const catColor = rankColor(cat); // ポートフォリオ構成（A〜Eランク）の円グラフと同じ配色に統一
-  const [showNisaPopup, setShowNisaPopup] = useState(false);
+  const hoverCapable = useHoverCapable();
+  const [popup, setPopup] = useState(null); // { x, y } = ポインター/タップ位置（viewport座標）。nullなら非表示
   const nisa = useMemo(() => calcNisaBreakdown(holdings, cat), [holdings, cat]);
   const hasSplit = nisa.nisaValue > 0 && nisa.tokuteiValue > 0;
+  const hasBar = nisa.total > 0;
+  const flip = popup ? popup.y < NISA_POPUP_FLIP_THRESHOLD : false; // 画面上端に近い場合はポインター下側に表示
+  const hoverHandlers = hasBar && hoverCapable ? {
+    onMouseEnter: (e) => setPopup({ x: e.clientX, y: e.clientY }),
+    onMouseMove: (e) => setPopup({ x: e.clientX, y: e.clientY }),
+    onMouseLeave: () => setPopup(null),
+  } : {};
+  const tapHandlers = hasBar && !hoverCapable ? {
+    onClick: (e) => { e.stopPropagation(); setPopup((p) => (p ? null : { x: e.clientX, y: e.clientY })); },
+  } : {};
   return (
     <div onClick={onClick} className="px-3 py-0.5 flex items-center gap-2" style={{ borderBottom: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
       <div className="flex-1 min-w-0">
@@ -1256,30 +1287,45 @@ function DiffBar({ cat, current, target, onClick, label, holdings }) {
         </div>
         <div className="relative h-1 rounded-full" style={{ background: C.panel2 }}>
           <div className="absolute top-0 h-1 rounded-full" style={{ width: `${(target / max) * 100}%`, background: C.borderSoft }} />
-          {/* 実績バー：NISA枠（不透明・左）と特定（半透明・右）の2セグメントに分割。クリックで内訳ポップアップ */}
+          {/* 実績バー：NISA枠（不透明・左）と特定（半透明・右）の2セグメントに分割。ホバー（PC）/タップ（モバイル）で内訳ポップアップ */}
           <div
             className="absolute top-0 h-1 rounded-full overflow-hidden"
-            style={{ width: `${(current / max) * 100}%`, cursor: nisa.total > 0 ? "pointer" : "inherit" }}
-            onClick={(e) => { if (nisa.total > 0) { e.stopPropagation(); setShowNisaPopup((v) => !v); } }}
+            style={{ width: `${(current / max) * 100}%`, cursor: hasBar ? "pointer" : "inherit" }}
+            {...hoverHandlers}
+            {...tapHandlers}
           >
             <div className="absolute top-0 left-0 h-1" style={{ width: `${nisa.nisaPct}%`, background: catColor, opacity: emphasize ? 1 : 0.75, borderRight: hasSplit ? `1px solid ${C.bg}` : "none" }} />
             <div className="absolute top-0 h-1" style={{ left: `${nisa.nisaPct}%`, right: 0, background: catColor, opacity: emphasize ? 0.35 : 0.28 }} />
           </div>
           <div className="absolute" style={{ left: `${(target / max) * 100}%`, top: -2.5, width: 2, height: 10, background: C.text, opacity: 0.6 }} />
-          {showNisaPopup && (
-            <>
-              <div onClick={(e) => { e.stopPropagation(); setShowNisaPopup(false); }} style={{ position: "fixed", inset: 0, zIndex: 40 }} />
-              <div onClick={(e) => e.stopPropagation()} className="absolute text-xs" style={{ top: "100%", left: 0, marginTop: 6, zIndex: 50, minWidth: 210, background: C.panel, border: `1px solid ${C.border}`, borderRadius: 6, padding: "8px 10px", boxShadow: "0 4px 16px rgba(0,0,0,0.4)" }}>
-                <div className="font-semibold mb-1.5" style={{ color: C.text }}>{cat}クラス　内訳</div>
-                <div className="flex items-center justify-between gap-4 mb-1 mono"><span style={{ color: C.textMuted }}>NISA</span><span style={{ color: C.text }}>{Math.round(nisa.nisaValue).toLocaleString()}円（{nisa.nisaPct.toFixed(1)}%）</span></div>
-                <div className="flex items-center justify-between gap-4 pb-1.5 mono" style={{ borderBottom: `1px solid ${C.borderSoft}` }}><span style={{ color: C.textMuted }}>特定</span><span style={{ color: C.text }}>{Math.round(nisa.tokuteiValue).toLocaleString()}円（{nisa.tokuteiPct.toFixed(1)}%）</span></div>
-                <div className="flex items-center justify-between gap-4 mt-1.5 mono"><span style={{ color: C.textDim }}>合計</span><span className="font-semibold" style={{ color: C.text }}>{Math.round(nisa.total).toLocaleString()}円</span></div>
-              </div>
-            </>
-          )}
         </div>
       </div>
       <ChevronRight size={13} style={{ color: C.textDim, flexShrink: 0 }} />
+      {popup && (
+        <>
+          {!hoverCapable && <div onClick={(e) => { e.stopPropagation(); setPopup(null); }} style={{ position: "fixed", inset: 0, zIndex: 55 }} />}
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="text-xs"
+            style={{
+              position: "fixed",
+              left: popup.x,
+              top: flip ? popup.y + 14 : popup.y - 14,
+              transform: flip ? "translate(-50%, 0)" : "translate(-50%, -100%)",
+              zIndex: 60,
+              minWidth: 210,
+              background: C.panel,
+              border: `1px solid ${C.border}`,
+              borderRadius: 6,
+              padding: "8px 10px",
+              boxShadow: "0 4px 16px rgba(0,0,0,0.4)",
+              pointerEvents: hoverCapable ? "none" : "auto",
+            }}
+          >
+            <NisaPopupContent cat={cat} nisa={nisa} />
+          </div>
+        </>
+      )}
     </div>
   );
 }
