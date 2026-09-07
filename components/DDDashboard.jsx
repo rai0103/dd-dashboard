@@ -492,6 +492,21 @@ function currentHoldingPctFromHoldings(holdings) {
   for (const r of byRank) if (pct[r.name] !== undefined) pct[r.name] = Number(((r.value / total) * 100).toFixed(1));
   return pct;
 }
+// クラス（A〜E）内でのNISA枠（非課税・NISA成長/つみたて）と特定（それ以外全て）の内訳金額・シェアを算出する。
+function isNisaAccount(account) { return account === "NISA成長" || account === "NISAつみたて"; }
+function calcNisaBreakdown(holdings, rankClass) {
+  const classHoldings = holdings.filter((h) => h.rank === rankClass);
+  const nisaValue = classHoldings.filter((h) => isNisaAccount(h.account)).reduce((sum, h) => sum + h.amount, 0);
+  const tokuteiValue = classHoldings.filter((h) => !isNisaAccount(h.account)).reduce((sum, h) => sum + h.amount, 0);
+  const total = nisaValue + tokuteiValue;
+  return {
+    nisaValue,
+    nisaPct: total > 0 ? (nisaValue / total) * 100 : 0,
+    tokuteiValue,
+    tokuteiPct: total > 0 ? (tokuteiValue / total) * 100 : 0,
+    total,
+  };
+}
 const CURRENCY_COLORS = { "ドル": C.teal, "円": C.amber };
 const OWNER_COLORS = { "shin": C.blue, "saki": C.violet };
 function colorForView(view, key) { return view === "category" ? (CATEGORY_COLORS[key] || C.textDim) : view === "currency" ? CURRENCY_COLORS[key] : view === "owner" ? (OWNER_COLORS[key] || C.textDim) : rankColor(key); }
@@ -1226,9 +1241,12 @@ function Panel({ title, action, children, className = "", style, hideHeader = fa
     </div>
   );
 }
-function DiffBar({ cat, current, target, onClick, label }) {
+function DiffBar({ cat, current, target, onClick, label, holdings }) {
   const diff = Number((current - target).toFixed(1)); const max = 50; const emphasize = Math.abs(diff) >= 4;
   const catColor = rankColor(cat); // ポートフォリオ構成（A〜Eランク）の円グラフと同じ配色に統一
+  const [showNisaPopup, setShowNisaPopup] = useState(false);
+  const nisa = useMemo(() => calcNisaBreakdown(holdings, cat), [holdings, cat]);
+  const hasSplit = nisa.nisaValue > 0 && nisa.tokuteiValue > 0;
   return (
     <div onClick={onClick} className="px-3 py-0.5 flex items-center gap-2" style={{ borderBottom: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
       <div className="flex-1 min-w-0">
@@ -1238,8 +1256,27 @@ function DiffBar({ cat, current, target, onClick, label }) {
         </div>
         <div className="relative h-1 rounded-full" style={{ background: C.panel2 }}>
           <div className="absolute top-0 h-1 rounded-full" style={{ width: `${(target / max) * 100}%`, background: C.borderSoft }} />
-          <div className="absolute top-0 h-1 rounded-full" style={{ width: `${(current / max) * 100}%`, background: catColor, opacity: emphasize ? 1 : 0.75 }} />
+          {/* 実績バー：NISA枠（不透明・左）と特定（半透明・右）の2セグメントに分割。クリックで内訳ポップアップ */}
+          <div
+            className="absolute top-0 h-1 rounded-full overflow-hidden"
+            style={{ width: `${(current / max) * 100}%`, cursor: nisa.total > 0 ? "pointer" : "inherit" }}
+            onClick={(e) => { if (nisa.total > 0) { e.stopPropagation(); setShowNisaPopup((v) => !v); } }}
+          >
+            <div className="absolute top-0 left-0 h-1" style={{ width: `${nisa.nisaPct}%`, background: catColor, opacity: emphasize ? 1 : 0.75, borderRight: hasSplit ? `1px solid ${C.bg}` : "none" }} />
+            <div className="absolute top-0 h-1" style={{ left: `${nisa.nisaPct}%`, right: 0, background: catColor, opacity: emphasize ? 0.35 : 0.28 }} />
+          </div>
           <div className="absolute" style={{ left: `${(target / max) * 100}%`, top: -2.5, width: 2, height: 10, background: C.text, opacity: 0.6 }} />
+          {showNisaPopup && (
+            <>
+              <div onClick={(e) => { e.stopPropagation(); setShowNisaPopup(false); }} style={{ position: "fixed", inset: 0, zIndex: 40 }} />
+              <div onClick={(e) => e.stopPropagation()} className="absolute text-xs" style={{ top: "100%", left: 0, marginTop: 6, zIndex: 50, minWidth: 210, background: C.panel, border: `1px solid ${C.border}`, borderRadius: 6, padding: "8px 10px", boxShadow: "0 4px 16px rgba(0,0,0,0.4)" }}>
+                <div className="font-semibold mb-1.5" style={{ color: C.text }}>{cat}クラス　内訳</div>
+                <div className="flex items-center justify-between gap-4 mb-1 mono"><span style={{ color: C.textMuted }}>NISA</span><span style={{ color: C.text }}>{Math.round(nisa.nisaValue).toLocaleString()}円（{nisa.nisaPct.toFixed(1)}%）</span></div>
+                <div className="flex items-center justify-between gap-4 pb-1.5 mono" style={{ borderBottom: `1px solid ${C.borderSoft}` }}><span style={{ color: C.textMuted }}>特定</span><span style={{ color: C.text }}>{Math.round(nisa.tokuteiValue).toLocaleString()}円（{nisa.tokuteiPct.toFixed(1)}%）</span></div>
+                <div className="flex items-center justify-between gap-4 mt-1.5 mono"><span style={{ color: C.textDim }}>合計</span><span className="font-semibold" style={{ color: C.text }}>{Math.round(nisa.total).toLocaleString()}円</span></div>
+              </div>
+            </>
+          )}
         </div>
       </div>
       <ChevronRight size={13} style={{ color: C.textDim, flexShrink: 0 }} />
@@ -3330,7 +3367,7 @@ export default function DDDashboard() {
                 </select>
                 <span className="flex items-center gap-1 text-[9px]" style={{ color: C.textMuted }}><span style={{ width: 8, height: 8, borderRadius: 2, background: C.textMuted, display: "inline-block" }} />実績<span style={{ width: 8, height: 8, borderRadius: 2, background: C.borderSoft, display: "inline-block", marginLeft: 4 }} />モデル</span><button onClick={() => setModal({ type: "ddTable" })} title="DD毎の配分表を表示" style={{ background: "transparent", border: "none", cursor: "pointer" }}><Info size={14} style={{ color: C.textDim }} /></button></div>} className="h-full">
                 <div className="overflow-y-auto h-full">
-                  {CATS.map((cat) => (<DiffBar key={cat} cat={cat} current={currentHoldingPct[cat]} target={effectiveModelRow[cat]} label={rankLabels[cat]} onClick={() => setModal({ type: "rank", rank: cat })} />))}
+                  {CATS.map((cat) => (<DiffBar key={cat} cat={cat} current={currentHoldingPct[cat]} target={effectiveModelRow[cat]} label={rankLabels[cat]} holdings={holdings} onClick={() => setModal({ type: "rank", rank: cat })} />))}
                   <div className="px-3 py-0.5 grid grid-cols-3 gap-1.5">
                     {[{ label: "A+B", ...blocks.AB }, { label: "C", ...blocks.Cb }, { label: "D+E", ...blocks.DE }].map((b) => { const diff = Number((b.cur - b.tgt).toFixed(1)); return (<div key={b.label} className="rounded px-2 py-0.5 text-center" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}><div className="text-[10px]" style={{ color: C.textDim }}>{b.label}</div><div className="mono text-xs font-semibold">{Number(b.cur.toFixed(1))}%</div><div className="mono text-[10px]" style={{ color: Math.abs(diff) >= 4 ? C.rust : C.textMuted }}>{diff > 0 ? "+" : ""}{diff}pt</div></div>); })}
                   </div>
