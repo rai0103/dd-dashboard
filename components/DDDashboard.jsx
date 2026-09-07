@@ -248,6 +248,16 @@ const SPEED_BUCKETS = [
   { label: "3日以内", min: 0, max: 3 }, { label: "4〜5日", min: 4, max: 5 }, { label: "6〜10日", min: 6, max: 10 },
   { label: "11〜20日", min: 11, max: 20 }, { label: "21日超", min: 21, max: Infinity },
 ];
+const CRASH_THRESHOLDS = [-15, -20, -30, -40, -50]; // バックテスト表の「大暴落率」列（最終DD到達水準別）
+// 速度バケット内の各エピソード（{ep, speed35}）について、閾値ごとの最終到達率（%）を計算する。
+// ep.troughDD（最終的な最大ドローダウン）を閾値と比較する点は既存の「DD-15%以上」列と同じロジックで、閾値だけを配列で拡張している。
+function calcCrashRatesByThreshold(episodesInBucket, thresholds) {
+  const n = episodesInBucket.length;
+  return thresholds.map((t) => {
+    const count = episodesInBucket.filter((r) => r.ep.troughDD <= t).length;
+    return { threshold: t, rate: n > 0 ? Math.round((count / n) * 100) : null, count };
+  });
+}
 // 局面（ATH→回復、未回復なら現在まで）について、各節目(-3,-5,-8,-10,-15,-20...)への到達までの営業日数を計測する。
 function episodeCrossDays(FULL, ep) {
   const endIdx = ep.isOngoing ? FULL.length - 1 : ep.recoveryIdx;
@@ -292,9 +302,9 @@ function computeTrackRecordStats(FULL, episodes) {
   const reachedD5 = crossings.filter((c) => c.cross[-3] !== null && c.cross[-5] !== null).map((c) => ({ ep: c.ep, speed35: c.cross[-5] - c.cross[-3] }));
   const speed35Backtest = SPEED_BUCKETS.map((b) => {
     const inBucket = reachedD5.filter((r) => r.speed35 >= b.min && r.speed35 <= b.max);
-    const crashed = inBucket.filter((r) => r.ep.troughDD <= -15);
     const avgFinalDD = inBucket.length ? Number((inBucket.reduce((s, r) => s + r.ep.troughDD, 0) / inBucket.length).toFixed(1)) : null;
-    return { label: b.label, min: b.min, max: b.max, n: inBucket.length, crashRate: inBucket.length ? Math.round((crashed.length / inBucket.length) * 100) : null, avgFinalDD };
+    const crashRates = calcCrashRatesByThreshold(inBucket, CRASH_THRESHOLDS);
+    return { label: b.label, min: b.min, max: b.max, n: inBucket.length, crashRates, avgFinalDD };
   });
   const deepRatesFor = (group) => {
     const denom = group.length;
@@ -1653,24 +1663,33 @@ function SpeedAlertModalContent({ d }) {
       )}
 
       <div>
-        <div className="text-xs mb-2" style={{ color: C.textDim }}>バックテスト：DD3→5%の速度別・大暴落率（最も長い実績があるSP500のデータ 約{d.trackRecord.totalYears.toFixed(0)}年・DD5%到達{d.trackRecord.reachedD5Count}局面）</div>
-        <table className="w-full text-xs mono">
-          <thead><tr style={{ color: C.textDim }}><th className="text-left font-normal py-1">速度区分</th><th>件数</th><th>大暴落率<br />（最終DD-15%以上）</th><th>平均最終DD</th></tr></thead>
-          <tbody>
-            {d.trackRecord.speed35Backtest.map((r) => (
-              <tr key={r.label} style={{ borderTop: `1px solid ${C.borderSoft}`, background: sa.backtestRow?.label === r.label ? `${C.teal}1a` : "transparent" }}>
-                <td className="py-1" style={{ color: C.textMuted }}>{r.label}</td>
-                <td className="text-center">{r.n}</td>
-                <td className="text-center" style={{ color: r.crashRate === null ? C.textDim : r.crashRate >= 30 ? C.rust : r.crashRate === 0 ? C.teal : C.text }}>{r.crashRate !== null ? `${r.crashRate}%` : "—"}</td>
-                <td className="text-center">{r.avgFinalDD !== null ? `${r.avgFinalDD}%` : "—"}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="text-xs mb-2" style={{ color: C.textDim }}>バックテスト：DD3→5%の速度別・大暴落率（最終DD到達水準別）（最も長い実績があるSP500のデータ 約{d.trackRecord.totalYears.toFixed(0)}年・DD5%到達{d.trackRecord.reachedD5Count}局面）</div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs mono" style={{ minWidth: 560 }}>
+            <thead><tr style={{ color: C.textDim }}>
+              <th className="text-left font-normal py-1">速度区分</th><th>件数</th>
+              {CRASH_THRESHOLDS.map((t) => (<th key={t}>{t}%<br />以上</th>))}
+              <th>平均<br />最終DD</th>
+            </tr></thead>
+            <tbody>
+              {d.trackRecord.speed35Backtest.map((r) => (
+                <tr key={r.label} style={{ borderTop: `1px solid ${C.borderSoft}`, background: sa.backtestRow?.label === r.label ? `${C.teal}1a` : "transparent" }}>
+                  <td className="py-1" style={{ color: C.textMuted }}>{r.label}{r.n > 0 && r.n < 10 && <span className="text-[9px]" style={{ color: C.textDim }}>（参考値）</span>}</td>
+                  <td className="text-center">{r.n}</td>
+                  {r.crashRates.map((cr) => (
+                    <td key={cr.threshold} className="text-center" style={{ color: cr.rate === null ? C.textDim : cr.rate >= 30 ? C.rust : cr.rate === 0 ? C.teal : C.text }}>{cr.rate !== null ? `${cr.rate}%` : "—"}</td>
+                  ))}
+                  <td className="text-center">{r.avgFinalDD !== null ? `${r.avgFinalDD}%` : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
         <div className="text-[10px] mt-1.5" style={{ color: C.textDim }}>
           {d.trackRecord.crashEpisodeCount > 0
             ? `大暴落${d.trackRecord.crashEpisodeCount}件のうち${d.trackRecord.crashFastCount}件（${d.trackRecord.crashFastShare}%）が「5日以内の急落型」で始まりました。`
             : "読み込まれているデータには最終DD-15%以上に達した局面がまだありません。"}
+          　※統計は過去傾向であり将来を保証するものではありません
         </div>
       </div>
 
