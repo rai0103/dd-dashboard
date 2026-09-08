@@ -3349,8 +3349,9 @@ function MobilePager({ activeIndex, onChange, pages }) {
 }
 // 評価額チャートの「拡大」時に開く全画面モーダル。CSSで常に横向き（landscape）表示に固定し、
 // 対応端末ではあわせてScreen Orientation APIでの実回転ロックも試みる（非対応環境ではCSS回転のみで代替）。
-function MobileChartZoomModal({ onClose, chartData, rangeDays, d, hidden, toggle, period, setPeriod, periodStats, historicalCrashes, selectedCrash, onSelectCrash, comparisonData, hiddenCrash, toggleCrash, crashLegendItems }) {
+function MobileChartZoomModal({ onClose, chartData, rangeDays, d, hidden, toggle, period, setPeriod, periodStats, historicalCrashes, selectedCrash, onSelectCrash, comparisonData, hiddenCrash, toggleCrash, crashLegendItems, isRealDevice = true }) {
   useEffect(() => {
+    if (!isRealDevice) return; // PC上でのスマホ表示プレビュー中は、実機用の全画面化・画面回転ロックを行わない（PC自体が全画面化されてしまうため）
     (async () => {
       try {
         if (document.documentElement.requestFullscreen) await document.documentElement.requestFullscreen();
@@ -3361,10 +3362,10 @@ function MobileChartZoomModal({ onClose, chartData, rangeDays, d, hidden, toggle
       try { if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); } catch (e) { /* noop */ }
       try { if (document.fullscreenElement) document.exitFullscreen(); } catch (e) { /* noop */ }
     };
-  }, []);
+  }, [isRealDevice]);
   return (
-    <div className="force-landscape" style={{ position: "fixed", inset: 0, zIndex: 60, background: C.bg, overflow: "hidden" }}>
-      <div className="force-landscape-inner">
+    <div className={isRealDevice ? "force-landscape" : ""} style={{ position: "fixed", inset: 0, zIndex: 60, background: C.bg, overflow: "hidden" }}>
+      <div className={isRealDevice ? "force-landscape-inner" : ""} style={isRealDevice ? undefined : { width: "100%", height: "100%" }}>
         <div className="w-full h-full flex flex-col" style={{ padding: 10, color: C.text, fontFamily: "'Zen Kaku Gothic New',sans-serif" }}>
           <div className="flex items-center justify-between mb-1.5 shrink-0">
             <span className="text-xs font-semibold">評価額（左軸） / DD%（右軸）</span>
@@ -3402,6 +3403,9 @@ export default function DDDashboard() {
     try { return localStorage.getItem("dd_view_mode"); } catch (e) { return null; }
   });
   const isMobile = viewOverride ? viewOverride === "mobile" : isMobileAuto;
+  // PC（実際は幅の広い画面）上で手動でスマホ表示に切り替えている状態＝実機ではないプレビュー。
+  // この場合のみ、画面幅いっぱいに広げず中央にスマホ相当サイズの枠で表示する。実機（isMobileAuto）では従来通り全画面表示のまま。
+  const isPreviewFrame = isMobile && !isMobileAuto;
   function toggleViewMode() {
     const next = isMobile ? "pc" : "mobile";
     setViewOverride(next);
@@ -3702,8 +3706,11 @@ export default function DDDashboard() {
     );
   }
 
-  return (
-    <div className="w-full flex flex-col" style={{ background: C.bg, color: C.text, height: "100dvh", overflow: "hidden", fontFamily: "'Zen Kaku Gothic New','Hiragino Kaku Gothic ProN',sans-serif" }}>
+  const appShell = (
+    <div
+      className={isPreviewFrame ? "flex flex-col" : "w-full flex flex-col"}
+      style={{ background: C.bg, color: C.text, height: isPreviewFrame ? "100%" : "100dvh", width: isPreviewFrame ? "100%" : undefined, overflow: "hidden", fontFamily: "'Zen Kaku Gothic New','Hiragino Kaku Gothic ProN',sans-serif" }}
+    >
       <style>{`
         .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
         .force-landscape-inner { position: absolute; top: 50%; left: 50%; }
@@ -3720,7 +3727,7 @@ export default function DDDashboard() {
       {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} spyVooSeries={spyVooSeries} onAppendSpyVoo={handleAppendSpyVoo} onImportSpyVoo={handleImportSpyVoo} onResetSpyVooField={handleResetSpyVooField} />}
       {modal?.type === "checkpointSettings" && <FullScreenModal title="チェックポイント設定" onClose={() => setModal(null)}><CheckpointSettingsContent checkpoints={checkpoints} onCheckpointChange={handleCheckpointChange} holdings={holdings} /></FullScreenModal>}
       {modal?.type === "summary" && <FullScreenModal title="詳細サマリー出力（AI相談用）" onClose={() => setModal(null)}><SummaryModalContent d={d} dVoo={dVoo} dSpy={dSpy} holdings={holdings} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} blocks={blocks} rankLabels={rankLabels} lifecycle={lifecycle} onLifecycleChange={handleLifecycleChange} fixedPositions={fixedPositions} onFixedPositionChange={handleFixedPositionChange} checkpoints={checkpoints} prevSnapshot={prevSnapshot} onSaveSnapshot={handleSaveSnapshot} /></FullScreenModal>}
-      {modal?.type === "mobileChartZoom" && <MobileChartZoomModal onClose={() => setModal(null)} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={setSelectedCrashId} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} />}
+      {modal?.type === "mobileChartZoom" && <MobileChartZoomModal onClose={() => setModal(null)} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={setSelectedCrashId} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} isRealDevice={isMobileAuto} />}
 
       <div className="flex items-center justify-between px-5 py-3 shrink-0 flex-wrap gap-y-1.5" style={{ borderBottom: `1px solid ${C.border}`, background: C.panel2 }}>
         <div className="flex items-center gap-3 flex-wrap">
@@ -3881,4 +3888,18 @@ export default function DDDashboard() {
       )}
     </div>
   );
+
+  if (isPreviewFrame) {
+    // PC上でのスマホ表示プレビュー：実際のスマホ画面幅に近い枠に収め、PC画面の中央に配置する。
+    // transform: translateZ(0) により、この枠がposition:fixedな子要素（各種フルスクリーンモーダル・チャート拡大表示）の
+    // 基準（containing block）になるため、それらもPC画面全体ではなくこの枠内に収まって表示される。
+    return (
+      <div style={{ height: "100dvh", width: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: C.panel2, overflow: "hidden", fontFamily: "'Zen Kaku Gothic New','Hiragino Kaku Gothic ProN',sans-serif" }}>
+        <div style={{ width: 390, height: "min(844px, 92dvh)", borderRadius: 40, border: "10px solid #05070c", boxShadow: "0 24px 64px rgba(0,0,0,0.55), inset 0 0 0 1px rgba(255,255,255,0.06)", overflow: "hidden", position: "relative", transform: "translateZ(0)" }}>
+          {appShell}
+        </div>
+      </div>
+    );
+  }
+  return appShell;
 }
