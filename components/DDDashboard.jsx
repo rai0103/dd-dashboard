@@ -3318,6 +3318,17 @@ export default function DDDashboard() {
           if (parsedSpyVoo.length) setSpyVooSeries(parsedSpyVoo);
         }
       } catch (e) { /* no saved spy/voo data yet */ }
+      // SPY/VOOの終値はIndexedDBが端末ごとに独立しているため、手動更新に頼ると端末間で表示が食い違う。
+      // ページ読み込みのたびにWorkerから当日終値を自動取得してマージし、どの端末で開いても同じ最新値になるようにする。
+      try {
+        const resLive = await fetch(STOCK_PRICES_API_URL);
+        if (resLive.ok) {
+          const live = await resLive.json();
+          if (live && live.date && typeof live.spy === "number" && typeof live.voo === "number") {
+            handleAppendSpyVoo({ date: parseDateOnly(live.date), spy: live.spy, voo: live.voo });
+          }
+        }
+      } catch (e) { /* 自動取得失敗（稼働時間外など）— 保存済みデータのまま表示を続行 */ }
       try {
         const res2 = await storage.get("portfolio_holdings");
         if (res2 && res2.value) {
@@ -3599,22 +3610,20 @@ export default function DDDashboard() {
       {modal?.type === "summary" && <FullScreenModal title="詳細サマリー出力（AI相談用）" onClose={() => setModal(null)}><SummaryModalContent d={d} dVoo={dVoo} dSpy={dSpy} holdings={holdings} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} blocks={blocks} rankLabels={rankLabels} lifecycle={lifecycle} onLifecycleChange={handleLifecycleChange} fixedPositions={fixedPositions} onFixedPositionChange={handleFixedPositionChange} checkpoints={checkpoints} prevSnapshot={prevSnapshot} onSaveSnapshot={handleSaveSnapshot} /></FullScreenModal>}
       {modal?.type === "mobileChartZoom" && <MobileChartZoomModal onClose={() => setModal(null)} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} />}
 
-      <div className="flex items-center justify-between px-5 py-3 shrink-0" style={{ borderBottom: `1px solid ${C.border}`, background: C.panel2 }}>
-        <div className="flex items-center gap-3">
+      <div className="flex items-center justify-between px-5 py-3 shrink-0 flex-wrap gap-y-1.5" style={{ borderBottom: `1px solid ${C.border}`, background: C.panel2 }}>
+        <div className="flex items-center gap-3 flex-wrap">
           <span className="text-sm font-bold tracking-wide">DD戦略ダッシュボード　S&P500（VOO/SPY）{usEasternYMD()}（us）</span>
           <button onClick={toggleViewMode} title="スマホ表示／PC表示を切り替え" className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
             {isMobile ? <Monitor size={12} /> : <Smartphone size={12} />} {isMobile ? "PC表示に切替" : "スマホ表示に切替"}
           </button>
         </div>
         <div className="flex items-center gap-3">
-          {!isMobile && (<>
-            <button onClick={() => setModal({ type: "summary" })} className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
-              <FileText size={12} /> 詳細サマリー
-            </button>
-            <button onClick={() => setModal({ type: "dataInput" })} className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
-              <Database size={12} /> データ入力・出力
-            </button>
-          </>)}
+          <button onClick={() => setModal({ type: "summary" })} title="詳細サマリー" className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+            <FileText size={12} /> {!isMobile && "詳細サマリー"}
+          </button>
+          <button onClick={() => setModal({ type: "dataInput" })} title="データ入力・出力" className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+            <Database size={12} /> {!isMobile && "データ入力・出力"}
+          </button>
           <span className="flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full" style={{ color: depthColor(d.currentDD), background: `${depthColor(d.currentDD)}1a`, border: `1px solid ${depthColor(d.currentDD)}44` }}>{d.isDrawdown ? <TrendingDown size={12} /> : <TrendingUp size={12} />} {d.mode}</span>
         </div>
       </div>
