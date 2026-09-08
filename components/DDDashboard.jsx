@@ -2113,7 +2113,7 @@ function InstrumentPanel({ instrument, spyVooSeries, fileName, fileMsg, onFileCh
       <p className="text-xs mb-4" style={{ color: C.textDim }}>取得元: https://stooq.com/q/d/l/?s={label.toLowerCase()}.us&i=d</p>
       <label className="inline-flex items-center gap-2 text-xs px-3 py-2 rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.textMuted, cursor: "pointer" }}>
         <Upload size={13} /> {label} CSVを選択
-        <input type="file" accept=".csv" onChange={onFileChange} style={{ display: "none" }} />
+        <input type="file" accept=".csv,text/csv,text/comma-separated-values,application/csv,application/vnd.ms-excel,text/plain,application/octet-stream" onChange={onFileChange} style={{ display: "none" }} />
       </label>
       {fileName && <div className="text-xs mt-2" style={{ color: C.textDim }}>選択中: {fileName}</div>}
       {fileMsg && <div className="text-xs mt-2" style={{ color: C.teal }}>{fileMsg}</div>}
@@ -2360,7 +2360,7 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
                   <p className="text-xs mb-4" style={{ color: C.textDim }}>取得元: https://stooq.com/q/d/l/?s=spy.us&i=d</p>
                   <label className="inline-flex items-center gap-2 text-xs px-3 py-2 rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.textMuted, cursor: "pointer" }}>
                     <Upload size={13} /> CSVファイルを選択
-                    <input type="file" accept=".csv" onChange={handleFile} style={{ display: "none" }} />
+                    <input type="file" accept=".csv,text/csv,text/comma-separated-values,application/csv,application/vnd.ms-excel,text/plain,application/octet-stream" onChange={handleFile} style={{ display: "none" }} />
                   </label>
                   {fileName && <div className="text-xs mt-2" style={{ color: C.textDim }}>選択中: {fileName}</div>}
                   {fileMsg && <div className="text-xs mt-2" style={{ color: C.teal }}>{fileMsg}</div>}
@@ -2415,7 +2415,7 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
                 </div>
                 <label className="inline-flex items-center gap-2 text-xs px-3 py-2 rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.textMuted, cursor: "pointer" }}>
                   <Upload size={13} /> 楽天証券CSVを選択
-                  <input type="file" accept=".csv" onChange={handleRakutenFile} style={{ display: "none" }} />
+                  <input type="file" accept=".csv,text/csv,text/comma-separated-values,application/csv,application/vnd.ms-excel,text/plain,application/octet-stream" onChange={handleRakutenFile} style={{ display: "none" }} />
                 </label>
               </div>
               {rakutenFileName && <div className="text-xs mt-2" style={{ color: C.textDim }}>選択中: {rakutenFileName}</div>}
