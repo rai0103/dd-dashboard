@@ -1120,6 +1120,11 @@ function ChartMarkers({ xAxisMap, yAxisMap, points, chartWidth }) {
     if (sorted[i].cx - sorted[i - 1].cx < 70) { labelOffset += 12; sorted[i].labelOffset = labelOffset; } else { labelOffset = 0; }
   }
   const hovered = hoverIdx != null ? sorted[hoverIdx] : null;
+  // プロット領域の最も上端（yScaleのピクセル範囲の最小値）。大底（プロット下端付近）にカーソルを合わせた際、
+  // Rechartsのカーソル追従ツールチップは表示領域内に収めるためカーソルの「上」に出ることが多く、
+  // 従来の「ドットのすぐ上」に出す方式だとその位置で確実に重なっていた。プロット最上部に固定表示することで、
+  // カーソル追従ツールチップ（常にカーソル付近＝ドットの近く）とは常に離れた位置になり重なりを避けられる。
+  const yRangeTop = Math.min(...yScale.range());
   return (
     <g>
       {sorted.map((pt, i) => (
@@ -1141,10 +1146,12 @@ function ChartMarkers({ xAxisMap, yAxisMap, points, chartWidth }) {
       {hovered && (() => {
         const w = Math.max(90, hovered.label.length * (hovered.fontSize * 0.62) + 12);
         const cxClamped = Math.min(Math.max(hovered.cx, w / 2 + 2), (chartWidth ?? 100000) - w / 2 - 2);
+        const boxY = yRangeTop + 4;
         return (
           <g style={{ pointerEvents: "none" }}>
-            <rect x={cxClamped - w / 2} y={hovered.cy - 32} width={w} height={18} rx={3} fill={C.panel} stroke={C.border} />
-            <text x={cxClamped} y={hovered.cy - 19} textAnchor="middle" fontSize={hovered.fontSize} fill={hovered.color} className="mono">{hovered.label}</text>
+            <line x1={hovered.cx} y1={boxY + 18} x2={hovered.cx} y2={hovered.cy} stroke={hovered.color} strokeWidth={1} strokeDasharray="2 2" opacity={0.5} />
+            <rect x={cxClamped - w / 2} y={boxY} width={w} height={18} rx={3} fill={C.panel} stroke={C.border} />
+            <text x={cxClamped} y={boxY + 13} textAnchor="middle" fontSize={hovered.fontSize} fill={hovered.color} className="mono">{hovered.label}</text>
           </g>
         );
       })()}
