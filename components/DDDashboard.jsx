@@ -5,7 +5,7 @@ import {
   ComposedChart, LineChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ReferenceLine, ReferenceDot, ResponsiveContainer, PieChart, Pie, Cell, Brush, Customized,
 } from "recharts";
-import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Download, RefreshCw, Database, Trash2, Zap, Copy, FileText } from "lucide-react";
+import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Download, RefreshCw, Database, Trash2, Zap, Copy, FileText, Activity, Layers, ListChecks, Smartphone, Monitor } from "lucide-react";
 import { storage } from "@/lib/storage";
 
 // Cloudflare Worker（当日のSP500/SPY/VOO終値を返す）のエンドポイント。デプロイ先のURLに置き換えてください。
@@ -1259,6 +1259,19 @@ function useHoverCapable() {
     try { setHoverCapable(window.matchMedia("(hover: hover) and (pointer: fine)").matches); } catch (e) { /* keep default */ }
   }, []);
   return hoverCapable;
+}
+// true=スマートフォン幅（768px未満）で表示中。専用のスマホ向け6ページ構成に切り替えるために使う。
+// 初回描画（マウント前）はfalse（PC相当）を返し、マウント後にmatchMediaの実値へ更新する。
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 767px)");
+    const update = () => setIsMobile(mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, []);
+  return isMobile;
 }
 const NISA_POPUP_FLIP_THRESHOLD = 130; // ポインターがこれより画面上端に近い場合、ポップアップを上→下表示に切り替える
 function NisaPopupContent({ cat, nisa }) {
@@ -2996,6 +3009,264 @@ function SummaryModalContent({ d, dVoo, dSpy, holdings, currentHoldingPct, effec
   );
 }
 
+/* ---------------- mobile layout (smartphone width, <768px専用の6ページ構成) ---------------- */
+// 各ページはPC向けの既存コンポーネント（ATHProgressBlock/PortfolioPie等）を再利用しつつ、
+// スマホ向けにカード型で縦積み表示する専用JSXを持つ。PC向けPanel/StatusPanel等のコンポーネント自体は変更しない。
+function MobileAthPage({ d, dVoo, dSpy }) {
+  const tickers = [{ label: "SP500", data: d }, { label: "VOO", data: dVoo }, { label: "SPY", data: dSpy }];
+  return (
+    <div className="p-3 flex flex-col gap-2.5">
+      {tickers.map(({ label, data }) => {
+        const chg = data ? dayChangePct(data) : null;
+        const updated = data ? isUpdatedToday(data) : false;
+        return (
+          <div key={label} className="rounded-lg p-3" style={{ background: C.panel, border: `1px solid ${C.border}` }}>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm font-bold" style={{ color: C.textMuted }}>{label}</span>
+              {data && <span className="text-[10px]" style={{ color: updated ? C.teal : C.textDim }}>{updated ? "●更新済" : "○未更新"}</span>}
+            </div>
+            {data ? (
+              <>
+                <div className="flex items-baseline justify-between mono mb-1">
+                  <span className="text-lg font-semibold" style={{ color: updated ? C.text : C.textDim }}>${data.currentPrice.toFixed(2)}</span>
+                  {chg !== null && (<span className="text-xs" style={{ color: updated ? (chg >= 0 ? C.teal : C.rust) : C.textDim }}>{chg >= 0 ? "+" : ""}{chg.toFixed(1)}%</span>)}
+                </div>
+                <div className="flex items-baseline justify-between mono text-[11px] mb-2.5" style={{ color: C.textDim }}>
+                  <span>ATH（{fmtYMD(data.athDate)}）</span><span>${data.currentATH.toFixed(2)}</span>
+                </div>
+                <div className="flex items-center justify-between pt-2" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+                  <span className="text-[10px]" style={{ color: C.textDim }}>最高値比</span>
+                  <span className="mono font-bold text-xl" style={{ color: data.currentDD >= 0 ? C.teal : C.rust }}>{data.currentDD.toFixed(1)}%</span>
+                </div>
+                {data.nextMilestone !== null && (
+                  <div className="mono text-[11px] mt-1.5" style={{ color: C.textMuted }}>
+                    {data.nextMilestone === -3
+                      ? `DD-3%まで あと${data.distanceToNextMilestone.toFixed(1)}%`
+                      : `DD${data.nextMilestone}%まで あと${data.distanceToNextMilestone.toFixed(1)}%（$${data.nextMilestonePrice.toFixed(2)}）`}
+                  </div>
+                )}
+              </>
+            ) : (<div className="text-xs" style={{ color: C.textDim }}>データ未取り込み</div>)}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+function MobileSpeedPage({ dVoo, onOpenSpeedAlert }) {
+  return (
+    <div className="p-3 flex flex-col gap-2.5">
+      <div className="rounded-lg p-3" style={{ background: C.panel, border: `1px solid ${C.border}` }}>
+        <div className="flex items-center gap-1.5 mb-2"><Clock size={13} style={{ color: C.textDim }} /><span className="text-xs" style={{ color: C.textDim }}>経過日数（VOO基準）</span></div>
+        <ATHProgressBlock dVoo={dVoo} />
+      </div>
+      <button onClick={dVoo ? onOpenSpeedAlert : undefined} disabled={!dVoo} className="rounded-lg p-3 text-left w-full" style={{ background: C.panel, border: `1px solid ${C.border}`, opacity: dVoo ? 1 : 0.5, cursor: dVoo ? "pointer" : "default" }}>
+        <div className="flex items-center gap-1.5 mb-2"><Zap size={13} style={{ color: dVoo ? speedAlertAccent(dVoo.speedAlert) : C.textDim }} /><span className="text-xs" style={{ color: C.textDim }}>DD加速度アラート（VOO基準）</span>{dVoo && <ChevronRight size={13} style={{ color: C.textDim, marginLeft: "auto" }} />}</div>
+        {!dVoo && <div className="text-xs" style={{ color: C.textDim }}>VOOデータ未取り込み</div>}
+        {dVoo && dVoo.speedAlert.level === "normal" && (<>
+          <div className="text-sm mb-1" style={{ color: C.textMuted }}>待機中（現在ATH圏、DD{dVoo.speedAlert.currentDD.toFixed(1)}%）</div>
+          <div className="text-[11px]" style={{ color: C.textDim }}>次にDD3%到達したら速度を自動計測します</div>
+        </>)}
+        {dVoo && dVoo.speedAlert.level === "pending5" && (<>
+          <div className="text-sm mb-1" style={{ color: C.textMuted }}>DD3%到達後{dVoo.speedAlert.daysSinceDD3}営業日経過、DD5%未達</div>
+          <div className="mono text-sm" style={{ color: C.amber }}>{dVoo.speedAlert.hint ?? "速度計測中"}</div>
+        </>)}
+        {dVoo && dVoo.speedAlert.level === "confirmed5" && (<>
+          <div className="mono text-lg font-bold" style={{ color: speedAlertAccent(dVoo.speedAlert) }}>{dVoo.speedAlert.warnLabel}</div>
+          <div className="text-sm" style={{ color: C.textMuted }}>3→5%の速度：{dVoo.speedAlert.speed35}営業日</div>
+        </>)}
+        {dVoo && dVoo.speedAlert.level === "deep8" && (<>
+          <div className="mono text-lg font-bold" style={{ color: speedAlertAccent(dVoo.speedAlert) }}>{dVoo.speedAlert.warnLabel}</div>
+          <div className="text-sm" style={{ color: C.textMuted }}>{dVoo.speedAlert.speed38Category ?? "3→8%速度：計測不可"}</div>
+        </>)}
+        {dVoo && <div className="text-[10px] mt-1.5 underline" style={{ color: C.textDim }}>タップで詳細・バックテストを表示</div>}
+      </button>
+    </div>
+  );
+}
+// 初期表示ではチャートを描画せずサマリー数値のみ表示し、「拡大表示」タップ時のみ横向き全画面モーダルでチャートを表示する。
+function MobileChartPage({ d, onZoom }) {
+  return (
+    <div className="p-3 flex flex-col gap-3">
+      <div className="rounded-lg p-4" style={{ background: C.panel, border: `1px solid ${C.border}` }}>
+        <div className="text-[11px] mb-2" style={{ color: C.textDim }}>評価額 / ATH（{fmtYMD(d.athDate)}）</div>
+        <div className="mono text-2xl font-bold mb-1">${d.currentPrice.toFixed(2)}</div>
+        <div className="mono text-xs mb-3" style={{ color: C.textDim }}>ATH ${d.currentATH.toFixed(2)}</div>
+        <div className="flex items-center justify-between pt-3" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+          <span className="text-[10px]" style={{ color: C.textDim }}>最高値比（DD%）</span>
+          <span className="mono font-bold text-xl" style={{ color: d.currentDD >= 0 ? C.teal : C.rust }}>{d.currentDD.toFixed(1)}%</span>
+        </div>
+      </div>
+      <button onClick={onZoom} className="flex items-center justify-center gap-2 rounded-lg py-3.5" style={{ background: C.teal, color: C.bg, fontWeight: 700, border: "none", cursor: "pointer" }}>
+        <Activity size={15} /> チャートを拡大表示（横向き）
+      </button>
+      <div className="text-[10px] leading-relaxed" style={{ color: C.textDim }}>評価額・DD%の推移チャートは拡大表示でご覧いただけます。拡大表示は横向き（landscape）で全画面表示されます。</div>
+    </div>
+  );
+}
+function MobilePortfolioPage({ pieView, setPieView, holdings, onOpen }) {
+  return (
+    <div className="p-3 flex flex-col gap-2">
+      <div className="flex gap-1 flex-wrap shrink-0">
+        {[{ k: "category", l: "カテゴリー別" }, { k: "currency", l: "為替別" }, { k: "rank", l: "A〜Eランク" }, { k: "owner", l: "口座別" }].map((t) => (
+          <button key={t.k} onClick={() => setPieView(t.k)} className="text-[11px] px-2 py-1 rounded" style={{ color: pieView === t.k ? C.bg : C.textMuted, background: pieView === t.k ? C.teal : C.panel2, fontWeight: pieView === t.k ? 700 : 400, border: "none", cursor: "pointer" }}>{t.l}</button>
+        ))}
+      </div>
+      {/* PortfolioPie自体はPC向けの横長パネル前提のレイアウトのため、高さを実寸に近い値に収めて縦に間延びしないようにする */}
+      <div className="rounded-lg" style={{ height: "min(56vh, 400px)", background: C.panel, border: `1px solid ${C.border}` }}>
+        <PortfolioPie view={pieView} holdings={holdings} onOpen={onOpen} />
+      </div>
+    </div>
+  );
+}
+// 横棒グラフは表示せず、各項目（A〜E）の乖離は数値のみで表示する。
+function MobileDiffPage({ modelOverride, setModelOverride, d, currentHoldingPct, effectiveModelRow, rankLabels, blocks, onOpenRank, onOpenDDTable }) {
+  return (
+    <div className="p-3 flex flex-col gap-2">
+      <div className="flex items-center justify-between gap-2 flex-wrap mb-1">
+        <select value={modelOverride ?? ""} onChange={(e) => setModelOverride(e.target.value || null)} className="text-[11px] rounded px-2 py-1.5 flex-1" style={{ background: C.panel2, color: C.text, border: `1px solid ${C.borderSoft}` }}>
+          <option value="">自動（{d.modelRow.label}）</option>
+          {MODEL_ROWS.map((r) => (<option key={r.label} value={r.label}>{r.label}</option>))}
+        </select>
+        <button onClick={onOpenDDTable} title="DD毎の配分表を表示" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, borderRadius: 6, padding: 6, cursor: "pointer" }}><Info size={14} style={{ color: C.textDim }} /></button>
+      </div>
+      {CATS.map((cat) => {
+        const cur = currentHoldingPct[cat], tgt = effectiveModelRow[cat];
+        const diff = Number((cur - tgt).toFixed(1));
+        const emphasize = Math.abs(diff) >= 4;
+        return (
+          <button key={cat} onClick={() => onOpenRank(cat)} className="rounded-lg px-3 py-2.5 text-left w-full" style={{ background: C.panel, border: `1px solid ${C.border}`, cursor: "pointer" }}>
+            <div className="flex items-center justify-between">
+              <div className="flex items-baseline gap-1.5 min-w-0"><span className="text-sm font-bold shrink-0" style={{ color: rankColor(cat) }}>{cat}</span><span className="text-[11px] truncate" style={{ color: C.textDim }}>{rankLabels[cat]}</span></div>
+              <ChevronRight size={13} style={{ color: C.textDim, flexShrink: 0 }} />
+            </div>
+            <div className="flex items-center gap-3 mt-1.5 mono text-xs">
+              <span style={{ color: C.textMuted }}>実績 {cur.toFixed(1)}%</span>
+              <span style={{ color: C.textDim }}>モデル {tgt.toFixed(1)}%</span>
+              <span className="font-semibold px-1.5 py-0.5 rounded ml-auto" style={{ color: emphasize ? C.rust : C.textMuted, background: emphasize ? C.rustSoft : "transparent" }}>{diff > 0 ? "+" : ""}{diff}pt</span>
+            </div>
+          </button>
+        );
+      })}
+      <div className="grid grid-cols-3 gap-1.5 mt-1">
+        {[{ label: "A+B", ...blocks.AB }, { label: "C", ...blocks.Cb }, { label: "D+E", ...blocks.DE }].map((b) => {
+          const diff = Number((b.cur - b.tgt).toFixed(1));
+          return (
+            <div key={b.label} className="rounded px-2 py-1.5 text-center" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
+              <div className="text-[10px]" style={{ color: C.textDim }}>{b.label}</div>
+              <div className="mono text-xs font-semibold">{Number(b.cur.toFixed(1))}%</div>
+              <div className="mono text-[10px]" style={{ color: Math.abs(diff) >= 4 ? C.rust : C.textMuted }}>{diff > 0 ? "+" : ""}{diff}pt</div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+function MobileAnalysisPage({ analysisText, checkpointResults, onOpenCheckpointSettings }) {
+  return (
+    <div className="p-3 flex flex-col gap-3">
+      <div className="rounded-lg p-3" style={{ background: C.panel, border: `1px solid ${C.border}` }}>
+        <div className="text-[11px] mb-1.5" style={{ color: C.textDim }}>現状分析</div>
+        <div className="text-[13px] leading-relaxed" style={{ color: C.text }}>{analysisText}</div>
+      </div>
+      <div className="rounded-lg p-3" style={{ background: C.panel, border: `1px solid ${C.border}` }}>
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="text-[11px]" style={{ color: C.textDim }}>チェックポイント</span>
+          <button onClick={onOpenCheckpointSettings} className="text-[10px] underline" style={{ color: C.textDim, background: "transparent", border: "none", cursor: "pointer" }}>新設・変更</button>
+        </div>
+        {checkpointResults.length > 0 ? (
+          <ul className="text-[12px] leading-relaxed list-disc pl-4" style={{ color: C.textMuted }}>
+            {checkpointResults.map((r, i) => (<li key={i} style={{ color: r.ok ? C.textMuted : C.rust }}>{r.text}</li>))}
+          </ul>
+        ) : (
+          <div className="text-[12px] leading-relaxed" style={{ color: C.textDim }}>チェックポイントが設定されていません。「新設・変更」から設定できます。</div>
+        )}
+      </div>
+      <div className="flex gap-1.5 text-[11px] leading-relaxed" style={{ color: C.textDim }}><Info size={12} style={{ flexShrink: 0, marginTop: 1 }} /><span>投資助言ではなく可視化・判断補助です。過去確率は将来を保証しません。</span></div>
+    </div>
+  );
+}
+// 6ページをスクロールスナップの横並びで持ち、スワイプ／下部タブバーのタップの両方でページ送りできる。
+function MobilePager({ activeIndex, onChange, pages }) {
+  const scrollerRef = useRef(null);
+  const scrollSettleTimer = useRef(null);
+  useEffect(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    const target = activeIndex * el.clientWidth;
+    if (Math.abs(el.scrollLeft - target) > 2) el.scrollTo({ left: target, behavior: "smooth" });
+  }, [activeIndex]);
+  // スクロール中（スワイプ操作中・プログラム的なsmooth scrollのアニメーション中）は毎フレームscrollイベントが発火し、
+  // 中間地点のscrollLeftから誤ったページ番号を都度onChangeしてしまうと、上のuseEffectのscrollToと競合して
+  // 目的のページへスクロールしきる前に元のページへ引き戻されてしまう（タブタップでページが切り替わらない不具合の原因）。
+  // そのためスクロールが完全に静止してから（一定時間イベントが来なくなってから）最終的なページ番号のみ確定させる。
+  function handleScroll(e) {
+    const el = e.currentTarget;
+    if (scrollSettleTimer.current) clearTimeout(scrollSettleTimer.current);
+    scrollSettleTimer.current = setTimeout(() => {
+      if (!el.clientWidth) return;
+      const idx = Math.round(el.scrollLeft / el.clientWidth);
+      if (idx !== activeIndex) onChange(idx);
+    }, 120);
+  }
+  useEffect(() => () => { if (scrollSettleTimer.current) clearTimeout(scrollSettleTimer.current); }, []);
+  return (
+    <div className="flex-1 min-h-0 flex flex-col">
+      <div ref={scrollerRef} onScroll={handleScroll} className="flex-1 min-h-0 flex overflow-x-auto" style={{ scrollSnapType: "x mandatory", WebkitOverflowScrolling: "touch" }}>
+        {pages.map((page) => (
+          <div key={page.key} className="w-full h-full shrink-0 overflow-y-auto" style={{ scrollSnapAlign: "start", scrollSnapStop: "always" }}>
+            {page.content}
+          </div>
+        ))}
+      </div>
+      <div className="shrink-0 flex" style={{ background: C.panel2, borderTop: `1px solid ${C.border}` }}>
+        {pages.map((page, i) => {
+          const Icon = page.icon;
+          const active = i === activeIndex;
+          return (
+            <button key={page.key} onClick={() => onChange(i)} className="flex-1 flex flex-col items-center gap-0.5 py-2" style={{ background: "transparent", border: "none", cursor: "pointer", color: active ? C.teal : C.textDim }}>
+              <Icon size={16} />
+              <span className="text-[9px] leading-none">{page.label}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+// 評価額チャートの「拡大」時に開く全画面モーダル。CSSで常に横向き（landscape）表示に固定し、
+// 対応端末ではあわせてScreen Orientation APIでの実回転ロックも試みる（非対応環境ではCSS回転のみで代替）。
+function MobileChartZoomModal({ onClose, chartData, rangeDays, d, hidden, toggle, period, setPeriod, periodStats }) {
+  useEffect(() => {
+    (async () => {
+      try {
+        if (document.documentElement.requestFullscreen) await document.documentElement.requestFullscreen();
+        if (screen.orientation && screen.orientation.lock) await screen.orientation.lock("landscape");
+      } catch (e) { /* 未対応・拒否時はCSSの強制横向き回転（.force-landscape-inner）にフォールバック */ }
+    })();
+    return () => {
+      try { if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); } catch (e) { /* noop */ }
+      try { if (document.fullscreenElement) document.exitFullscreen(); } catch (e) { /* noop */ }
+    };
+  }, []);
+  return (
+    <div className="force-landscape" style={{ position: "fixed", inset: 0, zIndex: 60, background: C.bg, overflow: "hidden" }}>
+      <div className="force-landscape-inner">
+        <div className="w-full h-full flex flex-col" style={{ padding: 10, color: C.text, fontFamily: "'Zen Kaku Gothic New',sans-serif" }}>
+          <div className="flex items-center justify-between mb-1.5 shrink-0">
+            <span className="text-xs font-semibold">評価額（左軸） / DD%（右軸）</span>
+            <button onClick={onClose} className="flex items-center gap-1 text-xs px-2 py-1 rounded" style={{ color: C.textMuted, background: "transparent", border: "none", cursor: "pointer" }}><X size={13} /> 閉じる</button>
+          </div>
+          <div className="flex-1 min-h-0">
+            <DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ---------------- main ---------------- */
 export default function DDDashboard() {
   const [rawSeries, setRawSeries] = useState(SEED_SERIES);
@@ -3013,6 +3284,18 @@ export default function DDDashboard() {
   const [chartTab, setChartTab] = useState("normal");
   const [selectedCrashId, setSelectedCrashId] = useState("2007"); // 「過去の暴落との比較」ミニウィジェットの既定選択＝リーマンショック
   const [modal, setModal] = useState(null);
+  const isMobileAuto = useIsMobile();
+  // null=画面幅から自動判定、"mobile"/"pc"=ボタンでの手動固定。端末ごとに好みが分かれるためlocalStorageに保存する。
+  const [viewOverride, setViewOverride] = useState(() => {
+    try { return localStorage.getItem("dd_view_mode"); } catch (e) { return null; }
+  });
+  const isMobile = viewOverride ? viewOverride === "mobile" : isMobileAuto;
+  function toggleViewMode() {
+    const next = isMobile ? "pc" : "mobile";
+    setViewOverride(next);
+    try { localStorage.setItem("dd_view_mode", next); } catch (e) { /* storage unavailable */ }
+  }
+  const [mobilePage, setMobilePage] = useState(0);
   const [hydrated, setHydrated] = useState(false);
   const [lifecycle, setLifecycle] = useState(LIFECYCLE_DEFAULT);
   const [fixedPositions, setFixedPositions] = useState({}); // { [銘柄名]: 理由(空文字可) }
@@ -3298,7 +3581,12 @@ export default function DDDashboard() {
 
   return (
     <div className="w-full flex flex-col" style={{ background: C.bg, color: C.text, height: "100dvh", overflow: "hidden", fontFamily: "'Zen Kaku Gothic New','Hiragino Kaku Gothic ProN',sans-serif" }}>
-      <style>{`.mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }`}</style>
+      <style>{`
+        .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+        .force-landscape-inner { position: absolute; top: 50%; left: 50%; }
+        @media (orientation: portrait) { .force-landscape-inner { width: 100vh; height: 100vw; transform: translate(-50%, -50%) rotate(90deg); } }
+        @media (orientation: landscape) { .force-landscape-inner { width: 100vw; height: 100vh; transform: translate(-50%, -50%); } }
+      `}</style>
 
       {modal?.type === "speedAlert" && dVoo && <FullScreenModal title="DD加速度アラート（速度・経過日数の法則・VOO基準）" onClose={() => setModal(null)}><SpeedAlertModalContent d={dVoo} /></FullScreenModal>}
       {modal?.type === "portfolio" && <FullScreenModal title="ポートフォリオ構成表" onClose={() => setModal(null)}><PortfolioTableContent view={pieView} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
@@ -3309,20 +3597,42 @@ export default function DDDashboard() {
       {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} spyVooSeries={spyVooSeries} onAppendSpyVoo={handleAppendSpyVoo} onImportSpyVoo={handleImportSpyVoo} onResetSpyVooField={handleResetSpyVooField} />}
       {modal?.type === "checkpointSettings" && <FullScreenModal title="チェックポイント設定" onClose={() => setModal(null)}><CheckpointSettingsContent checkpoints={checkpoints} onCheckpointChange={handleCheckpointChange} holdings={holdings} /></FullScreenModal>}
       {modal?.type === "summary" && <FullScreenModal title="詳細サマリー出力（AI相談用）" onClose={() => setModal(null)}><SummaryModalContent d={d} dVoo={dVoo} dSpy={dSpy} holdings={holdings} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} blocks={blocks} rankLabels={rankLabels} lifecycle={lifecycle} onLifecycleChange={handleLifecycleChange} fixedPositions={fixedPositions} onFixedPositionChange={handleFixedPositionChange} checkpoints={checkpoints} prevSnapshot={prevSnapshot} onSaveSnapshot={handleSaveSnapshot} /></FullScreenModal>}
+      {modal?.type === "mobileChartZoom" && <MobileChartZoomModal onClose={() => setModal(null)} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} />}
 
       <div className="flex items-center justify-between px-5 py-3 shrink-0" style={{ borderBottom: `1px solid ${C.border}`, background: C.panel2 }}>
-        <div className="flex items-center gap-3"><span className="text-sm font-bold tracking-wide">DD戦略ダッシュボード　S&P500（VOO/SPY）{usEasternYMD()}（us）</span></div>
         <div className="flex items-center gap-3">
-          <button onClick={() => setModal({ type: "summary" })} className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
-            <FileText size={12} /> 詳細サマリー
+          <span className="text-sm font-bold tracking-wide">DD戦略ダッシュボード　S&P500（VOO/SPY）{usEasternYMD()}（us）</span>
+          <button onClick={toggleViewMode} title="スマホ表示／PC表示を切り替え" className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+            {isMobile ? <Monitor size={12} /> : <Smartphone size={12} />} {isMobile ? "PC表示に切替" : "スマホ表示に切替"}
           </button>
-          <button onClick={() => setModal({ type: "dataInput" })} className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
-            <Database size={12} /> データ入力・出力
-          </button>
+        </div>
+        <div className="flex items-center gap-3">
+          {!isMobile && (<>
+            <button onClick={() => setModal({ type: "summary" })} className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+              <FileText size={12} /> 詳細サマリー
+            </button>
+            <button onClick={() => setModal({ type: "dataInput" })} className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+              <Database size={12} /> データ入力・出力
+            </button>
+          </>)}
           <span className="flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full" style={{ color: depthColor(d.currentDD), background: `${depthColor(d.currentDD)}1a`, border: `1px solid ${depthColor(d.currentDD)}44` }}>{d.isDrawdown ? <TrendingDown size={12} /> : <TrendingUp size={12} />} {d.mode}</span>
         </div>
       </div>
 
+      {isMobile ? (
+        <MobilePager
+          activeIndex={mobilePage}
+          onChange={setMobilePage}
+          pages={[
+            { key: "ath", label: "評価額/ATH", icon: TrendingUp, content: <MobileAthPage d={d} dVoo={dVoo} dSpy={dSpy} /> },
+            { key: "speed", label: "経過日数", icon: Clock, content: <MobileSpeedPage dVoo={dVoo} onOpenSpeedAlert={() => setModal({ type: "speedAlert" })} /> },
+            { key: "chart", label: "チャート", icon: Activity, content: <MobileChartPage d={d} onZoom={() => setModal({ type: "mobileChartZoom" })} /> },
+            { key: "portfolio", label: "構成", icon: Layers, content: <MobilePortfolioPage pieView={pieView} setPieView={setPieView} holdings={holdings} onOpen={() => setModal({ type: "portfolio" })} /> },
+            { key: "diff", label: "配分乖離", icon: ListChecks, content: <MobileDiffPage modelOverride={modelOverride} setModelOverride={setModelOverride} d={d} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} rankLabels={rankLabels} blocks={blocks} onOpenRank={(rank) => setModal({ type: "rank", rank })} onOpenDDTable={() => setModal({ type: "ddTable" })} /> },
+            { key: "analysis", label: "現状分析", icon: Info, content: <MobileAnalysisPage analysisText={analysisText} checkpointResults={checkpointResults} onOpenCheckpointSettings={() => setModal({ type: "checkpointSettings" })} /> },
+          ]}
+        />
+      ) : (
       <div className="flex flex-1 min-h-0">
         <DepthGauge dd={d.currentDD} />
 
@@ -3443,6 +3753,7 @@ export default function DDDashboard() {
           </div>
         </div>
       </div>
+      )}
     </div>
   );
 }
