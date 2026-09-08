@@ -1231,20 +1231,57 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBru
     </ComposedChart>
   );
 }
-function DDChartModalContent({ chartData, rangeDays, d, hidden, toggle, period, setPeriod, periodStats }) {
+// 通常表示（評価額/DD%）と暴落比較（経過日数ベース）をタブで切り替えられる拡大チャート。
+// PCの拡大表示（ddChartモーダル）とスマホの横向き拡大表示（MobileChartZoomModal）の両方から共通で使う。
+function DDChartModalContent({ chartData, rangeDays, d, hidden, toggle, period, setPeriod, periodStats, historicalCrashes, selectedCrash, onSelectCrash, comparisonData, hiddenCrash, toggleCrash, crashLegendItems, fontSize = 12 }) {
+  const [chartTab, setChartTab] = useState("normal");
+  const hasCrashCompare = !!(historicalCrashes && onSelectCrash);
   return (
     <div className="h-full flex flex-col">
-      <div className="flex items-center gap-3 mb-1.5 flex-wrap">
-        <ClickLegend items={[{ key: "price", label: "評価額 / ATH", color: C.teal }, { key: "dd", label: "DD%", color: C.rust }]} hidden={hidden} onToggle={toggle} />
-        <div className="flex gap-0.5">{PERIODS.map((p) => (<button key={p.key} onClick={() => setPeriod(p.key)} className="text-[11px] px-2 py-1 rounded" style={{ color: period === p.key ? C.bg : C.textMuted, background: period === p.key ? C.teal : "transparent", fontWeight: period === p.key ? 700 : 400 }}>{p.label}</button>))}</div>
+      <div className="flex items-center gap-2 mb-1.5 flex-wrap">
+        {hasCrashCompare && (
+          <div className="flex gap-0.5 mr-1">{[{ k: "normal", l: "通常表示" }, { k: "crash", l: "暴落比較" }].map((t) => (<button key={t.k} onClick={() => setChartTab(t.k)} className="text-[11px] px-2 py-1 rounded" style={{ color: chartTab === t.k ? C.bg : C.textMuted, background: chartTab === t.k ? C.amber : "transparent", fontWeight: chartTab === t.k ? 700 : 400 }}>{t.l}</button>))}</div>
+        )}
+        {chartTab === "normal" || !hasCrashCompare ? (
+          <>
+            <ClickLegend items={[{ key: "price", label: "評価額 / ATH", color: C.teal }, { key: "dd", label: "DD%", color: C.rust }]} hidden={hidden} onToggle={toggle} />
+            <div className="flex gap-0.5">{PERIODS.map((p) => (<button key={p.key} onClick={() => setPeriod(p.key)} className="text-[11px] px-2 py-1 rounded" style={{ color: period === p.key ? C.bg : C.textMuted, background: period === p.key ? C.teal : "transparent", fontWeight: period === p.key ? 700 : 400 }}>{p.label}</button>))}</div>
+          </>
+        ) : (
+          <>
+            <ClickLegend items={crashLegendItems} hidden={hiddenCrash} onToggle={toggleCrash} />
+            {historicalCrashes.length > 0 && (
+              <select value={selectedCrash?.id ?? ""} onChange={(e) => onSelectCrash(e.target.value)} className="mono text-[11px] rounded px-2 py-1" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text, cursor: "pointer" }}>
+                {historicalCrashes.map((c) => (<option key={c.id} value={c.id}>{crashButtonLabel(c)}</option>))}
+              </select>
+            )}
+          </>
+        )}
       </div>
-      <PeriodStatsBar periodStats={periodStats} />
-      <div style={{ height: "min(70vh, 640px)" }}>
-        <ResponsiveContainer width="100%" height="100%" key={period}>
-          <EvalDDChartBody chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} periodStats={periodStats} withBrush fontSize={12} />
-        </ResponsiveContainer>
-      </div>
-      <div className="mt-3 text-[10px]" style={{ color: C.textDim }}>下部のスクロールバーをドラッグして期間を絞り込み（ズーム）できます。グラフ上にカーソルを合わせるとツールチップが表示されます。</div>
+      {chartTab === "normal" || !hasCrashCompare ? (
+        <>
+          <PeriodStatsBar periodStats={periodStats} />
+          <div style={{ height: "min(70vh, 640px)" }}>
+            <ResponsiveContainer width="100%" height="100%" key={period}>
+              <EvalDDChartBody chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} periodStats={periodStats} withBrush fontSize={fontSize} />
+            </ResponsiveContainer>
+          </div>
+          <div className="mt-3 text-[10px]" style={{ color: C.textDim }}>下部のスクロールバーをドラッグして期間を絞り込み（ズーム）できます。グラフ上にカーソルを合わせるとツールチップが表示されます。</div>
+        </>
+      ) : (
+        <div style={{ height: "min(70vh, 640px)" }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={comparisonData} margin={{ top: 12, right: 20, left: 0, bottom: 0 }}>
+              <CartesianGrid stroke={C.borderSoft} vertical={false} />
+              <XAxis dataKey="day" tick={{ fill: C.textDim, fontSize }} axisLine={{ stroke: C.border }} tickLine={false} label={{ value: "経過日数（下落開始起点）", position: "insideBottom", offset: -2, fill: C.textDim, fontSize }} />
+              <YAxis domain={[-60, 2]} tick={{ fill: C.textDim, fontSize }} axisLine={false} tickLine={false} width={44} />
+              <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} />
+              {selectedCrash && !hiddenCrash[selectedCrash.id] && <Line type="monotone" dataKey={selectedCrash.id} stroke={C.rust} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls={false} name={selectedCrash.name} />}
+              {!hiddenCrash.current && <Line type="monotone" dataKey="current" stroke={C.teal} strokeWidth={2.6} dot={false} isAnimationActive={false} connectNulls={false} name="現在" />}
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
     </div>
   );
 }
@@ -1563,22 +1600,25 @@ function StatusPanel({ d, dVoo, dSpy, onOpenSpeedAlert }) {
 }
 
 /* ---------------- portfolio pie panel ---------------- */
-function PortfolioPie({ view, holdings, onOpen }) {
+// layout="row"（既定・PC）は円グラフと凡例を横並びに、layout="column"（スマホ）は円グラフを上に大きく・凡例をその下に配置し、
+// 横幅が狭い画面でも凡例と重ならずに円グラフ自体を大きく表示できるようにする。
+function PortfolioPie({ view, holdings, onOpen, layout = "row" }) {
   const field = fieldForView(view);
   const total = useMemo(() => holdingsTotal(holdings), [holdings]);
   const data = useMemo(() => {
     const grouped = sortGroupedForView(groupByField(holdings, field), view);
     return view === "category" ? aggregateTopN(grouped, 6) : grouped;
   }, [holdings, field, view]);
+  const isColumn = layout === "column";
   return (
-    <div onClick={onOpen} className="h-full flex items-center cursor-pointer" style={{ padding: "6px 8px", gap: 6 }}>
-      <div className="relative shrink-0" style={{ width: "40%", height: "92%" }}>
+    <div onClick={onOpen} className={`h-full flex cursor-pointer ${isColumn ? "flex-col" : "items-center"}`} style={{ padding: "6px 8px", gap: 6 }}>
+      <div className="relative shrink-0" style={isColumn ? { width: "100%", height: "64%" } : { width: "40%", height: "92%" }}>
         <ResponsiveContainer width="100%" height="100%">
           <PieChart><Pie data={data} dataKey="value" nameKey="name" startAngle={90} endAngle={-270} innerRadius="55%" outerRadius="88%" paddingAngle={2} stroke={C.panel} strokeWidth={2} isAnimationActive={false}>{data.map((d, i) => (<Cell key={i} fill={colorForView(view, d.name)} />))}</Pie><Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} formatter={(v, n) => [`¥${v.toLocaleString()}`, n]} /></PieChart>
         </ResponsiveContainer>
         <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none"><span className="text-[9px]" style={{ color: C.textDim }}>合計評価額</span><span className="mono text-xs font-bold">¥{Math.round(total / 10000).toLocaleString()}万</span></div>
       </div>
-      <div className="flex-1 min-w-0 flex flex-col justify-center gap-1 overflow-y-auto">
+      <div className={`flex-1 min-w-0 min-h-0 flex flex-col justify-center gap-1 overflow-y-auto ${isColumn ? "w-full" : ""}`}>
         {data.map((d) => (<div key={d.name} className="flex items-center gap-1 text-[10px]"><span style={{ width: 7, height: 7, borderRadius: 2, background: colorForView(view, d.name), flexShrink: 0 }} /><span style={{ color: C.textMuted }} className="flex-1 truncate">{d.name}</span><span className="mono shrink-0" style={{ color: C.text }}>{((d.value / total) * 100).toFixed(1)}%</span></div>))}
       </div>
     </div>
@@ -3147,7 +3187,7 @@ function MobileChartPage({ d, onZoom }) {
       <button onClick={onZoom} className="flex items-center justify-center gap-2 rounded-lg py-3.5" style={{ background: C.teal, color: C.bg, fontWeight: 700, border: "none", cursor: "pointer" }}>
         <Activity size={15} /> チャートを拡大表示（横向き）
       </button>
-      <div className="text-[10px] leading-relaxed" style={{ color: C.textDim }}>評価額・DD%の推移チャートは拡大表示でご覧いただけます。拡大表示は横向き（landscape）で全画面表示されます。</div>
+      <div className="text-[10px] leading-relaxed" style={{ color: C.textDim }}>評価額・DD%の推移チャート、および過去の暴落局面との比較（暴落比較）は拡大表示でご覧いただけます。拡大表示は横向き（landscape）で全画面表示されます。</div>
     </div>
   );
 }
@@ -3159,9 +3199,9 @@ function MobilePortfolioPage({ pieView, setPieView, holdings, onOpen }) {
           <button key={t.k} onClick={() => setPieView(t.k)} className="text-[11px] px-2 py-1 rounded" style={{ color: pieView === t.k ? C.bg : C.textMuted, background: pieView === t.k ? C.teal : C.panel2, fontWeight: pieView === t.k ? 700 : 400, border: "none", cursor: "pointer" }}>{t.l}</button>
         ))}
       </div>
-      {/* PortfolioPie自体はPC向けの横長パネル前提のレイアウトのため、高さを実寸に近い値に収めて縦に間延びしないようにする */}
-      <div className="rounded-lg" style={{ height: "min(56vh, 400px)", background: C.panel, border: `1px solid ${C.border}` }}>
-        <PortfolioPie view={pieView} holdings={holdings} onOpen={onOpen} />
+      {/* 円グラフを上・凡例を下に積む縦積みレイアウト（layout="column"）にすることで、狭い画面幅でも凡例と重ならずに円グラフ自体を大きく表示できる */}
+      <div className="rounded-lg" style={{ height: "min(72vh, 560px)", background: C.panel, border: `1px solid ${C.border}` }}>
+        <PortfolioPie view={pieView} holdings={holdings} onOpen={onOpen} layout="column" />
       </div>
     </div>
   );
@@ -3284,7 +3324,7 @@ function MobilePager({ activeIndex, onChange, pages }) {
 }
 // 評価額チャートの「拡大」時に開く全画面モーダル。CSSで常に横向き（landscape）表示に固定し、
 // 対応端末ではあわせてScreen Orientation APIでの実回転ロックも試みる（非対応環境ではCSS回転のみで代替）。
-function MobileChartZoomModal({ onClose, chartData, rangeDays, d, hidden, toggle, period, setPeriod, periodStats }) {
+function MobileChartZoomModal({ onClose, chartData, rangeDays, d, hidden, toggle, period, setPeriod, periodStats, historicalCrashes, selectedCrash, onSelectCrash, comparisonData, hiddenCrash, toggleCrash, crashLegendItems }) {
   useEffect(() => {
     (async () => {
       try {
@@ -3306,7 +3346,7 @@ function MobileChartZoomModal({ onClose, chartData, rangeDays, d, hidden, toggle
             <button onClick={onClose} className="flex items-center gap-1 text-xs px-2 py-1 rounded" style={{ color: C.textMuted, background: "transparent", border: "none", cursor: "pointer" }}><X size={13} /> 閉じる</button>
           </div>
           <div className="flex-1 min-h-0">
-            <DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} />
+            <DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={onSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} fontSize={13} />
           </div>
         </div>
       </div>
@@ -3651,11 +3691,11 @@ export default function DDDashboard() {
       {modal?.type === "ddTable" && <FullScreenModal title="DD毎のA〜E配分表" onClose={() => setModal(null)}><DDTableContent modelRow={d.modelRow} holdings={holdings} /></FullScreenModal>}
       {modal?.type === "rank" && <FullScreenModal title={`${modal.rank}ランクの保有銘柄`} onClose={() => setModal(null)}><RankHoldingsContent rank={modal.rank} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
       {modal?.type === "crash" && <FullScreenModal title={`${modal.crash.name}（${modal.crash.start} 〜）と現状の比較`} onClose={() => setModal(null)}><CrashModalContent crash={modal.crash} daysSinceATH={d.daysSinceATH} currentDD={d.currentDD} currentEpisodeCurve={d.currentEpisodeCurve} allCrashes={historicalCrashes} onJump={(c) => setModal({ type: "crash", crash: c })} /></FullScreenModal>}
-      {modal?.type === "ddChart" && <FullScreenModal title="評価額（左軸） / DD%（右軸）" onClose={() => setModal(null)}><DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} /></FullScreenModal>}
+      {modal?.type === "ddChart" && <FullScreenModal title="評価額（左軸） / DD%（右軸）" onClose={() => setModal(null)}><DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={setSelectedCrashId} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} /></FullScreenModal>}
       {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} spyVooSeries={spyVooSeries} onAppendSpyVoo={handleAppendSpyVoo} onImportSpyVoo={handleImportSpyVoo} onResetSpyVooField={handleResetSpyVooField} />}
       {modal?.type === "checkpointSettings" && <FullScreenModal title="チェックポイント設定" onClose={() => setModal(null)}><CheckpointSettingsContent checkpoints={checkpoints} onCheckpointChange={handleCheckpointChange} holdings={holdings} /></FullScreenModal>}
       {modal?.type === "summary" && <FullScreenModal title="詳細サマリー出力（AI相談用）" onClose={() => setModal(null)}><SummaryModalContent d={d} dVoo={dVoo} dSpy={dSpy} holdings={holdings} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} blocks={blocks} rankLabels={rankLabels} lifecycle={lifecycle} onLifecycleChange={handleLifecycleChange} fixedPositions={fixedPositions} onFixedPositionChange={handleFixedPositionChange} checkpoints={checkpoints} prevSnapshot={prevSnapshot} onSaveSnapshot={handleSaveSnapshot} /></FullScreenModal>}
-      {modal?.type === "mobileChartZoom" && <MobileChartZoomModal onClose={() => setModal(null)} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} />}
+      {modal?.type === "mobileChartZoom" && <MobileChartZoomModal onClose={() => setModal(null)} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={setSelectedCrashId} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} />}
 
       <div className="flex items-center justify-between px-5 py-3 shrink-0 flex-wrap gap-y-1.5" style={{ borderBottom: `1px solid ${C.border}`, background: C.panel2 }}>
         <div className="flex items-center gap-3 flex-wrap">
@@ -3676,18 +3716,22 @@ export default function DDDashboard() {
       </div>
 
       {isMobile ? (
-        <MobilePager
-          activeIndex={mobilePage}
-          onChange={setMobilePage}
-          pages={[
-            { key: "ath", label: "評価額/ATH", icon: TrendingUp, content: <MobileAthPage d={d} dVoo={dVoo} dSpy={dSpy} /> },
-            { key: "speed", label: "経過日数", icon: Clock, content: <MobileSpeedPage dVoo={dVoo} onOpenSpeedAlert={() => setModal({ type: "speedAlert" })} /> },
-            { key: "chart", label: "チャート", icon: Activity, content: <MobileChartPage d={d} onZoom={() => setModal({ type: "mobileChartZoom" })} /> },
-            { key: "portfolio", label: "構成", icon: Layers, content: <MobilePortfolioPage pieView={pieView} setPieView={setPieView} holdings={holdings} onOpen={() => setModal({ type: "portfolio" })} /> },
-            { key: "diff", label: "配分乖離", icon: ListChecks, content: <MobileDiffPage modelOverride={modelOverride} setModelOverride={setModelOverride} d={d} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} rankLabels={rankLabels} blocks={blocks} onOpenRank={(rank) => setModal({ type: "rank", rank })} onOpenDDTable={() => setModal({ type: "ddTable" })} /> },
-            { key: "analysis", label: "現状分析", icon: Info, content: <MobileAnalysisPage analysisText={analysisText} checkpointResults={checkpointResults} onOpenCheckpointSettings={() => setModal({ type: "checkpointSettings" })} /> },
-          ]}
-        />
+        // スマホ版は文字・図が小さいという要望に合わせ、6ページ全体をCSS zoomで1.2倍表示する。
+        // 各ページはoverflow-y-autoで自身の中身をスクロールできるため、拡大で高さが収まらなくなっても問題ない。
+        <div className="flex-1 min-h-0 flex flex-col" style={{ zoom: 1.2 }}>
+          <MobilePager
+            activeIndex={mobilePage}
+            onChange={setMobilePage}
+            pages={[
+              { key: "ath", label: "評価額/ATH", icon: TrendingUp, content: <MobileAthPage d={d} dVoo={dVoo} dSpy={dSpy} /> },
+              { key: "speed", label: "経過日数", icon: Clock, content: <MobileSpeedPage dVoo={dVoo} onOpenSpeedAlert={() => setModal({ type: "speedAlert" })} /> },
+              { key: "chart", label: "チャート", icon: Activity, content: <MobileChartPage d={d} onZoom={() => setModal({ type: "mobileChartZoom" })} /> },
+              { key: "portfolio", label: "構成", icon: Layers, content: <MobilePortfolioPage pieView={pieView} setPieView={setPieView} holdings={holdings} onOpen={() => setModal({ type: "portfolio" })} /> },
+              { key: "diff", label: "配分乖離", icon: ListChecks, content: <MobileDiffPage modelOverride={modelOverride} setModelOverride={setModelOverride} d={d} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} rankLabels={rankLabels} blocks={blocks} onOpenRank={(rank) => setModal({ type: "rank", rank })} onOpenDDTable={() => setModal({ type: "ddTable" })} /> },
+              { key: "analysis", label: "現状分析", icon: Info, content: <MobileAnalysisPage analysisText={analysisText} checkpointResults={checkpointResults} onOpenCheckpointSettings={() => setModal({ type: "checkpointSettings" })} /> },
+            ]}
+          />
+        </div>
       ) : (
       <div className="flex flex-1 min-h-0">
         <DepthGauge dd={d.currentDD} />
