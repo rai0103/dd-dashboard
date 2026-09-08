@@ -3167,12 +3167,12 @@ function MobileAthPage({ d, dVoo, dSpy }) {
 }
 function MobileSpeedPage({ dVoo, onOpenSpeedAlert }) {
   return (
-    <div className="p-3 flex flex-col gap-2.5">
-      <div className="rounded-lg p-3" style={{ background: C.panel, border: `1px solid ${C.border}` }}>
+    <div className="p-3 flex flex-col gap-2.5 h-full">
+      <div className="rounded-lg p-3 flex-1 flex flex-col justify-center min-h-0" style={{ background: C.panel, border: `1px solid ${C.border}` }}>
         <div className="flex items-center gap-1.5 mb-2"><Clock size={13} style={{ color: C.textDim }} /><span className="text-xs" style={{ color: C.textDim }}>経過日数（VOO基準）</span></div>
         <ATHProgressBlock dVoo={dVoo} />
       </div>
-      <button onClick={dVoo ? onOpenSpeedAlert : undefined} disabled={!dVoo} className="rounded-lg p-3 text-left w-full" style={{ background: C.panel, border: `1px solid ${C.border}`, opacity: dVoo ? 1 : 0.5, cursor: dVoo ? "pointer" : "default" }}>
+      <button onClick={dVoo ? onOpenSpeedAlert : undefined} disabled={!dVoo} className="rounded-lg p-3 text-left w-full flex-1 flex flex-col justify-center min-h-0" style={{ background: C.panel, border: `1px solid ${C.border}`, opacity: dVoo ? 1 : 0.5, cursor: dVoo ? "pointer" : "default" }}>
         <div className="flex items-center gap-1.5 mb-2"><Zap size={13} style={{ color: dVoo ? speedAlertAccent(dVoo.speedAlert) : C.textDim }} /><span className="text-xs" style={{ color: C.textDim }}>DD加速度アラート（VOO基準）</span>{dVoo && <ChevronRight size={13} style={{ color: C.textDim, marginLeft: "auto" }} />}</div>
         {!dVoo && <div className="text-xs" style={{ color: C.textDim }}>VOOデータ未取り込み</div>}
         {dVoo && dVoo.speedAlert.level === "normal" && (<>
@@ -3199,7 +3199,7 @@ function MobileSpeedPage({ dVoo, onOpenSpeedAlert }) {
 // 初期表示ではチャートを描画せずサマリー数値のみ表示し、「拡大表示」タップ時のみ横向き全画面モーダルでチャートを表示する。
 function MobileChartPage({ d, onZoom }) {
   return (
-    <div className="p-3 flex flex-col gap-3">
+    <div className="p-3 flex flex-col gap-3 h-full justify-center">
       <div className="rounded-lg p-4" style={{ background: C.panel, border: `1px solid ${C.border}` }}>
         <div className="text-[11px] mb-2" style={{ color: C.textDim }}>評価額 / ATH（{fmtYMD(d.athDate)}）</div>
         <div className="mono text-2xl font-bold mb-1">${d.currentPrice.toFixed(2)}</div>
@@ -3218,14 +3218,15 @@ function MobileChartPage({ d, onZoom }) {
 }
 function MobilePortfolioPage({ pieView, setPieView, holdings, onOpen }) {
   return (
-    <div className="p-3 flex flex-col gap-2">
+    <div className="p-3 flex flex-col gap-2 h-full">
       <div className="flex gap-1 flex-wrap shrink-0">
         {[{ k: "category", l: "カテゴリー別" }, { k: "currency", l: "為替別" }, { k: "rank", l: "A〜Eランク" }, { k: "owner", l: "口座別" }].map((t) => (
           <button key={t.k} onClick={() => setPieView(t.k)} className="text-[11px] px-2 py-1 rounded" style={{ color: pieView === t.k ? C.bg : C.textMuted, background: pieView === t.k ? C.teal : C.panel2, fontWeight: pieView === t.k ? 700 : 400, border: "none", cursor: "pointer" }}>{t.l}</button>
         ))}
       </div>
-      {/* 円グラフを上・凡例を下に積む縦積みレイアウト（layout="column"）にすることで、狭い画面幅でも凡例と重ならずに円グラフ自体を大きく表示できる */}
-      <div className="rounded-lg" style={{ height: "min(72vh, 560px)", background: C.panel, border: `1px solid ${C.border}` }}>
+      {/* 円グラフを上・凡例を下に積む縦積みレイアウト（layout="column"）にすることで、狭い画面幅でも凡例と重ならずに円グラフ自体を大きく表示できる。
+          高さはvh固定ではなくflex-1で残り領域いっぱいに使うことで、タブ行を含めたページ全体が必ず1画面（スクロールなし）に収まる。 */}
+      <div className="rounded-lg flex-1 min-h-0" style={{ background: C.panel, border: `1px solid ${C.border}` }}>
         <PortfolioPie view={pieView} holdings={holdings} onOpen={onOpen} layout="column" />
       </div>
     </div>
@@ -3234,33 +3235,36 @@ function MobilePortfolioPage({ pieView, setPieView, holdings, onOpen }) {
 // 横棒グラフは表示せず、各項目（A〜E）の乖離は数値のみで表示する。
 function MobileDiffPage({ modelOverride, setModelOverride, d, currentHoldingPct, effectiveModelRow, rankLabels, blocks, onOpenRank, onOpenDDTable }) {
   return (
-    <div className="p-3 flex flex-col gap-2">
-      <div className="flex items-center justify-between gap-2 flex-wrap mb-1">
+    <div className="p-3 flex flex-col gap-2 h-full">
+      <div className="flex items-center justify-between gap-2 flex-wrap shrink-0">
         <select value={modelOverride ?? ""} onChange={(e) => setModelOverride(e.target.value || null)} className="text-[11px] rounded px-2 py-1.5 flex-1" style={{ background: C.panel2, color: C.text, border: `1px solid ${C.borderSoft}` }}>
           <option value="">自動（{d.modelRow.label}）</option>
           {MODEL_ROWS.map((r) => (<option key={r.label} value={r.label}>{r.label}</option>))}
         </select>
         <button onClick={onOpenDDTable} title="DD毎の配分表を表示" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, borderRadius: 6, padding: 6, cursor: "pointer" }}><Info size={14} style={{ color: C.textDim }} /></button>
       </div>
-      {CATS.map((cat) => {
-        const cur = currentHoldingPct[cat], tgt = effectiveModelRow[cat];
-        const diff = Number((cur - tgt).toFixed(1));
-        const emphasize = Math.abs(diff) >= 4;
-        return (
-          <button key={cat} onClick={() => onOpenRank(cat)} className="rounded-lg px-3 py-2.5 text-left w-full" style={{ background: C.panel, border: `1px solid ${C.border}`, cursor: "pointer" }}>
-            <div className="flex items-center justify-between">
-              <div className="flex items-baseline gap-1.5 min-w-0"><span className="text-sm font-bold shrink-0" style={{ color: rankColor(cat) }}>{cat}</span><span className="text-[11px] truncate" style={{ color: C.textDim }}>{rankLabels[cat]}</span></div>
-              <ChevronRight size={13} style={{ color: C.textDim, flexShrink: 0 }} />
-            </div>
-            <div className="flex items-center gap-3 mt-1.5 mono text-xs">
-              <span style={{ color: C.textMuted }}>実績 {cur.toFixed(1)}%</span>
-              <span style={{ color: C.textDim }}>モデル {tgt.toFixed(1)}%</span>
-              <span className="font-semibold px-1.5 py-0.5 rounded ml-auto" style={{ color: emphasize ? C.rust : C.textMuted, background: emphasize ? C.rustSoft : "transparent" }}>{diff > 0 ? "+" : ""}{diff}pt</span>
-            </div>
-          </button>
-        );
-      })}
-      <div className="grid grid-cols-3 gap-1.5 mt-1">
+      {/* A〜Eの5項目をflex-1で残り領域に均等割りすることで、画面の小さい端末でも下部の合計ブロックまで含めて1画面に収まる */}
+      <div className="flex-1 min-h-0 flex flex-col gap-1.5">
+        {CATS.map((cat) => {
+          const cur = currentHoldingPct[cat], tgt = effectiveModelRow[cat];
+          const diff = Number((cur - tgt).toFixed(1));
+          const emphasize = Math.abs(diff) >= 4;
+          return (
+            <button key={cat} onClick={() => onOpenRank(cat)} className="rounded-lg px-3 flex-1 min-h-0 flex flex-col justify-center text-left w-full" style={{ background: C.panel, border: `1px solid ${C.border}`, cursor: "pointer" }}>
+              <div className="flex items-center justify-between">
+                <div className="flex items-baseline gap-1.5 min-w-0"><span className="text-sm font-bold shrink-0" style={{ color: rankColor(cat) }}>{cat}</span><span className="text-[11px] truncate" style={{ color: C.textDim }}>{rankLabels[cat]}</span></div>
+                <ChevronRight size={13} style={{ color: C.textDim, flexShrink: 0 }} />
+              </div>
+              <div className="flex items-center gap-3 mt-1 mono text-xs">
+                <span style={{ color: C.textMuted }}>実績 {cur.toFixed(1)}%</span>
+                <span style={{ color: C.textDim }}>モデル {tgt.toFixed(1)}%</span>
+                <span className="font-semibold px-1.5 py-0.5 rounded ml-auto" style={{ color: emphasize ? C.rust : C.textMuted, background: emphasize ? C.rustSoft : "transparent" }}>{diff > 0 ? "+" : ""}{diff}pt</span>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+      <div className="grid grid-cols-3 gap-1.5 shrink-0">
         {[{ label: "A+B", ...blocks.AB }, { label: "C", ...blocks.Cb }, { label: "D+E", ...blocks.DE }].map((b) => {
           const diff = Number((b.cur - b.tgt).toFixed(1));
           return (
@@ -3277,25 +3281,29 @@ function MobileDiffPage({ modelOverride, setModelOverride, d, currentHoldingPct,
 }
 function MobileAnalysisPage({ analysisText, checkpointResults, onOpenCheckpointSettings }) {
   return (
-    <div className="p-3 flex flex-col gap-3">
-      <div className="rounded-lg p-3" style={{ background: C.panel, border: `1px solid ${C.border}` }}>
+    <div className="p-3 flex flex-col gap-3 h-full">
+      <div className="rounded-lg p-3 shrink-0" style={{ background: C.panel, border: `1px solid ${C.border}` }}>
         <div className="text-[11px] mb-1.5" style={{ color: C.textDim }}>現状分析</div>
         <div className="text-[13px] leading-relaxed" style={{ color: C.text }}>{analysisText}</div>
       </div>
-      <div className="rounded-lg p-3" style={{ background: C.panel, border: `1px solid ${C.border}` }}>
-        <div className="flex items-center justify-between mb-1.5">
+      {/* チェックポイントの件数はユーザー設定次第で増減するため、この枠だけ内部スクロールにして、
+          現状分析・免責事項は常に1画面内でスクロールなしに見えるようにする */}
+      <div className="rounded-lg p-3 flex-1 min-h-0 flex flex-col" style={{ background: C.panel, border: `1px solid ${C.border}` }}>
+        <div className="flex items-center justify-between mb-1.5 shrink-0">
           <span className="text-[11px]" style={{ color: C.textDim }}>チェックポイント</span>
           <button onClick={onOpenCheckpointSettings} className="text-[10px] underline" style={{ color: C.textDim, background: "transparent", border: "none", cursor: "pointer" }}>新設・変更</button>
         </div>
-        {checkpointResults.length > 0 ? (
-          <ul className="text-[12px] leading-relaxed list-disc pl-4" style={{ color: C.textMuted }}>
-            {checkpointResults.map((r, i) => (<li key={i} style={{ color: r.ok ? C.textMuted : C.rust }}>{r.text}</li>))}
-          </ul>
-        ) : (
-          <div className="text-[12px] leading-relaxed" style={{ color: C.textDim }}>チェックポイントが設定されていません。「新設・変更」から設定できます。</div>
-        )}
+        <div className="flex-1 min-h-0 overflow-y-auto">
+          {checkpointResults.length > 0 ? (
+            <ul className="text-[12px] leading-relaxed list-disc pl-4" style={{ color: C.textMuted }}>
+              {checkpointResults.map((r, i) => (<li key={i} style={{ color: r.ok ? C.textMuted : C.rust }}>{r.text}</li>))}
+            </ul>
+          ) : (
+            <div className="text-[12px] leading-relaxed" style={{ color: C.textDim }}>チェックポイントが設定されていません。「新設・変更」から設定できます。</div>
+          )}
+        </div>
       </div>
-      <div className="flex gap-1.5 text-[11px] leading-relaxed" style={{ color: C.textDim }}><Info size={12} style={{ flexShrink: 0, marginTop: 1 }} /><span>投資助言ではなく可視化・判断補助です。過去確率は将来を保証しません。</span></div>
+      <div className="flex gap-1.5 text-[11px] leading-relaxed shrink-0" style={{ color: C.textDim }}><Info size={12} style={{ flexShrink: 0, marginTop: 1 }} /><span>投資助言ではなく可視化・判断補助です。過去確率は将来を保証しません。</span></div>
     </div>
   );
 }
