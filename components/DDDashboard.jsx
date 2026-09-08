@@ -3134,10 +3134,13 @@ function MobileAthPage({ d, dVoo, dSpy }) {
                     <div className="text-xl font-bold leading-tight" style={{ color: data.currentDD >= 0 ? C.teal : C.rust }}>{data.currentDD.toFixed(1)}%</div>
                   </div>
                 </div>
-                <div className="flex items-center justify-between mono text-[10px] mt-1 pt-1 flex-wrap gap-x-2" style={{ borderTop: `1px solid ${C.borderSoft}`, color: C.textDim }}>
-                  <span>ATH ${data.currentATH.toFixed(2)}</span>
+                <div className="mono mt-1 pt-1" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+                  <div className="text-[9px]" style={{ color: C.textDim }}>ATH ${data.currentATH.toFixed(2)}</div>
                   {data.nextMilestone !== null && (
-                    <span>DD{data.nextMilestone}%まで{data.distanceToNextMilestone.toFixed(1)}%（${data.nextMilestonePrice.toFixed(2)}）</span>
+                    <>
+                      <div className="text-[9px] mt-0.5" style={{ color: C.textDim }}>DD{data.nextMilestone}%まで {data.distanceToNextMilestone.toFixed(1)}%</div>
+                      <div className="text-xl font-bold leading-tight truncate" style={{ color: C.rust }}>${data.nextMilestonePrice.toFixed(2)}</div>
+                    </>
                   )}
                 </div>
               </>
