@@ -1165,14 +1165,13 @@ function EvalTooltipContent({ active, payload, label, markerByTime }) {
   );
 }
 
-// 局面の底値マーカー用ラベルを組み立てる。選択期間内で最も深い局面（大底）の場合のみ、末尾に「（大底）」と
-// 「DD開始～大底」「大底～回復」の営業日数を付記する。
+// 局面の底値マーカー用ラベルを組み立てる。「DD開始～大底」「大底～回復」の経過営業日数は全ての底値マーカーに共通で付記し、
+// 選択期間内で最も深い局面（大底）の場合のみ、末尾に「（大底）」を追加で付記する。
 function troughLabel(athIdx, troughIdx, troughDate, troughPrice, troughDD, recoveryIdx, isWorst) {
-  const base = `$${troughPrice.toFixed(2)}（${fmtYMD(troughDate)}）DD${troughDD.toFixed(1)}%`;
-  if (!isWorst) return base;
+  const base = `$${troughPrice.toFixed(2)}（${fmtYMD(troughDate)}）DD${troughDD.toFixed(1)}%${isWorst ? "（大底）" : ""}`;
   const daysToTrough = troughIdx - athIdx;
   const daysToRecovery = recoveryIdx != null ? recoveryIdx - troughIdx : null;
-  return `${base}（大底）　DD開始～大底：${daysToTrough}日間、大底～回復：${daysToRecovery !== null ? `${daysToRecovery}日間` : "未回復"}`;
+  return `${base}　DD開始～大底：${daysToTrough}日間、大底～回復：${daysToRecovery !== null ? `${daysToRecovery}日間` : "未回復"}`;
 }
 // 選択期間の要約（DD-3%以上の発生回数・最大DD・評価額の騰落%）。チャートに重ねず、期間選択ボタンの下に常時表示する。
 function PeriodStatsBar({ periodStats }) {
@@ -1210,8 +1209,9 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBru
       addPt(ep.athIdx, ep.athDate, ep.athPrice, C.teal, `$${ep.athPrice.toFixed(2)}（${fmtYMD(ep.athDate)}）`);
       if (ep.troughIdx !== ep.athIdx) {
         const isWorst = periodStats?.worstEpisode?.troughIdx === ep.troughIdx;
-        // 大底の詳細（開始～大底・大底～回復の日数）は長くなるため、常時表示ラベルではなくホバー時の吹き出し（幅がクランプされ画面外にはみ出ない）で表示する。
-        addPt(ep.troughIdx, ep.troughDate, ep.troughPrice, C.rust, troughLabel(ep.athIdx, ep.troughIdx, ep.troughDate, ep.troughPrice, ep.troughDD, ep.recoveryIdx, isWorst), isWorst);
+        // 底値の詳細（開始～底値・底値～回復の日数）は全ての底値マーカーに付記して長くなるため、常時表示ラベルではなく
+        // ホバー時のツールチップ（幅の制約を受けず画面外にはみ出ない）で表示する。
+        addPt(ep.troughIdx, ep.troughDate, ep.troughPrice, C.rust, troughLabel(ep.athIdx, ep.troughIdx, ep.troughDate, ep.troughPrice, ep.troughDD, ep.recoveryIdx, isWorst), true);
       }
       if (ep.recoveryIdx !== ep.troughIdx) addPt(ep.recoveryIdx, ep.recoveryDate, ep.recoveryPrice, C.blue, `$${ep.recoveryPrice.toFixed(2)}（${fmtYMD(ep.recoveryDate)}）`);
     }
@@ -1219,11 +1219,11 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBru
     addPt(d.episode.athIdx, d.athDate, d.currentATH, C.teal, `$${d.currentATH.toFixed(2)}（${fmtYMD(d.athDate)}）`);
     const troughIsToday = d.trough.i === d.last.i; // 底値がまだ今日（未回復）の場合は現在値マーカーと重なるため統合する
     const troughIsWorst = periodStats?.worstEpisode?.troughIdx === d.trough.i;
-    if (!troughIsToday && d.trough.i !== d.episode.athIdx) addPt(d.trough.i, d.trough.date, d.trough.price, C.rust, troughLabel(d.episode.athIdx, d.trough.i, d.trough.date, d.trough.price, d.trough.dd, null, troughIsWorst), troughIsWorst);
+    if (!troughIsToday && d.trough.i !== d.episode.athIdx) addPt(d.trough.i, d.trough.date, d.trough.price, C.rust, troughLabel(d.episode.athIdx, d.trough.i, d.trough.date, d.trough.price, d.trough.dd, null, troughIsWorst), true);
     const currentLabel = troughIsToday
       ? troughLabel(d.episode.athIdx, d.trough.i, d.trough.date, d.trough.price, d.currentDD, null, troughIsWorst)
       : `$${d.currentPrice.toFixed(2)}（${fmtYMD(d.last.date)}）`;
-    markerPoints.push({ date: chartLast, price: d.currentPrice, color: depthColor(d.currentDD), anchor: "end", fontSize: markerFontSize, label: currentLabel, dotOnly: (troughIsToday && troughIsWorst) || !isShortTerm, isCurrent: true });
+    markerPoints.push({ date: chartLast, price: d.currentPrice, color: depthColor(d.currentDD), anchor: "end", fontSize: markerFontSize, label: currentLabel, dotOnly: troughIsToday || !isShortTerm, isCurrent: true });
   }
   const markerByTime = new Map(markerPoints.map((m) => [m.date.getTime(), m]));
   return (
