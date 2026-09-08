@@ -3099,39 +3099,40 @@ function SummaryModalContent({ d, dVoo, dSpy, holdings, currentHoldingPct, effec
 /* ---------------- mobile layout (smartphone width, <768px専用の6ページ構成) ---------------- */
 // 各ページはPC向けの既存コンポーネント（ATHProgressBlock/PortfolioPie等）を再利用しつつ、
 // スマホ向けにカード型で縦積み表示する専用JSXを持つ。PC向けPanel/StatusPanel等のコンポーネント自体は変更しない。
+// SP500/VOO/SPYの3指数分を、スクロールなしで1画面に収まるようそれぞれ均等割り（flex-1）のカードで表示する。
+// 各カードは上段に「評価額（金額・大きく強調）」と「最高値比DD%（金額同様に大きく強調）」を横並びで、
+// 下段に「ATH金額」と「次の節目までの残り%・その節目の評価額」を1行にまとめて、金額と%の両方を一目で読み取れるようにする。
 function MobileAthPage({ d, dVoo, dSpy }) {
   const tickers = [{ label: "SP500", data: d }, { label: "VOO", data: dVoo }, { label: "SPY", data: dSpy }];
   return (
-    <div className="p-3 flex flex-col gap-2.5">
+    <div className="p-2 flex flex-col gap-2 h-full">
       {tickers.map(({ label, data }) => {
         const chg = data ? dayChangePct(data) : null;
         const updated = data ? isUpdatedToday(data) : false;
         return (
-          <div key={label} className="rounded-lg p-3" style={{ background: C.panel, border: `1px solid ${C.border}` }}>
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-bold" style={{ color: C.textMuted }}>{label}</span>
-              {data && <span className="text-[10px]" style={{ color: updated ? C.teal : C.textDim }}>{updated ? "●更新済" : "○未更新"}</span>}
+          <div key={label} className="rounded-lg px-3 py-2 flex-1 flex flex-col justify-center min-h-0" style={{ background: C.panel, border: `1px solid ${C.border}` }}>
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-xs font-bold" style={{ color: C.textMuted }}>{label}</span>
+              {data && <span className="text-[9px]" style={{ color: updated ? C.teal : C.textDim }}>{updated ? "●更新済" : "○未更新"}</span>}
             </div>
             {data ? (
               <>
-                <div className="flex items-baseline justify-between mono mb-1">
-                  <span className="text-lg font-semibold" style={{ color: updated ? C.text : C.textDim }}>${data.currentPrice.toFixed(2)}</span>
-                  {chg !== null && (<span className="text-xs" style={{ color: updated ? (chg >= 0 ? C.teal : C.rust) : C.textDim }}>{chg >= 0 ? "+" : ""}{chg.toFixed(1)}%</span>)}
-                </div>
-                <div className="flex items-baseline justify-between mono text-[11px] mb-2.5" style={{ color: C.textDim }}>
-                  <span>ATH（{fmtYMD(data.athDate)}）</span><span>${data.currentATH.toFixed(2)}</span>
-                </div>
-                <div className="flex items-center justify-between pt-2" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
-                  <span className="text-[10px]" style={{ color: C.textDim }}>最高値比</span>
-                  <span className="mono font-bold text-xl" style={{ color: data.currentDD >= 0 ? C.teal : C.rust }}>{data.currentDD.toFixed(1)}%</span>
-                </div>
-                {data.nextMilestone !== null && (
-                  <div className="mono text-[11px] mt-1.5" style={{ color: C.textMuted }}>
-                    {data.nextMilestone === -3
-                      ? `DD-3%まで あと${data.distanceToNextMilestone.toFixed(1)}%`
-                      : `DD${data.nextMilestone}%まで あと${data.distanceToNextMilestone.toFixed(1)}%（$${data.nextMilestonePrice.toFixed(2)}）`}
+                <div className="grid grid-cols-2 gap-x-2 items-end mono">
+                  <div className="min-w-0">
+                    <div className="text-[9px] truncate" style={{ color: C.textDim }}>評価額{chg !== null && <span className="ml-1" style={{ color: updated ? (chg >= 0 ? C.teal : C.rust) : C.textDim }}>{chg >= 0 ? "+" : ""}{chg.toFixed(1)}%</span>}</div>
+                    <div className="text-xl font-bold leading-tight truncate" style={{ color: updated ? C.text : C.textDim }}>${data.currentPrice.toFixed(2)}</div>
                   </div>
-                )}
+                  <div className="text-right min-w-0">
+                    <div className="text-[9px]" style={{ color: C.textDim }}>最高値比</div>
+                    <div className="text-xl font-bold leading-tight" style={{ color: data.currentDD >= 0 ? C.teal : C.rust }}>{data.currentDD.toFixed(1)}%</div>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between mono text-[10px] mt-1 pt-1 flex-wrap gap-x-2" style={{ borderTop: `1px solid ${C.borderSoft}`, color: C.textDim }}>
+                  <span>ATH ${data.currentATH.toFixed(2)}</span>
+                  {data.nextMilestone !== null && (
+                    <span>DD{data.nextMilestone}%まで{data.distanceToNextMilestone.toFixed(1)}%（${data.nextMilestonePrice.toFixed(2)}）</span>
+                  )}
+                </div>
               </>
             ) : (<div className="text-xs" style={{ color: C.textDim }}>データ未取り込み</div>)}
           </div>
