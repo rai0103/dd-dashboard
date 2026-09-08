@@ -1101,9 +1101,11 @@ function nearestChartPoint(chartData, targetDate) {
 // Rechartsの<ReferenceDot>はx値がnumber/stringでないと描画されず(Date型のcategory軸では使えない)、
 // このアプリの日付軸(dataKey="date"がDateオブジェクト)とは相性が悪い。
 // そのためxAxisMap/yAxisMapの実スケール関数を<Customized>経由で直接使い、マーカーを自前のSVGで描画する。
-// dotOnly:true の点はラベルを常時表示せず、ホバー時のみ吹き出しツールチップで詳細を表示する（長期チャート向け）。
-function ChartMarkers({ xAxisMap, yAxisMap, points, chartWidth }) {
-  const [hoverIdx, setHoverIdx] = useState(null);
+// dotOnly:true の点は常時ラベルを表示せず点のみ描画する（長期チャート向け）。詳細はホバー時にEvalTooltipContent側の
+// 統合ツールチップに表示するため、このコンポーネント自身は別の吹き出しを持たない（カーソル追従ツールチップとの重なりを構造的に無くすため）。
+// activeDateはEvalDDChartBody側で追跡している現在ホバー中の日付。常時表示ラベルがこの日付と一致する間は、
+// カーソル追従ツールチップと重なって読めなくなるのを避けるため一時的に非表示にする（詳細はツールチップ側に統合表示済み）。
+function ChartMarkers({ xAxisMap, yAxisMap, points, activeDate }) {
   const xAxis = xAxisMap && xAxisMap[Object.keys(xAxisMap)[0]];
   const yAxis = yAxisMap && yAxisMap.price;
   if (!xAxis || !yAxis) return null;
@@ -1119,43 +1121,47 @@ function ChartMarkers({ xAxisMap, yAxisMap, points, chartWidth }) {
     if (sorted[i].dotOnly || sorted[i - 1].dotOnly) { labelOffset = 0; continue; }
     if (sorted[i].cx - sorted[i - 1].cx < 70) { labelOffset += 12; sorted[i].labelOffset = labelOffset; } else { labelOffset = 0; }
   }
-  const hovered = hoverIdx != null ? sorted[hoverIdx] : null;
-  // プロット領域の最も上端（yScaleのピクセル範囲の最小値）。大底（プロット下端付近）にカーソルを合わせた際、
-  // Rechartsのカーソル追従ツールチップは表示領域内に収めるためカーソルの「上」に出ることが多く、
-  // 従来の「ドットのすぐ上」に出す方式だとその位置で確実に重なっていた。プロット最上部に固定表示することで、
-  // カーソル追従ツールチップ（常にカーソル付近＝ドットの近く）とは常に離れた位置になり重なりを避けられる。
-  const yRangeTop = Math.min(...yScale.range());
+  const activeTime = activeDate ? activeDate.getTime() : null;
   return (
     <g>
-      {sorted.map((pt, i) => (
-        <g key={i}
-          onMouseEnter={pt.dotOnly ? () => setHoverIdx(i) : undefined}
-          onMouseLeave={pt.dotOnly ? () => setHoverIdx((h) => (h === i ? null : h)) : undefined}
-        >
-          {pt.isCurrent ? (
-            <rect x={pt.cx - 4} y={pt.cy - 4} width={8} height={8} fill="#fff" stroke={C.bg} strokeWidth={1.5} style={pt.dotOnly ? { cursor: "pointer" } : undefined} />
-          ) : (
-            <circle cx={pt.cx} cy={pt.cy} r={pt.dotOnly ? 4 : 4} fill={pt.color} stroke={C.bg} strokeWidth={1.5} style={pt.dotOnly ? { cursor: "pointer" } : undefined} />
-          )}
-          {pt.dotOnly && <circle cx={pt.cx} cy={pt.cy} r={9} fill="transparent" style={{ cursor: "pointer" }} />}
-          {!pt.dotOnly && (
-            <text x={pt.cx} y={pt.cy - 8 - (pt.labelOffset || 0)} textAnchor={pt.anchor || "middle"} fontSize={pt.fontSize} fill={pt.color} className="mono">{pt.label}</text>
-          )}
-        </g>
-      ))}
-      {hovered && (() => {
-        const w = Math.max(90, hovered.label.length * (hovered.fontSize * 0.62) + 12);
-        const cxClamped = Math.min(Math.max(hovered.cx, w / 2 + 2), (chartWidth ?? 100000) - w / 2 - 2);
-        const boxY = yRangeTop + 4;
+      {sorted.map((pt, i) => {
+        const isActive = activeTime != null && pt.date.getTime() === activeTime;
         return (
-          <g style={{ pointerEvents: "none" }}>
-            <line x1={hovered.cx} y1={boxY + 18} x2={hovered.cx} y2={hovered.cy} stroke={hovered.color} strokeWidth={1} strokeDasharray="2 2" opacity={0.5} />
-            <rect x={cxClamped - w / 2} y={boxY} width={w} height={18} rx={3} fill={C.panel} stroke={C.border} />
-            <text x={cxClamped} y={boxY + 13} textAnchor="middle" fontSize={hovered.fontSize} fill={hovered.color} className="mono">{hovered.label}</text>
+          <g key={i}>
+            {pt.isCurrent ? (
+              <rect x={pt.cx - 4} y={pt.cy - 4} width={8} height={8} fill="#fff" stroke={C.bg} strokeWidth={1.5} />
+            ) : (
+              <circle cx={pt.cx} cy={pt.cy} r={4} fill={pt.color} stroke={C.bg} strokeWidth={1.5} />
+            )}
+            {!pt.dotOnly && !isActive && (
+              <text x={pt.cx} y={pt.cy - 8 - (pt.labelOffset || 0)} textAnchor={pt.anchor || "middle"} fontSize={pt.fontSize} fill={pt.color} className="mono">{pt.label}</text>
+            )}
           </g>
         );
-      })()}
+      })}
     </g>
+  );
+}
+// カーソル追従ツールチップの中身。標準の日付・DD%・評価額・ATHに加え、ホバー中の日付がマーカー点（大底・高値更新等）と
+// 一致する場合はその注釈をこの同じ吹き出しの中に追記する。吹き出しを1つに統合することで、
+// マーカー用の別の吹き出しとカーソル追従ツールチップが別々の位置に出て重なる、という問題が構造的に起きなくなる。
+function EvalTooltipContent({ active, payload, label, markerByTime }) {
+  if (!active || !payload || !payload.length || !label) return null;
+  const marker = markerByTime.get(label.getTime());
+  return (
+    <div style={{ margin: 0, padding: 10, background: C.panel, border: `1px solid ${C.border}`, fontSize: 12, whiteSpace: "nowrap" }}>
+      <p style={{ margin: 0, color: C.textMuted }}>{label.toLocaleDateString("ja-JP")}</p>
+      <ul style={{ margin: 0, padding: 0, listStyle: "none" }}>
+        {payload.map((entry, i) => {
+          const name = entry.dataKey === "dd" ? "DD" : entry.dataKey === "ath" ? "ATH" : "評価額";
+          const value = entry.dataKey === "dd" ? `${entry.value}%` : `$${entry.value}`;
+          return (<li key={i} style={{ display: "block", paddingTop: 4, paddingBottom: 4, color: entry.color }}>{name} : {value}</li>);
+        })}
+      </ul>
+      {marker && (
+        <div className="mono" style={{ marginTop: 4, paddingTop: 4, borderTop: `1px solid ${C.borderSoft}`, color: marker.color, fontWeight: 700 }}>{marker.label}</div>
+      )}
+    </div>
   );
 }
 
@@ -1181,6 +1187,9 @@ function PeriodStatsBar({ periodStats }) {
 }
 /* ---------------- reusable evaluation/DD composed chart ---------------- */
 function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBrush = false, fontSize = 10, width, height }) {
+  // 現在カーソル追従ツールチップが指している日付。ChartMarkersの常時表示ラベルをこの日付と重ならないよう
+  // 一時的に隠す判定と、EvalTooltipContentでマーカー注釈を同じ吹き出しに統合するための照合の両方に使う。
+  const [activeDate, setActiveDate] = useState(null);
   const chartFirst = chartData[0].date, chartLast = chartData[chartData.length - 1].date;
   const markerFontSize = Math.max(8, fontSize - 1);
   const isShortTerm = rangeDays <= 200; // 1・3・6ヶ月＝ラベル常時表示、1年以上＝点のみ＋ホバーで詳細
@@ -1216,8 +1225,13 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBru
       : `$${d.currentPrice.toFixed(2)}（${fmtYMD(d.last.date)}）`;
     markerPoints.push({ date: chartLast, price: d.currentPrice, color: depthColor(d.currentDD), anchor: "end", fontSize: markerFontSize, label: currentLabel, dotOnly: (troughIsToday && troughIsWorst) || !isShortTerm, isCurrent: true });
   }
+  const markerByTime = new Map(markerPoints.map((m) => [m.date.getTime(), m]));
   return (
-    <ComposedChart width={width} height={height} data={chartData} margin={{ top: 12, right: 44, left: 0, bottom: withBrush ? 0 : 0 }}>
+    <ComposedChart
+      width={width} height={height} data={chartData} margin={{ top: 12, right: 44, left: 0, bottom: withBrush ? 0 : 0 }}
+      onMouseMove={(state) => setActiveDate(state && state.isTooltipActive && state.activeLabel ? state.activeLabel : null)}
+      onMouseLeave={() => setActiveDate(null)}
+    >
       <defs>
         <linearGradient id="ddFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={C.rust} stopOpacity={0} /><stop offset="100%" stopColor={C.rust} stopOpacity={0.32} /></linearGradient>
         <linearGradient id="priceFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={C.teal} stopOpacity={0.22} /><stop offset="100%" stopColor={C.teal} stopOpacity={0} /></linearGradient>
@@ -1226,14 +1240,14 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBru
       <XAxis dataKey="date" tickFormatter={(dt) => fmtAxisDate(dt, rangeDays)} tick={{ fill: C.textDim, fontSize }} axisLine={{ stroke: C.border }} tickLine={false} minTickGap={40} />
       <YAxis yAxisId="price" domain={["auto", "auto"]} tick={{ fill: C.teal, fontSize }} axisLine={false} tickLine={false} width={48} label={{ value: "評価額", angle: -90, position: "insideLeft", fill: C.teal, fontSize }} />
       <YAxis yAxisId="dd" orientation="right" domain={[ddTicks[ddTicks.length - 1], 0]} ticks={ddTicks} tick={{ fill: C.rust, fontSize }} axisLine={false} tickLine={false} width={46} label={{ value: "DD%", angle: 90, position: "insideRight", fill: C.rust, fontSize }} />
-      <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} labelStyle={{ color: C.textMuted }} labelFormatter={(dt) => dt.toLocaleDateString("ja-JP")} formatter={(v, name) => [name === "dd" ? `${v}%` : `$${v}`, name === "dd" ? "DD" : name === "ath" ? "ATH" : "評価額"]} />
+      <Tooltip content={(props) => <EvalTooltipContent {...props} markerByTime={markerByTime} />} />
       {MILESTONES.filter((t) => t !== -3).map((t) => (<ReferenceLine key={t} yAxisId="dd" y={t} stroke={C.borderSoft} strokeDasharray="2 3" label={{ value: `${t}%`, position: "left", fill: C.textDim, fontSize: Math.max(8, fontSize - 2) }} />))}
       <ReferenceLine yAxisId="dd" y={-3} stroke={C.rust} strokeDasharray="4 3" strokeWidth={1.3} label={{ value: "-3%", position: "left", fill: C.rust, fontSize: Math.max(8, fontSize - 2) }} />
       {chartData[0].date < SPY_LISTING_DATE && chartData[chartData.length - 1].date > SPY_LISTING_DATE && (<ReferenceLine yAxisId="price" x={SPY_LISTING_DATE} stroke={C.violet} strokeDasharray="3 3" label={{ value: "S&P500上場", fill: C.violet, fontSize: Math.max(9, fontSize - 1), position: "top" }} />)}
       <Area yAxisId="dd" type="linear" dataKey="dd" stroke={C.rust} fill="url(#ddFill)" strokeWidth={1.3} dot={false} isAnimationActive={false} fillOpacity={hidden.dd ? 0 : 1} strokeOpacity={hidden.dd ? 0 : 1} />
       <Area yAxisId="price" type="linear" dataKey="price" stroke={C.teal} fill="url(#priceFill)" strokeWidth={1.8} dot={false} isAnimationActive={false} fillOpacity={hidden.price ? 0 : 1} strokeOpacity={hidden.price ? 0 : 1} />
       <Line yAxisId="price" type="linear" dataKey="ath" stroke={C.textDim} strokeDasharray="3 4" strokeWidth={1} dot={false} isAnimationActive={false} strokeOpacity={hidden.price ? 0 : 1} />
-      {markerPoints.length > 0 && <Customized component={<ChartMarkers points={markerPoints} chartWidth={width} />} />}
+      {markerPoints.length > 0 && <Customized component={<ChartMarkers points={markerPoints} activeDate={activeDate} />} />}
       {withBrush && <Brush dataKey="date" height={26} stroke={C.teal} fill={C.panel2} tickFormatter={(dt) => fmtAxisDate(new Date(dt), rangeDays)} travellerWidth={8} />}
     </ComposedChart>
   );
