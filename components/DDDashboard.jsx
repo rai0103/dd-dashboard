@@ -106,6 +106,36 @@ function parseStooqCSV(text) {
   rows.sort((a, b) => a.date - b.date);
   return rows;
 }
+// 本アプリの「データ出力」が生成する統合形式（見出し Date,SP500,SPY,VOO）を検出してパースする。
+// 日付は"-"/"/"区切り・ゼロ埋めなし（例:2026/9/3）どちらも parseDateOnly が吸収し、昇順・降順どちらの並びでも読めるよう都度ソートし直す。
+// 見出しにsp500/spy/vooの列が揃っていない場合はnullを返し、呼び出し側は従来のStooq単一Close列形式へフォールバックする。
+function parseCombinedTrackRecordCSV(text) {
+  const normalized = text.replace(BOM_RE, "").trim();
+  const lines = normalized.split(/\r?\n/).filter((l) => l.trim() !== "");
+  if (!lines.length) return null;
+  const header = parseCSVLine(lines[0]).map((h) => h.trim().toLowerCase());
+  const dateIdx = findCol(header, ["date", "日付"]);
+  const sp500Idx = findCol(header, ["sp500", "s&p500"]);
+  const spyIdx = findCol(header, ["spy"]);
+  const vooIdx = findCol(header, ["voo"]);
+  if (dateIdx === -1 || sp500Idx === -1 || spyIdx === -1 || vooIdx === -1) return null;
+  const sp500 = [], spy = [], voo = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = parseCSVLine(lines[i]);
+    if (cols.length <= Math.max(dateIdx, sp500Idx, spyIdx, vooIdx)) continue;
+    const d = parseDateOnly(cols[dateIdx]);
+    if (isNaN(d.getTime())) continue;
+    const num = (idx) => { const v = parseFloat(String(cols[idx]).replace(/,/g, "").trim()); return isNaN(v) ? null : v; };
+    const sp = num(sp500Idx), sy = num(spyIdx), vo = num(vooIdx);
+    if (sp !== null) sp500.push({ date: d, price: sp });
+    if (sy !== null) spy.push({ date: d, price: sy });
+    if (vo !== null) voo.push({ date: d, price: vo });
+  }
+  sp500.sort((a, b) => a.date - b.date);
+  spy.sort((a, b) => a.date - b.date);
+  voo.sort((a, b) => a.date - b.date);
+  return { sp500, spy, voo };
+}
 const SPY_LISTING_DATE = new Date("1993-01-22"); // S&P500の実際の設定日（この日以前はS&P500の実データが存在しない）
 
 /* ---------------- derived analytics (recomputed whenever the price series changes) ---------------- */
@@ -2217,9 +2247,25 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
     setFileName(file.name);
     const reader = new FileReader();
     reader.onload = (ev) => {
-      const parsed = parseStooqCSV(String(ev.target.result));
+      const text = String(ev.target.result);
+      // 「データ出力」で生成した統合形式（Date,SP500,SPY,VOO）を優先的に検出する。
+      // 見つかればSP500・SPY・VOOをそれぞれの既存の取り込み経路（onReplace/onImportSpyVoo）にそのまま渡すため、
+      // ロジックはPC・スマホどちらでこのモーダルを開いても完全に同一になる。
+      const combined = parseCombinedTrackRecordCSV(text);
+      if (combined && (combined.sp500.length || combined.spy.length || combined.voo.length)) {
+        if (combined.sp500.length) onReplace(combined.sp500);
+        if (combined.spy.length) onImportSpyVoo("spy", combined.spy);
+        if (combined.voo.length) onImportSpyVoo("voo", combined.voo);
+        const parts = [];
+        if (combined.sp500.length) parts.push(`SP500 ${combined.sp500.length}件`);
+        if (combined.spy.length) parts.push(`SPY ${combined.spy.length}件`);
+        if (combined.voo.length) parts.push(`VOO ${combined.voo.length}件`);
+        setFileMsg(`統合形式（Date,SP500,SPY,VOO）として読み込みました：${parts.join("・")}`);
+        return;
+      }
+      const parsed = parseStooqCSV(text);
       if (parsed.length) { onReplace(parsed); setFileMsg(`${parsed.length}件を読み込みました（${parsed[0].date.toLocaleDateString("ja-JP")} 〜 ${parsed[parsed.length - 1].date.toLocaleDateString("ja-JP")}）`); }
-      else setFileMsg("CSVを解析できませんでした。Date,Open,High,Low,Close,Volume 形式か確認してください。");
+      else setFileMsg("CSVを解析できませんでした。Date,Open,High,Low,Close,Volume 形式、または「データ出力」で生成した Date,SP500,SPY,VOO 形式か確認してください。");
     };
     reader.readAsText(file);
   };
@@ -2310,6 +2356,7 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
               {tab === "csv" ? (
                 <div>
                   <p className="text-sm mb-1 leading-relaxed" style={{ color: C.textMuted }}>Stooqからダウンロードした SPY.US の日次CSV（Date,Open,High,Low,Close,Volume・日付昇順）を選択してください。（この値をダッシュボードでは「S&P500」本系列として表示します。VOO・SPY単体のデータは上のVOO・SPYタブから取り込んでください）</p>
+                  <p className="text-sm mb-1 leading-relaxed" style={{ color: C.textMuted }}>下の「データ出力」で書き出したCSV（Date,SP500,SPY,VOO）もそのまま選択できます。その場合はSP500・SPY・VOOの3列がまとめて取り込まれます。</p>
                   <p className="text-xs mb-4" style={{ color: C.textDim }}>取得元: https://stooq.com/q/d/l/?s=spy.us&i=d</p>
                   <label className="inline-flex items-center gap-2 text-xs px-3 py-2 rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.textMuted, cursor: "pointer" }}>
                     <Upload size={13} /> CSVファイルを選択
