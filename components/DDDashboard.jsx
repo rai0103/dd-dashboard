@@ -3737,23 +3737,43 @@ export default function DDDashboard() {
       {modal?.type === "summary" && <FullScreenModal title="詳細サマリー出力（AI相談用）" onClose={() => setModal(null)}><SummaryModalContent d={d} dVoo={dVoo} dSpy={dSpy} holdings={holdings} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} blocks={blocks} rankLabels={rankLabels} lifecycle={lifecycle} onLifecycleChange={handleLifecycleChange} fixedPositions={fixedPositions} onFixedPositionChange={handleFixedPositionChange} checkpoints={checkpoints} prevSnapshot={prevSnapshot} onSaveSnapshot={handleSaveSnapshot} /></FullScreenModal>}
       {modal?.type === "mobileChartZoom" && <MobileChartZoomModal onClose={() => setModal(null)} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={setSelectedCrashId} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} isRealDevice={isMobileAuto} />}
 
+      {isMobile ? (
+        // スマホ版はヘッダーの縦幅を最小化し、各ページの表示領域を最大化するため、タイトルを短縮し、
+        // 「PC表示に切替」を含む全ボタンをアイコンのみで1行にまとめる（PC版のレイアウトはこの分岐の外で従来通り維持）。
+        <div className="flex items-center justify-between px-2 py-1.5 shrink-0 gap-1.5" style={{ borderBottom: `1px solid ${C.border}`, background: C.panel2 }}>
+          <span className="text-[11px] font-bold tracking-wide truncate min-w-0">DD戦略 {usEasternYMD()}</span>
+          <div className="flex items-center gap-1 shrink-0">
+            <button onClick={toggleViewMode} title="PC表示に切り替え" className="flex items-center p-1 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+              <Monitor size={12} />
+            </button>
+            <button onClick={() => setModal({ type: "summary" })} title="詳細サマリー" className="flex items-center p-1 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+              <FileText size={12} />
+            </button>
+            <button onClick={() => setModal({ type: "dataInput" })} title="データ入力・出力" className="flex items-center p-1 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+              <Database size={12} />
+            </button>
+            <span className="flex items-center gap-0.5 text-[10px] font-semibold px-1.5 py-1 rounded-full whitespace-nowrap" style={{ color: depthColor(d.currentDD), background: `${depthColor(d.currentDD)}1a`, border: `1px solid ${depthColor(d.currentDD)}44` }}>{d.isDrawdown ? <TrendingDown size={11} /> : <TrendingUp size={11} />} {d.mode}</span>
+          </div>
+        </div>
+      ) : (
       <div className="flex items-center justify-between px-5 py-3 shrink-0 flex-wrap gap-y-1.5" style={{ borderBottom: `1px solid ${C.border}`, background: C.panel2 }}>
         <div className="flex items-center gap-3 flex-wrap">
           <span className="text-sm font-bold tracking-wide">DD戦略ダッシュボード　S&P500（VOO/SPY）{usEasternYMD()}（us）</span>
           <button onClick={toggleViewMode} title="スマホ表示／PC表示を切り替え" className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
-            {isMobile ? <Monitor size={12} /> : <Smartphone size={12} />} {isMobile ? "PC表示に切替" : "スマホ表示に切替"}
+            <Smartphone size={12} /> スマホ表示に切替
           </button>
         </div>
         <div className="flex items-center gap-3">
           <button onClick={() => setModal({ type: "summary" })} title="詳細サマリー" className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
-            <FileText size={12} /> {!isMobile && "詳細サマリー"}
+            <FileText size={12} /> 詳細サマリー
           </button>
           <button onClick={() => setModal({ type: "dataInput" })} title="データ入力・出力" className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
-            <Database size={12} /> {!isMobile && "データ入力・出力"}
+            <Database size={12} /> データ入力・出力
           </button>
           <span className="flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full" style={{ color: depthColor(d.currentDD), background: `${depthColor(d.currentDD)}1a`, border: `1px solid ${depthColor(d.currentDD)}44` }}>{d.isDrawdown ? <TrendingDown size={12} /> : <TrendingUp size={12} />} {d.mode}</span>
         </div>
       </div>
+      )}
 
       {isMobile ? (
         // スマホ版は文字・図が小さいという要望に合わせ、6ページ全体をCSS zoomで1.2倍表示する。
