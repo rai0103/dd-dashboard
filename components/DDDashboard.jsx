@@ -972,6 +972,37 @@ function buildHistoricalCrashes(FULL) {
 }
 // 既知/自動検出を問わず、ボタン・プルダウンで使う表示ラベル（例：「2000年3月 ドットコムバブル崩壊（-49%）」）。
 function crashButtonLabel(c) { return c.isKnown ? `${yearMonthLabel(c.start)} ${c.name}（${c.maxDD}%）` : c.name; }
+function pearsonCorrelation(xs, ys) {
+  const n = xs.length;
+  const mx = xs.reduce((s, v) => s + v, 0) / n, my = ys.reduce((s, v) => s + v, 0) / n;
+  let num = 0, dx2 = 0, dy2 = 0;
+  for (let i = 0; i < n; i++) { const dx = xs[i] - mx, dy = ys[i] - my; num += dx * dy; dx2 += dx * dx; dy2 += dy * dy; }
+  const denom = Math.sqrt(dx2 * dy2);
+  return denom === 0 ? null : num / denom;
+}
+function rmse(xs, ys) {
+  const n = xs.length;
+  let sum = 0;
+  for (let i = 0; i < n; i++) { const diff = xs[i] - ys[i]; sum += diff * diff; }
+  return Math.sqrt(sum / n);
+}
+// 「経過日数ベース」比較に使う類似度ランキング（現在のDD%推移と各過去暴落イベントの同区間を比較）。
+// 現在のDD開始日（day0）からdaysSinceATH日目までの区間のみを比較対象とし、その区間を確保できない
+// （まだそこまで日数が経っていない）イベントは除外する。相関係数（ピアソン）が高い順、
+// 相関が同程度（差がCORR_TIE_EPS未満）の場合は誤差（RMSE）が小さい順に並べる。
+const CORR_TIE_EPS = 0.02;
+function rankCrashesBySimilarity(currentEpisodeCurve, daysSinceATH, crashes, excludeIds = []) {
+  if (!currentEpisodeCurve || daysSinceATH < 1) return [];
+  const currentSeg = currentEpisodeCurve.slice(0, daysSinceATH + 1).map((p) => p.dd);
+  return crashes
+    .filter((c) => !excludeIds.includes(c.id) && c.curve.length > daysSinceATH)
+    .map((c) => {
+      const seg = c.curve.slice(0, daysSinceATH + 1).map((p) => p.dd);
+      return { crash: c, corr: pearsonCorrelation(currentSeg, seg), rmse: rmse(currentSeg, seg) };
+    })
+    .filter((r) => r.corr !== null)
+    .sort((a, b) => (Math.abs(a.corr - b.corr) > CORR_TIE_EPS ? b.corr - a.corr : a.rmse - b.rmse));
+}
 function buildComparisonData(currentEpisodeCurve, crashes) {
   const maxDay = crashes.length ? Math.max(...crashes.map((c) => c.recoveryDay)) : Math.max(0, currentEpisodeCurve.length - 1);
   const rows = [];
@@ -1983,6 +2014,10 @@ function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve
   useEffect(() => { if (compareId2 && compareId2 === compareId1) setCompareId2(""); }, [compareId1, compareId2]);
   const compare1Options = allCrashes ? allCrashes.filter((c) => c.id !== crash.id && c.id !== compareId2) : [];
   const compare2Options = allCrashes ? allCrashes.filter((c) => c.id !== crash.id && c.id !== compareId1) : [];
+  // 追加1/追加2の「類似設定」ボタン：メインの暴落（crash.id）を除外した中で、現在のDD%推移に類似した順に2位・3位を自動セットする。
+  const rankedSimilar = useMemo(() => rankCrashesBySimilarity(currentEpisodeCurve, daysSinceATH, allCrashes ?? [], [crash.id]), [currentEpisodeCurve, daysSinceATH, allCrashes, crash.id]);
+  const autoSetCompare1 = () => { if (rankedSimilar[0]) setCompareId1(rankedSimilar[0].crash.id); };
+  const autoSetCompare2 = () => { if (rankedSimilar[1]) setCompareId2(rankedSimilar[1].crash.id); };
   const comparisonRow = (c) => {
     const idx = Math.min(daysSinceATH, c.curve.length - 1);
     const ddAtSameDay = c.curve[idx].dd;
@@ -2018,6 +2053,7 @@ function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve
               <option value="">選択しない</option>
               {compare1Options.map((c) => (<option key={c.id} value={c.id}>{crashButtonLabel(c)}</option>))}
             </select>
+            <button onClick={autoSetCompare1} disabled={!rankedSimilar[0]} className="text-[10px] px-2 py-1 rounded" style={{ color: rankedSimilar[0] ? C.text : C.textMuted, background: C.panel2, border: `1px solid ${C.borderSoft}`, cursor: rankedSimilar[0] ? "pointer" : "not-allowed" }}>類似設定</button>
             {compare1 && <span className="mono" style={{ color: C.textMuted }}>{summaryLine(compare1)}</span>}
           </div>
           <div className="flex items-center gap-2 flex-wrap text-[11px]" style={{ color: C.textDim }}>
@@ -2032,6 +2068,7 @@ function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve
               <option value="">選択しない</option>
               {compare2Options.map((c) => (<option key={c.id} value={c.id}>{crashButtonLabel(c)}</option>))}
             </select>
+            <button onClick={autoSetCompare2} disabled={!rankedSimilar[1]} className="text-[10px] px-2 py-1 rounded" style={{ color: rankedSimilar[1] ? C.text : C.textMuted, background: C.panel2, border: `1px solid ${C.borderSoft}`, cursor: rankedSimilar[1] ? "pointer" : "not-allowed" }}>類似設定</button>
             {compare2 && <span className="mono" style={{ color: C.textMuted }}>{summaryLine(compare2)}</span>}
           </div>
           <div className="flex items-center gap-2 text-[11px]" style={{ color: C.textDim }}>
@@ -3417,7 +3454,8 @@ export default function DDDashboard() {
   const [pieView, setPieView] = useState("rank");
   const [modelOverride, setModelOverride] = useState(null); // null = 自動（現在の評価額に応じて選択）
   const [chartTab, setChartTab] = useState("normal");
-  const [selectedCrashId, setSelectedCrashId] = useState("2007"); // 「過去の暴落との比較」ミニウィジェットの既定選択＝リーマンショック
+  const [selectedCrashId, setSelectedCrashId] = useState(null); // 「過去の暴落との比較」の選択。null中は自動選択（現在のDD推移に最も類似したイベント）に従う
+  const [crashAutoFollow, setCrashAutoFollow] = useState(true); // trueの間は経過日数が進むたび自動で最類似イベントに追従。ユーザーが手動選択したらfalseにして固定する
   const [modal, setModal] = useState(null);
   const isMobileAuto = useIsMobile();
   // null=画面幅から自動判定、"mobile"/"pc"=ボタンでの手動固定。端末ごとに好みが分かれるためlocalStorageに保存する。
@@ -3697,7 +3735,15 @@ export default function DDDashboard() {
   const periodStats = useMemo(() => computePeriodStats(periodRange, d.episodes), [periodRange, d.episodes]);
   // SP500の全期間データ（d.FULL）からATH比-10%以上の下落局面を自動検出。全23件をドロップダウンで選択可能にする。
   const historicalCrashes = useMemo(() => buildHistoricalCrashes(d.FULL), [d.FULL]);
-  // ミニウィジェットは常に1件のみ選択（既定：リーマンショック）。データ未読込等でidが見つからない場合は先頭にフォールバック。
+  // 現在のDD%推移（経過日数分）に最も類似した過去の暴落イベントを判定する。経過日数が進むたび（d.currentEpisodeCurve/d.daysSinceATHの更新時）に再計算される。
+  const rankedSimilarCrashes = useMemo(() => rankCrashesBySimilarity(d.currentEpisodeCurve, d.daysSinceATH, historicalCrashes), [d.currentEpisodeCurve, d.daysSinceATH, historicalCrashes]);
+  const autoSimilarCrashId = rankedSimilarCrashes[0]?.crash.id ?? null;
+  // ユーザーが手動選択（crashAutoFollow=false）していない間は、最類似イベントに自動追従する。手動選択後は次にページを開き直すまで固定。
+  useEffect(() => {
+    if (crashAutoFollow && autoSimilarCrashId) setSelectedCrashId(autoSimilarCrashId);
+  }, [crashAutoFollow, autoSimilarCrashId]);
+  const handleSelectCrash = (id) => { setCrashAutoFollow(false); setSelectedCrashId(id); };
+  // データ未読込等でidが見つからない場合は先頭にフォールバック。
   const selectedCrash = useMemo(() => historicalCrashes.find((c) => c.id === selectedCrashId) ?? historicalCrashes[0] ?? null, [historicalCrashes, selectedCrashId]);
   const comparisonData = useMemo(() => buildComparisonData(d.currentEpisodeCurve, selectedCrash ? [selectedCrash] : []), [d.currentEpisodeCurve, selectedCrash]);
   const toggle = (k) => setHidden((p) => ({ ...p, [k]: !p[k] }));
@@ -3746,11 +3792,11 @@ export default function DDDashboard() {
       {modal?.type === "ddTable" && <FullScreenModal title="DD毎のA〜E配分表" onClose={() => setModal(null)}><DDTableContent modelRow={d.modelRow} holdings={holdings} /></FullScreenModal>}
       {modal?.type === "rank" && <FullScreenModal title={`${modal.rank}ランクの保有銘柄`} onClose={() => setModal(null)}><RankHoldingsContent rank={modal.rank} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
       {modal?.type === "crash" && <FullScreenModal title={`${modal.crash.name}（${modal.crash.start} 〜）と現状の比較`} onClose={() => setModal(null)}><CrashModalContent crash={modal.crash} daysSinceATH={d.daysSinceATH} currentDD={d.currentDD} currentEpisodeCurve={d.currentEpisodeCurve} allCrashes={historicalCrashes} onJump={(c) => setModal({ type: "crash", crash: c })} /></FullScreenModal>}
-      {modal?.type === "ddChart" && <FullScreenModal title="評価額（左軸） / DD%（右軸）" onClose={() => setModal(null)}><DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={setSelectedCrashId} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} /></FullScreenModal>}
+      {modal?.type === "ddChart" && <FullScreenModal title="評価額（左軸） / DD%（右軸）" onClose={() => setModal(null)}><DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} /></FullScreenModal>}
       {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} spyVooSeries={spyVooSeries} onAppendSpyVoo={handleAppendSpyVoo} onImportSpyVoo={handleImportSpyVoo} onResetSpyVooField={handleResetSpyVooField} />}
       {modal?.type === "checkpointSettings" && <FullScreenModal title="チェックポイント設定" onClose={() => setModal(null)}><CheckpointSettingsContent checkpoints={checkpoints} onCheckpointChange={handleCheckpointChange} holdings={holdings} /></FullScreenModal>}
       {modal?.type === "summary" && <FullScreenModal title="詳細サマリー出力（AI相談用）" onClose={() => setModal(null)}><SummaryModalContent d={d} dVoo={dVoo} dSpy={dSpy} holdings={holdings} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} blocks={blocks} rankLabels={rankLabels} lifecycle={lifecycle} onLifecycleChange={handleLifecycleChange} fixedPositions={fixedPositions} onFixedPositionChange={handleFixedPositionChange} checkpoints={checkpoints} prevSnapshot={prevSnapshot} onSaveSnapshot={handleSaveSnapshot} /></FullScreenModal>}
-      {modal?.type === "mobileChartZoom" && <MobileChartZoomModal onClose={() => setModal(null)} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={setSelectedCrashId} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} isRealDevice={isMobileAuto} />}
+      {modal?.type === "mobileChartZoom" && <MobileChartZoomModal onClose={() => setModal(null)} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} isRealDevice={isMobileAuto} />}
 
       {isMobile ? (
         // スマホ版はヘッダーの縦幅を最小化し、各ページの表示領域を最大化するため、タイトルを短縮し、
@@ -3843,7 +3889,7 @@ export default function DDDashboard() {
                       {historicalCrashes.length > 0 && (
                         <select
                           value={selectedCrash?.id ?? ""}
-                          onChange={(e) => setSelectedCrashId(e.target.value)}
+                          onChange={(e) => handleSelectCrash(e.target.value)}
                           className="mono text-[11px] rounded px-2 py-1"
                           style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text, cursor: "pointer" }}
                         >
