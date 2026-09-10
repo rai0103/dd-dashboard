@@ -1060,13 +1060,21 @@ function groupMarkersByPixelProximity(positioned, threshold = MARKER_GROUP_PX) {
 // 暴落局面の年表イベント（annotations）をチャート上のマーカーとして描画し、ホバー時に吹き出しで詳細を表示する（ChartMarkersと同じCustomizedパターン）。
 // ニュースの吹き出し表示中はhover位置がRechartsの標準Tooltip（経過日数のポップアップ）とも重なるため、
 // onHoverChangeで親（CrashDetailChart）にホバー状態を伝え、標準Tooltipを非表示にする。
+// マーカーは実データ点（cy=yScale(dd)）の真上ではなく、プロット上端よりさらに上の専用帯（マージン内の余白）に固定の高さで描画する。
+// 暴落初期など出来事がATH直後（dd≈0%）に集中する局面では、実データ点の高さに置くと「現在」基準線のラベルや
+// 曲線の起点（ATH地点）と物理的に重なって見分けがつかなくなるため。帯の高さはyスケールの値域（プロット上端=topPx）から
+// 導出するため、データのdd値とは完全に独立しており、プロット内の他要素と高さの面で重なることが構造的にない。
+// どのx位置のイベントかをひと目で対応づけられるよう、マーカーからプロット上端まで薄いティック線を垂らす。
+const MARKER_BAND_OFFSET = 16; // プロット上端からこの分だけ上（マージン内）にマーカーの丸印を配置
 function CrashEventMarkers({ xAxisMap, yAxisMap, points, chartWidth, onHoverChange }) {
   const [hoverIdx, setHoverIdx] = useState(null);
   const xAxis = xAxisMap && xAxisMap[Object.keys(xAxisMap)[0]];
   const yAxis = yAxisMap && yAxisMap[Object.keys(yAxisMap)[0]];
   if (!xAxis || !yAxis) return null;
   const xScale = xAxis.scale, yScale = yAxis.scale;
-  const positioned = points.map((pt) => ({ ...pt, cx: xScale(pt.day), cy: yScale(pt.dd) })).filter((pt) => Number.isFinite(pt.cx) && Number.isFinite(pt.cy));
+  const plotTopY = Math.min(...yScale.range());
+  const bandY = plotTopY - MARKER_BAND_OFFSET;
+  const positioned = points.map((pt) => ({ ...pt, cx: xScale(pt.day), cy: bandY })).filter((pt) => Number.isFinite(pt.cx));
   const markers = groupMarkersByPixelProximity(positioned);
   const hovered = hoverIdx != null ? markers[hoverIdx] : null;
   const enter = (i) => { setHoverIdx(i); onHoverChange?.(true); };
@@ -1075,6 +1083,7 @@ function CrashEventMarkers({ xAxisMap, yAxisMap, points, chartWidth, onHoverChan
     <g>
       {markers.map((pt, i) => (
         <g key={i} onMouseEnter={() => enter(i)} onMouseLeave={() => leave(i)} style={{ cursor: "pointer" }}>
+          <line x1={pt.cx} y1={pt.cy + 6} x2={pt.cx} y2={plotTopY} stroke={C.amber} strokeOpacity={0.5} strokeWidth={1} />
           <circle cx={pt.cx} cy={pt.cy} r={5} fill={C.bg} stroke={C.amber} strokeWidth={1.6} />
           <circle cx={pt.cx} cy={pt.cy} r={10} fill="transparent" />
         </g>
@@ -1990,7 +1999,7 @@ function CrashDetailChart({ crash, compareCrashes = [], daysSinceATH, currentDD,
     return compareCrashes.find((c) => c.id === id)?.name ?? id;
   };
   return (
-    <LineChart width={width} height={height} margin={{ top: 22, right: 20, left: 0, bottom: 28 }}>
+    <LineChart width={width} height={height} margin={{ top: 34, right: 20, left: 0, bottom: 28 }}>
       <CartesianGrid stroke={C.borderSoft} vertical={false} />
       <XAxis dataKey="day" type="number" domain={[0, maxDay ?? crash.recoveryDay]} allowDuplicatedCategory={false} tick={{ fill: C.textDim, fontSize: 10 }} axisLine={{ stroke: C.border }} tickLine={false} label={{ value: "経過日数（ATH起点、左端=ATH・右端=次のATH）", position: "bottom", offset: 4, fill: C.textDim, fontSize: 10 }} />
       <YAxis domain={[ddTicks[ddTicks.length - 1], 2]} ticks={ddTicks} tick={{ fill: C.textDim, fontSize: 10 }} axisLine={false} tickLine={false} width={48} tickFormatter={(v) => `${v}%`} label={{ value: "DD%", angle: -90, position: "insideLeft", fill: C.textDim, fontSize: 10 }} />
