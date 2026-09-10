@@ -1037,6 +1037,26 @@ function resolveCrashAnnotations(crash) {
   return Array.from(byDay.values()).sort((a, b) => a.day - b.day);
 }
 function wrapJaLines(text, maxChars) { const lines = []; for (let i = 0; i < text.length; i += maxChars) lines.push(text.slice(i, i + maxChars)); return lines; }
+// resolveCrashAnnotationsは「同じ最近傍取引日」に丸められたイベントのみを1マーカーに統合するが、日付が異なっても
+// 描画ピクセル位置（cx）が近いイベント同士は別マーカーのまま重なって表示され、丸印やホバー判定が視覚的に衝突する
+// （暴落初期など出来事が短期間に集中する局面で顕著）。そのためxScale適用後のピクセル距離で隣接クラスタリングし、
+// 閾値以下で連なる点を1つの統合マーカーにまとめる（同日マージの後段として積み上げる、日数ベースでは判定しない：
+// ズーム/表示幅でピクセル距離が変わるため）。
+const MARKER_GROUP_PX = 15;
+function groupMarkersByPixelProximity(positioned, threshold = MARKER_GROUP_PX) {
+  const sorted = [...positioned].sort((a, b) => a.cx - b.cx);
+  const clusters = [];
+  for (const pt of sorted) {
+    const last = clusters[clusters.length - 1];
+    if (last && pt.cx - last[last.length - 1].cx <= threshold) last.push(pt);
+    else clusters.push([pt]);
+  }
+  return clusters.map((cluster) => {
+    const rep = cluster[Math.floor((cluster.length - 1) / 2)]; // 代表点＝クラスタ中央の点の座標を使う
+    const items = cluster.flatMap((p) => p.items).sort((a, b) => parseDateOnly(a.date) - parseDateOnly(b.date));
+    return { day: rep.day, dd: rep.dd, cx: rep.cx, cy: rep.cy, items };
+  });
+}
 // 暴落局面の年表イベント（annotations）をチャート上のマーカーとして描画し、ホバー時に吹き出しで詳細を表示する（ChartMarkersと同じCustomizedパターン）。
 // ニュースの吹き出し表示中はhover位置がRechartsの標準Tooltip（経過日数のポップアップ）とも重なるため、
 // onHoverChangeで親（CrashDetailChart）にホバー状態を伝え、標準Tooltipを非表示にする。
@@ -1047,12 +1067,13 @@ function CrashEventMarkers({ xAxisMap, yAxisMap, points, chartWidth, onHoverChan
   if (!xAxis || !yAxis) return null;
   const xScale = xAxis.scale, yScale = yAxis.scale;
   const positioned = points.map((pt) => ({ ...pt, cx: xScale(pt.day), cy: yScale(pt.dd) })).filter((pt) => Number.isFinite(pt.cx) && Number.isFinite(pt.cy));
-  const hovered = hoverIdx != null ? positioned[hoverIdx] : null;
+  const markers = groupMarkersByPixelProximity(positioned);
+  const hovered = hoverIdx != null ? markers[hoverIdx] : null;
   const enter = (i) => { setHoverIdx(i); onHoverChange?.(true); };
   const leave = (i) => { setHoverIdx((h) => (h === i ? null : h)); onHoverChange?.(false); };
   return (
     <g>
-      {positioned.map((pt, i) => (
+      {markers.map((pt, i) => (
         <g key={i} onMouseEnter={() => enter(i)} onMouseLeave={() => leave(i)} style={{ cursor: "pointer" }}>
           <circle cx={pt.cx} cy={pt.cy} r={5} fill={C.bg} stroke={C.amber} strokeWidth={1.6} />
           <circle cx={pt.cx} cy={pt.cy} r={10} fill="transparent" />
