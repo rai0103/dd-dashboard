@@ -1092,7 +1092,9 @@ function CrashEventMarkers({ xAxisMap, yAxisMap, points, chartWidth, onHoverChan
         const lines = hovered.items.flatMap((it) => wrapJaLines(`${fmtDateSlash(it.date)} ${it.text}`, 22));
         const w = 216, lineH = 13, h = lines.length * lineH + 10;
         const cxClamped = Math.min(Math.max(hovered.cx, w / 2 + 2), (chartWidth ?? 100000) - w / 2 - 2);
-        const boxY = hovered.cy > h + 24 ? hovered.cy - h - 10 : hovered.cy + 12;
+        // マーカーからプロット上端まで垂らしたティック線（ポインター）とポップアップが重ならないよう、
+        // 常にそのティック線より下＝プロット上端の内側に固定表示する（マーカー位置cyの直下には出さない）。
+        const boxY = plotTopY + 8;
         return (
           <g style={{ pointerEvents: "none" }}>
             <rect x={cxClamped - w / 2} y={boxY} width={w} height={h} rx={4} fill={C.panel} stroke={C.amber} />
