@@ -651,6 +651,15 @@ function detectOwnerFromFileName(name) {
   if (/shin/.test(lower)) return "shin";
   return null;
 }
+// ファイル名（例: assetbalance(all)_20260909_saki.csv）に含まれる8桁の日付（YYYYMMDD）から、
+// このCSVが出力された日付を "YYYY-MM-DD" 形式で返す。見つからない場合はnull。
+function detectDateFromFileName(name) {
+  const m = String(name ?? "").match(/(20\d{2})(\d{2})(\d{2})/);
+  if (!m) return null;
+  const [, y, mo, day] = m;
+  return `${y}-${mo}-${day}`;
+}
+const OWNER_LABEL = { shin: "Shin", saki: "Saki" };
 function normalizeAccount(a) {
   if (a === "-" || a === "‐" || a === "―") return "—";
   return a.replace(/投資枠$/, "");
@@ -2297,6 +2306,7 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
   const [preview, setPreview] = useState(null); // rows pending confirmation
   const [previewOwner, setPreviewOwner] = useState("shin");
   const [ownerAutoDetected, setOwnerAutoDetected] = useState(false);
+  const [previewAsOf, setPreviewAsOf] = useState(null); // ファイル名から検出したCSVのデータ日付（YYYY-MM-DD）
   const [showCategoryRankSettings, setShowCategoryRankSettings] = useState(false);
   const [updateLoading, setUpdateLoading] = useState(false);
   const [updateMsg, setUpdateMsg] = useState(null);
@@ -2430,6 +2440,7 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
     const detectedOwner = detectOwnerFromFileName(file.name);
     setOwnerAutoDetected(!!detectedOwner);
     if (detectedOwner) setPreviewOwner(detectedOwner);
+    setPreviewAsOf(detectDateFromFileName(file.name));
     const reader = new FileReader();
     reader.onload = (ev) => {
       const text = decodeShiftJIS(ev.target.result);
@@ -2453,12 +2464,12 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
     return next;
   });
   const confirmUpdate = () => {
-    onUpdateHoldings(previewOwner, preview);
+    onUpdateHoldings(previewOwner, preview, previewAsOf);
     setRakutenMsg(`${previewOwner}のデータを${preview.length}件のこのCSVの内容に更新しました（重複銘柄は新データで上書き、CSVに無くなった銘柄＝売却済み等は削除）。修正内容は銘柄名ごとに記憶され、次回以降は自動で適用されます。`);
     setPreview(null);
   };
   const confirmResetImport = () => {
-    onResetAndImportHoldings(previewOwner, preview);
+    onResetAndImportHoldings(previewOwner, preview, previewAsOf);
     setRakutenMsg(`既存の保有資産データと分類の記憶を全て削除し、${preview.length}件を${previewOwner}のデータとして新規登録しました。`);
     setPreview(null);
   };
@@ -2559,7 +2570,7 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
                   <input type="file" accept=".csv,text/csv,text/comma-separated-values,application/csv,application/vnd.ms-excel,text/plain,application/octet-stream" onChange={handleRakutenFile} style={{ display: "none" }} />
                 </label>
               </div>
-              {rakutenFileName && <div className="text-xs mt-2" style={{ color: C.textDim }}>選択中: {rakutenFileName}</div>}
+              {rakutenFileName && <div className="text-xs mt-2" style={{ color: C.textDim }}>選択中: {rakutenFileName}{previewAsOf ? <span style={{ color: C.teal }}>（データ日付: {fmtDateSlash(previewAsOf)}・ファイル名から自動判定）</span> : <span style={{ color: C.textDim }}>（ファイル名から日付を検出できませんでした）</span>}</div>}
               {rakutenMsg && <div className="text-xs mt-2" style={{ color: C.teal }}>{rakutenMsg}</div>}
 
               <div className="mt-8 pt-4 flex items-center justify-between" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
@@ -2598,6 +2609,7 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
           ) : (
             <>
               <p className="text-sm mb-1" style={{ color: C.textMuted }}>取り込み内容を確認してください。カテゴリー・ランクは自動推定です。誤りがあればここで修正できます。</p>
+              <p className="text-xs mb-1" style={{ color: previewAsOf ? C.teal : C.textDim }}>データ日付: {previewAsOf ? fmtDateSlash(previewAsOf) : "ファイル名から検出できませんでした"}</p>
               <p className="text-xs mb-1 leading-relaxed" style={{ color: C.textDim }}><b style={{ color: C.textMuted }}>更新</b>：口座主「{previewOwner}」の保有データをこのCSVの内容に同期します（重複銘柄は新データで上書き、新規銘柄は追加、CSVに無くなった銘柄＝売却済み等は削除。他の口座主のデータは変更されません）。／<b style={{ color: C.textMuted }}>初期化</b>：既存の保有資産データと分類の記憶を全て削除し、このCSVの内容だけで作り直します。</p>
               <p className="text-xs mb-3" style={{ color: C.textDim }}>ここでの修正は銘柄名ごとに記憶され、次回以降の取り込みでは自動的に同じ分類が適用されます（毎回直す必要はありません）。</p>
               <div className="flex gap-2 mb-4">
@@ -3296,13 +3308,16 @@ function MobileChartPage({ d, onZoom }) {
     </div>
   );
 }
-function MobilePortfolioPage({ pieView, setPieView, holdings, onOpen }) {
+function MobilePortfolioPage({ pieView, setPieView, holdings, onOpen, dateLabel }) {
   return (
     <div className="p-3 flex flex-col gap-2 h-full">
-      <div className="flex gap-1 flex-wrap shrink-0">
-        {[{ k: "category", l: "カテゴリー別" }, { k: "currency", l: "為替別" }, { k: "rank", l: "A〜Eクラス" }, { k: "owner", l: "口座別" }].map((t) => (
-          <button key={t.k} onClick={() => setPieView(t.k)} className="text-[11px] px-2 py-1 rounded" style={{ color: pieView === t.k ? C.bg : C.textMuted, background: pieView === t.k ? C.teal : C.panel2, fontWeight: pieView === t.k ? 700 : 400, border: "none", cursor: "pointer" }}>{t.l}</button>
-        ))}
+      <div className="flex items-center justify-between gap-2 shrink-0">
+        <div className="flex gap-1 flex-wrap">
+          {[{ k: "category", l: "カテゴリー別" }, { k: "currency", l: "為替別" }, { k: "rank", l: "A〜Eクラス" }, { k: "owner", l: "口座別" }].map((t) => (
+            <button key={t.k} onClick={() => setPieView(t.k)} className="text-[11px] px-2 py-1 rounded" style={{ color: pieView === t.k ? C.bg : C.textMuted, background: pieView === t.k ? C.teal : C.panel2, fontWeight: pieView === t.k ? 700 : 400, border: "none", cursor: "pointer" }}>{t.l}</button>
+          ))}
+        </div>
+        {dateLabel && <span className="text-[9px] whitespace-nowrap" style={{ color: C.textDim }}>{dateLabel} 時点</span>}
       </div>
       {/* 円グラフを上・凡例を下に積む縦積みレイアウト（layout="column"）にすることで、狭い画面幅でも凡例と重ならずに円グラフ自体を大きく表示できる。
           高さはvh固定ではなくflex-1で残り領域いっぱいに使うことで、タブ行を含めたページ全体が必ず1画面（スクロールなし）に収まる。 */}
@@ -3313,7 +3328,7 @@ function MobilePortfolioPage({ pieView, setPieView, holdings, onOpen }) {
   );
 }
 // 横棒グラフは表示せず、各項目（A〜E）の乖離は数値のみで表示する。
-function MobileDiffPage({ modelOverride, setModelOverride, d, currentHoldingPct, currentHoldingAmount, effectiveModelRow, rankLabels, blocks, onOpenRank, onOpenDDTable }) {
+function MobileDiffPage({ modelOverride, setModelOverride, d, currentHoldingPct, currentHoldingAmount, effectiveModelRow, rankLabels, blocks, onOpenRank, onOpenDDTable, dateLabel }) {
   return (
     <div className="p-3 flex flex-col gap-2 h-full">
       <div className="flex items-center justify-between gap-2 flex-wrap shrink-0">
@@ -3323,6 +3338,7 @@ function MobileDiffPage({ modelOverride, setModelOverride, d, currentHoldingPct,
         </select>
         <button onClick={onOpenDDTable} title="DD毎の配分表を表示" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, borderRadius: 6, padding: 6, cursor: "pointer" }}><Info size={14} style={{ color: C.textDim }} /></button>
       </div>
+      {dateLabel && <div className="text-[9px] shrink-0" style={{ color: C.textDim }}>{dateLabel} 時点</div>}
       {/* A〜Eの5項目をflex-1で残り領域に均等割りすることで、画面の小さい端末でも下部の合計ブロックまで含めて1画面に収まる */}
       <div className="flex-1 min-h-0 flex flex-col gap-1.5">
         {CATS.map((cat) => {
@@ -3477,6 +3493,7 @@ export default function DDDashboard() {
   const [dataSource, setDataSource] = useState("seed");
   const [holdings, setHoldings] = useState(HOLDINGS_DEFAULT);
   const [holdingsSource, setHoldingsSource] = useState("seed");
+  const [holdingsAsOf, setHoldingsAsOf] = useState({}); // 口座主ごとの最新CSVデータ日付（YYYY-MM-DD）。楽天証券CSVのファイル名から検出。
   const [overrides, setOverrides] = useState({});
   const [categoryDefaultRanks, setCategoryDefaultRanks] = useState(CATEGORY_DEFAULT_RANK);
   const [checkpoints, setCheckpoints] = useState(DEFAULT_CHECKPOINTS);
@@ -3547,6 +3564,10 @@ export default function DDDashboard() {
         }
       } catch (e) { /* no saved holdings yet — keep default */ }
       try {
+        const resAsOf = await storage.get("holdings_as_of");
+        if (resAsOf && resAsOf.value) setHoldingsAsOf(JSON.parse(resAsOf.value));
+      } catch (e) { /* no saved holdings-as-of dates yet */ }
+      try {
         const res3 = await storage.get("classification_overrides");
         if (res3 && res3.value) setOverrides(JSON.parse(res3.value));
       } catch (e) { /* no saved overrides yet */ }
@@ -3614,6 +3635,9 @@ export default function DDDashboard() {
   async function persistHoldings(list) {
     try { await storage.set("portfolio_holdings", JSON.stringify(list)); } catch (e) { /* storage unavailable */ }
   }
+  async function persistHoldingsAsOf(map) {
+    try { await storage.set("holdings_as_of", JSON.stringify(map)); } catch (e) { /* storage unavailable */ }
+  }
   async function persistOverrides(map) {
     try { await storage.set("classification_overrides", JSON.stringify(map)); } catch (e) { /* storage unavailable */ }
   }
@@ -3675,7 +3699,8 @@ export default function DDDashboard() {
   function handleReset() { setRawSeries(SEED_SERIES); setDataSource("seed"); storage.delete("voo_price_history").catch(() => {}); }
   // 「更新」：この口座主の保有データを新CSVの内容に完全同期する（重複銘柄は新データで上書き、新規銘柄は追加、
   // CSVに含まれなくなった銘柄＝売却済み等は削除）。他の口座主のデータ・分類の記憶（overrides）は影響を受けない。
-  function handleUpdateHoldings(owner, previewRows) {
+  // asOf: 取り込んだCSVのファイル名から検出したデータ日付（YYYY-MM-DD）。検出できた場合のみその口座主の最新更新日として記憶する。
+  function handleUpdateHoldings(owner, previewRows, asOf) {
     setHoldings((prev) => {
       const incoming = previewRows.map((r) => ({ ...r, owner, id: r.id ?? genId() }));
       const kept = prev.filter((h) => h.owner !== owner);
@@ -3690,9 +3715,10 @@ export default function DDDashboard() {
       persistOverrides(next);
       return next;
     });
+    if (asOf) setHoldingsAsOf((prev) => { const next = { ...prev, [owner]: asOf }; persistHoldingsAsOf(next); return next; });
   }
   // 「初期化」：既存の保有資産データ・分類の記憶（overrides）を全て消去し、このCSVの内容のみで作り直す。
-  function handleResetAndImportHoldings(owner, previewRows) {
+  function handleResetAndImportHoldings(owner, previewRows, asOf) {
     const incoming = previewRows.map((r) => ({ ...r, owner, id: r.id ?? genId() }));
     setHoldings(incoming);
     persistHoldings(incoming);
@@ -3701,8 +3727,11 @@ export default function DDDashboard() {
     for (const r of previewRows) next[r.name] = { category: r.category, rank: r.rank, currency: r.currency };
     setOverrides(next);
     persistOverrides(next);
+    const nextAsOf = asOf ? { [owner]: asOf } : {};
+    setHoldingsAsOf(nextAsOf);
+    persistHoldingsAsOf(nextAsOf);
   }
-  function handleResetHoldings() { setHoldings(HOLDINGS_DEFAULT); setHoldingsSource("seed"); storage.delete("portfolio_holdings").catch(() => {}); }
+  function handleResetHoldings() { setHoldings(HOLDINGS_DEFAULT); setHoldingsSource("seed"); setHoldingsAsOf({}); storage.delete("portfolio_holdings").catch(() => {}); storage.delete("holdings_as_of").catch(() => {}); }
   // カテゴリー/ランクは銘柄名ごとに（同じ銘柄が複数口座・口座主にあっても揃うよう）まとめて更新し、overridesにも記憶する。
   // 口座主は行固有の情報なので、その行だけを更新する。
   function handleHoldingFieldEdit(id, field, value) {
@@ -3781,6 +3810,17 @@ export default function DDDashboard() {
   const toggle = (k) => setHidden((p) => ({ ...p, [k]: !p[k] }));
   const toggleCrash = (k) => setHiddenCrash((p) => ({ ...p, [k]: !p[k] }));
 
+  // 保有資産データの最終更新日（口座主ごとに検出したCSVのデータ日付）を表示用の文字列にまとめる。
+  // 全員分の日付が同じなら1つだけ、異なれば口座主名付きで併記する。1件も検出できていなければnull。
+  const holdingsDateLabel = useMemo(() => {
+    const owners = [...new Set(holdings.map((h) => h.owner))];
+    const entries = owners.map((o) => [o, holdingsAsOf[o]]).filter(([, v]) => v);
+    if (!entries.length) return null;
+    const uniqueDates = [...new Set(entries.map(([, v]) => v))];
+    if (uniqueDates.length === 1) return fmtDateSlash(uniqueDates[0]);
+    return entries.map(([o, v]) => `${OWNER_LABEL[o] ?? o} ${fmtDateSlash(v)}`).join(" / ");
+  }, [holdings, holdingsAsOf]);
+  const holdingsDateSuffix = holdingsDateLabel ? <span className="font-normal" style={{ color: C.textDim }}>（{holdingsDateLabel} 時点）</span> : null;
   const currentHoldingPct = useMemo(() => currentHoldingPctFromHoldings(holdings), [holdings]);
   const currentHoldingAmount = useMemo(() => currentHoldingAmountFromHoldings(holdings), [holdings]);
   const rankLabels = useMemo(() => rankCategoryLabels(holdings), [holdings]);
@@ -3820,7 +3860,7 @@ export default function DDDashboard() {
       `}</style>
 
       {modal?.type === "speedAlert" && dVoo && <FullScreenModal title="DD加速度アラート（速度・経過日数の法則・VOO基準）" onClose={() => setModal(null)}><SpeedAlertModalContent d={dVoo} /></FullScreenModal>}
-      {modal?.type === "portfolio" && <FullScreenModal title="ポートフォリオ構成表" onClose={() => setModal(null)}><PortfolioTableContent view={pieView} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
+      {modal?.type === "portfolio" && <FullScreenModal title={<>ポートフォリオ構成表{holdingsDateSuffix}</>} onClose={() => setModal(null)}><PortfolioTableContent view={pieView} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
       {modal?.type === "ddTable" && <FullScreenModal title="DD毎のA〜E配分表" onClose={() => setModal(null)}><DDTableContent modelRow={d.modelRow} holdings={holdings} /></FullScreenModal>}
       {modal?.type === "rank" && <FullScreenModal title={`${modal.rank}ランクの保有銘柄`} onClose={() => setModal(null)}><RankHoldingsContent rank={modal.rank} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
       {modal?.type === "crash" && <FullScreenModal title={`${modal.crash.name}（${modal.crash.start} 〜）と現状の比較`} onClose={() => setModal(null)}><CrashModalContent crash={modal.crash} daysSinceATH={d.daysSinceATH} currentDD={d.currentDD} currentEpisodeCurve={d.currentEpisodeCurve} allCrashes={historicalCrashes} onJump={(c) => setModal({ type: "crash", crash: c })} /></FullScreenModal>}
@@ -3879,8 +3919,8 @@ export default function DDDashboard() {
               { key: "ath", label: "評価額/ATH", icon: TrendingUp, content: <MobileAthPage d={d} dVoo={dVoo} dSpy={dSpy} /> },
               { key: "speed", label: "経過日数", icon: Clock, content: <MobileSpeedPage dVoo={dVoo} onOpenSpeedAlert={() => setModal({ type: "speedAlert" })} /> },
               { key: "chart", label: "チャート", icon: Activity, content: <MobileChartPage d={d} onZoom={() => setModal({ type: "mobileChartZoom" })} /> },
-              { key: "portfolio", label: "構成", icon: Layers, content: <MobilePortfolioPage pieView={pieView} setPieView={setPieView} holdings={holdings} onOpen={() => setModal({ type: "portfolio" })} /> },
-              { key: "diff", label: "配分乖離", icon: ListChecks, content: <MobileDiffPage modelOverride={modelOverride} setModelOverride={setModelOverride} d={d} currentHoldingPct={currentHoldingPct} currentHoldingAmount={currentHoldingAmount} effectiveModelRow={effectiveModelRow} rankLabels={rankLabels} blocks={blocks} onOpenRank={(rank) => setModal({ type: "rank", rank })} onOpenDDTable={() => setModal({ type: "ddTable" })} /> },
+              { key: "portfolio", label: "構成", icon: Layers, content: <MobilePortfolioPage pieView={pieView} setPieView={setPieView} holdings={holdings} onOpen={() => setModal({ type: "portfolio" })} dateLabel={holdingsDateLabel} /> },
+              { key: "diff", label: "配分乖離", icon: ListChecks, content: <MobileDiffPage modelOverride={modelOverride} setModelOverride={setModelOverride} d={d} currentHoldingPct={currentHoldingPct} currentHoldingAmount={currentHoldingAmount} effectiveModelRow={effectiveModelRow} rankLabels={rankLabels} blocks={blocks} onOpenRank={(rank) => setModal({ type: "rank", rank })} onOpenDDTable={() => setModal({ type: "ddTable" })} dateLabel={holdingsDateLabel} /> },
               { key: "analysis", label: "現状分析", icon: Info, content: <MobileAnalysisPage analysisText={analysisText} checkpointResults={checkpointResults} onOpenCheckpointSettings={() => setModal({ type: "checkpointSettings" })} /> },
             ]}
           />
@@ -3981,14 +4021,14 @@ export default function DDDashboard() {
           <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 4, flex: 1, minHeight: 0 }}>
             {/* bottom-left: portfolio pie */}
             <div style={{ minHeight: 0 }}>
-              <Panel title="ポートフォリオ構成" action={<div className="flex gap-1">{[{ k: "category", l: "カテゴリー別" }, { k: "currency", l: "為替別" }, { k: "rank", l: "A〜Eクラス" }, { k: "owner", l: "口座別" }].map((t) => (<button key={t.k} onClick={() => setPieView(t.k)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: pieView === t.k ? C.bg : C.textMuted, background: pieView === t.k ? C.teal : "transparent", fontWeight: pieView === t.k ? 700 : 400 }}>{t.l}</button>))}</div>} className="h-full">
+              <Panel title={<>ポートフォリオ構成{holdingsDateSuffix}</>} action={<div className="flex gap-1">{[{ k: "category", l: "カテゴリー別" }, { k: "currency", l: "為替別" }, { k: "rank", l: "A〜Eクラス" }, { k: "owner", l: "口座別" }].map((t) => (<button key={t.k} onClick={() => setPieView(t.k)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: pieView === t.k ? C.bg : C.textMuted, background: pieView === t.k ? C.teal : "transparent", fontWeight: pieView === t.k ? 700 : 400 }}>{t.l}</button>))}</div>} className="h-full">
                 <PortfolioPie view={pieView} holdings={holdings} onOpen={() => setModal({ type: "portfolio" })} />
               </Panel>
             </div>
 
             {/* bottom-right: A-E diff */}
             <div style={{ minHeight: 0 }}>
-              <Panel title="A〜E 配分乖離" action={<div className="flex items-center gap-2">
+              <Panel title={<>A〜E 配分乖離{holdingsDateSuffix}</>} action={<div className="flex items-center gap-2">
                 <select value={modelOverride ?? ""} onChange={(e) => setModelOverride(e.target.value || null)} className="text-[10px] rounded px-1 py-0.5" style={{ background: C.panel2, color: C.text, border: `1px solid ${C.borderSoft}` }}>
                   <option value="">自動（{d.modelRow.label}）</option>
                   {MODEL_ROWS.map((r) => (<option key={r.label} value={r.label}>{r.label}</option>))}
