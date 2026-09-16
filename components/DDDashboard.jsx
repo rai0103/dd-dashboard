@@ -185,23 +185,15 @@ function freqLabelFromP(p, ddFreqPerYear) {
   const years = 1 / perYear;
   return `${years < 10 ? years.toFixed(1) : Math.round(years)}年に1度`;
 }
-function freqPerYearForLabel(label, finalReach, ddFreqPerYear) { const row = finalReach.find((r) => r.label === label); return (row && row.p !== null) ? freqPerYearFromP(row.p, ddFreqPerYear) : null; }
-function correctionType(dd) { const abs = Math.abs(dd); if (abs < 10) return "浅い調整"; if (abs < 20) return "中程度の調整"; return "深い調整"; }
 // 「現状分析」パネルの自動生成テキスト（毎日データ更新の都度、最新の状況から再計算される）。
-// DD加速度アラート（速度・経過日数の法則）の判定結果を、現状分析テキストに差し込む一文に変換する。
-function speedAlertSentence(sa) {
-  if (sa.level === "pending5") return `DD3%到達から${sa.daysSinceDD3}営業日が経過し、まだDD5%には未到達です。${sa.hint ? sa.hint + "。" : ""}`;
-  if (sa.level === "confirmed5") { const p15 = sa.deepProb["-15"]; return `DD3→5%の速度は${sa.speed35}営業日（${sa.warnLabel}）で、この先DD15%以深まで進む確率は${p15 !== null ? `${p15}%` : "算出不可（実績データ不足）"}です。推奨：${sa.action}。`; }
-  if (sa.level === "deep8") return `DD8%を突破し本格下落局面です（3→8%の速度：${sa.speed38 ?? "算出不可"}営業日・${sa.speed38Category ?? "速度データなし"}）。推奨：${sa.action}。`;
-  return "";
-}
-function buildAnalysisText(d, currentHoldingPct, totalValue) {
-  const athStr = fmtYMD(d.athDate);
-  const ddStr = `${d.currentDD.toFixed(1)}%`;
-  const perYear = d.currentLevelP !== null ? freqPerYearFromP(d.currentLevelP, d.trackRecord.ddFreqPerYear) : null;
-  const freqStr = perYear !== null ? `${perYear.toFixed(1)}回` : "算出不可の水準（過去データの範囲外）";
-  const typeStr = correctionType(d.currentDD);
-
+// 現在のDD局面を3フェーズに分類し、フェーズごとに異なる過去実績統計を差し込んだ文章を組み立てる：
+//   フェーズ1：ATH更新後、まだDD-3%未到達（ボックス圏）→ BOX_STATS
+//   フェーズ2：DD-3%到達済み、まだDD-5%未到達        → ATH_TO_DD3_STATS + speed35Backtest
+//   フェーズ3：DD-5%到達済み                        → speed35Backtest（DD加速度アラートの詳細に委ねる要約のみ）
+const ANALYSIS_DISCLAIMER = "※統計は過去傾向であり将来を保証するものではありません";
+function lowSampleNote(stat) { return stat.lowSample ? `※このパターンは過去${stat.n}件と少数のため参考値としてご覧ください。` : ""; }
+function crashRate(bucket, threshold) { const row = bucket.crashRates.find((c) => c.threshold === threshold); return row && row.rate !== null ? `${row.rate}%` : "算出不可"; }
+function buildRebalanceSentence(d, currentHoldingPct, totalValue) {
   let maxCat = "A", maxDiff = 0;
   for (const cat of CATS) {
     const diff = Number((currentHoldingPct[cat] - d.modelRow[cat]).toFixed(1));
@@ -210,18 +202,51 @@ function buildAnalysisText(d, currentHoldingPct, totalValue) {
   const maxDiffAmount = Math.round((totalValue * maxDiff) / 100);
   const direction = maxDiff >= 0 ? "過多" : "不足";
   const verdict = Math.abs(maxDiff) >= 4 ? "リバランスを推奨します" : "現状のバランスは良好です";
-  const rebalanceSentence = `${d.modelRow.label}の推奨ポートフォリオと比較して、${maxCat}クラスが${Math.abs(maxDiff).toFixed(1)}%（${maxDiffAmount >= 0 ? "+" : "-"}¥${Math.abs(maxDiffAmount).toLocaleString()}）${direction}しており、${verdict}。`;
-
-  const speedStr = speedAlertSentence(d.speedAlert);
-  if (d.isDrawdown && d.nextProg) {
-    const nextFreqPerYear = freqPerYearForLabel(`${d.nextProg.to}%`, d.trackRecord.finalReach, d.trackRecord.ddFreqPerYear);
-    const nextFreqStr = nextFreqPerYear !== null ? `${nextFreqPerYear.toFixed(1)}回` : "算出不可";
-    return `ATHが${athStr}で現在は${ddStr}です。${ddStr}は${perYear !== null ? `年に${freqStr}程度発生する` : `${freqStr}`}${typeStr}です。ATHから${d.daysSinceATH}日間経過しており、次の節目である${d.nextProg.to}%まで下落する確率は${d.nextProg.p}%で、発生した場合は年に${nextFreqStr}程度の下落相場となります。${speedStr}${rebalanceSentence}`;
-  }
-  if (d.isDrawdown) {
-    return `ATHが${athStr}で現在は${ddStr}です。${ddStr}は${perYear !== null ? `年に${freqStr}程度発生する` : `${freqStr}`}${typeStr}です。ATHから${d.daysSinceATH}日間経過しています。${speedStr}${rebalanceSentence}`;
-  }
-  return `ATHが${athStr}で、現在は前回のATHから${d.daysSinceATH}日で新高値圏（${ddStr}）にあります。${rebalanceSentence}`;
+  return `${d.modelRow.label}の推奨ポートフォリオと比較して、${maxCat}クラスが${Math.abs(maxDiff).toFixed(1)}%（${maxDiffAmount >= 0 ? "+" : "-"}¥${Math.abs(maxDiffAmount).toLocaleString()}）${direction}しており、${verdict}。`;
+}
+// フェーズ1：ATH更新後・DD-3%未到達（ボックス圏、または当日ATH更新）。
+function buildPhase1AnalysisText(d, rebalanceSentence) {
+  const athStr = fmtYMD(d.athDate);
+  const ddStr = `${d.currentDD.toFixed(1)}%`;
+  const statusLabel = d.daysSinceATH === 0 ? "ATH更新中" : "ボックス圏";
+  const stat = findBoxStat(d.daysSinceATH);
+  const boxSentence = stat
+    ? `過去実績（同様に${boxStatRangeLabel(stat)}ATH未更新が続いたケース n=${stat.n}件）では、最終的にATH更新${stat.athRate.toFixed(1)}%／DD-3%到達${stat.dd3Rate.toFixed(1)}%となっています。${lowSampleNote(stat)}`
+    : "";
+  return `ATHが${athStr}で、現在は前回のATHから${d.daysSinceATH}日で${statusLabel}（${ddStr}）にあります。${boxSentence}${rebalanceSentence}${ANALYSIS_DISCLAIMER}`;
+}
+// フェーズ2：DD-3%到達済み・DD-5%未到達。
+function buildPhase2AnalysisText(d, rebalanceSentence) {
+  const athStr = fmtYMD(d.athDate);
+  const dd3Str = d.speedAlert.d3Date ? fmtYMD(d.speedAlert.d3Date) : "—";
+  const daysAthToDd3 = d.ddStartIdx !== -1 ? d.ddStartIdx - d.episode.athIdx : null;
+  const athStat = findAthToDd3Stat(daysAthToDd3);
+  const athToDd3Sentence = athStat
+    ? `過去に同程度の期間（${athToDd3RangeLabel(athStat)}、n=${athStat.n}件）をかけてDD-3%に至ったケースでは、最終的にDD-5%まで到達した割合が${athStat.reach5Rate.toFixed(1)}%、到達した場合の平均所要日数は${athStat.speedMeanDays.toFixed(1)}日でした。また、この局面全体の最終的な最大下落幅は平均${athStat.finalDDMean.toFixed(1)}%（中央値${athStat.finalDDMedian.toFixed(1)}%）、大暴落（DD-15%以上）に至った割合は${athStat.crash15Rate.toFixed(1)}%です。${lowSampleNote(athStat)}`
+    : "";
+  const daysSinceDD3 = d.daysSinceDDStart;
+  const bucket = daysSinceDD3 !== null ? speed35Bucket(daysSinceDD3, d.trackRecord.speed35Backtest) : null;
+  const speedSentence = bucket
+    ? `現在はDD-3%到達から${daysSinceDD3}日が経過しており、これは速度区分「${bucket.label}」に該当します。過去の同区分（n=${bucket.n}）では、最終DD-15%以上${crashRate(bucket, -15)}／DD-20%以上${crashRate(bucket, -20)}／DD-30%以上${crashRate(bucket, -30)}となっています。`
+    : "";
+  return `${dd3Str}にDD-3%へ到達しました（ATHの${athStr}から${daysAthToDd3 !== null ? daysAthToDd3 : "—"}日）。${athToDd3Sentence}${speedSentence}${rebalanceSentence}${ANALYSIS_DISCLAIMER}`;
+}
+// フェーズ3：DD-5%到達済み。詳細はDD加速度アラートに委ね、ここでは要約のみ表示する。
+function buildPhase3AnalysisText(d, rebalanceSentence) {
+  const dd5Str = d.speedAlert.d5Date ? fmtYMD(d.speedAlert.d5Date) : "—";
+  const idx3 = d.episode.crossIdx[-3], idx5 = d.episode.crossIdx[-5];
+  const speed35 = (idx3 !== -1 && idx5 !== -1) ? idx5 - idx3 : null;
+  const bucket = speed35 !== null ? speed35Bucket(speed35, d.trackRecord.speed35Backtest) : null;
+  const summary = bucket
+    ? `速度区分「${bucket.label}」に該当し、過去実績（n=${bucket.n}）では最終DD-15%以上${crashRate(bucket, -15)}／DD-20%以上${crashRate(bucket, -20)}／DD-30%以上${crashRate(bucket, -30)}／DD-40%以上${crashRate(bucket, -40)}／DD-50%以上${crashRate(bucket, -50)}です。詳細はDD加速度アラートをご覧ください。`
+    : "詳細はDD加速度アラートをご覧ください。";
+  return `DD-5%へ到達済みです（${dd5Str}）。${summary}${rebalanceSentence}${ANALYSIS_DISCLAIMER}`;
+}
+function buildAnalysisText(d, currentHoldingPct, totalValue) {
+  const rebalanceSentence = buildRebalanceSentence(d, currentHoldingPct, totalValue);
+  if (d.currentDD <= -5) return buildPhase3AnalysisText(d, rebalanceSentence);
+  if (d.currentDD <= -3) return buildPhase2AnalysisText(d, rebalanceSentence);
+  return buildPhase1AnalysisText(d, rebalanceSentence);
 }
 
 // trackRecordOverride を渡すと、この系列自身の実績ではなく渡された統計（節目間の進行確率・最終到達確率・速度別確率など）を使う。
@@ -1572,6 +1597,19 @@ function findBoxStat(days) {
   if (days === null || days === undefined || days < 5) return null;
   return BOX_STATS.find((s) => days >= s.minDays && days <= s.maxDays) ?? null;
 }
+// ATH→DD-3%到達までの所要日数バケット別統計（S&P500実績に基づく）。
+// 「今回の下落がATHからどれくらいの期間をかけてDD-3%に至ったか」で過去エピソードを分類し、
+// その後の展開（DD-5%到達率・所要日数・最終下落幅・大暴落率）の傾向を示す。
+const ATH_TO_DD3_STATS = [
+  { minDays: 0, maxDays: 10, n: 83, reach5Rate: 51.8, speedMeanDays: 6.6, speedMedianDays: 5.0, finalDDMean: -8.8, finalDDMedian: -5.3, crash15Rate: 12.0 },
+  { minDays: 11, maxDays: 20, n: 26, reach5Rate: 50.0, speedMeanDays: 7.0, speedMedianDays: 5.0, finalDDMean: -9.9, finalDDMedian: -5.1, crash15Rate: 19.2 },
+  { minDays: 21, maxDays: 9999, n: 6, reach5Rate: 83.3, speedMeanDays: 18.6, speedMedianDays: 8.0, finalDDMean: -8.7, finalDDMedian: -8.4, crash15Rate: 0.0, lowSample: true },
+];
+function findAthToDd3Stat(days) {
+  if (days === null || days === undefined || days < 0) return null;
+  return ATH_TO_DD3_STATS.find((s) => days >= s.minDays && days <= s.maxDays) ?? null;
+}
+function athToDd3RangeLabel(stat) { return stat.maxDays >= 9999 ? `ATHから${stat.minDays}日以上かけて到達` : `ATHから${stat.minDays}〜${stat.maxDays}日で到達`; }
 function boxStatRangeLabel(stat) { return stat.maxDays >= 9999 ? `${stat.minDays}日以上` : `${stat.minDays}〜${stat.maxDays}日`; }
 // compact: ダッシュボード上部の小さいステータス欄用。false: DD加速度アラートモーダル内の詳細カード用。
 function BoxStatsPanel({ days, compact }) {
