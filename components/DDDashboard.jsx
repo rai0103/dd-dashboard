@@ -3095,6 +3095,18 @@ function ClickLegend({ items, hidden, onToggle }) {
   return (<div className="flex items-center gap-3 px-1 flex-wrap">{items.map((it) => (<button key={it.key} onClick={() => onToggle(it.key)} className="flex items-center gap-1.5 text-[11px]" style={{ opacity: hidden[it.key] ? 0.35 : 1, background: "transparent", border: "none", cursor: "pointer" }}><span style={{ width: 10, height: 10, borderRadius: 2, background: it.color }} /><span style={{ color: C.textMuted, textDecoration: hidden[it.key] ? "line-through" : "none" }}>{it.label}</span></button>))}</div>);
 }
 
+// Clipboard APIやexecCommandが「成功」を返しても、実際には書き込まれていない／古い内容のままというケースが
+// ブラウザ・拡張機能によっては起こりうるため、clipboard-read権限が既に付与されている場合に限り書き込み内容を
+// 読み戻して画面表示と一致するか検証する（未許可の場合は新たな許可プロンプトを出さずスキップし、成功を信頼する）。
+async function verifyClipboardWrite(expected) {
+  try {
+    if (!navigator.permissions?.query || !navigator.clipboard?.readText) return null;
+    const status = await navigator.permissions.query({ name: "clipboard-read" });
+    if (status.state !== "granted") return null;
+    const actual = await navigator.clipboard.readText();
+    return actual.replace(/\r\n/g, "\n") === expected.replace(/\r\n/g, "\n");
+  } catch (e) { return null; }
+}
 /* ---------------- 詳細サマリー出力モーダル ---------------- */
 function SummaryModalContent({ d, dVoo, dSpy, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, onLifecycleChange, fixedPositions, onFixedPositionChange, checkpoints, prevSnapshot, onSaveSnapshot }) {
   const [format, setFormat] = useState("json");
@@ -3130,16 +3142,18 @@ function SummaryModalContent({ d, dVoo, dSpy, holdings, currentHoldingPct, effec
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(output);
+      if ((await verifyClipboardWrite(output)) === false) throw new Error("clipboard content mismatch after writeText");
       setCopied(true); setCopyError(false);
       setTimeout(() => setCopied(false), 2000);
       return;
-    } catch (e) { /* Clipboard API不可・権限拒否等 → 下のexecCommandフォールバックへ */ }
+    } catch (e) { /* Clipboard API不可・権限拒否・検証失敗等 → 下のexecCommandフォールバックへ */ }
     try {
       const ta = textareaRef.current;
       if (!ta) throw new Error("textarea not mounted");
       ta.focus(); ta.select();
       const ok = document.execCommand("copy");
       if (!ok) throw new Error("execCommand returned false");
+      if ((await verifyClipboardWrite(output)) === false) throw new Error("clipboard content mismatch after execCommand");
       setCopied(true); setCopyError(false);
       setTimeout(() => setCopied(false), 2000);
     } catch (e2) {
