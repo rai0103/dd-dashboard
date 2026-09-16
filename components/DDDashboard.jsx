@@ -3161,6 +3161,22 @@ function SummaryModalContent({ d, dVoo, dSpy, holdings, currentHoldingPct, effec
       setTimeout(() => setCopyError(false), 4000);
     }
   };
+  // コピー先チャットが長文貼り付けを添付ファイル化する際に中身が空になる不具合の回避策として、
+  // クリップボード経由ではなく実ファイルとして直接ダウンロード・手動アップロードできるようにする。
+  const handleDownload = () => {
+    const ext = format === "md" ? "md" : "json";
+    const mime = format === "md" ? "text/markdown;charset=utf-8;" : "application/json;charset=utf-8;";
+    const blob = new Blob([output], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const stamp = generatedAt.toISOString().slice(0, 19).replace(/[:T]/g, "").replace(/-/g, "");
+    a.href = url;
+    a.download = `dd_dashboard_summary_${stamp}.${ext}`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
 
   const inputStyle = { background: C.panel, border: `1px solid ${C.borderSoft}`, color: C.text, padding: "3px 6px" };
 
@@ -3253,10 +3269,13 @@ function SummaryModalContent({ d, dVoo, dSpy, holdings, currentHoldingPct, effec
 
       <div className="flex items-center justify-between mb-1">
         <span className="text-[10px]" style={{ color: C.textDim }}>出力（{format === "md" ? "Markdown" : "JSON"}）・{output.length.toLocaleString()}文字・クリックで全選択</span>
-        <button onClick={handleCopy} className="text-xs px-3 py-1 rounded flex items-center gap-1.5" style={{ background: copied ? C.teal : copyError ? C.rustSoft : C.panel2, color: copied ? C.bg : copyError ? C.rust : C.textMuted, border: `1px solid ${copyError ? C.rust : C.borderSoft}`, fontWeight: copied || copyError ? 700 : 400, cursor: "pointer" }}><Copy size={12} />{copied ? "コピーしました" : copyError ? "コピー失敗（下の欄を選択してCtrl+C）" : "コピー"}</button>
+        <div className="flex items-center gap-1.5">
+          <button onClick={handleDownload} className="text-xs px-3 py-1 rounded flex items-center gap-1.5" style={{ background: C.panel2, color: C.textMuted, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}><Download size={12} />ダウンロード</button>
+          <button onClick={handleCopy} className="text-xs px-3 py-1 rounded flex items-center gap-1.5" style={{ background: copied ? C.teal : copyError ? C.rustSoft : C.panel2, color: copied ? C.bg : copyError ? C.rust : C.textMuted, border: `1px solid ${copyError ? C.rust : C.borderSoft}`, fontWeight: copied || copyError ? 700 : 400, cursor: "pointer" }}><Copy size={12} />{copied ? "コピーしました" : copyError ? "コピー失敗（下の欄を選択してCtrl+C）" : "コピー"}</button>
+        </div>
       </div>
       <textarea ref={textareaRef} readOnly value={output} onClick={(e) => e.target.select()} className="w-full mono text-[11px] rounded p-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text, height: 380, resize: "vertical" }} />
-      <div className="text-[10px] mt-3 leading-relaxed" style={{ color: C.textDim }}>投資助言ではなく判断補助です。過去確率・トラックレコードは傾向であり将来を保証しません。最終判断はご自身で行ってください。</div>
+      <div className="text-[10px] mt-3 leading-relaxed" style={{ color: C.textDim }}>投資助言ではなく判断補助です。過去確率・トラックレコードは傾向であり将来を保証しません。最終判断はご自身で行ってください。貼り付け先チャットで内容が空扱いになる場合は「ダウンロード」でファイル保存し、ファイル添付でお試しください。</div>
     </div>
   );
 }
