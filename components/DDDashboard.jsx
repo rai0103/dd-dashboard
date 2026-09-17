@@ -1361,11 +1361,66 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBru
     </ComposedChart>
   );
 }
+// 評価額/DDチャートのタイトル文言（選択中のchartSourceに応じて切り替える）。
+function chartSourceTitle(chartSource) {
+  if (chartSource === "qqq") return "QQQ 評価額（左軸） / DD%（右軸）";
+  if (chartSource === "both") return "SP500（VOO）+ QQQ 評価額比較";
+  return "評価額（左軸） / DD%（右軸）";
+}
+// SP500（VOO）とQQQのどちらの評価額/DDチャートを表示するかを切り替えるセレクタ。
+// qqqAvailableがfalseの間はQQQ・両方のオプションを無効化する（QQQのトラックレコード未取り込み時）。
+function ChartSourceToggle({ value, onChange, qqqAvailable, size = "sm" }) {
+  const options = [{ key: "sp500", label: "SP500（VOO）" }, { key: "qqq", label: "QQQ" }, { key: "both", label: "両方" }];
+  const pad = size === "sm" ? "1.5px 6px" : "2px 8px";
+  const fontSize = size === "sm" ? 10 : 11;
+  return (
+    <div className="flex gap-0.5">
+      {options.map((o) => {
+        const disabled = o.key !== "sp500" && !qqqAvailable;
+        const active = value === o.key;
+        return (
+          <button key={o.key} disabled={disabled} onClick={() => onChange(o.key)} title={disabled ? "QQQのトラックレコードが未取り込みです" : undefined}
+            className="rounded" style={{ fontSize, padding: pad, color: active ? C.bg : C.textMuted, background: active ? C.violet : "transparent", fontWeight: active ? 700 : 400, border: "none", opacity: disabled ? 0.35 : 1, cursor: disabled ? "default" : "pointer" }}>
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+// SP500（VOO）とQQQを同時に比較表示するための、評価額のみ（DD%なし）の2軸チャート（左軸=SP500（VOO）、右軸=QQQ）。
+// 価格水準が大きく異なる（SP500は$千〜、QQQは$百〜）ため、軸を分けてそれぞれ独立にautoスケールさせ、一画面に収める。
+function DualPriceChartBody({ data, rangeDays, hidden, fontSize = 10, width, height }) {
+  const fmt = (v) => (v == null ? "" : `$${Number(v).toFixed(2)}`);
+  return (
+    <ComposedChart width={width} height={height} data={data} margin={{ top: 12, right: 44, left: 0, bottom: 0 }}>
+      <CartesianGrid stroke={C.borderSoft} vertical={false} />
+      <XAxis dataKey="date" tickFormatter={(dt) => fmtAxisDate(dt, rangeDays)} tick={{ fill: C.textDim, fontSize }} axisLine={{ stroke: C.border }} tickLine={false} minTickGap={40} />
+      <YAxis yAxisId="sp500" domain={["auto", "auto"]} tick={{ fill: C.teal, fontSize }} axisLine={false} tickLine={false} width={52} label={{ value: "SP500（VOO）", angle: -90, position: "insideLeft", fill: C.teal, fontSize }} />
+      <YAxis yAxisId="qqq" orientation="right" domain={["auto", "auto"]} tick={{ fill: C.violet, fontSize }} axisLine={false} tickLine={false} width={52} label={{ value: "QQQ", angle: 90, position: "insideRight", fill: C.violet, fontSize }} />
+      <Tooltip
+        contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }}
+        labelFormatter={(dt) => fmtYMD(dt)}
+        formatter={(value, name) => [fmt(value), name]}
+      />
+      <Line yAxisId="sp500" type="linear" dataKey="sp500Price" stroke={C.teal} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls hide={!!hidden.sp500Line} name="SP500（VOO）" />
+      <Line yAxisId="qqq" type="linear" dataKey="qqqPrice" stroke={C.violet} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls hide={!!hidden.qqqLine} name="QQQ" />
+    </ComposedChart>
+  );
+}
 // 通常表示（評価額/DD%）と暴落比較（経過日数ベース）をタブで切り替えられる拡大チャート。
 // PCの拡大表示（ddChartモーダル）とスマホの横向き拡大表示（MobileChartZoomModal）の両方から共通で使う。
-function DDChartModalContent({ chartData, rangeDays, d, hidden, toggle, period, setPeriod, periodStats, historicalCrashes, selectedCrash, onSelectCrash, comparisonData, hiddenCrash, toggleCrash, crashLegendItems, fontSize = 12 }) {
+// chartSourceでSP500（VOO）/QQQ/両方を切り替え可能（暴落比較タブはSP500（VOO）選択時のみ）。
+function DDChartModalContent({ chartData, rangeDays, d, hidden, toggle, period, setPeriod, periodStats, historicalCrashes, selectedCrash, onSelectCrash, comparisonData, hiddenCrash, toggleCrash, crashLegendItems, dQqq, qqqChartData, qqqRangeDays, qqqPeriodStats, bothChartData, chartSource, setChartSource, fontSize = 12 }) {
   const [chartTab, setChartTab] = useState("normal");
-  const hasCrashCompare = !!(historicalCrashes && onSelectCrash);
+  const hasCrashCompare = !!(historicalCrashes && onSelectCrash) && chartSource === "sp500";
+  const isQqqSource = chartSource === "qqq";
+  const isBothSource = chartSource === "both";
+  const activeChartData = isQqqSource ? qqqChartData : chartData;
+  const activeRangeDays = isQqqSource ? qqqRangeDays : rangeDays;
+  const activeD = isQqqSource ? dQqq : d;
+  const activePeriodStats = isQqqSource ? qqqPeriodStats : periodStats;
+  const sourceUnavailable = (isQqqSource || isBothSource) && !dQqq;
   return (
     <div className="h-full flex flex-col">
       <div className="flex items-center gap-2 mb-1.5 flex-wrap">
@@ -1374,8 +1429,13 @@ function DDChartModalContent({ chartData, rangeDays, d, hidden, toggle, period, 
         )}
         {chartTab === "normal" || !hasCrashCompare ? (
           <>
-            <ClickLegend items={[{ key: "price", label: "評価額 / ATH", color: C.teal }, { key: "dd", label: "DD%", color: C.rust }]} hidden={hidden} onToggle={toggle} />
+            {isBothSource ? (
+              <ClickLegend items={[{ key: "sp500Line", label: "SP500（VOO）", color: C.teal }, { key: "qqqLine", label: "QQQ", color: C.violet }]} hidden={hidden} onToggle={toggle} />
+            ) : (
+              <ClickLegend items={[{ key: "price", label: "評価額 / ATH", color: C.teal }, { key: "dd", label: "DD%", color: C.rust }]} hidden={hidden} onToggle={toggle} />
+            )}
             <div className="flex gap-0.5">{PERIODS.map((p) => (<button key={p.key} onClick={() => setPeriod(p.key)} className="text-[11px] px-2 py-1 rounded" style={{ color: period === p.key ? C.bg : C.textMuted, background: period === p.key ? C.teal : "transparent", fontWeight: period === p.key ? 700 : 400 }}>{p.label}</button>))}</div>
+            <ChartSourceToggle value={chartSource} onChange={setChartSource} qqqAvailable={!!dQqq} />
           </>
         ) : (
           <>
@@ -1390,13 +1450,19 @@ function DDChartModalContent({ chartData, rangeDays, d, hidden, toggle, period, 
       </div>
       {chartTab === "normal" || !hasCrashCompare ? (
         <>
-          <PeriodStatsBar periodStats={periodStats} />
+          {!isBothSource && <PeriodStatsBar periodStats={activePeriodStats} />}
           <div style={{ height: "min(70vh, 640px)" }}>
-            <ResponsiveContainer width="100%" height="100%" key={period}>
-              <EvalDDChartBody chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} periodStats={periodStats} withBrush fontSize={fontSize} />
-            </ResponsiveContainer>
+            {sourceUnavailable ? (
+              <div className="h-full flex items-center justify-center text-sm" style={{ color: C.textDim }}>QQQのトラックレコードが未取り込みです。データ入力・出力画面からQQQのCSVを取り込んでください。</div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%" key={`${period}-${chartSource}`}>
+                {isBothSource
+                  ? <DualPriceChartBody data={bothChartData} rangeDays={rangeDays} hidden={hidden} fontSize={fontSize} />
+                  : <EvalDDChartBody chartData={activeChartData} rangeDays={activeRangeDays} d={activeD} hidden={hidden} periodStats={activePeriodStats} withBrush fontSize={fontSize} />}
+              </ResponsiveContainer>
+            )}
           </div>
-          <div className="mt-3 text-[10px]" style={{ color: C.textDim }}>下部のスクロールバーをドラッグして期間を絞り込み（ズーム）できます。グラフ上にカーソルを合わせるとツールチップが表示されます。</div>
+          <div className="mt-3 text-[10px]" style={{ color: C.textDim }}>{isBothSource ? "SP500（VOO）は左軸、QQQは右軸で表示しています。凡例クリックで系列の表示/非表示を切り替えられます。" : "下部のスクロールバーをドラッグして期間を絞り込み（ズーム）できます。グラフ上にカーソルを合わせるとツールチップが表示されます。"}</div>
         </>
       ) : (
         <div style={{ height: "min(70vh, 640px)" }}>
@@ -1716,11 +1782,11 @@ function StatusPanel({ d, dVoo, dQqq, speedAlertInstrument, onChangeSpeedAlertIn
               <span className="font-bold text-xs" style={{ color: C.textMuted, display: "inline-block", width: 42 }}>{label}</span>
               {data ? (<>
                 <span className="font-bold text-xs" style={{ display: "inline-block", width: 50, textAlign: "right", color: data.currentDD >= 0 ? C.teal : C.rust }}>{data.currentDD.toFixed(1)}%</span>
-                <span className="text-xs" style={{ display: "inline-block", width: 70, marginLeft: 8, color: C.textMuted }}>DD-3%評価額</span>
-                <span className="font-bold text-xs" style={{ display: "inline-block", width: 80, textAlign: "right", color: C.text }}>（${(data.currentATH * 0.97).toFixed(2)}）</span>
-                {data.nextMilestone === -3 && (
+                {data.nextMilestone === -3 && (<>
+                  <span className="text-xs" style={{ display: "inline-block", width: 70, marginLeft: 8, color: C.textMuted }}>DD-3%評価額</span>
+                  <span className="font-bold text-xs" style={{ display: "inline-block", width: 80, textAlign: "right", color: C.text }}>（${(data.currentATH * 0.97).toFixed(2)}）</span>
                   <span className="font-bold text-xs" style={{ marginLeft: 4, color: C.text }}>まで{data.distanceToNextMilestone.toFixed(1)}%</span>
-                )}
+                </>)}
                 {data.nextMilestone !== null && data.nextMilestone !== -3 && (
                   <span className="font-bold text-xs" style={{ marginLeft: 8, color: C.text }}>DD{data.nextMilestone}%まで {data.distanceToNextMilestone.toFixed(1)}%<span style={{ color: C.textMuted }}>（${data.nextMilestonePrice.toFixed(2)}）</span></span>
                 )}
@@ -1845,7 +1911,7 @@ function TrackRecordContent({ currentT, trackRecord }) {
 }
 
 /* ---------------- DD加速度アラート 詳細モーダル ---------------- */
-function SpeedAlertModalContent({ d }) {
+function SpeedAlertModalContent({ d, instrumentLabel = "VOO" }) {
   const sa = d.speedAlert;
   const deepProbRows = sa.level === "confirmed5" ? [
     { label: "DD8%まで", p: sa.deepProb["-8"] }, { label: "DD10%まで", p: sa.deepProb["-10"] },
@@ -1854,7 +1920,7 @@ function SpeedAlertModalContent({ d }) {
   return (
     <div className="flex flex-col gap-5">
       <div>
-        <div className="text-xs mb-2" style={{ color: C.textDim }}>現在の状況（VOOの評価額を参照）</div>
+        <div className="text-xs mb-2" style={{ color: C.textDim }}>現在の状況（{instrumentLabel}の評価額を参照）</div>
         <div className="flex items-center gap-4 mb-1.5">
           <span className="mono text-lg font-bold" style={{ color: depthColor(sa.currentDD) }}>DD {sa.currentDD.toFixed(1)}%</span>
           <span className="text-xs" style={{ color: C.textMuted }}>モード：{d.mode}</span>
@@ -3585,7 +3651,7 @@ function MobilePager({ activeIndex, onChange, pages }) {
 }
 // 評価額チャートの「拡大」時に開く全画面モーダル。CSSで常に横向き（landscape）表示に固定し、
 // 対応端末ではあわせてScreen Orientation APIでの実回転ロックも試みる（非対応環境ではCSS回転のみで代替）。
-function MobileChartZoomModal({ onClose, chartData, rangeDays, d, hidden, toggle, period, setPeriod, periodStats, historicalCrashes, selectedCrash, onSelectCrash, comparisonData, hiddenCrash, toggleCrash, crashLegendItems, isRealDevice = true }) {
+function MobileChartZoomModal({ onClose, chartData, rangeDays, d, hidden, toggle, period, setPeriod, periodStats, historicalCrashes, selectedCrash, onSelectCrash, comparisonData, hiddenCrash, toggleCrash, crashLegendItems, dQqq, qqqChartData, qqqRangeDays, qqqPeriodStats, bothChartData, chartSource, setChartSource, isRealDevice = true }) {
   useEffect(() => {
     if (!isRealDevice) return; // PC上でのスマホ表示プレビュー中は、実機用の全画面化・画面回転ロックを行わない（PC自体が全画面化されてしまうため）
     (async () => {
@@ -3604,11 +3670,11 @@ function MobileChartZoomModal({ onClose, chartData, rangeDays, d, hidden, toggle
       <div className={isRealDevice ? "force-landscape-inner" : ""} style={isRealDevice ? undefined : { width: "100%", height: "100%" }}>
         <div className="w-full h-full flex flex-col" style={{ padding: 10, color: C.text, fontFamily: "'Zen Kaku Gothic New',sans-serif" }}>
           <div className="flex items-center justify-between mb-1.5 shrink-0">
-            <span className="text-xs font-semibold">評価額（左軸） / DD%（右軸）</span>
+            <span className="text-xs font-semibold">{chartSourceTitle(chartSource)}</span>
             <button onClick={onClose} className="flex items-center gap-1 text-xs px-2 py-1 rounded" style={{ color: C.textMuted, background: "transparent", border: "none", cursor: "pointer" }}><X size={13} /> 閉じる</button>
           </div>
           <div className="flex-1 min-h-0">
-            <DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={onSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} fontSize={13} />
+            <DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={onSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} bothChartData={bothChartData} chartSource={chartSource} setChartSource={setChartSource} fontSize={13} />
           </div>
         </div>
       </div>
@@ -3632,6 +3698,7 @@ export default function DDDashboard() {
   const [pieView, setPieView] = useState("rank");
   const [modelOverride, setModelOverride] = useState(null); // null = 自動（現在の評価額に応じて選択）
   const [chartTab, setChartTab] = useState("normal");
+  const [chartSource, setChartSource] = useState("sp500"); // "sp500" | "qqq" | "both"（評価額/DDチャートのソース切替）
   const [selectedCrashId, setSelectedCrashId] = useState(null); // 「過去の暴落との比較」の選択。null中は自動選択（現在のDD推移に最も類似したイベント）に従う
   const [crashAutoFollow, setCrashAutoFollow] = useState(true); // trueの間は経過日数が進むたび自動で最類似イベントに追従。ユーザーが手動選択したらfalseにして固定する
   const [modal, setModal] = useState(null);
@@ -3926,6 +3993,24 @@ export default function DDDashboard() {
   const rangeDays = useMemo(() => { const f = chartData[0].date, l = chartData[chartData.length - 1].date; return Math.round((l - f) / 86400000); }, [chartData]);
   const periodRange = useMemo(() => periodDateRange(d.FULL, d.last, period), [d.FULL, d.last, period]);
   const periodStats = useMemo(() => computePeriodStats(periodRange, d.episodes), [periodRange, d.episodes]);
+  // 評価額/DDチャートのQQQソース用（SP500と同じロジックをQQQのトラックレコードに適用）。QQQ未取り込み時はnull。
+  const qqqChartData = useMemo(() => (dQqq ? sliceForPeriod(dQqq.FULL, dQqq.last, period) : null), [dQqq, period]);
+  const qqqRangeDays = useMemo(() => { if (!qqqChartData) return 0; const f = qqqChartData[0].date, l = qqqChartData[qqqChartData.length - 1].date; return Math.round((l - f) / 86400000); }, [qqqChartData]);
+  const qqqPeriodRange = useMemo(() => (dQqq ? periodDateRange(dQqq.FULL, dQqq.last, period) : null), [dQqq, period]);
+  const qqqPeriodStats = useMemo(() => (qqqPeriodRange ? computePeriodStats(qqqPeriodRange, dQqq.episodes) : null), [qqqPeriodRange, dQqq]);
+  // 「両方」表示用：SP500（VOO）とQQQを日付キーでマージした{date, sp500Price, qqqPrice}の配列（どちらかが無い日はそのフィールドがundefined）。
+  const bothChartData = useMemo(() => {
+    if (!qqqChartData) return null;
+    const map = new Map();
+    for (const p of chartData) map.set(p.date.getTime(), { date: p.date, sp500Price: p.price });
+    for (const p of qqqChartData) {
+      const key = p.date.getTime();
+      const existing = map.get(key);
+      if (existing) existing.qqqPrice = p.price;
+      else map.set(key, { date: p.date, qqqPrice: p.price });
+    }
+    return Array.from(map.values()).sort((a, b) => a.date - b.date);
+  }, [chartData, qqqChartData]);
   // SP500の全期間データ（d.FULL）からATH比-10%以上の下落局面を自動検出。全23件をドロップダウンで選択可能にする。
   const historicalCrashes = useMemo(() => buildHistoricalCrashes(d.FULL), [d.FULL]);
   // 現在のDD%推移（経過日数分）に最も類似した過去の暴落イベントを判定する。経過日数が進むたび（d.currentEpisodeCurve/d.daysSinceATHの更新時）に再計算される。
@@ -3991,16 +4076,16 @@ export default function DDDashboard() {
         @media (orientation: landscape) { .force-landscape-inner { width: 100vw; height: 100vh; transform: translate(-50%, -50%); } }
       `}</style>
 
-      {modal?.type === "speedAlert" && (speedAlertInstrument === "qqq" ? dQqq : dVoo) && <FullScreenModal title={`DD加速度アラート（速度・経過日数の法則・${speedAlertInstrument.toUpperCase()}基準）`} onClose={() => setModal(null)}><SpeedAlertModalContent d={speedAlertInstrument === "qqq" ? dQqq : dVoo} /></FullScreenModal>}
+      {modal?.type === "speedAlert" && (speedAlertInstrument === "qqq" ? dQqq : dVoo) && <FullScreenModal title={`DD加速度アラート（速度・経過日数の法則・${speedAlertInstrument.toUpperCase()}基準）`} onClose={() => setModal(null)}><SpeedAlertModalContent d={speedAlertInstrument === "qqq" ? dQqq : dVoo} instrumentLabel={speedAlertInstrument.toUpperCase()} /></FullScreenModal>}
       {modal?.type === "portfolio" && <FullScreenModal title={<>ポートフォリオ構成表{holdingsDateSuffix}</>} onClose={() => setModal(null)}><PortfolioTableContent view={pieView} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
       {modal?.type === "ddTable" && <FullScreenModal title="DD毎のA〜E配分表" onClose={() => setModal(null)}><DDTableContent modelRow={d.modelRow} holdings={holdings} /></FullScreenModal>}
       {modal?.type === "rank" && <FullScreenModal title={`${modal.rank}ランクの保有銘柄`} onClose={() => setModal(null)}><RankHoldingsContent rank={modal.rank} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
       {modal?.type === "crash" && <FullScreenModal title={`${modal.crash.name}（${modal.crash.start} 〜）と現状の比較`} onClose={() => setModal(null)}><CrashModalContent crash={modal.crash} daysSinceATH={d.daysSinceATH} currentDD={d.currentDD} currentEpisodeCurve={d.currentEpisodeCurve} allCrashes={historicalCrashes} onJump={(c) => setModal({ type: "crash", crash: c })} /></FullScreenModal>}
-      {modal?.type === "ddChart" && <FullScreenModal title="評価額（左軸） / DD%（右軸）" onClose={() => setModal(null)}><DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} /></FullScreenModal>}
+      {modal?.type === "ddChart" && <FullScreenModal title={chartSourceTitle(chartSource)} onClose={() => setModal(null)}><DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} bothChartData={bothChartData} chartSource={chartSource} setChartSource={setChartSource} /></FullScreenModal>}
       {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} vooQqqSeries={vooQqqSeries} onAppendVooQqq={handleAppendVooQqq} onImportVooQqq={handleImportVooQqq} onResetVooQqqField={handleResetVooQqqField} />}
       {modal?.type === "checkpointSettings" && <FullScreenModal title="チェックポイント設定" onClose={() => setModal(null)}><CheckpointSettingsContent checkpoints={checkpoints} onCheckpointChange={handleCheckpointChange} holdings={holdings} /></FullScreenModal>}
       {modal?.type === "summary" && <FullScreenModal title="詳細サマリー出力（AI相談用）" onClose={() => setModal(null)}><SummaryModalContent d={d} dVoo={dVoo} dQqq={dQqq} holdings={holdings} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} blocks={blocks} rankLabels={rankLabels} lifecycle={lifecycle} onLifecycleChange={handleLifecycleChange} fixedPositions={fixedPositions} onFixedPositionChange={handleFixedPositionChange} checkpoints={checkpoints} prevSnapshot={prevSnapshot} onSaveSnapshot={handleSaveSnapshot} /></FullScreenModal>}
-      {modal?.type === "mobileChartZoom" && <MobileChartZoomModal onClose={() => setModal(null)} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} isRealDevice={isMobileAuto} />}
+      {modal?.type === "mobileChartZoom" && <MobileChartZoomModal onClose={() => setModal(null)} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} bothChartData={bothChartData} chartSource={chartSource} setChartSource={setChartSource} isRealDevice={isMobileAuto} />}
 
       {isMobile ? (
         // スマホ版はヘッダーの縦幅を最小化し、各ページの表示領域を最大化するため、タイトルを短縮し、
@@ -4069,22 +4154,42 @@ export default function DDDashboard() {
             {/* top-left: chart */}
             <div style={{ minHeight: 0 }}>
               <Panel
-                title={chartTab === "normal" ? "評価額（左軸） / DD%（右軸）" : "過去の暴落との比較（経過日数ベース）"}
+                title={(chartTab === "normal" || chartSource !== "sp500") ? chartSourceTitle(chartSource) : "過去の暴落との比較（経過日数ベース）"}
                 action={
                   <div className="flex items-center gap-3">
-                    <div className="flex gap-0.5 mr-2">{[{ k: "normal", l: "通常表示" }, { k: "crash", l: "暴落比較" }].map((t) => (<button key={t.k} onClick={() => setChartTab(t.k)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: chartTab === t.k ? C.bg : C.textMuted, background: chartTab === t.k ? C.amber : "transparent", fontWeight: chartTab === t.k ? 700 : 400 }}>{t.l}</button>))}</div>
-                    {chartTab === "normal" ? (<><ClickLegend items={[{ key: "price", label: "評価額 / ATH", color: C.teal }, { key: "dd", label: "DD%", color: C.rust }]} hidden={hidden} onToggle={toggle} /><div className="flex gap-0.5">{PERIODS.map((p) => (<button key={p.key} onClick={() => setPeriod(p.key)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: period === p.key ? C.bg : C.textMuted, background: period === p.key ? C.teal : "transparent", fontWeight: period === p.key ? 700 : 400 }}>{p.label}</button>))}</div></>) : (<ClickLegend items={crashLegendItems} hidden={hiddenCrash} onToggle={toggleCrash} />)}
+                    {chartSource === "sp500" && (
+                      <div className="flex gap-0.5 mr-2">{[{ k: "normal", l: "通常表示" }, { k: "crash", l: "暴落比較" }].map((t) => (<button key={t.k} onClick={() => setChartTab(t.k)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: chartTab === t.k ? C.bg : C.textMuted, background: chartTab === t.k ? C.amber : "transparent", fontWeight: chartTab === t.k ? 700 : 400 }}>{t.l}</button>))}</div>
+                    )}
+                    {(chartTab === "normal" || chartSource !== "sp500") ? (
+                      <>
+                        {chartSource === "both" ? (
+                          <ClickLegend items={[{ key: "sp500Line", label: "SP500（VOO）", color: C.teal }, { key: "qqqLine", label: "QQQ", color: C.violet }]} hidden={hidden} onToggle={toggle} />
+                        ) : (
+                          <ClickLegend items={[{ key: "price", label: "評価額 / ATH", color: C.teal }, { key: "dd", label: "DD%", color: C.rust }]} hidden={hidden} onToggle={toggle} />
+                        )}
+                        <div className="flex gap-0.5">{PERIODS.map((p) => (<button key={p.key} onClick={() => setPeriod(p.key)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: period === p.key ? C.bg : C.textMuted, background: period === p.key ? C.teal : "transparent", fontWeight: period === p.key ? 700 : 400 }}>{p.label}</button>))}</div>
+                        <ChartSourceToggle value={chartSource} onChange={setChartSource} qqqAvailable={!!dQqq} />
+                      </>
+                    ) : (<ClickLegend items={crashLegendItems} hidden={hiddenCrash} onToggle={toggleCrash} />)}
                   </div>
                 }
                 className="h-full"
               >
-                {chartTab === "normal" ? (
+                {(chartTab === "normal" || chartSource !== "sp500") ? (
                   <div className="h-full flex flex-col cursor-zoom-in" title="クリックで拡大表示" onClick={() => setModal({ type: "ddChart" })}>
-                    <PeriodStatsBar periodStats={periodStats} />
+                    {chartSource !== "both" && <PeriodStatsBar periodStats={chartSource === "qqq" ? qqqPeriodStats : periodStats} />}
                     <div className="flex-1 min-h-0">
-                      <ResponsiveContainer width="100%" height="100%" key={period}>
-                        <EvalDDChartBody chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} periodStats={periodStats} />
-                      </ResponsiveContainer>
+                      {(chartSource === "qqq" || chartSource === "both") && !dQqq ? (
+                        <div className="h-full flex items-center justify-center text-xs text-center px-4" style={{ color: C.textDim }}>QQQのトラックレコードが未取り込みです。データ入力・出力画面からQQQのCSVを取り込んでください。</div>
+                      ) : (
+                        <ResponsiveContainer width="100%" height="100%" key={`${period}-${chartSource}`}>
+                          {chartSource === "both"
+                            ? <DualPriceChartBody data={bothChartData} rangeDays={rangeDays} hidden={hidden} />
+                            : chartSource === "qqq"
+                              ? <EvalDDChartBody chartData={qqqChartData} rangeDays={qqqRangeDays} d={dQqq} hidden={hidden} periodStats={qqqPeriodStats} />
+                              : <EvalDDChartBody chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} periodStats={periodStats} />}
+                        </ResponsiveContainer>
+                      )}
                     </div>
                   </div>
                 ) : (
