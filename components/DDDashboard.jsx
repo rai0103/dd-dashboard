@@ -505,11 +505,12 @@ function evaluateCheckpoint(cp, holdings, totalValue) {
   const label = cp.label?.trim() || cp.targetValues.join("+");
   const directionLabel = isMax ? "以内" : "以上";
   if (overBy <= 0) {
-    return { ok: true, text: `${label}は全体の${threshold}%${directionLabel}で、現在${actualPct.toFixed(1)}%です（基準内）。` };
+    return { ok: true, text: `${label}は全体の${threshold}%${directionLabel}で、現在${actualPct.toFixed(1)}%です（基準内）。`, actualPct, threshold, overBy: 0, overByValue: 0 };
   }
-  const diffAmountMan = Math.round((totalValue * overBy) / 100 / 10000);
+  const overByValue = Math.round((totalValue * overBy) / 100);
+  const diffAmountMan = Math.round(overByValue / 10000);
   const verb = isMax ? "超過" : "不足";
-  return { ok: false, text: `${label}は全体の${threshold}%${directionLabel}：現在${actualPct.toFixed(1)}%なので${overBy.toFixed(1)}%（約${diffAmountMan.toLocaleString()}万円）${verb}しています。` };
+  return { ok: false, text: `${label}は全体の${threshold}%${directionLabel}：現在${actualPct.toFixed(1)}%なので${overBy.toFixed(1)}%（約${diffAmountMan.toLocaleString()}万円）${verb}しています。`, actualPct, threshold, overBy, overByValue };
 }
 
 /* ---------------- portfolio holdings (default/seed — replaced once real data is imported) ---------------- */
@@ -2773,78 +2774,107 @@ function computeHoldingsDiff(prevSnapshot, holdings) {
   }
   return { prevDate: prevSnapshot.generatedAt, sold, bought, changed };
 }
-// DD-3%到達時のリバランス提案：D+EランクがDD-3%モデルの目標比率を超過している分を、
-// Eランク優先・金額降順で売却候補に積み上げ、売却額の半分をSP500カテゴリーへの買付、半分を現金化する前提でシミュレーションする。
-// 固定ポジション（fixedPositions）は売却候補から除外する。現在のDDが実際に-3%以下かどうかに関わらず常に算出する（到達時のプレビュー）。
-function computeDD3RebalancePlan(holdings, currentHoldingPct, fixedPositions) {
+// 乖離±この幅（pt）以内のクラスは「ほぼ目標達成」とみなし売買対象から除外する（誤差・端数のノイズ吸収用）。
+const DD3_REBALANCE_DIFF_THRESHOLD_PT = 1;
+// DD-3%到達時のリバランス提案：A〜E各クラスの「現在の評価額 - DD-3%モデル目標額」（diff_value）を求め、
+// 超過している各クラスからはその超過分そのものを、不足している各クラスへはその不足分そのものを目標に
+// （＝乖離幅にそのまま比例して）売却・買付を配分する。乖離±1pt以内のクラスは対象外とする。
+// 固定ポジション（fixedPositions）は売却候補から除外し、各クラス内の銘柄選定は金額降順のまま（既存踏襲）。
+// 「現金」については、有効な現金系チェックポイント（direction:min）があれば、その不足額を上限にAクラスの
+// 売却を抑えて現金を残す（Aクラス自体が超過中のみ・Aを現在の水準よりさらに超過させることはない）。
+// 現在のDDが実際に-3%以下かどうかに関わらず常に算出する（到達時のプレビュー）。
+function computeDD3RebalancePlan(holdings, currentHoldingPct, fixedPositions, checkpoints) {
   const total = holdingsTotal(holdings);
   const target = MODEL_ROWS.find((r) => r.label === "DD-3%");
   const deTargetPct = target.D + target.E;
   const deCurrentPct = currentHoldingPct.D + currentHoldingPct.E;
-  const excessPct = deCurrentPct - deTargetPct;
-  if (total <= 0 || excessPct <= 0.05) return { needed: false, target, total, deTargetPct, deCurrentPct };
 
-  const sellGoal = Math.round((excessPct / 100) * total);
-  const rankOrder = { E: 0, D: 1 };
-  const candidates = holdings
-    .filter((h) => (h.rank === "D" || h.rank === "E") && fixedPositions[h.name] === undefined)
-    .slice()
-    .sort((a, b) => (rankOrder[a.rank] - rankOrder[b.rank]) || (b.amount - a.amount));
+  const diffPct = Object.fromEntries(CATS.map((c) => [c, Number((currentHoldingPct[c] - target[c]).toFixed(2))]));
+  const diffValue = Object.fromEntries(CATS.map((c) => [c, (diffPct[c] / 100) * total]));
+  const excessCats = CATS.filter((c) => diffPct[c] > DD3_REBALANCE_DIFF_THRESHOLD_PT);
+  const deficitCats = CATS.filter((c) => diffPct[c] < -DD3_REBALANCE_DIFF_THRESHOLD_PT);
 
-  let remaining = sellGoal;
-  const picks = [];
-  for (const h of candidates) {
-    if (remaining <= 0) break;
-    const sellAmount = Math.min(h.amount, remaining);
-    picks.push({ name: h.name, rank: h.rank, amount: h.amount, sellAmount });
-    remaining -= sellAmount;
+  if (total <= 0 || excessCats.length === 0) return { needed: false, target, total, deTargetPct, deCurrentPct, diffPct, diffValue };
+
+  // Aクラス自体が超過している場合に限り、現金系チェックポイント（不足方向）の不足額を、Aの超過分を上限に
+  // 「売らずに現金として残す」枠として確保する（＝Aの実売却額をその分だけ減らす。買い増しではない）。
+  let cashTopUp = 0;
+  if (excessCats.includes("A")) {
+    const cashCheckpoint = (checkpoints || []).find((cp) => cp.enabled && cp.direction === "min" && cp.targetType === "category" && (cp.targetValues || []).includes("現金"));
+    if (cashCheckpoint) {
+      const evaluated = evaluateCheckpoint(cashCheckpoint, holdings, total);
+      cashTopUp = Math.min(evaluated?.overByValue ?? 0, Math.round(diffValue.A));
+    }
   }
-  const sellTotal = sellGoal - remaining; // D/E保有だけでは目標額に届かない場合は実際に売却可能な額にとどめる
-  const buySP500 = Math.round(sellTotal / 2);
-  const buyCash = sellTotal - buySP500;
 
-  const sellByRank = { D: 0, E: 0 };
-  for (const p of picks) sellByRank[p.rank] += p.sellAmount;
+  const sellGoalByCat = Object.fromEntries(excessCats.map((c) => [c, Math.max(0, Math.round(diffValue[c]) - (c === "A" ? cashTopUp : 0))]));
+  const picks = [];
+  const sellByCat = Object.fromEntries(CATS.map((c) => [c, 0]));
+  for (const cat of excessCats) {
+    let remaining = sellGoalByCat[cat];
+    if (remaining <= 0) continue;
+    const candidates = holdings.filter((h) => h.rank === cat && fixedPositions[h.name] === undefined).slice().sort((a, b) => b.amount - a.amount);
+    for (const h of candidates) {
+      if (remaining <= 0) break;
+      const sellAmount = Math.min(h.amount, remaining);
+      picks.push({ name: h.name, rank: h.rank, amount: h.amount, sellAmount });
+      sellByCat[cat] += sellAmount;
+      remaining -= sellAmount;
+    }
+  }
+  const sellGoal = Object.values(sellGoalByCat).reduce((s, v) => s + v, 0);
+  const sellTotal = Object.values(sellByCat).reduce((s, v) => s + v, 0);
+  const shortfall = Math.max(0, sellGoal - sellTotal);
+
+  const sp500Candidate = holdings.filter((h) => h.category === "SP500").reduce((best, h) => (!best || h.amount > best.amount ? h : best), null);
+  // 買付側：不足している各クラスへ不足額そのものを配分するのが目標だが、原資（実際に売却できた額）が
+  // 不足する場合は全クラスに同じ比率を掛けて按分する（特定クラスだけ達成度が偏らないようにするため）。
+  const buyGoalByCat = Object.fromEntries(deficitCats.map((c) => [c, Math.round(-diffValue[c])]));
+  const buyGoalTotal = Object.values(buyGoalByCat).reduce((s, v) => s + v, 0);
+  const buyScale = buyGoalTotal > 0 ? Math.min(1, sellTotal / buyGoalTotal) : 0;
+  const buyByCat = Object.fromEntries(deficitCats.map((c) => [c, Math.round(buyGoalByCat[c] * buyScale)]));
+  const buyExampleByCat = Object.fromEntries(deficitCats.map((c) => {
+    if (c === "C") return [c, sp500Candidate];
+    return [c, holdings.filter((h) => h.rank === c).reduce((best, h) => (!best || h.amount > best.amount ? h : best), null)];
+  }));
+  const buyPicks = deficitCats.map((c) => ({ cat: c, amount: buyByCat[c], example: buyExampleByCat[c]?.name ?? null }));
+  const buyTotal = Object.values(buyByCat).reduce((s, v) => s + v, 0);
 
   const currentAmount = Object.fromEntries(CATS.map((c) => [c, (currentHoldingPct[c] / 100) * total]));
-  const newAmount = {
-    A: currentAmount.A + buyCash,
-    B: currentAmount.B,
-    C: currentAmount.C + buySP500,
-    D: currentAmount.D - sellByRank.D,
-    E: currentAmount.E - sellByRank.E,
-  };
+  const newAmount = Object.fromEntries(CATS.map((c) => [c, currentAmount[c] - (sellByCat[c] || 0) + (buyByCat[c] || 0)]));
   // 達成度：この提案の実行で「現状→目標」のギャップ（gapBefore）がどれだけ縮まるか（gapAfter）を割合で示す。
+  // 全クラスで同じロジック（乖離そのものを目標に按分）を適用しているため、原資不足によるクラス間の
+  // 達成度の差は「保有量・原資の制約」によるものであり、優先順位による恣意的な差ではない。
   const projection = CATS.map((cat) => {
     const curPct = currentHoldingPct[cat];
     const newPct = (newAmount[cat] / total) * 100;
     const tgtPct = target[cat];
     const gapBefore = curPct - tgtPct;
     const gapAfter = newPct - tgtPct;
-    const achievement = Math.abs(gapBefore) < 0.05 ? 100 : Math.max(0, Math.min(100, (1 - Math.abs(gapAfter) / Math.abs(gapBefore)) * 100));
+    const achievement = Math.abs(gapBefore) < DD3_REBALANCE_DIFF_THRESHOLD_PT ? 100 : Math.max(0, Math.min(100, (1 - Math.abs(gapAfter) / Math.abs(gapBefore)) * 100));
     return { cat, curPct, newPct, tgtPct, achievement };
   });
 
-  const sp500Candidate = holdings.filter((h) => h.category === "SP500").reduce((best, h) => (!best || h.amount > best.amount ? h : best), null);
-
-  return { needed: true, target, total, deTargetPct, deCurrentPct, sellGoal, sellTotal, shortfall: sellGoal - sellTotal, picks, buySP500, buyCash, projection, sp500Candidate };
+  return { needed: true, target, total, deTargetPct, deCurrentPct, diffPct, diffValue, sellGoal, sellTotal, shortfall, picks, buyPicks, buyTotal, cashTopUp, projection };
 }
 function buildDD3RebalanceLines(plan, amt) {
   const L = [];
   L.push("【DD-3%リバランス提案】");
   if (!plan.needed) {
-    L.push(`現在のD+E配分（${plan.deCurrentPct.toFixed(1)}%）はDD-3%到達時モデルの目標（D+E ${plan.deTargetPct}%）の範囲内のため、追加の売却提案はありません。`);
+    L.push(`現在の配分はDD-3%到達時モデルの目標との乖離が全クラスで±${DD3_REBALANCE_DIFF_THRESHOLD_PT}pt以内のため、追加の売却提案はありません。`);
     return L;
   }
-  L.push(`売却対象ランク: D・E ランクから${amt(plan.sellTotal)}を売却（世帯全体の${((plan.sellTotal / plan.total) * 100).toFixed(1)}%）`);
-  if (plan.shortfall > 0) L.push(`※ D・E保有の合計だけでは目標額${amt(plan.sellGoal)}に${amt(plan.shortfall)}不足しています（保有分を全て売却する前提の金額です）。`);
-  L.push("売却銘柄候補（ランク順）:");
-  if (!plan.picks.length) L.push("  （固定ポジション以外にD・E保有がありません）");
-  for (const p of plan.picks) L.push(`  * ${p.name} ${amt(p.amount)}（${p.rank}ランク） → 売却推奨額 ${amt(p.sellAmount)}`);
+  L.push(`売却対象: 目標比${DD3_REBALANCE_DIFF_THRESHOLD_PT}pt超で超過している各クラスから、超過分に比例して合計${amt(plan.sellTotal)}を売却（世帯全体の${((plan.sellTotal / plan.total) * 100).toFixed(1)}%）`);
+  if (plan.shortfall > 0) L.push(`※ 超過クラスの保有合計だけでは目標額${amt(plan.sellGoal)}に${amt(plan.shortfall)}不足しています（保有分を全て売却する前提の金額です）。`);
+  if (plan.cashTopUp > 0) L.push(`※ Aクラスのうち${amt(plan.cashTopUp)}は現金チェックポイントの目標維持のため売却せず温存します（Aクラスを現状よりさらに超過させることはありません）。`);
+  L.push("売却銘柄候補（クラス別・超過幅の大きいクラスほど多く売却）:");
+  if (!plan.picks.length) L.push("  （固定ポジション以外に超過クラスの保有がありません）");
+  for (const p of plan.picks) L.push(`  * ${p.name} ${amt(p.amount)}（${p.rank}クラス） → 売却推奨額 ${amt(p.sellAmount)}`);
   L.push("");
-  L.push("買付提案:");
-  L.push(`  * SP500関連: 売却額の50% = ${amt(plan.buySP500)} 買付推奨${plan.sp500Candidate ? `（例）${plan.sp500Candidate.name} へ追加` : "（既存SP500カテゴリー保有なし・新規検討）"}`);
-  L.push(`  * 現金ストック: 売却額の50% = ${amt(plan.buyCash)} を現金化`);
+  L.push("買付提案（不足幅に比例して配分）:");
+  if (!plan.buyPicks.length && plan.cashTopUp <= 0) L.push("  （不足しているクラスがありません）");
+  for (const b of plan.buyPicks) L.push(`  * ${b.cat}クラス: ${amt(b.amount)} 買付推奨${b.example ? `（例）${b.example} へ追加` : "（該当クラスの既存保有なし・新規検討）"}`);
+  if (plan.cashTopUp > 0) L.push(`  * 現金（Aクラス内）: ${amt(plan.cashTopUp)} を売却せず現金のまま温存`);
   L.push("");
   L.push("実行後のポートフォリオ（予想）:");
   for (const p of plan.projection) L.push(`  * ${p.cat}: ${p.curPct.toFixed(1)}% → ${p.newPct.toFixed(1)}%（目標${p.tgtPct}%・達成度${p.achievement.toFixed(0)}%）`);
@@ -2892,7 +2922,7 @@ function fmtDateTimeJST(date) {
   } catch (e) { return date.toISOString(); }
 }
 function buildSummaryMarkdown(ctx) {
-  const { d, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, fixedPositions, recentStats, exposure, diff, consultQuestion, hideAmounts, generatedAt } = ctx;
+  const { d, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, fixedPositions, checkpoints, recentStats, exposure, diff, consultQuestion, hideAmounts, generatedAt } = ctx;
   const total = holdingsTotal(holdings);
   const cashHoldings = holdings.filter((h) => h.category === "現金");
   const cash = cashHoldings.reduce((s, h) => s + h.amount, 0);
@@ -2965,7 +2995,7 @@ function buildSummaryMarkdown(ctx) {
   }
   L.push("");
 
-  const dd3Plan = computeDD3RebalancePlan(holdings, currentHoldingPct, fixedPositions);
+  const dd3Plan = computeDD3RebalancePlan(holdings, currentHoldingPct, fixedPositions, checkpoints);
   L.push(d.currentDD <= -3 ? "⚠ 現在DD-3%以下です。以下は今すぐ実行を検討できる提案です。" : "（現在DD-3%未到達のため、以下はDD-3%到達時点を想定したシミュレーションです）");
   for (const line of buildDD3RebalanceLines(dd3Plan, amt)) L.push(line);
   L.push("");
@@ -3066,13 +3096,16 @@ function buildSummaryJSON(ctx) {
     blocks: { AB: blocks.AB, C: blocks.Cb, DE: blocks.DE },
     fixed_positions: Object.entries(fixedPositions).map(([name, reason]) => ({ name, reason, value: val(holdings.filter((h) => h.name === name).reduce((s, h) => s + h.amount, 0)) })),
     dd3_rebalance_plan: (() => {
-      const plan = computeDD3RebalancePlan(holdings, currentHoldingPct, fixedPositions);
+      const plan = computeDD3RebalancePlan(holdings, currentHoldingPct, fixedPositions, checkpoints);
       if (!plan.needed) return { needed: false, de_current_pct: plan.deCurrentPct, de_target_pct: plan.deTargetPct };
       return {
         needed: true, currently_actionable: d.currentDD <= -3,
+        diff_threshold_pt: DD3_REBALANCE_DIFF_THRESHOLD_PT,
+        diff_by_class: Object.fromEntries(CATS.map((c) => [c, { diff_pt: plan.diffPct[c], diff_value: val(plan.diffValue[c]) }])),
         sell_total: val(plan.sellTotal), sell_goal: val(plan.sellGoal), shortfall: val(plan.shortfall),
         sell_candidates: plan.picks.map((p) => ({ name: p.name, rank: p.rank, holding_value: val(p.amount), sell_amount: val(p.sellAmount) })),
-        buy_sp500: val(plan.buySP500), buy_sp500_example: plan.sp500Candidate?.name ?? null, buy_cash: val(plan.buyCash),
+        buy_total: val(plan.buyTotal), buy_by_class: plan.buyPicks.map((b) => ({ cat: b.cat, amount: val(b.amount), example: b.example })),
+        cash_top_up: val(plan.cashTopUp),
         projection: plan.projection.map((p) => ({ cat: p.cat, current_pct: p.curPct, new_pct: Number(p.newPct.toFixed(1)), target_pct: p.tgtPct, achievement_pct: Number(p.achievement.toFixed(0)) })),
       };
     })(),
