@@ -1300,17 +1300,18 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBru
   const [activeDate, setActiveDate] = useState(null);
   const chartFirst = chartData[0].date, chartLast = chartData[chartData.length - 1].date;
   const markerFontSize = Math.max(8, fontSize - 1);
-  const isShortTerm = rangeDays <= 200; // 1・3・6ヶ月＝ラベル常時表示、1年以上＝点のみ＋ホバーで詳細
   const maxDrawdownInView = Math.min(0, ...chartData.map((p) => p.dd)); // 表示期間内の最大DD%（最も深い下落）
   const ddTicks = ddAxisTicksForMaxDrawdown(maxDrawdownInView);
   const markerPoints = [];
   if (!hidden.price) {
     const seenIdx = new Set();
-    const addPt = (idx, date, price, color, label, forceDot) => {
+    // DD開始・底値・回復ポイントのラベルは期間を問わず常時表示せず点のみ描画し、ホバー時のツールチップ
+    // （EvalTooltipContent側でマーカー注釈を統合表示）でのみ内容を見せる（全期間で共通の挙動に統一）。
+    const addPt = (idx, date, price, color, label) => {
       if (seenIdx.has(idx) || !(chartFirst <= date && date <= chartLast)) return;
       seenIdx.add(idx);
       const p = nearestChartPoint(chartData, date);
-      markerPoints.push({ date: p.date, price: p.price, color, anchor: "middle", fontSize: markerFontSize, label, dotOnly: forceDot || !isShortTerm });
+      markerPoints.push({ date: p.date, price: p.price, color, anchor: "middle", fontSize: markerFontSize, label, dotOnly: true });
     };
     // 過去の各DD局面（ATH→底値→回復）
     for (const ep of d.episodes) {
@@ -1318,9 +1319,7 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBru
       addPt(ep.athIdx, ep.athDate, ep.athPrice, C.teal, `$${ep.athPrice.toFixed(2)}（${fmtYMD(ep.athDate)}）`);
       if (ep.troughIdx !== ep.athIdx) {
         const isWorst = periodStats?.worstEpisode?.troughIdx === ep.troughIdx;
-        // 底値の詳細（開始～底値・底値～回復の日数）は全ての底値マーカーに付記して長くなるため、常時表示ラベルではなく
-        // ホバー時のツールチップ（幅の制約を受けず画面外にはみ出ない）で表示する。
-        addPt(ep.troughIdx, ep.troughDate, ep.troughPrice, C.rust, troughLabel(ep.athIdx, ep.troughIdx, ep.troughDate, ep.troughPrice, ep.troughDD, ep.recoveryIdx, isWorst), true);
+        addPt(ep.troughIdx, ep.troughDate, ep.troughPrice, C.rust, troughLabel(ep.athIdx, ep.troughIdx, ep.troughDate, ep.troughPrice, ep.troughDD, ep.recoveryIdx, isWorst));
       }
       if (ep.recoveryIdx !== ep.troughIdx) addPt(ep.recoveryIdx, ep.recoveryDate, ep.recoveryPrice, C.blue, `$${ep.recoveryPrice.toFixed(2)}（${fmtYMD(ep.recoveryDate)}）`);
     }
@@ -1328,11 +1327,11 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBru
     addPt(d.episode.athIdx, d.athDate, d.currentATH, C.teal, `$${d.currentATH.toFixed(2)}（${fmtYMD(d.athDate)}）`);
     const troughIsToday = d.trough.i === d.last.i; // 底値がまだ今日（未回復）の場合は現在値マーカーと重なるため統合する
     const troughIsWorst = periodStats?.worstEpisode?.troughIdx === d.trough.i;
-    if (!troughIsToday && d.trough.i !== d.episode.athIdx) addPt(d.trough.i, d.trough.date, d.trough.price, C.rust, troughLabel(d.episode.athIdx, d.trough.i, d.trough.date, d.trough.price, d.trough.dd, null, troughIsWorst), true);
+    if (!troughIsToday && d.trough.i !== d.episode.athIdx) addPt(d.trough.i, d.trough.date, d.trough.price, C.rust, troughLabel(d.episode.athIdx, d.trough.i, d.trough.date, d.trough.price, d.trough.dd, null, troughIsWorst));
     const currentLabel = troughIsToday
       ? troughLabel(d.episode.athIdx, d.trough.i, d.trough.date, d.trough.price, d.currentDD, null, troughIsWorst)
       : `$${d.currentPrice.toFixed(2)}（${fmtYMD(d.last.date)}）`;
-    markerPoints.push({ date: chartLast, price: d.currentPrice, color: depthColor(d.currentDD), anchor: "end", fontSize: markerFontSize, label: currentLabel, dotOnly: troughIsToday || !isShortTerm, isCurrent: true });
+    markerPoints.push({ date: chartLast, price: d.currentPrice, color: depthColor(d.currentDD), anchor: "end", fontSize: markerFontSize, label: currentLabel, dotOnly: true, isCurrent: true });
   }
   const markerByTime = new Map(markerPoints.map((m) => [m.date.getTime(), m]));
   return (
