@@ -8,7 +8,8 @@ import {
 import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Download, RefreshCw, Database, Trash2, Zap, Copy, FileText, Activity, Layers, ListChecks, Smartphone, Monitor } from "lucide-react";
 import { storage } from "@/lib/storage";
 
-// Cloudflare Worker（当日のSP500/SPY/VOO終値を返す）のエンドポイント。デプロイ先のURLに置き換えてください。
+// Cloudflare Worker（当日のVOO/QQQ終値を返す。SP500はここでは扱わず引き続きCSV取り込み/直接入力で更新する）のエンドポイント。
+// デプロイ先のURLに置き換えてください。
 const STOCK_PRICES_API_URL = "https://stock-prices.shinichiogasawara0103.workers.dev/api/stock-prices";
 
 /* ---------------- design tokens ---------------- */
@@ -106,9 +107,11 @@ function parseStooqCSV(text) {
   rows.sort((a, b) => a.date - b.date);
   return rows;
 }
-// 本アプリの「データ出力」が生成する統合形式（見出し Date,SP500,SPY,VOO）を検出してパースする。
+// 本アプリの「データ出力」が生成する統合形式（見出し Date,SP500,VOO,QQQ）を検出してパースする。
 // 日付は"-"/"/"区切り・ゼロ埋めなし（例:2026/9/3）どちらも parseDateOnly が吸収し、昇順・降順どちらの並びでも読めるよう都度ソートし直す。
-// 見出しにsp500/spy/vooの列が揃っていない場合はnullを返し、呼び出し側は従来のStooq単一Close列形式へフォールバックする。
+// SP500をまとめて手入力・貼り付けでアップロードするケースにも対応できるよう、sp500/voo/qqqのいずれか1列でも
+// 見出しに見つかれば統合形式として扱う（見つからない列は空配列を返す）。日付列すら見つからなければnullを返し、
+// 呼び出し側は従来のStooq単一Close列形式へフォールバックする。
 function parseCombinedTrackRecordCSV(text) {
   const normalized = text.replace(BOM_RE, "").trim();
   const lines = normalized.split(/\r?\n/).filter((l) => l.trim() !== "");
@@ -116,25 +119,25 @@ function parseCombinedTrackRecordCSV(text) {
   const header = parseCSVLine(lines[0]).map((h) => h.trim().toLowerCase());
   const dateIdx = findCol(header, ["date", "日付"]);
   const sp500Idx = findCol(header, ["sp500", "s&p500"]);
-  const spyIdx = findCol(header, ["spy"]);
   const vooIdx = findCol(header, ["voo"]);
-  if (dateIdx === -1 || sp500Idx === -1 || spyIdx === -1 || vooIdx === -1) return null;
-  const sp500 = [], spy = [], voo = [];
+  const qqqIdx = findCol(header, ["qqq"]);
+  if (dateIdx === -1 || (sp500Idx === -1 && vooIdx === -1 && qqqIdx === -1)) return null;
+  const sp500 = [], voo = [], qqq = [];
   for (let i = 1; i < lines.length; i++) {
     const cols = parseCSVLine(lines[i]);
-    if (cols.length <= Math.max(dateIdx, sp500Idx, spyIdx, vooIdx)) continue;
+    if (cols.length <= Math.max(dateIdx, sp500Idx, vooIdx, qqqIdx)) continue;
     const d = parseDateOnly(cols[dateIdx]);
     if (isNaN(d.getTime())) continue;
-    const num = (idx) => { const v = parseFloat(String(cols[idx]).replace(/,/g, "").trim()); return isNaN(v) ? null : v; };
-    const sp = num(sp500Idx), sy = num(spyIdx), vo = num(vooIdx);
+    const num = (idx) => { if (idx === -1) return null; const v = parseFloat(String(cols[idx]).replace(/,/g, "").trim()); return isNaN(v) ? null : v; };
+    const sp = num(sp500Idx), vo = num(vooIdx), qq = num(qqqIdx);
     if (sp !== null) sp500.push({ date: d, price: sp });
-    if (sy !== null) spy.push({ date: d, price: sy });
     if (vo !== null) voo.push({ date: d, price: vo });
+    if (qq !== null) qqq.push({ date: d, price: qq });
   }
   sp500.sort((a, b) => a.date - b.date);
-  spy.sort((a, b) => a.date - b.date);
   voo.sort((a, b) => a.date - b.date);
-  return { sp500, spy, voo };
+  qqq.sort((a, b) => a.date - b.date);
+  return { sp500, voo, qqq };
 }
 const SPY_LISTING_DATE = new Date("1993-01-22"); // S&P500の実際の設定日（この日以前はS&P500の実データが存在しない）
 
@@ -250,7 +253,7 @@ function buildAnalysisText(d, currentHoldingPct, totalValue) {
 }
 
 // trackRecordOverride を渡すと、この系列自身の実績ではなく渡された統計（節目間の進行確率・最終到達確率・速度別確率など）を使う。
-// VOO/SPYは track record として使うには期間が短いため、最も長い実績があるSP500（本系列）の統計をVOO/SPYの速度アラートにも流用するために使用する。
+// VOO/QQQは track record として使うには期間が短いため、最も長い実績があるSP500（本系列）の統計をVOO/QQQの速度アラートにも流用するために使用する。
 function computeAll(rawSeries, trackRecordOverride) {
   let ath = 0;
   const FULL = rawSeries.map((p, i) => { ath = Math.max(ath, p.price); return { i, date: p.date, price: p.price, ath, dd: Number((((p.price / ath) - 1) * 100).toFixed(2)) }; });
@@ -284,9 +287,10 @@ function computeAll(rawSeries, trackRecordOverride) {
   const speedAlert = computeSpeedAlert(FULL, last, episode, currentDD, trackRecord);
   return { FULL, last, currentDD, currentPrice, currentATH, isDrawdown, mode, episode, ddStartIdx, daysSinceDDStart, daysSinceCurrentThreshold, legDays, isEntryLeg, currentTLabel, currentEpisodeCurve, speedCategory, nextProg, modelRow, currentLevelP, currentFreqLabel, athDate, daysSinceATH, trough, episodes, trackRecord, nextMilestone, distanceToNextMilestone, nextMilestonePrice, speedAlert };
 }
-// spyVooSeries（{date, spy?, voo?}の配列）から指定フィールドのみを抽出し、computeAllにそのまま渡せる{date,price}系列に変換する。
-function seriesFromSpyVoo(spyVooSeries, field) {
-  return spyVooSeries.filter((p) => p[field] != null).map((p) => ({ date: p.date, price: p[field] })).sort((a, b) => a.date - b.date);
+// vooQqqSeries（{date, voo?, qqq?}の配列。IndexedDBキー名は歴史的経緯で"spy_voo_price_history"のまま）から
+// 指定フィールドのみを抽出し、computeAllにそのまま渡せる{date,price}系列に変換する。
+function seriesFromVooQqq(vooQqqSeries, field) {
+  return vooQqqSeries.filter((p) => p[field] != null).map((p) => ({ date: p.date, price: p[field] })).sort((a, b) => a.date - b.date);
 }
 // 前営業日（系列上の直前の日）比の変化率（%）。系列が2件未満なら算出不可。
 function dayChangePct(dObj) {
@@ -1643,10 +1647,20 @@ function BoxStatsPanel({ days, compact }) {
     </div>
   );
 }
+// VOO/QQQのどちらを「経過日数」「DD加速度アラート」の基準にするかを切り替える小さなトグル。
+function SpeedAlertInstrumentToggle({ value, onChange }) {
+  return (
+    <div className="flex gap-0.5" onClick={(e) => e.stopPropagation()}>
+      {["voo", "qqq"].map((k) => (
+        <button key={k} onClick={() => onChange(k)} className="text-[8px] leading-none px-1 py-0.5 rounded" style={{ background: value === k ? C.teal : "transparent", color: value === k ? C.bg : C.textDim, border: `1px solid ${C.borderSoft}`, fontWeight: value === k ? 700 : 400, cursor: "pointer" }}>{k.toUpperCase()}</button>
+      ))}
+    </div>
+  );
+}
 // 「DD開始から」＝直近ATH更新から「ATH更新中」「ボックス圏」「DD3%以降」の状態を一本化して表示する。
-function ATHProgressBlock({ dVoo }) {
-  if (!dVoo) return <div className="text-xs" style={{ color: C.textDim }}>VOOデータ未取り込み</div>;
-  const { daysSinceATH, athDate, currentPrice, currentDD, isDrawdown } = dVoo;
+function ATHProgressBlock({ dInstrument }) {
+  if (!dInstrument) return <div className="text-xs" style={{ color: C.textDim }}>データ未取り込み</div>;
+  const { daysSinceATH, athDate, currentPrice, currentDD, isDrawdown } = dInstrument;
   if (daysSinceATH === 0) {
     return (
       <div>
@@ -1669,8 +1683,10 @@ function ATHProgressBlock({ dVoo }) {
 }
 
 /* ---------------- status panel ---------------- */
-function StatusPanel({ d, dVoo, dSpy, onOpenSpeedAlert }) {
-  const tickers = [{ label: "SP500", data: d }, { label: "VOO", data: dVoo }, { label: "SPY", data: dSpy }];
+function StatusPanel({ d, dVoo, dQqq, speedAlertInstrument, onChangeSpeedAlertInstrument, onOpenSpeedAlert }) {
+  const tickers = [{ label: "SP500", data: d }, { label: "VOO", data: dVoo }, { label: "QQQ", data: dQqq }];
+  const dSpeedAlert = speedAlertInstrument === "qqq" ? dQqq : dVoo;
+  const speedAlertLabel = speedAlertInstrument.toUpperCase();
   return (
     <Panel title="現在のステータス" hideHeader className="h-full">
       <div className="flex h-full">
@@ -1713,29 +1729,32 @@ function StatusPanel({ d, dVoo, dSpy, onOpenSpeedAlert }) {
           ))}
         </div>
         <div className="flex-1 px-4 py-2 flex flex-col justify-center" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
-          <div className="flex items-center gap-1.5 mb-1"><Clock size={11} style={{ color: C.textDim }} /><span className="text-[10px]" style={{ color: C.textDim }}>経過日数（VOO基準）</span></div>
-          <ATHProgressBlock dVoo={dVoo} />
+          <div className="flex items-center justify-between mb-1">
+            <div className="flex items-center gap-1.5"><Clock size={11} style={{ color: C.textDim }} /><span className="text-[10px]" style={{ color: C.textDim }}>経過日数（{speedAlertLabel}基準）</span></div>
+            <SpeedAlertInstrumentToggle value={speedAlertInstrument} onChange={onChangeSpeedAlertInstrument} />
+          </div>
+          <ATHProgressBlock dInstrument={dSpeedAlert} />
         </div>
-        <button onClick={dVoo ? onOpenSpeedAlert : undefined} disabled={!dVoo} className="flex-1 px-4 py-2 flex flex-col justify-center text-left" style={{ background: "transparent", border: "none", cursor: dVoo ? "pointer" : "default", opacity: dVoo ? 1 : 0.5 }}>
-          <div className="flex items-center gap-1.5 mb-1"><Zap size={11} style={{ color: dVoo ? speedAlertAccent(dVoo.speedAlert) : C.textDim }} /><span className="text-[10px]" style={{ color: C.textDim }}>DD加速度アラート（VOO基準）</span>{dVoo && <ChevronRight size={11} style={{ color: C.textDim, marginLeft: "auto" }} />}</div>
-          {!dVoo && <div className="text-xs" style={{ color: C.textDim }}>VOOデータ未取り込み</div>}
-          {dVoo && dVoo.speedAlert.level === "normal" && (<>
-            <div className="text-xs mb-0.5" style={{ color: C.textMuted }}>待機中（現在ATH圏、DD{dVoo.speedAlert.currentDD.toFixed(1)}%）</div>
+        <button onClick={dSpeedAlert ? onOpenSpeedAlert : undefined} disabled={!dSpeedAlert} className="flex-1 px-4 py-2 flex flex-col justify-center text-left" style={{ background: "transparent", border: "none", cursor: dSpeedAlert ? "pointer" : "default", opacity: dSpeedAlert ? 1 : 0.5 }}>
+          <div className="flex items-center gap-1.5 mb-1"><Zap size={11} style={{ color: dSpeedAlert ? speedAlertAccent(dSpeedAlert.speedAlert) : C.textDim }} /><span className="text-[10px]" style={{ color: C.textDim }}>DD加速度アラート（{speedAlertLabel}基準）</span>{dSpeedAlert && <ChevronRight size={11} style={{ color: C.textDim, marginLeft: "auto" }} />}</div>
+          {!dSpeedAlert && <div className="text-xs" style={{ color: C.textDim }}>{speedAlertLabel}データ未取り込み</div>}
+          {dSpeedAlert && dSpeedAlert.speedAlert.level === "normal" && (<>
+            <div className="text-xs mb-0.5" style={{ color: C.textMuted }}>待機中（現在ATH圏、DD{dSpeedAlert.speedAlert.currentDD.toFixed(1)}%）</div>
             <div className="text-[10px]" style={{ color: C.textDim }}>次にDD3%到達したら速度を自動計測します</div>
           </>)}
-          {dVoo && dVoo.speedAlert.level === "pending5" && (<>
-            <div className="text-xs mb-0.5" style={{ color: C.textMuted }}>DD3%到達後{dVoo.speedAlert.daysSinceDD3}営業日経過、DD5%未達</div>
-            <div className="mono text-xs" style={{ color: C.amber }}>{dVoo.speedAlert.hint ?? "速度計測中"}</div>
+          {dSpeedAlert && dSpeedAlert.speedAlert.level === "pending5" && (<>
+            <div className="text-xs mb-0.5" style={{ color: C.textMuted }}>DD3%到達後{dSpeedAlert.speedAlert.daysSinceDD3}営業日経過、DD5%未達</div>
+            <div className="mono text-xs" style={{ color: C.amber }}>{dSpeedAlert.speedAlert.hint ?? "速度計測中"}</div>
           </>)}
-          {dVoo && dVoo.speedAlert.level === "confirmed5" && (<>
-            <div className="mono text-sm font-bold" style={{ color: speedAlertAccent(dVoo.speedAlert) }}>{dVoo.speedAlert.warnLabel}</div>
-            <div className="text-xs" style={{ color: C.textMuted }}>3→5%の速度：{dVoo.speedAlert.speed35}営業日</div>
+          {dSpeedAlert && dSpeedAlert.speedAlert.level === "confirmed5" && (<>
+            <div className="mono text-sm font-bold" style={{ color: speedAlertAccent(dSpeedAlert.speedAlert) }}>{dSpeedAlert.speedAlert.warnLabel}</div>
+            <div className="text-xs" style={{ color: C.textMuted }}>3→5%の速度：{dSpeedAlert.speedAlert.speed35}営業日</div>
           </>)}
-          {dVoo && dVoo.speedAlert.level === "deep8" && (<>
-            <div className="mono text-sm font-bold" style={{ color: speedAlertAccent(dVoo.speedAlert) }}>{dVoo.speedAlert.warnLabel}</div>
-            <div className="text-xs" style={{ color: C.textMuted }}>{dVoo.speedAlert.speed38Category ?? "3→8%速度：計測不可"}</div>
+          {dSpeedAlert && dSpeedAlert.speedAlert.level === "deep8" && (<>
+            <div className="mono text-sm font-bold" style={{ color: speedAlertAccent(dSpeedAlert.speedAlert) }}>{dSpeedAlert.speedAlert.warnLabel}</div>
+            <div className="text-xs" style={{ color: C.textMuted }}>{dSpeedAlert.speedAlert.speed38Category ?? "3→8%速度：計測不可"}</div>
           </>)}
-          {dVoo && <div className="text-[9px] mt-0.5 underline" style={{ color: C.textDim }}>クリックで詳細・バックテストを表示</div>}
+          {dSpeedAlert && <div className="text-[9px] mt-0.5 underline" style={{ color: C.textDim }}>クリックで詳細・バックテストを表示</div>}
         </button>
       </div>
     </Panel>
@@ -2291,10 +2310,10 @@ function CheckpointSettingsContent({ checkpoints, onCheckpointChange, holdings }
 }
 
 /* ---------------- data input modal ---------------- */
-// VOO/SPY単体のデータ管理パネル（CSV一括取り込み・1日分の手動入力・現在のデータ表示・削除）。
-function InstrumentPanel({ instrument, spyVooSeries, fileName, fileMsg, onFileChange, manualDate, setManualDate, manualPrice, setManualPrice, onAddManual, onResetField }) {
-  const label = instrument === "voo" ? "VOO" : "SPY";
-  const entries = spyVooSeries.filter((p) => p[instrument] != null);
+// VOO/QQQ単体のデータ管理パネル（CSV一括取り込み・1日分の手動入力・現在のデータ表示・削除）。
+function InstrumentPanel({ instrument, vooQqqSeries, fileName, fileMsg, onFileChange, manualDate, setManualDate, manualPrice, setManualPrice, onAddManual, onResetField }) {
+  const label = instrument === "voo" ? "VOO" : "QQQ";
+  const entries = vooQqqSeries.filter((p) => p[instrument] != null);
   const prevPrice = entries.length ? entries[entries.length - 1][instrument] : null;
   return (
     <div>
@@ -2327,9 +2346,9 @@ function InstrumentPanel({ instrument, spyVooSeries, fileName, fileMsg, onFileCh
   );
 }
 
-function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, source, holdings, onUpdateHoldings, onResetAndImportHoldings, onResetHoldings, holdingsSource, overrides, categoryDefaultRanks, onCategoryDefaultRankChange, spyVooSeries, onAppendSpyVoo, onImportSpyVoo, onResetSpyVooField }) {
+function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, source, holdings, onUpdateHoldings, onResetAndImportHoldings, onResetHoldings, holdingsSource, overrides, categoryDefaultRanks, onCategoryDefaultRankChange, vooQqqSeries, onAppendVooQqq, onImportVooQqq, onResetVooQqqField }) {
   const [dataset, setDataset] = useState("voo"); // "voo" | "holdings"
-  const [instrument, setInstrument] = useState("sp500"); // "sp500" | "voo" | "spy"（voo/spyのCSV/手動入力/削除の対象切り替え）
+  const [instrument, setInstrument] = useState("sp500"); // "sp500" | "voo" | "qqq"（voo/qqqのCSV/手動入力/削除の対象切り替え）
   const [tab, setTab] = useState("csv");
   const [instrManualDate, setInstrManualDate] = useState(localYMD());
   const [instrManualPrice, setInstrManualPrice] = useState("");
@@ -2350,23 +2369,23 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
   const [updateLoading, setUpdateLoading] = useState(false);
   const [updateMsg, setUpdateMsg] = useState(null);
   const [updateError, setUpdateError] = useState(false);
-  const [spyImportFileName, setSpyImportFileName] = useState(null);
-  const [spyImportMsg, setSpyImportMsg] = useState(null);
+  const [qqqImportFileName, setQqqImportFileName] = useState(null);
+  const [qqqImportMsg, setQqqImportMsg] = useState(null);
   const [vooImportFileName, setVooImportFileName] = useState(null);
   const [vooImportMsg, setVooImportMsg] = useState(null);
 
   // 「方式B：直接入力」の終値欄のデフォルト表示（プレースホルダー）＝選択中の指数の前日（直近取り込み済み）の評価額。
   const sp500PrevPrice = rawSeries.length ? rawSeries[rawSeries.length - 1].price : null;
 
-  const handleSpyImportFile = (e) => {
+  const handleQqqImportFile = (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    setSpyImportFileName(file.name);
+    setQqqImportFileName(file.name);
     const reader = new FileReader();
     reader.onload = (ev) => {
       const parsed = parseStooqCSV(String(ev.target.result));
-      if (parsed.length) { onImportSpyVoo("spy", parsed); setSpyImportMsg(`${parsed.length}件のSPY終値を取り込みました（${parsed[0].date.toLocaleDateString("ja-JP")} 〜 ${parsed[parsed.length - 1].date.toLocaleDateString("ja-JP")}）`); }
-      else setSpyImportMsg("CSVを解析できませんでした。Date,Open,High,Low,Close,Volume 形式か確認してください。");
+      if (parsed.length) { onImportVooQqq("qqq", parsed); setQqqImportMsg(`${parsed.length}件のQQQ終値を取り込みました（${parsed[0].date.toLocaleDateString("ja-JP")} 〜 ${parsed[parsed.length - 1].date.toLocaleDateString("ja-JP")}）`); }
+      else setQqqImportMsg("CSVを解析できませんでした。Date,Open,High,Low,Close,Volume 形式か確認してください。");
     };
     reader.readAsText(file);
   };
@@ -2377,7 +2396,7 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
     const reader = new FileReader();
     reader.onload = (ev) => {
       const parsed = parseStooqCSV(String(ev.target.result));
-      if (parsed.length) { onImportSpyVoo("voo", parsed); setVooImportMsg(`${parsed.length}件のVOO終値を取り込みました（${parsed[0].date.toLocaleDateString("ja-JP")} 〜 ${parsed[parsed.length - 1].date.toLocaleDateString("ja-JP")}）`); }
+      if (parsed.length) { onImportVooQqq("voo", parsed); setVooImportMsg(`${parsed.length}件のVOO終値を取り込みました（${parsed[0].date.toLocaleDateString("ja-JP")} 〜 ${parsed[parsed.length - 1].date.toLocaleDateString("ja-JP")}）`); }
       else setVooImportMsg("CSVを解析できませんでした。Date,Open,High,Low,Close,Volume 形式か確認してください。");
     };
     reader.readAsText(file);
@@ -2391,10 +2410,10 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
       const res = await fetch(STOCK_PRICES_API_URL);
       if (!res.ok) throw new Error("fetch failed");
       const data = await res.json();
-      if (!data || !data.date || typeof data.spy !== "number" || typeof data.voo !== "number") throw new Error("invalid response");
+      if (!data || !data.date || typeof data.voo !== "number" || typeof data.qqq !== "number") throw new Error("invalid response");
       const date = parseDateOnly(data.date);
-      onAppendSpyVoo({ date, spy: data.spy, voo: data.voo });
-      setUpdateMsg(`更新完了：${date.toLocaleDateString("ja-JP")} のSPY/VOO終値を記録しました（S&P500はStooq取り込み/直接入力で更新してください）`);
+      onAppendVooQqq({ date, voo: data.voo, qqq: data.qqq });
+      setUpdateMsg(`更新完了：${date.toLocaleDateString("ja-JP")} のVOO/QQQ終値を記録しました（S&P500はStooq取り込み/直接入力で更新してください）`);
     } catch (e) {
       setUpdateError(true);
       setUpdateMsg("データ取得失敗。稼働時間外の可能性があります");
@@ -2404,18 +2423,18 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
   };
 
   const handleExportCSV = () => {
-    const header = "Date,SP500,SPY,VOO";
-    const spyVooByDate = new Map(spyVooSeries.map((p) => [p.date.toISOString().slice(0, 10), p]));
-    const allDates = new Set([...rawSeries.map((p) => p.date.toISOString().slice(0, 10)), ...spyVooByDate.keys()]);
+    const header = "Date,SP500,VOO,QQQ";
+    const vooQqqByDate = new Map(vooQqqSeries.map((p) => [p.date.toISOString().slice(0, 10), p]));
+    const allDates = new Set([...rawSeries.map((p) => p.date.toISOString().slice(0, 10)), ...vooQqqByDate.keys()]);
     const sp500ByDate = new Map(rawSeries.map((p) => [p.date.toISOString().slice(0, 10), p]));
     const rows = Array.from(allDates).sort().map((dateStr) => {
       const sp500 = sp500ByDate.get(dateStr);
-      const spyVoo = spyVooByDate.get(dateStr);
+      const vooQqq = vooQqqByDate.get(dateStr);
       return [
         dateStr,
         sp500 && sp500.price != null ? sp500.price : "",
-        spyVoo && spyVoo.spy != null ? spyVoo.spy : "",
-        spyVoo && spyVoo.voo != null ? spyVoo.voo : "",
+        vooQqq && vooQqq.voo != null ? vooQqq.voo : "",
+        vooQqq && vooQqq.qqq != null ? vooQqq.qqq : "",
       ].join(",");
     });
     const csv = [header, ...rows].join("\n");
@@ -2424,7 +2443,7 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
     const a = document.createElement("a");
     const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
     a.href = url;
-    a.download = `sp500_spy_voo_trackrecord_${stamp}.csv`;
+    a.download = `sp500_voo_qqq_trackrecord_${stamp}.csv`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -2438,24 +2457,25 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
     const reader = new FileReader();
     reader.onload = (ev) => {
       const text = String(ev.target.result);
-      // 「データ出力」で生成した統合形式（Date,SP500,SPY,VOO）を優先的に検出する。
-      // 見つかればSP500・SPY・VOOをそれぞれの既存の取り込み経路（onReplace/onImportSpyVoo）にそのまま渡すため、
+      // 「データ出力」で生成した統合形式（Date,SP500,VOO,QQQ）を優先的に検出する。SP500列だけをまとめて
+      // 手入力・貼り付けでアップロードするケースにも対応できるよう、いずれか1列でもあれば取り込む。
+      // 見つかればSP500・VOO・QQQをそれぞれの既存の取り込み経路（onReplace/onImportVooQqq）にそのまま渡すため、
       // ロジックはPC・スマホどちらでこのモーダルを開いても完全に同一になる。
       const combined = parseCombinedTrackRecordCSV(text);
-      if (combined && (combined.sp500.length || combined.spy.length || combined.voo.length)) {
+      if (combined && (combined.sp500.length || combined.voo.length || combined.qqq.length)) {
         if (combined.sp500.length) onReplace(combined.sp500);
-        if (combined.spy.length) onImportSpyVoo("spy", combined.spy);
-        if (combined.voo.length) onImportSpyVoo("voo", combined.voo);
+        if (combined.voo.length) onImportVooQqq("voo", combined.voo);
+        if (combined.qqq.length) onImportVooQqq("qqq", combined.qqq);
         const parts = [];
         if (combined.sp500.length) parts.push(`SP500 ${combined.sp500.length}件`);
-        if (combined.spy.length) parts.push(`SPY ${combined.spy.length}件`);
         if (combined.voo.length) parts.push(`VOO ${combined.voo.length}件`);
-        setFileMsg(`統合形式（Date,SP500,SPY,VOO）として読み込みました：${parts.join("・")}`);
+        if (combined.qqq.length) parts.push(`QQQ ${combined.qqq.length}件`);
+        setFileMsg(`統合形式（Date,SP500,VOO,QQQ）として読み込みました：${parts.join("・")}`);
         return;
       }
       const parsed = parseStooqCSV(text);
       if (parsed.length) { onReplace(parsed); setFileMsg(`${parsed.length}件を読み込みました（${parsed[0].date.toLocaleDateString("ja-JP")} 〜 ${parsed[parsed.length - 1].date.toLocaleDateString("ja-JP")}）`); }
-      else setFileMsg("CSVを解析できませんでした。Date,Open,High,Low,Close,Volume 形式、または「データ出力」で生成した Date,SP500,SPY,VOO 形式か確認してください。");
+      else setFileMsg("CSVを解析できませんでした。Date,Open,High,Low,Close,Volume 形式、または「データ出力」で生成した Date,SP500,VOO,QQQ 形式か確認してください。");
     };
     reader.readAsText(file);
   };
@@ -2468,7 +2488,7 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
   const handleAddInstrManual = () => {
     const price = parseFloat(instrManualPrice);
     if (!instrManualDate || isNaN(price)) return;
-    onImportSpyVoo(instrument, [{ date: parseDateOnly(instrManualDate), price }]);
+    onImportVooQqq(instrument, [{ date: parseDateOnly(instrManualDate), price }]);
     setInstrManualPrice("");
   };
   const handleRakutenFile = (e) => {
@@ -2520,7 +2540,7 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
 
   return (
     <FullScreenModal title="データの入力" onClose={handleModalClose}>
-      <div className="flex gap-2 mb-3">{tabBtn(dataset, setDataset, "voo", "SP500/VOO/SPY価格データ")}{tabBtn(dataset, setDataset, "holdings", "保有資産データ（ポートフォリオ）")}</div>
+      <div className="flex gap-2 mb-3">{tabBtn(dataset, setDataset, "voo", "SP500/VOO/QQQ価格データ")}{tabBtn(dataset, setDataset, "holdings", "保有資産データ（ポートフォリオ）")}</div>
 
       {dataset === "voo" ? (
         <>
@@ -2532,13 +2552,13 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
               <Download size={13} /> データ出力
             </button>
           </div>
-          <div className="text-[10px] mb-2" style={{ color: C.textDim }}>※「データ更新」はSPY/VOOのみ自動取得します（記録用途）。S&P500はダッシュボードのDD計算に使う本系列のため、引き続き下記のCSV取り込み・直接入力で更新してください。</div>
+          <div className="text-[10px] mb-2" style={{ color: C.textDim }}>※「データ更新」はVOO/QQQのみ自動取得します（記録用途）。S&P500はダッシュボードのDD計算に使う本系列のため、引き続き下記のCSV取り込み・直接入力で更新してください。</div>
           {updateMsg && <div className="text-xs mb-4" style={{ color: updateError ? C.rust : C.teal }}>{updateMsg}</div>}
 
           <div className="flex gap-2 mb-5">
             {tabBtn(instrument, setInstrument, "sp500", "SP500（本系列・DD計算に使用）")}
             {tabBtn(instrument, setInstrument, "voo", "VOO")}
-            {tabBtn(instrument, setInstrument, "spy", "SPY")}
+            {tabBtn(instrument, setInstrument, "qqq", "QQQ")}
           </div>
 
           {instrument === "sp500" ? (
@@ -2546,8 +2566,8 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
               <div className="flex gap-2 mb-5">{tabBtn(tab, setTab, "csv", "方式A：CSV取り込み（Stooq）")}{tabBtn(tab, setTab, "manual", "方式B：直接入力")}</div>
               {tab === "csv" ? (
                 <div>
-                  <p className="text-sm mb-1 leading-relaxed" style={{ color: C.textMuted }}>Stooqからダウンロードした SPY.US の日次CSV（Date,Open,High,Low,Close,Volume・日付昇順）を選択してください。（この値をダッシュボードでは「S&P500」本系列として表示します。VOO・SPY単体のデータは上のVOO・SPYタブから取り込んでください）</p>
-                  <p className="text-sm mb-1 leading-relaxed" style={{ color: C.textMuted }}>下の「データ出力」で書き出したCSV（Date,SP500,SPY,VOO）もそのまま選択できます。その場合はSP500・SPY・VOOの3列がまとめて取り込まれます。</p>
+                  <p className="text-sm mb-1 leading-relaxed" style={{ color: C.textMuted }}>Stooqからダウンロードした SPY.US の日次CSV（Date,Open,High,Low,Close,Volume・日付昇順）を選択してください。（この値をダッシュボードでは「S&P500」本系列として表示します。VOO・QQQ単体のデータは上のVOO・QQQタブから取り込んでください）</p>
+                  <p className="text-sm mb-1 leading-relaxed" style={{ color: C.textMuted }}>下の「データ出力」で書き出したCSV（Date,SP500,VOO,QQQ）もそのまま選択できます。その場合はSP500・VOO・QQQの3列がまとめて取り込まれます。</p>
                   <p className="text-xs mb-4" style={{ color: C.textDim }}>取得元: https://stooq.com/q/d/l/?s=spy.us&i=d</p>
                   <label className="inline-flex items-center gap-2 text-xs px-3 py-2 rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.textMuted, cursor: "pointer" }}>
                     <Upload size={13} /> CSVファイルを選択
@@ -2578,16 +2598,16 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
           ) : (
             <InstrumentPanel
               instrument={instrument}
-              spyVooSeries={spyVooSeries}
-              fileName={instrument === "voo" ? vooImportFileName : spyImportFileName}
-              fileMsg={instrument === "voo" ? vooImportMsg : spyImportMsg}
-              onFileChange={instrument === "voo" ? handleVooImportFile : handleSpyImportFile}
+              vooQqqSeries={vooQqqSeries}
+              fileName={instrument === "voo" ? vooImportFileName : qqqImportFileName}
+              fileMsg={instrument === "voo" ? vooImportMsg : qqqImportMsg}
+              onFileChange={instrument === "voo" ? handleVooImportFile : handleQqqImportFile}
               manualDate={instrManualDate}
               setManualDate={setInstrManualDate}
               manualPrice={instrManualPrice}
               setManualPrice={setInstrManualPrice}
               onAddManual={handleAddInstrManual}
-              onResetField={() => onResetSpyVooField(instrument)}
+              onResetField={() => onResetVooQqqField(instrument)}
             />
           )}
         </>
@@ -3049,7 +3069,7 @@ function buildSummaryMarkdown(ctx) {
   L.push("※本サマリーは判断補助であり投資助言ではありません。過去確率・トラックレコードは傾向であり将来を保証しません。最終判断はご自身で行ってください。");
   return L.join("\n");
 }
-// dシェイプ（computeAllの戻り値）から、AI向けJSON出力用の基礎統計＋全履歴トラックレコードを抜き出す（SP500/VOO/SPYで共通利用）。
+// dシェイプ（computeAllの戻り値）から、AI向けJSON出力用の基礎統計＋全履歴トラックレコードを抜き出す（SP500/VOO/QQQで共通利用）。
 function summarizeSeriesForJSON(dObj) {
   if (!dObj) return null;
   return {
@@ -3061,7 +3081,7 @@ function summarizeSeriesForJSON(dObj) {
   };
 }
 function buildSummaryJSON(ctx) {
-  const { d, dVoo, dSpy, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, fixedPositions, checkpoints, recentStats, exposure, diff, consultQuestion, hideAmounts, generatedAt } = ctx;
+  const { d, dVoo, dQqq, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, fixedPositions, checkpoints, recentStats, exposure, diff, consultQuestion, hideAmounts, generatedAt } = ctx;
   const total = holdingsTotal(holdings);
   const cashHoldings = holdings.filter((h) => h.category === "現金");
   const cash = cashHoldings.reduce((s, h) => s + h.amount, 0);
@@ -3077,12 +3097,12 @@ function buildSummaryJSON(ctx) {
     lifecycle: { spouse_working: lifecycle.spouseWorking, phase: lifecycle.phase, annual_withdrawal: val(lifecycle.annualWithdrawal) },
     sp500: { ...summarizeSeriesForJSON(d), recent: recentStats },
     voo: dVoo ? summarizeSeriesForJSON(dVoo) : null,
-    spy: dSpy ? summarizeSeriesForJSON(dSpy) : null,
+    qqq: dQqq ? summarizeSeriesForJSON(dQqq) : null,
     price_series: {
       note: "各配列は[日付, 終値]の全履歴（読み込み済み全期間）。バックテスト・独自分析にそのまま使用可能。",
       sp500: seriesToPairs(d),
       voo: dVoo ? seriesToPairs(dVoo) : null,
-      spy: dSpy ? seriesToPairs(dSpy) : null,
+      qqq: dQqq ? seriesToPairs(dQqq) : null,
     },
     dd_strategy: {
       note: "DD戦略：S&P500がATHから-3%以上下落する節目ごとにA〜E配分をこのモデルに沿って調整する。値は目標構成比(%)。",
@@ -3141,7 +3161,7 @@ async function verifyClipboardWrite(expected) {
   } catch (e) { return null; }
 }
 /* ---------------- 詳細サマリー出力モーダル ---------------- */
-function SummaryModalContent({ d, dVoo, dSpy, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, onLifecycleChange, fixedPositions, onFixedPositionChange, checkpoints, prevSnapshot, onSaveSnapshot }) {
+function SummaryModalContent({ d, dVoo, dQqq, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, onLifecycleChange, fixedPositions, onFixedPositionChange, checkpoints, prevSnapshot, onSaveSnapshot }) {
   const [format, setFormat] = useState("json");
   const [hideAmounts, setHideAmounts] = useState(false);
   const [consultQuestion, setConsultQuestion] = useState("");
@@ -3162,8 +3182,8 @@ function SummaryModalContent({ d, dVoo, dSpy, holdings, currentHoldingPct, effec
   // このサマリーを閉じた時点の保有内容を「次回比較用」のスナップショットとして保存する（開いている間は前回分との差分を表示し続ける）。
   useEffect(() => () => onSaveSnapshot(holdings, generatedAt), []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const ctx = useMemo(() => ({ d, dVoo, dSpy, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, fixedPositions, checkpoints, recentStats, exposure, diff, consultQuestion, hideAmounts, generatedAt }),
-    [d, dVoo, dSpy, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, fixedPositions, checkpoints, recentStats, exposure, diff, consultQuestion, hideAmounts, generatedAt]);
+  const ctx = useMemo(() => ({ d, dVoo, dQqq, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, fixedPositions, checkpoints, recentStats, exposure, diff, consultQuestion, hideAmounts, generatedAt }),
+    [d, dVoo, dQqq, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, fixedPositions, checkpoints, recentStats, exposure, diff, consultQuestion, hideAmounts, generatedAt]);
   // 出力生成中に例外が起きても空文字/undefinedのままコピーされてしまわないよう、失敗時はエラー内容そのものを出力する。
   const output = useMemo(() => {
     try { return format === "md" ? buildSummaryMarkdown(ctx) : JSON.stringify(buildSummaryJSON(ctx), null, 2); }
@@ -3216,7 +3236,7 @@ function SummaryModalContent({ d, dVoo, dSpy, holdings, currentHoldingPct, effec
   return (
     <div className="flex flex-col">
       <p className="text-xs mb-3 leading-relaxed" style={{ color: C.textDim }}>
-        ポートフォリオ・SP500/VOO/SPYの日次価格系列（バックテスト用の全履歴）・DD戦略モデル（全節目のA〜E目標配分と現状差異）・過去の全DD局面など、AIによる投資判断・分析に必要な情報をできる限り詳細に書き出します。人が読みやすい必要はないため、JSON形式が最も網羅的です。そのままチャットに貼り付けて相談できます。
+        ポートフォリオ・SP500/VOO/QQQの日次価格系列（バックテスト用の全履歴）・DD戦略モデル（全節目のA〜E目標配分と現状差異）・過去の全DD局面など、AIによる投資判断・分析に必要な情報をできる限り詳細に書き出します。人が読みやすい必要はないため、JSON形式が最も網羅的です。そのままチャットに貼り付けて相談できます。
       </p>
       <div className="flex items-center gap-2 mb-3 flex-wrap">
         <div className="flex gap-0.5">
@@ -3316,11 +3336,11 @@ function SummaryModalContent({ d, dVoo, dSpy, holdings, currentHoldingPct, effec
 /* ---------------- mobile layout (smartphone width, <768px専用の6ページ構成) ---------------- */
 // 各ページはPC向けの既存コンポーネント（ATHProgressBlock/PortfolioPie等）を再利用しつつ、
 // スマホ向けにカード型で縦積み表示する専用JSXを持つ。PC向けPanel/StatusPanel等のコンポーネント自体は変更しない。
-// SP500/VOO/SPYの3指数分を、スクロールなしで1画面に収まるようそれぞれ均等割り（flex-1）のカードで表示する。
+// SP500/VOO/QQQの3指数分を、スクロールなしで1画面に収まるようそれぞれ均等割り（flex-1）のカードで表示する。
 // 各カードは上段に「評価額（金額・大きく強調）」と「最高値比DD%（金額同様に大きく強調）」を横並びで、
 // 下段に「ATH金額」と「次の節目までの残り%・その節目の評価額」を1行にまとめて、金額と%の両方を一目で読み取れるようにする。
-function MobileAthPage({ d, dVoo, dSpy }) {
-  const tickers = [{ label: "SP500", data: d }, { label: "VOO", data: dVoo }, { label: "SPY", data: dSpy }];
+function MobileAthPage({ d, dVoo, dQqq }) {
+  const tickers = [{ label: "SP500", data: d }, { label: "VOO", data: dVoo }, { label: "QQQ", data: dQqq }];
   return (
     <div className="p-2 flex flex-col gap-2 h-full">
       {tickers.map(({ label, data }) => {
@@ -3361,33 +3381,38 @@ function MobileAthPage({ d, dVoo, dSpy }) {
     </div>
   );
 }
-function MobileSpeedPage({ dVoo, onOpenSpeedAlert }) {
+function MobileSpeedPage({ dVoo, dQqq, speedAlertInstrument, onChangeSpeedAlertInstrument, onOpenSpeedAlert }) {
+  const dSpeedAlert = speedAlertInstrument === "qqq" ? dQqq : dVoo;
+  const speedAlertLabel = speedAlertInstrument.toUpperCase();
   return (
     <div className="p-3 flex flex-col gap-2.5 h-full">
       <div className="rounded-lg p-3 flex-1 flex flex-col justify-center min-h-0" style={{ background: C.panel, border: `1px solid ${C.border}` }}>
-        <div className="flex items-center gap-1.5 mb-2"><Clock size={13} style={{ color: C.textDim }} /><span className="text-xs" style={{ color: C.textDim }}>経過日数（VOO基準）</span></div>
-        <ATHProgressBlock dVoo={dVoo} />
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-1.5"><Clock size={13} style={{ color: C.textDim }} /><span className="text-xs" style={{ color: C.textDim }}>経過日数（{speedAlertLabel}基準）</span></div>
+          <SpeedAlertInstrumentToggle value={speedAlertInstrument} onChange={onChangeSpeedAlertInstrument} />
+        </div>
+        <ATHProgressBlock dInstrument={dSpeedAlert} />
       </div>
-      <button onClick={dVoo ? onOpenSpeedAlert : undefined} disabled={!dVoo} className="rounded-lg p-3 text-left w-full flex-1 flex flex-col justify-center min-h-0" style={{ background: C.panel, border: `1px solid ${C.border}`, opacity: dVoo ? 1 : 0.5, cursor: dVoo ? "pointer" : "default" }}>
-        <div className="flex items-center gap-1.5 mb-2"><Zap size={13} style={{ color: dVoo ? speedAlertAccent(dVoo.speedAlert) : C.textDim }} /><span className="text-xs" style={{ color: C.textDim }}>DD加速度アラート（VOO基準）</span>{dVoo && <ChevronRight size={13} style={{ color: C.textDim, marginLeft: "auto" }} />}</div>
-        {!dVoo && <div className="text-xs" style={{ color: C.textDim }}>VOOデータ未取り込み</div>}
-        {dVoo && dVoo.speedAlert.level === "normal" && (<>
-          <div className="text-sm mb-1" style={{ color: C.textMuted }}>待機中（現在ATH圏、DD{dVoo.speedAlert.currentDD.toFixed(1)}%）</div>
+      <button onClick={dSpeedAlert ? onOpenSpeedAlert : undefined} disabled={!dSpeedAlert} className="rounded-lg p-3 text-left w-full flex-1 flex flex-col justify-center min-h-0" style={{ background: C.panel, border: `1px solid ${C.border}`, opacity: dSpeedAlert ? 1 : 0.5, cursor: dSpeedAlert ? "pointer" : "default" }}>
+        <div className="flex items-center gap-1.5 mb-2"><Zap size={13} style={{ color: dSpeedAlert ? speedAlertAccent(dSpeedAlert.speedAlert) : C.textDim }} /><span className="text-xs" style={{ color: C.textDim }}>DD加速度アラート（{speedAlertLabel}基準）</span>{dSpeedAlert && <ChevronRight size={13} style={{ color: C.textDim, marginLeft: "auto" }} />}</div>
+        {!dSpeedAlert && <div className="text-xs" style={{ color: C.textDim }}>{speedAlertLabel}データ未取り込み</div>}
+        {dSpeedAlert && dSpeedAlert.speedAlert.level === "normal" && (<>
+          <div className="text-sm mb-1" style={{ color: C.textMuted }}>待機中（現在ATH圏、DD{dSpeedAlert.speedAlert.currentDD.toFixed(1)}%）</div>
           <div className="text-[11px]" style={{ color: C.textDim }}>次にDD3%到達したら速度を自動計測します</div>
         </>)}
-        {dVoo && dVoo.speedAlert.level === "pending5" && (<>
-          <div className="text-sm mb-1" style={{ color: C.textMuted }}>DD3%到達後{dVoo.speedAlert.daysSinceDD3}営業日経過、DD5%未達</div>
-          <div className="mono text-sm" style={{ color: C.amber }}>{dVoo.speedAlert.hint ?? "速度計測中"}</div>
+        {dSpeedAlert && dSpeedAlert.speedAlert.level === "pending5" && (<>
+          <div className="text-sm mb-1" style={{ color: C.textMuted }}>DD3%到達後{dSpeedAlert.speedAlert.daysSinceDD3}営業日経過、DD5%未達</div>
+          <div className="mono text-sm" style={{ color: C.amber }}>{dSpeedAlert.speedAlert.hint ?? "速度計測中"}</div>
         </>)}
-        {dVoo && dVoo.speedAlert.level === "confirmed5" && (<>
-          <div className="mono text-lg font-bold" style={{ color: speedAlertAccent(dVoo.speedAlert) }}>{dVoo.speedAlert.warnLabel}</div>
-          <div className="text-sm" style={{ color: C.textMuted }}>3→5%の速度：{dVoo.speedAlert.speed35}営業日</div>
+        {dSpeedAlert && dSpeedAlert.speedAlert.level === "confirmed5" && (<>
+          <div className="mono text-lg font-bold" style={{ color: speedAlertAccent(dSpeedAlert.speedAlert) }}>{dSpeedAlert.speedAlert.warnLabel}</div>
+          <div className="text-sm" style={{ color: C.textMuted }}>3→5%の速度：{dSpeedAlert.speedAlert.speed35}営業日</div>
         </>)}
-        {dVoo && dVoo.speedAlert.level === "deep8" && (<>
-          <div className="mono text-lg font-bold" style={{ color: speedAlertAccent(dVoo.speedAlert) }}>{dVoo.speedAlert.warnLabel}</div>
-          <div className="text-sm" style={{ color: C.textMuted }}>{dVoo.speedAlert.speed38Category ?? "3→8%速度：計測不可"}</div>
+        {dSpeedAlert && dSpeedAlert.speedAlert.level === "deep8" && (<>
+          <div className="mono text-lg font-bold" style={{ color: speedAlertAccent(dSpeedAlert.speedAlert) }}>{dSpeedAlert.speedAlert.warnLabel}</div>
+          <div className="text-sm" style={{ color: C.textMuted }}>{dSpeedAlert.speedAlert.speed38Category ?? "3→8%速度：計測不可"}</div>
         </>)}
-        {dVoo && <div className="text-[10px] mt-1.5 underline" style={{ color: C.textDim }}>タップで詳細・バックテストを表示</div>}
+        {dSpeedAlert && <div className="text-[10px] mt-1.5 underline" style={{ color: C.textDim }}>タップで詳細・バックテストを表示</div>}
       </button>
     </div>
   );
@@ -3629,7 +3654,8 @@ export default function DDDashboard() {
   const [lifecycle, setLifecycle] = useState(LIFECYCLE_DEFAULT);
   const [fixedPositions, setFixedPositions] = useState({}); // { [銘柄名]: 理由(空文字可) }
   const [prevSnapshot, setPrevSnapshot] = useState(null); // 詳細サマリー出力の前回スナップショット（差分表示用）
-  const [spyVooSeries, setSpyVooSeries] = useState([]); // 「データ更新」で取得したSPY/VOO終値（S&P500のDD計算には使わない、CSV出力専用の補助データ）
+  const [vooQqqSeries, setVooQqqSeries] = useState([]); // 「データ更新」で取得したVOO/QQQ終値（S&P500のDD計算には使わない、CSV出力専用の補助データ）
+  const [speedAlertInstrument, setSpeedAlertInstrument] = useState("voo"); // "経過日数"・"DD加速度アラート"の基準をVOO/QQQどちらにするか
 
   useEffect(() => {
     (async () => {
@@ -3641,20 +3667,22 @@ export default function DDDashboard() {
         }
       } catch (e) { /* no saved data yet — keep bundled seed */ }
       try {
-        const resSpyVoo = await storage.get("spy_voo_price_history");
-        if (resSpyVoo && resSpyVoo.value) {
-          const parsedSpyVoo = JSON.parse(resSpyVoo.value).map((p) => ({ date: parseDateOnly(p.date), spy: p.spy, voo: p.voo }));
-          if (parsedSpyVoo.length) setSpyVooSeries(parsedSpyVoo);
+        // IndexedDBキー名は歴史的経緯で"spy_voo_price_history"のまま（実体はVOO/QQQの終値）。
+        // 旧レコードのspyフィールドは読み捨てる（SPYは廃止・QQQに置き換え）。
+        const resVooQqq = await storage.get("spy_voo_price_history");
+        if (resVooQqq && resVooQqq.value) {
+          const parsedVooQqq = JSON.parse(resVooQqq.value).map((p) => ({ date: parseDateOnly(p.date), voo: p.voo, qqq: p.qqq }));
+          if (parsedVooQqq.length) setVooQqqSeries(parsedVooQqq);
         }
-      } catch (e) { /* no saved spy/voo data yet */ }
-      // SPY/VOOの終値はIndexedDBが端末ごとに独立しているため、手動更新に頼ると端末間で表示が食い違う。
+      } catch (e) { /* no saved voo/qqq data yet */ }
+      // VOO/QQQの終値はIndexedDBが端末ごとに独立しているため、手動更新に頼ると端末間で表示が食い違う。
       // ページ読み込みのたびにWorkerから当日終値を自動取得してマージし、どの端末で開いても同じ最新値になるようにする。
       try {
         const resLive = await fetch(STOCK_PRICES_API_URL);
         if (resLive.ok) {
           const live = await resLive.json();
-          if (live && live.date && typeof live.spy === "number" && typeof live.voo === "number") {
-            handleAppendSpyVoo({ date: parseDateOnly(live.date), spy: live.spy, voo: live.voo });
+          if (live && live.date && typeof live.voo === "number" && typeof live.qqq === "number") {
+            handleAppendVooQqq({ date: parseDateOnly(live.date), voo: live.voo, qqq: live.qqq });
           }
         }
       } catch (e) { /* 自動取得失敗（稼働時間外など）— 保存済みデータのまま表示を続行 */ }
@@ -3702,21 +3730,21 @@ export default function DDDashboard() {
   async function persist(series) {
     try { await storage.set("voo_price_history", JSON.stringify(series.map((p) => ({ date: p.date.toISOString().slice(0, 10), price: p.price })))); } catch (e) { /* storage unavailable */ }
   }
-  async function persistSpyVoo(series) {
-    try { await storage.set("spy_voo_price_history", JSON.stringify(series.map((p) => ({ date: p.date.toISOString().slice(0, 10), spy: p.spy, voo: p.voo })))); } catch (e) { /* storage unavailable */ }
+  async function persistVooQqq(series) {
+    try { await storage.set("spy_voo_price_history", JSON.stringify(series.map((p) => ({ date: p.date.toISOString().slice(0, 10), voo: p.voo, qqq: p.qqq })))); } catch (e) { /* storage unavailable */ }
   }
-  function handleAppendSpyVoo(entry) {
-    setSpyVooSeries((prev) => {
+  function handleAppendVooQqq(entry) {
+    setVooQqqSeries((prev) => {
       const map = new Map(prev.map((p) => [p.date.toISOString().slice(0, 10), p]));
       map.set(entry.date.toISOString().slice(0, 10), entry);
       const merged = Array.from(map.values()).sort((a, b) => a.date - b.date);
-      persistSpyVoo(merged);
+      persistVooQqq(merged);
       return merged;
     });
   }
-  // CSV一括取り込み：kindは"spy"|"voo"。同じ日付の既存レコードには該当フィールドのみ上書きで合成する。
-  function handleImportSpyVoo(kind, parsedRows) {
-    setSpyVooSeries((prev) => {
+  // CSV一括取り込み：kindは"qqq"|"voo"。同じ日付の既存レコードには該当フィールドのみ上書きで合成する。
+  function handleImportVooQqq(kind, parsedRows) {
+    setVooQqqSeries((prev) => {
       const map = new Map(prev.map((p) => [p.date.toISOString().slice(0, 10), p]));
       for (const row of parsedRows) {
         const key = row.date.toISOString().slice(0, 10);
@@ -3724,15 +3752,15 @@ export default function DDDashboard() {
         map.set(key, { ...existing, [kind]: row.price });
       }
       const merged = Array.from(map.values()).sort((a, b) => a.date - b.date);
-      persistSpyVoo(merged);
+      persistVooQqq(merged);
       return merged;
     });
   }
-  // kind（"spy"|"voo"）のデータのみ削除する。両方消えた日付のレコードは配列から除去する。
-  function handleResetSpyVooField(kind) {
-    setSpyVooSeries((prev) => {
-      const next = prev.map((p) => { const c = { ...p }; delete c[kind]; return c; }).filter((p) => p.spy != null || p.voo != null);
-      persistSpyVoo(next);
+  // kind（"qqq"|"voo"）のデータのみ削除する。両方消えた日付のレコードは配列から除去する。
+  function handleResetVooQqqField(kind) {
+    setVooQqqSeries((prev) => {
+      const next = prev.map((p) => { const c = { ...p }; delete c[kind]; return c; }).filter((p) => p.voo != null || p.qqq != null);
+      persistVooQqq(next);
       return next;
     });
   }
@@ -3888,12 +3916,12 @@ export default function DDDashboard() {
   }
 
   const d = useMemo(() => computeAll(rawSeries), [rawSeries]);
-  const vooCalcSeries = useMemo(() => seriesFromSpyVoo(spyVooSeries, "voo"), [spyVooSeries]);
-  const spyCalcSeries = useMemo(() => seriesFromSpyVoo(spyVooSeries, "spy"), [spyVooSeries]);
-  // VOO/SPY自身の実績は期間が短いため、進行確率・速度別確率などのトラックレコード統計は最も長い実績があるSP500（d.trackRecord）を使う。
-  // 現在のDD%・経過日数・速度計測（DD3→5%等）はVOO/SPY自身の評価額の動きをそのまま使う（速度アラートはVOOの評価額を参照する仕様）。
+  const vooCalcSeries = useMemo(() => seriesFromVooQqq(vooQqqSeries, "voo"), [vooQqqSeries]);
+  const qqqCalcSeries = useMemo(() => seriesFromVooQqq(vooQqqSeries, "qqq"), [vooQqqSeries]);
+  // VOO/QQQ自身の実績は期間が短いため、進行確率・速度別確率などのトラックレコード統計は最も長い実績があるSP500（d.trackRecord）を使う。
+  // 現在のDD%・経過日数・速度計測（DD3→5%等）はVOO/QQQ自身の評価額の動きをそのまま使う（DD加速度アラートはVOO/QQQのユーザー選択に応じて切り替える仕様）。
   const dVoo = useMemo(() => (vooCalcSeries.length ? computeAll(vooCalcSeries, d.trackRecord) : null), [vooCalcSeries, d.trackRecord]);
-  const dSpy = useMemo(() => (spyCalcSeries.length ? computeAll(spyCalcSeries, d.trackRecord) : null), [spyCalcSeries, d.trackRecord]);
+  const dQqq = useMemo(() => (qqqCalcSeries.length ? computeAll(qqqCalcSeries, d.trackRecord) : null), [qqqCalcSeries, d.trackRecord]);
   const chartData = useMemo(() => sliceForPeriod(d.FULL, d.last, period), [d.FULL, d.last, period]);
   const rangeDays = useMemo(() => { const f = chartData[0].date, l = chartData[chartData.length - 1].date; return Math.round((l - f) / 86400000); }, [chartData]);
   const periodRange = useMemo(() => periodDateRange(d.FULL, d.last, period), [d.FULL, d.last, period]);
@@ -3963,15 +3991,15 @@ export default function DDDashboard() {
         @media (orientation: landscape) { .force-landscape-inner { width: 100vw; height: 100vh; transform: translate(-50%, -50%); } }
       `}</style>
 
-      {modal?.type === "speedAlert" && dVoo && <FullScreenModal title="DD加速度アラート（速度・経過日数の法則・VOO基準）" onClose={() => setModal(null)}><SpeedAlertModalContent d={dVoo} /></FullScreenModal>}
+      {modal?.type === "speedAlert" && (speedAlertInstrument === "qqq" ? dQqq : dVoo) && <FullScreenModal title={`DD加速度アラート（速度・経過日数の法則・${speedAlertInstrument.toUpperCase()}基準）`} onClose={() => setModal(null)}><SpeedAlertModalContent d={speedAlertInstrument === "qqq" ? dQqq : dVoo} /></FullScreenModal>}
       {modal?.type === "portfolio" && <FullScreenModal title={<>ポートフォリオ構成表{holdingsDateSuffix}</>} onClose={() => setModal(null)}><PortfolioTableContent view={pieView} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
       {modal?.type === "ddTable" && <FullScreenModal title="DD毎のA〜E配分表" onClose={() => setModal(null)}><DDTableContent modelRow={d.modelRow} holdings={holdings} /></FullScreenModal>}
       {modal?.type === "rank" && <FullScreenModal title={`${modal.rank}ランクの保有銘柄`} onClose={() => setModal(null)}><RankHoldingsContent rank={modal.rank} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
       {modal?.type === "crash" && <FullScreenModal title={`${modal.crash.name}（${modal.crash.start} 〜）と現状の比較`} onClose={() => setModal(null)}><CrashModalContent crash={modal.crash} daysSinceATH={d.daysSinceATH} currentDD={d.currentDD} currentEpisodeCurve={d.currentEpisodeCurve} allCrashes={historicalCrashes} onJump={(c) => setModal({ type: "crash", crash: c })} /></FullScreenModal>}
       {modal?.type === "ddChart" && <FullScreenModal title="評価額（左軸） / DD%（右軸）" onClose={() => setModal(null)}><DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} /></FullScreenModal>}
-      {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} spyVooSeries={spyVooSeries} onAppendSpyVoo={handleAppendSpyVoo} onImportSpyVoo={handleImportSpyVoo} onResetSpyVooField={handleResetSpyVooField} />}
+      {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} vooQqqSeries={vooQqqSeries} onAppendVooQqq={handleAppendVooQqq} onImportVooQqq={handleImportVooQqq} onResetVooQqqField={handleResetVooQqqField} />}
       {modal?.type === "checkpointSettings" && <FullScreenModal title="チェックポイント設定" onClose={() => setModal(null)}><CheckpointSettingsContent checkpoints={checkpoints} onCheckpointChange={handleCheckpointChange} holdings={holdings} /></FullScreenModal>}
-      {modal?.type === "summary" && <FullScreenModal title="詳細サマリー出力（AI相談用）" onClose={() => setModal(null)}><SummaryModalContent d={d} dVoo={dVoo} dSpy={dSpy} holdings={holdings} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} blocks={blocks} rankLabels={rankLabels} lifecycle={lifecycle} onLifecycleChange={handleLifecycleChange} fixedPositions={fixedPositions} onFixedPositionChange={handleFixedPositionChange} checkpoints={checkpoints} prevSnapshot={prevSnapshot} onSaveSnapshot={handleSaveSnapshot} /></FullScreenModal>}
+      {modal?.type === "summary" && <FullScreenModal title="詳細サマリー出力（AI相談用）" onClose={() => setModal(null)}><SummaryModalContent d={d} dVoo={dVoo} dQqq={dQqq} holdings={holdings} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} blocks={blocks} rankLabels={rankLabels} lifecycle={lifecycle} onLifecycleChange={handleLifecycleChange} fixedPositions={fixedPositions} onFixedPositionChange={handleFixedPositionChange} checkpoints={checkpoints} prevSnapshot={prevSnapshot} onSaveSnapshot={handleSaveSnapshot} /></FullScreenModal>}
       {modal?.type === "mobileChartZoom" && <MobileChartZoomModal onClose={() => setModal(null)} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} isRealDevice={isMobileAuto} />}
 
       {isMobile ? (
@@ -3995,7 +4023,7 @@ export default function DDDashboard() {
       ) : (
       <div className="flex items-center justify-between px-5 py-3 shrink-0 flex-wrap gap-y-1.5" style={{ borderBottom: `1px solid ${C.border}`, background: C.panel2 }}>
         <div className="flex items-center gap-3 flex-wrap">
-          <span className="text-sm font-bold tracking-wide">DD戦略ダッシュボード　S&P500（VOO/SPY）{usEasternYMD()}（us）</span>
+          <span className="text-sm font-bold tracking-wide">DD戦略ダッシュボード　S&P500（VOO/QQQ）{usEasternYMD()}（us）</span>
           <button onClick={toggleViewMode} title="スマホ表示／PC表示を切り替え" className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
             <Smartphone size={12} /> スマホ表示に切替
           </button>
@@ -4020,8 +4048,8 @@ export default function DDDashboard() {
             activeIndex={mobilePage}
             onChange={setMobilePage}
             pages={[
-              { key: "ath", label: "評価額/ATH", icon: TrendingUp, content: <MobileAthPage d={d} dVoo={dVoo} dSpy={dSpy} /> },
-              { key: "speed", label: "経過日数", icon: Clock, content: <MobileSpeedPage dVoo={dVoo} onOpenSpeedAlert={() => setModal({ type: "speedAlert" })} /> },
+              { key: "ath", label: "評価額/ATH", icon: TrendingUp, content: <MobileAthPage d={d} dVoo={dVoo} dQqq={dQqq} /> },
+              { key: "speed", label: "経過日数", icon: Clock, content: <MobileSpeedPage dVoo={dVoo} dQqq={dQqq} speedAlertInstrument={speedAlertInstrument} onChangeSpeedAlertInstrument={setSpeedAlertInstrument} onOpenSpeedAlert={() => setModal({ type: "speedAlert" })} /> },
               { key: "chart", label: "チャート", icon: Activity, content: <MobileChartPage d={d} onZoom={() => setModal({ type: "mobileChartZoom" })} /> },
               { key: "portfolio", label: "構成", icon: Layers, content: <MobilePortfolioPage pieView={pieView} setPieView={setPieView} holdings={holdings} onOpen={() => setModal({ type: "portfolio" })} dateLabel={holdingsDateLabel} /> },
               { key: "diff", label: "配分乖離", icon: ListChecks, content: <MobileDiffPage modelOverride={modelOverride} setModelOverride={setModelOverride} d={d} currentHoldingPct={currentHoldingPct} currentHoldingAmount={currentHoldingAmount} effectiveModelRow={effectiveModelRow} rankLabels={rankLabels} blocks={blocks} onOpenRank={(rank) => setModal({ type: "rank", rank })} onOpenDDTable={() => setModal({ type: "ddTable" })} dateLabel={holdingsDateLabel} /> },
@@ -4034,7 +4062,7 @@ export default function DDDashboard() {
         <DepthGauge dd={d.currentDD} />
 
         <div className="flex-1 flex flex-col gap-0 p-2 min-w-0">
-          <div style={{ height: 116, flexShrink: 0 }}><StatusPanel d={d} dVoo={dVoo} dSpy={dSpy} onOpenSpeedAlert={() => setModal({ type: "speedAlert" })} /></div>
+          <div style={{ height: 116, flexShrink: 0 }}><StatusPanel d={d} dVoo={dVoo} dQqq={dQqq} speedAlertInstrument={speedAlertInstrument} onChangeSpeedAlertInstrument={setSpeedAlertInstrument} onOpenSpeedAlert={() => setModal({ type: "speedAlert" })} /></div>
 
           <div className="flex-1 flex flex-col" style={{ gap: 0, minHeight: 0 }}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 380px", gap: 4, flex: 1, minHeight: 0 }}>
