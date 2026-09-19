@@ -173,12 +173,31 @@ export async function parseInvestmentExcel(arrayBuffer: ArrayBuffer, fileName: s
     if (!candidates.length) { errors.push(`「${prevLabel}」の直後にあるはずの「利回（年）」行が見つかりませんでした。`); return null; }
     return candidates[0];
   };
-  // 「資産集計」セクションの行範囲：見出し行から次のセクション区切り行の直前まで。
-  const assetSummaryHeaderRow = findRows("資産集計")[0] ?? null;
-  if (assetSummaryHeaderRow === null) errors.push("「資産集計」セクションの見出し行が見つかりませんでした。口座別内訳はシート全体から検索します（同名ラベルが他セクションにもあると誤検出のおそれがあります）。");
-  const assetSummaryRange = assetSummaryHeaderRow === null ? null : {
-    start: assetSummaryHeaderRow,
-    end: sectionHeaderRows.find((h) => h.row > assetSummaryHeaderRow)?.row ?? range.e.r + 1,
+  // 口座別内訳（資産集計）の行：口座名と同名のラベルが複数セクションに存在しうる
+  // （例：口座ごとの明細セクションだけでなく、"TOTAL"セクション内の内訳行としても同じラベルが出現する）。
+  // 実際のシートで確認された優先順位で選ぶ：
+  //   ①その口座名と同じ名前のセクション（例：「moomoo証券」という名前のセクション自体）内の行
+  //   ②「資産集計」セクション内の行
+  //   ③"TOTAL"セクション以外の行（TOTAL内の同名行は口座別の内訳表記であり、時系列データ本体ではないため対象外）
+  //   ④それでも無ければ先頭に見つかった行
+  const findAccountRow = (label: string): number | null => {
+    const all = findRows(label);
+    if (!all.length) { errors.push(`「${label}」の行が見つかりませんでした。`); return null; }
+    // セクション見出し行自身（例：「moomoo証券」という名前のセクションの見出し行）は日付列にデータを
+    // 持たないため、たとえ同名ラベルでもデータ行の候補からは除外する（そうしないと空のデータしか
+    // 持たない見出し行を「口座名と同じセクション内の行」として誤って採用してしまう）。
+    const withData = all.filter((r) => !rowHasNoData(r));
+    const candidates = withData.length ? withData : all;
+    const norm = normalizeLabel(label);
+    const ownSection = candidates.find((r) => normalizeLabel(sectionForRow(r)) === norm);
+    const inAssetSummary = candidates.find((r) => normalizeLabel(sectionForRow(r)) === "資産集計");
+    const outsideTotal = candidates.find((r) => normalizeLabel(sectionForRow(r)) !== "TOTAL");
+    const chosen = ownSection ?? inAssetSummary ?? outsideTotal ?? candidates[0];
+    if (all.length > 1) {
+      const others = all.filter((r) => r !== chosen).map((r) => `${sectionForRow(r)}内(行${r + 1})`).join("、");
+      errors.push(`「${label}」の行が複数見つかりました。${sectionForRow(chosen)}内(行${chosen + 1})の行を使用し、${others}は対象外としました。`);
+    }
+    return chosen;
   };
 
   const extractRowSeries = (row: number | null, parse: (cell: XLSXType.CellObject | undefined) => number | null): (number | null)[] =>
@@ -221,11 +240,9 @@ export async function parseInvestmentExcel(arrayBuffer: ArrayBuffer, fileName: s
     withdrawal: withdrawalVals[i], excessReturn: excessReturnVals[i], bonusReserve: bonusReserveVals[i],
   }));
 
-  // 資産集計セクション：口座別内訳。口座開設前の空欄は0円ではなくnull（データなし）として扱う。
-  // 「資産集計」セクションの行範囲に絞り込んで検索し、他セクションにある同名ラベル（例：将来のライフプラン
-  // 試算セクション等）を誤って拾わないようにする。
+  // 口座別内訳：口座開設前の空欄は0円ではなくnull（データなし）として扱う。
   const accountRows: Record<string, number | null> = {};
-  for (const label of ACCOUNT_LABELS) accountRows[label] = findRow(label, assetSummaryRange);
+  for (const label of ACCOUNT_LABELS) accountRows[label] = findAccountRow(label);
   const accountSeries: InvestmentAccountPoint[] = dateCols.map(({ date }, i) => ({
     date: ymd(date),
     accounts: Object.fromEntries(ACCOUNT_LABELS.map((label) => {
