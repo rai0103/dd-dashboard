@@ -137,11 +137,34 @@ export async function parseInvestmentExcel(arrayBuffer: ArrayBuffer, fileName: s
     for (const [r, l] of rowLabels) if (l === norm) rows.push(r);
     return rows.sort((a, b) => a - b);
   };
-  const findRow = (label: string): number | null => {
-    const rows = findRows(label);
-    if (!rows.length) { errors.push(`「${label}」の行が見つかりませんでした。`); return null; }
-    if (rows.length > 1) errors.push(`「${label}」の行が複数見つかりました（${rows.length}件）。先頭の行を使用します。`);
-    return rows[0];
+  // セクション区切り行（＝A列にラベルはあるが日付列に一切データが無い行）を検出し、任意の行が
+  // どのセクションに属するかを判定する。特定のセクション名をハードコードせず汎用的な判定にすることで、
+  // 将来シートにセクションが追加・変更されても壊れないようにする。
+  const rowHasNoData = (row: number): boolean =>
+    dateCols.every(({ col }) => { const c = get(row, col); return !c || c.v == null || c.v === ""; });
+  const sectionHeaderRows = [...rowLabels.entries()]
+    .filter(([r]) => rowHasNoData(r))
+    .map(([r, label]) => ({ row: r, label }))
+    .sort((a, b) => a.row - b.row);
+  const sectionForRow = (row: number): string => {
+    let sec = "（シート先頭・セクション不明）";
+    for (const h of sectionHeaderRows) { if (h.row <= row) sec = h.label; else break; }
+    return sec;
+  };
+  // sectionRangeを指定すると行範囲 [start, end) に絞り込んで検索する（同名ラベルが他セクションにもある場合の
+  // 誤検出を防ぐ）。範囲内に見つからない場合はシート全体にフォールバックし、その旨をエラーに記録する。
+  // 複数見つかった場合は、どのセクションに何件あったかをエラーメッセージに含める（診断用）。
+  const findRow = (label: string, sectionRange: { start: number; end: number } | null = null): number | null => {
+    const all = findRows(label);
+    if (!all.length) { errors.push(`「${label}」の行が見つかりませんでした。`); return null; }
+    const scoped = sectionRange ? all.filter((r) => r >= sectionRange.start && r < sectionRange.end) : all;
+    const used = scoped.length ? scoped : all;
+    if (sectionRange && !scoped.length) errors.push(`「${label}」が対象セクション内に見つからなかったため、シート全体から検索しました（${sectionForRow(used[0])}内の行を使用）。`);
+    if (all.length > 1) {
+      const others = all.filter((r) => r !== used[0]).map((r) => `${sectionForRow(r)}内(行${r + 1})`).join("、");
+      errors.push(`「${label}」の行が複数見つかりました。${sectionForRow(used[0])}内(行${used[0] + 1})の行を使用し、${others}は対象外としました。`);
+    }
+    return used[0];
   };
   // 「利回（年）」は複数出現するため、直前の行のラベルで区別する。
   const findYieldRowAfter = (prevLabel: string, prevRow: number | null): number | null => {
@@ -149,6 +172,13 @@ export async function parseInvestmentExcel(arrayBuffer: ArrayBuffer, fileName: s
     const candidates = findRows("利回（年）").filter((r) => r === prevRow + 1);
     if (!candidates.length) { errors.push(`「${prevLabel}」の直後にあるはずの「利回（年）」行が見つかりませんでした。`); return null; }
     return candidates[0];
+  };
+  // 「資産集計」セクションの行範囲：見出し行から次のセクション区切り行の直前まで。
+  const assetSummaryHeaderRow = findRows("資産集計")[0] ?? null;
+  if (assetSummaryHeaderRow === null) errors.push("「資産集計」セクションの見出し行が見つかりませんでした。口座別内訳はシート全体から検索します（同名ラベルが他セクションにもあると誤検出のおそれがあります）。");
+  const assetSummaryRange = assetSummaryHeaderRow === null ? null : {
+    start: assetSummaryHeaderRow,
+    end: sectionHeaderRows.find((h) => h.row > assetSummaryHeaderRow)?.row ?? range.e.r + 1,
   };
 
   const extractRowSeries = (row: number | null, parse: (cell: XLSXType.CellObject | undefined) => number | null): (number | null)[] =>
@@ -192,8 +222,10 @@ export async function parseInvestmentExcel(arrayBuffer: ArrayBuffer, fileName: s
   }));
 
   // 資産集計セクション：口座別内訳。口座開設前の空欄は0円ではなくnull（データなし）として扱う。
+  // 「資産集計」セクションの行範囲に絞り込んで検索し、他セクションにある同名ラベル（例：将来のライフプラン
+  // 試算セクション等）を誤って拾わないようにする。
   const accountRows: Record<string, number | null> = {};
-  for (const label of ACCOUNT_LABELS) accountRows[label] = findRow(label);
+  for (const label of ACCOUNT_LABELS) accountRows[label] = findRow(label, assetSummaryRange);
   const accountSeries: InvestmentAccountPoint[] = dateCols.map(({ date }, i) => ({
     date: ymd(date),
     accounts: Object.fromEntries(ACCOUNT_LABELS.map((label) => {
