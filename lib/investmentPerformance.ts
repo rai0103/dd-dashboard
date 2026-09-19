@@ -177,6 +177,9 @@ export async function parseInvestmentExcel(arrayBuffer: ArrayBuffer, fileName: s
   // そのセクション内でA列のラベルが口座名と一致するかどうかに関わらず、日付列に最もデータが
   // 入っている行を「その口座の時系列データ行」とみなす。セクション内の実データ行のラベルが必ずしも
   // 口座名と同じとは限らない（例：TOTALセクションと同様に"総資産"等の内部ラベルを持つ場合がある）ため。
+  // これは「資産評価額」の行が見つからない場合の最終フォールバックとしてのみ使う
+  // （同じセクション内には「私（元本）」「評価損益」等、資産評価額以外の行も存在し、
+  // 単純にデータが最も多い行を選ぶだけでは誤った行を拾うことがあるため）。
   const bestDataRowInRange = (start: number, end: number): number | null => {
     let best: number | null = null, bestCount = 0;
     for (let r = start; r < end; r++) {
@@ -185,19 +188,34 @@ export async function parseInvestmentExcel(arrayBuffer: ArrayBuffer, fileName: s
     }
     return best;
   };
+  const ASSET_VALUE_ROW_LABEL = "資産評価額";
+  // 口座セクション内で「資産評価額」ラベルの行を明示的に探す。「私（元本）」「評価損益」等の
+  // 似た行と混同しないよう、正規化後のラベル完全一致のみを対象とする。
+  const findLabeledRowInRange = (label: string, start: number, end: number): number | null => {
+    const norm = normalizeLabel(label);
+    for (let r = start; r < end; r++) {
+      const l = rowLabels.get(r);
+      if (l && normalizeLabel(l) === norm) return r;
+    }
+    return null;
+  };
   // 口座別内訳（資産集計）の行：口座名と同名のラベルが複数セクションに存在しうる
   // （例：口座ごとの明細セクションだけでなく、"TOTAL"セクション内の内訳行としても同じラベルが出現する）。
   // 実際のシートで確認された優先順位で選ぶ：
-  //   ①その口座名と同じ名前のセクション自体があれば、その中でデータが最も多い行（ラベル一致は問わない）
-  //   ②口座名ラベルに完全一致する行のうち、「資産集計」セクション内の行
-  //   ③口座名ラベルに完全一致する行のうち、"TOTAL"セクション以外の行（TOTAL内の同名行は口座別の
+  //   ①その口座名と同じ名前のセクション自体があれば、その中の「資産評価額」ラベルの行
+  //   ②同セクション内に「資産評価額」が無ければ、その中でデータが最も多い行（フォールバック）
+  //   ③口座名ラベルに完全一致する行のうち、「資産集計」セクション内の行
+  //   ④口座名ラベルに完全一致する行のうち、"TOTAL"セクション以外の行（TOTAL内の同名行は口座別の
   //     内訳表記であり時系列データ本体ではないため対象外）
-  //   ④それでも無ければ先頭に見つかった行
+  //   ⑤それでも無ければ先頭に見つかった行
   const findAccountRow = (label: string): number | null => {
     const norm = normalizeLabel(label);
     const ownSectionHeader = sectionHeaderRows.find((h) => normalizeLabel(h.label) === norm);
     if (ownSectionHeader) {
       const sectionEnd = sectionHeaderRows.find((h) => h.row > ownSectionHeader.row)?.row ?? range.e.r + 1;
+      const assetValueRow = findLabeledRowInRange(ASSET_VALUE_ROW_LABEL, ownSectionHeader.row + 1, sectionEnd);
+      if (assetValueRow !== null) return assetValueRow;
+      errors.push(`「${label}」セクション（行${ownSectionHeader.row + 1}）内に「${ASSET_VALUE_ROW_LABEL}」の行が見つからなかったため、セクション内でデータが最も多い行を代わりに使用します。`);
       const best = bestDataRowInRange(ownSectionHeader.row + 1, sectionEnd);
       if (best !== null) return best;
       errors.push(`「${label}」という名前のセクション（行${ownSectionHeader.row + 1}）は見つかりましたが、その中にデータのある行が見つかりませんでした。別の行にフォールバックします。`);
