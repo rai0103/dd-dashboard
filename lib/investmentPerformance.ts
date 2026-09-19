@@ -173,14 +173,35 @@ export async function parseInvestmentExcel(arrayBuffer: ArrayBuffer, fileName: s
     if (!candidates.length) { errors.push(`「${prevLabel}」の直後にあるはずの「利回（年）」行が見つかりませんでした。`); return null; }
     return candidates[0];
   };
+  // 口座名と同じ名前のセクション（例：「moomoo証券」という名前のセクション自体）が見つかった場合、
+  // そのセクション内でA列のラベルが口座名と一致するかどうかに関わらず、日付列に最もデータが
+  // 入っている行を「その口座の時系列データ行」とみなす。セクション内の実データ行のラベルが必ずしも
+  // 口座名と同じとは限らない（例：TOTALセクションと同様に"総資産"等の内部ラベルを持つ場合がある）ため。
+  const bestDataRowInRange = (start: number, end: number): number | null => {
+    let best: number | null = null, bestCount = 0;
+    for (let r = start; r < end; r++) {
+      const count = dateCols.filter(({ col }) => { const c = get(r, col); return c && c.v != null && c.v !== ""; }).length;
+      if (count > bestCount) { bestCount = count; best = r; }
+    }
+    return best;
+  };
   // 口座別内訳（資産集計）の行：口座名と同名のラベルが複数セクションに存在しうる
   // （例：口座ごとの明細セクションだけでなく、"TOTAL"セクション内の内訳行としても同じラベルが出現する）。
   // 実際のシートで確認された優先順位で選ぶ：
-  //   ①その口座名と同じ名前のセクション（例：「moomoo証券」という名前のセクション自体）内の行
-  //   ②「資産集計」セクション内の行
-  //   ③"TOTAL"セクション以外の行（TOTAL内の同名行は口座別の内訳表記であり、時系列データ本体ではないため対象外）
+  //   ①その口座名と同じ名前のセクション自体があれば、その中でデータが最も多い行（ラベル一致は問わない）
+  //   ②口座名ラベルに完全一致する行のうち、「資産集計」セクション内の行
+  //   ③口座名ラベルに完全一致する行のうち、"TOTAL"セクション以外の行（TOTAL内の同名行は口座別の
+  //     内訳表記であり時系列データ本体ではないため対象外）
   //   ④それでも無ければ先頭に見つかった行
   const findAccountRow = (label: string): number | null => {
+    const norm = normalizeLabel(label);
+    const ownSectionHeader = sectionHeaderRows.find((h) => normalizeLabel(h.label) === norm);
+    if (ownSectionHeader) {
+      const sectionEnd = sectionHeaderRows.find((h) => h.row > ownSectionHeader.row)?.row ?? range.e.r + 1;
+      const best = bestDataRowInRange(ownSectionHeader.row + 1, sectionEnd);
+      if (best !== null) return best;
+      errors.push(`「${label}」という名前のセクション（行${ownSectionHeader.row + 1}）は見つかりましたが、その中にデータのある行が見つかりませんでした。別の行にフォールバックします。`);
+    }
     const all = findRows(label);
     if (!all.length) { errors.push(`「${label}」の行が見つかりませんでした。`); return null; }
     // セクション見出し行自身（例：「moomoo証券」という名前のセクションの見出し行）は日付列にデータを
@@ -188,11 +209,9 @@ export async function parseInvestmentExcel(arrayBuffer: ArrayBuffer, fileName: s
     // 持たない見出し行を「口座名と同じセクション内の行」として誤って採用してしまう）。
     const withData = all.filter((r) => !rowHasNoData(r));
     const candidates = withData.length ? withData : all;
-    const norm = normalizeLabel(label);
-    const ownSection = candidates.find((r) => normalizeLabel(sectionForRow(r)) === norm);
     const inAssetSummary = candidates.find((r) => normalizeLabel(sectionForRow(r)) === "資産集計");
     const outsideTotal = candidates.find((r) => normalizeLabel(sectionForRow(r)) !== "TOTAL");
-    const chosen = ownSection ?? inAssetSummary ?? outsideTotal ?? candidates[0];
+    const chosen = inAssetSummary ?? outsideTotal ?? candidates[0];
     if (all.length > 1) {
       const others = all.filter((r) => r !== chosen).map((r) => `${sectionForRow(r)}内(行${r + 1})`).join("、");
       errors.push(`「${label}」の行が複数見つかりました。${sectionForRow(chosen)}内(行${chosen + 1})の行を使用し、${others}は対象外としました。`);
