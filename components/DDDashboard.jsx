@@ -2,11 +2,12 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  ComposedChart, LineChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip,
+  ComposedChart, LineChart, Area, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ReferenceLine, ReferenceDot, ResponsiveContainer, PieChart, Pie, Cell, Brush, Customized,
 } from "recharts";
-import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Download, RefreshCw, Database, Trash2, Zap, Copy, FileText, Activity, Layers, ListChecks, Smartphone, Monitor } from "lucide-react";
+import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Download, RefreshCw, Database, Trash2, Zap, Copy, FileText, Activity, Layers, ListChecks, Smartphone, Monitor, Wallet } from "lucide-react";
 import { storage } from "@/lib/storage";
+import { parseInvestmentExcel, computeOwnAssetDrawdown, computeBenchmarkCAGR } from "@/lib/investmentPerformance";
 
 // Cloudflare Worker（当日のVOO/QQQ終値を返す。SP500はここでは扱わず引き続きCSV取り込み/直接入力で更新する）のエンドポイント。
 // デプロイ先のURLに置き換えてください。
@@ -152,7 +153,7 @@ function analyzeEpisode(series) {
   return { athIdx, crossIdx, currentT, currentIdx, prevT, prevIdx };
 }
 // 現在のDD%が到達済みの節目のうち最も深いものを選ぶ（例：DD-2%はまだ-3%未到達なのでATH、DD-6%は-5%到達済み・-8%未到達なのでDD-5%）。
-function nearestModelRow(dd) { const reached = MODEL_ROWS.filter((r) => r.v <= 0 && dd <= r.v); return reached.length ? reached.reduce((deepest, r) => (r.v < deepest.v ? r : deepest)) : MODEL_ROWS.find((r) => r.v === 0); }
+function nearestModelRow(dd, modelRows = MODEL_ROWS) { const reached = modelRows.filter((r) => r.v <= 0 && dd <= r.v); return reached.length ? reached.reduce((deepest, r) => (r.v < deepest.v ? r : deepest)) : modelRows.find((r) => r.v === 0); }
 // 全期間から「ATH→底値→回復（新ATH）」の下落局面を全て抽出する（DD%がminDD以下に達したもののみ、ノイズ除去）。
 // 最後の局面が未回復（現在も下落中/回復モード）の場合は isOngoing:true として含める。
 function findDDEpisodes(FULL, minDD) {
@@ -193,9 +194,80 @@ function freqLabelFromP(p, ddFreqPerYear) {
 //   フェーズ1：ATH更新後、まだDD-3%未到達（ボックス圏）→ BOX_STATS
 //   フェーズ2：DD-3%到達済み、まだDD-5%未到達        → ATH_TO_DD3_STATS + speed35Backtest
 //   フェーズ3：DD-5%到達済み                        → speed35Backtest（DD加速度アラートの詳細に委ねる要約のみ）
+// フェーズとは別に、現在のエピソード（直近ATHから現在まで）で一度でもDD-3%圏に到達していれば、
+// フェーズに関わらず「DD-3%圏への突入回数」の補助情報（DD3_ENTRY_STATS）を末尾に付加する。
 const ANALYSIS_DISCLAIMER = "※統計は過去傾向であり将来を保証するものではありません";
 function lowSampleNote(stat) { return stat.lowSample ? `※このパターンは過去${stat.n}件と少数のため参考値としてご覧ください。` : ""; }
 function crashRate(bucket, threshold) { const row = bucket.crashRates.find((c) => c.threshold === threshold); return row && row.rate !== null ? `${row.rate}%` : "算出不可"; }
+
+// ②③④ DDマイルストーン到達時のCクラス買い増しペースに対するモディファイア（ポリシー定数）。
+// バックテストの数値そのものではなく「その数値をどう使うか」という方針のため、固定値のまま管理する
+// （将来の調整はこの定数を変更するだけでよい。効率カーブ側＝①は自動で再計算され続ける）。
+const SPEED_MODIFIER = { "3日以内": 0.7, "4〜5日": 0.85, "6〜10日": 1.0, "11〜20日": 1.1, "21日超": 1.2 };
+const ENTRY_COUNT_MODIFIER = { 1: 1.0, 2: 0.95, 3: 0.85, 4: 0.75, "5+": 0.6 };
+const QQQ_AMPLIFICATION_ALERT_MULTIPLIER = 2; // 現在のQQQ増幅率が中央値の何倍以上で「著しく高い」とみなすか
+const QQQ_MODIFIER_FACTOR = 0.9; // 著しく高い場合に買い増し額へ掛ける抑制係数
+
+// ④QQQ/SP500の増幅率（qqqMaxDD/spMaxDD）の中央値を動的に算出する。SP500の各完了エピソードの期間
+// （ATH〜底値）について、同じ期間内でのQQQ自身の最大DD（QQQ自身のATH基準）を求め、SP500の最大DDとの
+// 比を取る。QQQデータの存在期間より前のエピソードは対象外（QQQは2000年前後からのデータのみのため）。
+function computeQqqAmplificationStats(spEpisodes, qqqFULL) {
+  if (!qqqFULL || !qqqFULL.length) return null;
+  const qqqStart = qqqFULL[0].date, qqqEnd = qqqFULL[qqqFULL.length - 1].date;
+  const ratios = [];
+  for (const ep of spEpisodes.filter((e) => !e.isOngoing && e.troughDD < 0)) {
+    if (ep.athDate < qqqStart || ep.troughDate > qqqEnd) continue;
+    const inWindow = qqqFULL.filter((p) => p.date >= ep.athDate && p.date <= ep.troughDate);
+    if (!inWindow.length) continue;
+    const qqqMaxDD = Math.min(...inWindow.map((p) => p.dd));
+    if (qqqMaxDD >= 0) continue;
+    const ratio = qqqMaxDD / ep.troughDD;
+    if (Number.isFinite(ratio) && ratio > 0) ratios.push(ratio);
+  }
+  if (!ratios.length) return { medianRatio: null, n: 0 };
+  return { medianRatio: Number(median(ratios).toFixed(2)), n: ratios.length };
+}
+// ⑤ 各DDマイルストーン到達時のCクラス買い増し額 = ベース配分額（①の動的モデルの目標C%と現在C%保有比率の差）
+//   × 速度モディファイア（②） × 突入回数モディファイア（③） × QQQ警戒モディファイア（④）。
+// 抑制された差額は別台帳を持たず現金（A）として保有され続ける想定：次回計算時にも現在のC%保有比率がまだ
+// 低いままなら同じギャップが再度現れるため、状態を持たなくても自然に「より深い水準への繰り越し」になる。
+function computeDynamicAllocationAdvisory(d, dQqq, qqqAmplification, currentHoldingPct, totalValue) {
+  const ddOnlyRows = d.trackRecord.dynamicModelRows.filter((r) => r.v <= -3);
+  const nextRow = ddOnlyRows.find((r) => d.currentDD > r.v) ?? null; // まだ到達していない直近の節目
+  if (!nextRow || !totalValue) return null;
+  const baseGapPt = nextRow.C - currentHoldingPct.C;
+  if (baseGapPt <= 0) return null;
+  const baseAmount = totalValue * (baseGapPt / 100);
+
+  const speedBucket = d.daysSinceDDStart !== null ? speed35Bucket(d.daysSinceDDStart, d.trackRecord.speed35Backtest) : null;
+  const speedMod = speedBucket ? (SPEED_MODIFIER[speedBucket.label] ?? 1) : 1;
+
+  const entries = countDd3Entries(d.currentEpisodeCurve.map((p) => p.dd));
+  const entryKey = entries > 0 ? (entries >= 5 ? "5+" : entries) : null;
+  const entryMod = entryKey !== null ? (ENTRY_COUNT_MODIFIER[entryKey] ?? 1) : 1;
+
+  let qqqMod = 1, qqqRatio = null, qqqAlert = false;
+  if (dQqq && qqqAmplification?.medianRatio && d.currentDD < 0) {
+    qqqRatio = dQqq.currentDD / d.currentDD;
+    if (Number.isFinite(qqqRatio) && qqqRatio >= qqqAmplification.medianRatio * QQQ_AMPLIFICATION_ALERT_MULTIPLIER) { qqqMod = QQQ_MODIFIER_FACTOR; qqqAlert = true; }
+  }
+
+  const totalMod = speedMod * entryMod * qqqMod;
+  return {
+    milestoneLabel: nextRow.label, baseAmount: Math.round(baseAmount), adjustedAmount: Math.round(baseAmount * totalMod), suppressionRate: Number(((1 - totalMod) * 100).toFixed(1)),
+    speedLabel: speedBucket?.label ?? null, speedMod, entries, entryKey, entryMod,
+    qqqRatio: qqqRatio !== null ? Number(qqqRatio.toFixed(2)) : null, qqqMedian: qqqAmplification?.medianRatio ?? null, qqqMod, qqqAlert,
+  };
+}
+// ⑥ 現状分析パネルに追加する、抑制係数の内訳を含む短い助言文（該当なしならnull）。
+function buildDynamicAllocationSentence(advisory) {
+  if (!advisory) return "";
+  const speedPart = advisory.speedLabel ? `速度区分「${advisory.speedLabel}」` : "速度区分未確定";
+  const entryPart = `突入回数${advisory.entries}回`;
+  const qqqPart = advisory.qqqRatio !== null ? `QQQ増幅率${advisory.qqqRatio}倍${advisory.qqqAlert ? "（警戒水準）" : ""}` : "QQQ増幅率算出不可";
+  const suppressPart = advisory.suppressionRate > 0 ? `本来の計画配分から${advisory.suppressionRate}%抑制し、` : "";
+  return `現在の${speedPart}・${entryPart}・${qqqPart}を踏まえ、${suppressPart}Cクラスへの${advisory.milestoneLabel}到達時点での買い増し額を¥${advisory.adjustedAmount.toLocaleString()}としています（抑制分は現金として温存し、より深い下落局面での買い増しに繰り越します）。`;
+}
 function buildRebalanceSentence(d, currentHoldingPct, totalValue) {
   let maxCat = "A", maxDiff = 0;
   for (const cat of CATS) {
@@ -208,7 +280,7 @@ function buildRebalanceSentence(d, currentHoldingPct, totalValue) {
   return `${d.modelRow.label}の推奨ポートフォリオと比較して、${maxCat}クラスが${Math.abs(maxDiff).toFixed(1)}%（${maxDiffAmount >= 0 ? "+" : "-"}¥${Math.abs(maxDiffAmount).toLocaleString()}）${direction}しており、${verdict}。`;
 }
 // フェーズ1：ATH更新後・DD-3%未到達（ボックス圏、または当日ATH更新）。
-function buildPhase1AnalysisText(d, rebalanceSentence) {
+function buildPhase1AnalysisText(d, rebalanceSentence, dd3EntrySentence, dynamicAllocationSentence) {
   const athStr = fmtYMD(d.athDate);
   const ddStr = `${d.currentDD.toFixed(1)}%`;
   const statusLabel = d.daysSinceATH === 0 ? "ATH更新中" : "ボックス圏";
@@ -216,10 +288,10 @@ function buildPhase1AnalysisText(d, rebalanceSentence) {
   const boxSentence = stat
     ? `過去実績（同様に${boxStatRangeLabel(stat)}ATH未更新が続いたケース n=${stat.n}件）では、最終的にATH更新${stat.athRate.toFixed(1)}%／DD-3%到達${stat.dd3Rate.toFixed(1)}%となっています。${lowSampleNote(stat)}`
     : "";
-  return `ATHが${athStr}で、現在は前回のATHから${d.daysSinceATH}日で${statusLabel}（${ddStr}）にあります。${boxSentence}${rebalanceSentence}${ANALYSIS_DISCLAIMER}`;
+  return `ATHが${athStr}で、現在は前回のATHから${d.daysSinceATH}日で${statusLabel}（${ddStr}）にあります。${boxSentence}${dd3EntrySentence}${dynamicAllocationSentence}${rebalanceSentence}${ANALYSIS_DISCLAIMER}`;
 }
 // フェーズ2：DD-3%到達済み・DD-5%未到達。
-function buildPhase2AnalysisText(d, rebalanceSentence) {
+function buildPhase2AnalysisText(d, rebalanceSentence, dd3EntrySentence, dynamicAllocationSentence) {
   const athStr = fmtYMD(d.athDate);
   const dd3Str = d.speedAlert.d3Date ? fmtYMD(d.speedAlert.d3Date) : "—";
   const daysAthToDd3 = d.ddStartIdx !== -1 ? d.ddStartIdx - d.episode.athIdx : null;
@@ -232,10 +304,10 @@ function buildPhase2AnalysisText(d, rebalanceSentence) {
   const speedSentence = bucket
     ? `現在はDD-3%到達から${daysSinceDD3}日が経過しており、これは速度区分「${bucket.label}」に該当します。過去の同区分（n=${bucket.n}）では、最終DD-15%以上${crashRate(bucket, -15)}／DD-20%以上${crashRate(bucket, -20)}／DD-30%以上${crashRate(bucket, -30)}となっています。`
     : "";
-  return `${dd3Str}にDD-3%へ到達しました（ATHの${athStr}から${daysAthToDd3 !== null ? daysAthToDd3 : "—"}日）。${athToDd3Sentence}${speedSentence}${rebalanceSentence}${ANALYSIS_DISCLAIMER}`;
+  return `${dd3Str}にDD-3%へ到達しました（ATHの${athStr}から${daysAthToDd3 !== null ? daysAthToDd3 : "—"}日）。${athToDd3Sentence}${speedSentence}${dd3EntrySentence}${dynamicAllocationSentence}${rebalanceSentence}${ANALYSIS_DISCLAIMER}`;
 }
 // フェーズ3：DD-5%到達済み。詳細はDD加速度アラートに委ね、ここでは要約のみ表示する。
-function buildPhase3AnalysisText(d, rebalanceSentence) {
+function buildPhase3AnalysisText(d, rebalanceSentence, dd3EntrySentence, dynamicAllocationSentence) {
   const dd5Str = d.speedAlert.d5Date ? fmtYMD(d.speedAlert.d5Date) : "—";
   const idx3 = d.episode.crossIdx[-3], idx5 = d.episode.crossIdx[-5];
   const speed35 = (idx3 !== -1 && idx5 !== -1) ? idx5 - idx3 : null;
@@ -243,13 +315,16 @@ function buildPhase3AnalysisText(d, rebalanceSentence) {
   const summary = bucket
     ? `速度区分「${bucket.label}」に該当し、過去実績（n=${bucket.n}）では最終DD-15%以上${crashRate(bucket, -15)}／DD-20%以上${crashRate(bucket, -20)}／DD-30%以上${crashRate(bucket, -30)}／DD-40%以上${crashRate(bucket, -40)}／DD-50%以上${crashRate(bucket, -50)}です。詳細はDD加速度アラートをご覧ください。`
     : "詳細はDD加速度アラートをご覧ください。";
-  return `DD-5%へ到達済みです（${dd5Str}）。${summary}${rebalanceSentence}${ANALYSIS_DISCLAIMER}`;
+  return `DD-5%へ到達済みです（${dd5Str}）。${summary}${dd3EntrySentence}${dynamicAllocationSentence}${rebalanceSentence}${ANALYSIS_DISCLAIMER}`;
 }
-function buildAnalysisText(d, currentHoldingPct, totalValue) {
+function buildAnalysisText(d, currentHoldingPct, totalValue, dQqq, qqqAmplification) {
   const rebalanceSentence = buildRebalanceSentence(d, currentHoldingPct, totalValue);
-  if (d.currentDD <= -5) return buildPhase3AnalysisText(d, rebalanceSentence);
-  if (d.currentDD <= -3) return buildPhase2AnalysisText(d, rebalanceSentence);
-  return buildPhase1AnalysisText(d, rebalanceSentence);
+  const dd3EntrySentence = buildDd3EntrySentence(d);
+  const advisory = computeDynamicAllocationAdvisory(d, dQqq, qqqAmplification, currentHoldingPct, totalValue);
+  const dynamicAllocationSentence = buildDynamicAllocationSentence(advisory);
+  if (d.currentDD <= -5) return buildPhase3AnalysisText(d, rebalanceSentence, dd3EntrySentence, dynamicAllocationSentence);
+  if (d.currentDD <= -3) return buildPhase2AnalysisText(d, rebalanceSentence, dd3EntrySentence, dynamicAllocationSentence);
+  return buildPhase1AnalysisText(d, rebalanceSentence, dd3EntrySentence, dynamicAllocationSentence);
 }
 
 // trackRecordOverride を渡すと、この系列自身の実績ではなく渡された統計（節目間の進行確率・最終到達確率・速度別確率など）を使う。
@@ -273,7 +348,7 @@ function computeAll(rawSeries, trackRecordOverride) {
   const currentEpisodeCurve = FULL.slice(episode.athIdx, last.i + 1).map((p, idx) => ({ day: idx, dd: p.dd })); // day=0が直近ATH（DD0%）起点。暴落比較チャートの各局面と同じ基準に揃える
   const speedCategory = legDays !== null ? (legDays <= 5 ? "急落" : "緩慢") : null;
   const nextProg = episode.currentT !== null ? trackRecord.progression.find((r) => r.from === episode.currentT) : null;
-  const modelRow = nearestModelRow(currentDD);
+  const modelRow = nearestModelRow(currentDD, trackRecord.dynamicModelRows);
   const currentLevelP = currentTLabel === "-3%" ? 100 : (trackRecord.finalReach.find((r) => r.label === currentTLabel)?.p ?? null);
   const currentFreqLabel = currentLevelP !== null ? freqLabelFromP(currentLevelP, trackRecord.ddFreqPerYear) : null;
   const athDate = FULL[episode.athIdx].date; // 直近の下落局面の起点となった最高値更新日
@@ -328,6 +403,136 @@ function episodeCrossDays(FULL, ep) {
   }
   return cross;
 }
+// ---- ここから：DD深度・加速度に応じた動的配分モデルのための算出ロジック ----
+// いずれも「読み込まれているトラックレコード（SP500日次価格）から都度算出する」統計。
+// CSVが更新されるたびに再計算され、ハードコードされた固定値としては保持しない。
+
+// ピアソンの相関係数はpearsonCorrelation（暴落類似度ランキングで定義済み）を再利用する。
+function median(arr) {
+  if (!arr.length) return null;
+  const s = [...arr].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+// DD-3%圏への「複数回出入り」統計（動的算出版）。完了エピソード（dd3Episodes=findDDEpisodes(FULL,-3)の完了分）を
+// countDd3Entriesで求めた突入回数ごとにグルーピングし、回数別の最終DD中央値・平均期間・大暴落率を求める。
+// 5回以上は「5+」ビンとして1グループにまとめる（個々のnが小さく、特殊な長期停滞相場を含みやすいため）。
+function computeDd3EntryStats(FULL, dd3Episodes) {
+  const rows = dd3Episodes.filter((e) => !e.isOngoing).map((e) => ({
+    entries: countDd3Entries(FULL.slice(e.athIdx, e.recoveryIdx + 1).map((p) => p.dd)),
+    troughDD: e.troughDD,
+    durationDays: (e.recoveryDate - e.athDate) / 86400000,
+  })).filter((r) => r.entries > 0);
+  const groups = new Map();
+  for (const r of rows) { const key = Math.min(r.entries, 5); if (!groups.has(key)) groups.set(key, []); groups.get(key).push(r); }
+  const stats = [1, 2, 3, 4, 5].map((key) => {
+    const g = groups.get(key) ?? [];
+    const n = g.length;
+    if (!n) return null;
+    return {
+      entries: key, n,
+      finalDDMedian: Number(median(g.map((r) => r.troughDD)).toFixed(1)),
+      avgDurationDays: Number((g.reduce((s, r) => s + r.durationDays, 0) / n).toFixed(1)),
+      crash15Rate: Number(((g.filter((r) => r.troughDD <= -15).length / n) * 100).toFixed(1)),
+      lowSample: key === 5, // 「5回以上」ビンは特殊な長期停滞相場を含みうるため常に参考値扱いにする
+    };
+  }).filter(Boolean);
+  const overallN = rows.length;
+  const multiEntryCount = rows.filter((r) => r.entries >= 2).length;
+  return {
+    stats,
+    n: overallN,
+    overallRate: overallN > 0 ? Number(((multiEntryCount / overallN) * 100).toFixed(1)) : null,
+    correlations: {
+      entriesVsFinalDD: Number((pearsonCorrelation(rows.map((r) => r.entries), rows.map((r) => r.troughDD)) ?? 0).toFixed(3)),
+      entriesVsDuration: Number((pearsonCorrelation(rows.map((r) => r.entries), rows.map((r) => r.durationDays)) ?? 0).toFixed(3)),
+    },
+  };
+}
+function findDd3EntryStat(entries, dd3EntryStats) {
+  if (!entries || entries <= 0 || !dd3EntryStats) return null;
+  const key = Math.min(entries, 5);
+  return dd3EntryStats.stats.find((s) => s.entries === key) ?? null;
+}
+
+// ①DD到達水準別「押し目買い効率」カーブ。各水準に新規到達した日（前日はその水準より浅かった日）をイベントと
+// して抽出し、そこから1/3/6/12ヶ月後（営業日21/63/126/252日）のフォワードリターンの平均÷標準偏差＝
+// 効率スコアを算出する（高いほど、その水準からの押し目買いが歴史的に効率的＝リターンが安定して取れている）。
+const EFFICIENCY_MILESTONE_LEVELS = [-5, -8, -10, -12, -15, -18, -20, -25, -30, -40, -50];
+const FORWARD_RETURN_HORIZONS = [{ label: "1ヶ月", days: 21 }, { label: "3ヶ月", days: 63 }, { label: "6ヶ月", days: 126 }, { label: "12ヶ月", days: 252 }];
+function sampleStdev(arr, mean) {
+  if (arr.length < 2) return null;
+  return Math.sqrt(arr.reduce((s, v) => s + (v - mean) ** 2, 0) / (arr.length - 1));
+}
+function computeMilestoneEfficiency(FULL, level) {
+  const entryIdxs = [];
+  for (let i = 0; i < FULL.length; i++) {
+    const below = FULL[i].dd <= level, wasBelow = i > 0 && FULL[i - 1].dd <= level;
+    if (below && !wasBelow) entryIdxs.push(i);
+  }
+  const horizons = FORWARD_RETURN_HORIZONS.map((h) => {
+    const returns = entryIdxs.map((idx) => idx + h.days).filter((fi) => fi < FULL.length).map((fi) => ((FULL[fi].price / FULL[fi - h.days].price) - 1) * 100);
+    const n = returns.length;
+    const mean = n ? returns.reduce((s, v) => s + v, 0) / n : null;
+    const stdev = n >= 2 ? sampleStdev(returns, mean) : null;
+    const efficiency = (stdev !== null && stdev > 0) ? mean / stdev : null;
+    return { label: h.label, days: h.days, n, mean: mean !== null ? Number(mean.toFixed(2)) : null, stdev: stdev !== null ? Number(stdev.toFixed(2)) : null, efficiency: efficiency !== null ? Number(efficiency.toFixed(3)) : null };
+  });
+  const validEff = horizons.map((h) => h.efficiency).filter((e) => e !== null);
+  const efficiencyScore = validEff.length ? Number((validEff.reduce((s, v) => s + v, 0) / validEff.length).toFixed(3)) : null;
+  return { level, eventCount: entryIdxs.length, horizons, efficiencyScore };
+}
+function computeMilestoneEfficiencyCurve(FULL) { return EFFICIENCY_MILESTONE_LEVELS.map((level) => computeMilestoneEfficiency(FULL, level)); }
+
+// 効率スコアが低い/負/算出不可の区間でも配分の重みが0や負にならないための下限（ポリシー定数）。
+const EFFICIENCY_FLOOR = 0.05;
+// 事象数（イベント件数）が少ない水準の効率スコアを、他の水準の中央値へ縮小（シュリンケージ）する信頼度定数。
+// 例：EFFICIENCY_CREDIBILITY_K=20の場合、n=20件で「生スコア50%・中央値50%」の重みになる。
+// DD-50%等はサンプルが数件しかなく生スコアが極端な外れ値になりやすいため、この縮小がないと最終区間の
+// 重みだけが不自然に支配的になり、進捗ペース全体が歪む（実データで確認済み。ModelDebugContentで生値も確認可能）。
+const EFFICIENCY_CREDIBILITY_K = 20;
+// MODEL_ROWSのDD-3%→DD-50%の間で、目標配分を再配分する対象区間（区間の終端の節目ラベルで表す）。
+const DYNAMIC_MODEL_INTERVALS = ["DD-5%", "DD-8%", "DD-10%", "DD-15%", "DD-20%", "DD-30%", "DD-50%"];
+// ①のロジック本体：DD-3%とDD-50%の目標配分（MODEL_ROWSの固定アンカー。方針判断のため変更しない）は維持したまま、
+// その間の各節目（DD-5〜DD-30%）のA〜E目標配分を、区間終端の効率スコア（信頼度シュリンケージ後）に比例した
+// 重みで再配分する（効率が悪い区間＝重み小＝その節目までの進み方が緩やか、効率が良い区間＝重み大＝進み方が急）。
+// 5クラスとも同じ「進捗曲線」を共有するため、Cクラスだけでなく、深いDDでA/BからD/Eへ資金移動していく
+// 既存モデルの形（DD-3%終点からDD-50%終点への到達ペース）もそのまま効率カーブで再配分される。
+function buildDynamicModelRows(FULL, efficiencyCurve) {
+  const effByLevel = new Map(efficiencyCurve.map((e) => [e.level, e]));
+  const validScores = efficiencyCurve.map((e) => e.efficiencyScore).filter((s) => s !== null);
+  const priorScore = validScores.length ? median(validScores) : 0; // 中央値は外れ値（n極小の水準）の影響を受けにくい
+  const rowByLabel = new Map(MODEL_ROWS.map((r) => [r.label, r]));
+  const start = rowByLabel.get("DD-3%"), end = rowByLabel.get("DD-50%");
+  const weights = DYNAMIC_MODEL_INTERVALS.map((label) => {
+    const row = rowByLabel.get(label);
+    const e = effByLevel.get(row.v);
+    const rawScore = e?.efficiencyScore ?? null;
+    const credibility = e ? e.eventCount / (e.eventCount + EFFICIENCY_CREDIBILITY_K) : 0;
+    const shrunkScore = rawScore !== null ? credibility * rawScore + (1 - credibility) * priorScore : priorScore;
+    return { label, v: row.v, efficiencyScore: rawScore, shrunkScore: Number(shrunkScore.toFixed(3)), weight: Math.max(EFFICIENCY_FLOOR, shrunkScore) };
+  });
+  const totalWeight = weights.reduce((s, w) => s + w.weight, 0);
+  const fractionByLabel = new Map();
+  let cumulative = 0;
+  for (const w of weights) { cumulative += w.weight; fractionByLabel.set(w.label, cumulative / totalWeight); }
+
+  // 端数調整は最大剰余法（largest remainder method）で行い、各行のA〜E合計が常にちょうど100になるようにする。
+  const buildRow = (row, frac) => {
+    const raw = {}; for (const cat of CATS) raw[cat] = start[cat] + frac * (end[cat] - start[cat]);
+    const floorVal = {}; let sumFloor = 0;
+    for (const cat of CATS) { floorVal[cat] = Math.floor(raw[cat]); sumFloor += floorVal[cat]; }
+    const needed = 100 - sumFloor;
+    const order = [...CATS].sort((a, b) => (raw[b] - floorVal[b]) - (raw[a] - floorVal[a]));
+    const result = { ...floorVal };
+    for (let i = 0; i < needed; i++) result[order[i % order.length]] += 1;
+    return { label: row.label, v: row.v, ...result };
+  };
+  const rows = MODEL_ROWS.map((row) => (fractionByLabel.has(row.label) ? buildRow(row, fractionByLabel.get(row.label)) : { ...row }));
+  return { rows, weights, totalWeight };
+}
+// ---- ここまで：動的配分モデルのための算出ロジック ----
+
 // アップロード・更新された実際の価格推移（トラックレコード）から、進行確率・速度別統計をその都度算出する。
 // 静的な想定値ではなく、読み込まれている全期間のデータに応じて自動的に更新される。
 function computeTrackRecordStats(FULL, episodes) {
@@ -378,7 +583,14 @@ function computeTrackRecordStats(FULL, episodes) {
   const fastCrashRate = fastAll.length > 0 ? Math.round((fastAll.filter((r) => r.ep.troughDD <= -15).length / fastAll.length) * 100) : null;
   const fastMissRate = fastCrashRate !== null ? 100 - fastCrashRate : null;
 
-  return { n, totalYears, ddFreqPerYear, finalReach, progression, speed35Backtest, speedTable, reachedD5Count: reachedD5.length, crashEpisodeCount: crashEpisodes.length, crashFastCount, crashFastShare, fastCrashRate, fastMissRate, dipCount, dipToD3Count, dipToD3Rate };
+  const dd3EntryStats = computeDd3EntryStats(FULL, episodes);
+  const milestoneEfficiency = computeMilestoneEfficiencyCurve(FULL);
+  const dynamicModel = buildDynamicModelRows(FULL, milestoneEfficiency);
+
+  return {
+    n, totalYears, ddFreqPerYear, finalReach, progression, speed35Backtest, speedTable, reachedD5Count: reachedD5.length, crashEpisodeCount: crashEpisodes.length, crashFastCount, crashFastShare, fastCrashRate, fastMissRate, dipCount, dipToD3Count, dipToD3Rate,
+    dd3EntryStats, milestoneEfficiency, dynamicModelRows: dynamicModel.rows, dynamicModelWeights: dynamicModel.weights,
+  };
 }
 function speed35Bucket(days, speed35Backtest) { return speed35Backtest.find((r) => days >= r.min && days <= r.max) ?? null; }
 function classifySpeed35(days) { if (days <= 5) return "fast"; if (days >= 21) return "slow"; return "mid"; }
@@ -1681,6 +1893,43 @@ function findAthToDd3Stat(days) {
 }
 function athToDd3RangeLabel(stat) { return stat.maxDays >= 9999 ? `ATHから${stat.minDays}日以上かけて到達` : `ATHから${stat.minDays}〜${stat.maxDays}日で到達`; }
 function boxStatRangeLabel(stat) { return stat.maxDays >= 9999 ? `${stat.minDays}日以上` : `${stat.minDays}〜${stat.maxDays}日`; }
+
+// DD-3%圏への「複数回出入り」統計・現在のエピソードの突入回数カウント。
+// 統計そのもの（DD3_ENTRY_STATS相当）は computeDd3EntryStats により、読み込まれているトラックレコードから
+// その都度動的に算出される（d.trackRecord.dd3EntryStats）。ここでは現在のエピソードの突入回数を数える
+// countDd3Entries と、それを補足文として組み立てる関数のみを定義する。
+// 現在のエピソード（直近ATHから現在まで）の日次DD%系列から、DD-3%圏（DD<=-3%）へ跨いだ回数を数える。
+// 初日（i=0）でDD<=-3%の場合も1回としてカウントする。
+function countDd3Entries(ddSeries) {
+  let entries = 0;
+  for (let i = 0; i < ddSeries.length; i++) {
+    const below = ddSeries[i] <= -3.0;
+    const wasBelow = i > 0 && ddSeries[i - 1] <= -3.0;
+    if (below && !wasBelow) entries++;
+  }
+  return entries;
+}
+// 現在のエピソードで一度でもDD-3%圏に到達していれば、フェーズ判定とは独立に突入回数の統計を短い補足文として返す
+// （未到達なら空文字）。DD-3%を回復済み・新ATH未達の状態では「複数回出入りする方が多数派」という注記を必ず添える。
+function buildDd3EntrySentence(d) {
+  const entries = countDd3Entries(d.currentEpisodeCurve.map((p) => p.dd));
+  if (entries <= 0) return "";
+  const dd3EntryStats = d.trackRecord.dd3EntryStats;
+  const stat = findDd3EntryStat(entries, dd3EntryStats);
+  if (!stat) return "";
+  const bucketLabel = entries <= 4 ? `${entries}回` : "5回以上";
+  let text;
+  if (entries === 1) {
+    text = `今回のエピソードでは、これまでDD-3%圏に1回入っています。初回の到達のため統計的な傾向を示すにはまだ早い段階ですが、過去実績（1回のみ入ったケース n=${stat.n}件）では最終的な下落幅の中央値は${stat.finalDDMedian}%、エピソード全体の平均期間は${stat.avgDurationDays.toFixed(1)}日でした。`;
+  } else {
+    text = `今回のエピソードでは、これまでDD-3%圏に${entries}回入っています。過去実績（n=${dd3EntryStats.n}）では、DD-3%圏への複数回の出入りが発生したエピソードは全体の${dd3EntryStats.overallRate}%を占め、突入回数が多いほど最終的な下落幅が深く、エピソード全体の期間も長期化する傾向があります（突入回数と最終DDの相関${dd3EntryStats.correlations.entriesVsFinalDD}、突入回数と期間の相関${dd3EntryStats.correlations.entriesVsDuration}）。同じ${bucketLabel}のケース（n=${stat.n}）では、最終的な下落幅の中央値は${stat.finalDDMedian}%、エピソード全体の平均期間は${stat.avgDurationDays.toFixed(1)}日でした。`;
+  }
+  if (stat.lowSample) text += `※この突入回数（5回以上）は過去${stat.n}件と少数のため、参考値としてご覧ください。`;
+  if (d.currentDD > -3 && dd3EntryStats.overallRate !== null) {
+    text += `なお、過去実績では一度DD-3%を回復しても、そのまま新高値まで到達せず、再度DD-3%を下回るケースの方が多数派です（全体の${dd3EntryStats.overallRate}%が複数出入りを経験）。今回の回復が「下落終了」を意味するとは限らない点にご留意ください。`;
+  }
+  return text;
+}
 // compact: ダッシュボード上部の小さいステータス欄用。false: DD加速度アラートモーダル内の詳細カード用。
 function BoxStatsPanel({ days, compact }) {
   const stat = findBoxStat(days);
@@ -2055,7 +2304,7 @@ function PortfolioTableContent({ view, holdings, onEditHolding, onDeleteHolding 
 }
 
 const AXIS_TICKS = [0, 20, 40, 60, 80, 100];
-function DDTableContent({ modelRow, holdings }) {
+function DDTableContent({ modelRow, modelRows = MODEL_ROWS, holdings }) {
   const rankLabels = useMemo(() => rankCategoryLabels(holdings), [holdings]);
   return (
     <div>
@@ -2077,7 +2326,7 @@ function DDTableContent({ modelRow, holdings }) {
         </div>
       </div>
 
-      {MODEL_ROWS.map((r) => {
+      {modelRows.map((r) => {
         const isCurrent = r.label === modelRow.label;
         return (
           <div key={r.label} className="flex items-center gap-3 mb-1.5">
@@ -2099,6 +2348,92 @@ function DDTableContent({ modelRow, holdings }) {
         );
       })}
       <div className="text-[10px] mt-3" style={{ color: C.textDim }}>各行は横棒の合計が100%（A〜Eの構成比の目安）。バーにマウスを乗せると各セグメントの詳細を確認できます。</div>
+    </div>
+  );
+}
+
+// 管理者向けデバッグビュー：動的配分モデルの元になっているバックテスト統計（読み込み済みトラックレコードから
+// その都度算出される値）と、固定のポリシー定数を並べて確認できるようにする。CSVを差し替えて統計値が
+// 実際に変化する（＝ハードコードされていない）ことをここで目視確認できる。
+function DebugSectionTitle({ children }) { return <div className="text-xs font-semibold mt-4 mb-2" style={{ color: C.text }}>{children}</div>; }
+function ModelDebugContent({ d, dQqq, qqqAmplification }) {
+  const tr = d.trackRecord;
+  const currentQqqRatio = (dQqq && d.currentDD < 0) ? Number((dQqq.currentDD / d.currentDD).toFixed(2)) : null;
+  return (
+    <div className="text-xs" style={{ color: C.textMuted }}>
+      <div style={{ color: C.textDim }}>読み込み済みトラックレコード: 約{tr.totalYears.toFixed(0)}年・完了エピソードn={tr.n}件。以下は全てこのデータから都度再計算された値。</div>
+
+      <DebugSectionTitle>①DD到達水準別「押し目買い効率」カーブ（フォワードリターン平均÷標準偏差）</DebugSectionTitle>
+      <div className="overflow-x-auto">
+        <table className="mono text-[10px]" style={{ borderCollapse: "collapse", width: "100%" }}>
+          <thead><tr style={{ color: C.textDim }}>
+            <th className="text-right pr-3">水準</th><th className="text-right pr-3">イベント数</th>
+            {FORWARD_RETURN_HORIZONS.map((h) => <th key={h.label} className="text-right pr-3">{h.label}(n/効率)</th>)}
+            <th className="text-right">効率スコア</th>
+          </tr></thead>
+          <tbody>
+            {tr.milestoneEfficiency.map((e) => (
+              <tr key={e.level} style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+                <td className="text-right pr-3">{e.level}%</td>
+                <td className="text-right pr-3">{e.eventCount}</td>
+                {e.horizons.map((h) => <td key={h.label} className="text-right pr-3">{h.n}/{h.efficiency ?? "—"}</td>)}
+                <td className="text-right font-semibold" style={{ color: C.teal }}>{e.efficiencyScore ?? "算出不可"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <DebugSectionTitle>①区間ウェイト（DD-3%→DD-50%の配分再構成に使用する区間終端の効率スコア。信頼度シュリンケージ後の値を使用）</DebugSectionTitle>
+      <div className="mono text-[10px]">
+        {tr.dynamicModelWeights.map((w) => (
+          <div key={w.label}>{w.label}（{w.v}%）: 生スコア {w.efficiencyScore ?? "算出不可"} → シュリンケージ後 {w.shrunkScore} → 重み {w.weight.toFixed(3)}（全体比{((w.weight / tr.dynamicModelWeights.reduce((s, x) => s + x.weight, 0)) * 100).toFixed(1)}%）</div>
+        ))}
+      </div>
+
+      <DebugSectionTitle>動的モデル vs 固定モデル（A〜E目標配分の比較）</DebugSectionTitle>
+      <div className="overflow-x-auto">
+        <table className="mono text-[10px]" style={{ borderCollapse: "collapse", width: "100%" }}>
+          <thead><tr style={{ color: C.textDim }}><th className="text-right pr-3">節目</th>{CATS.map((c) => <th key={c} className="text-right pr-3">{c}（動的/固定）</th>)}</tr></thead>
+          <tbody>
+            {tr.dynamicModelRows.map((dyn) => {
+              const stat = MODEL_ROWS.find((r) => r.label === dyn.label);
+              return (
+                <tr key={dyn.label} style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+                  <td className="text-right pr-3">{dyn.label}</td>
+                  {CATS.map((c) => (
+                    <td key={c} className="text-right pr-3" style={{ color: dyn[c] !== stat[c] ? C.amber : undefined }}>{dyn[c]}/{stat[c]}</td>
+                  ))}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <DebugSectionTitle>③DD-3%圏「複数回出入り」統計（動的算出）</DebugSectionTitle>
+      <div className="mono text-[10px]">
+        <div>全体n={tr.dd3EntryStats.n}・複数回出入り率{tr.dd3EntryStats.overallRate ?? "算出不可"}%・相関（回数×最終DD）{tr.dd3EntryStats.correlations.entriesVsFinalDD}・相関（回数×期間）{tr.dd3EntryStats.correlations.entriesVsDuration}</div>
+        {tr.dd3EntryStats.stats.map((s) => (
+          <div key={s.entries}>{s.entries >= 5 ? "5回以上" : `${s.entries}回`}: n={s.n} 最終DD中央値{s.finalDDMedian}% 平均期間{s.avgDurationDays}日 大暴落率{s.crash15Rate}%{s.lowSample ? "（参考値）" : ""}</div>
+        ))}
+      </div>
+
+      <DebugSectionTitle>④QQQ増幅率</DebugSectionTitle>
+      <div className="mono text-[10px]">
+        <div>平時の中央値（動的算出）: {qqqAmplification?.medianRatio ?? "QQQデータ未取り込み"}{qqqAmplification?.n ? `（n=${qqqAmplification.n}エピソード）` : ""}</div>
+        <div>現在の増幅率: {currentQqqRatio ?? "算出不可"}{currentQqqRatio !== null && qqqAmplification?.medianRatio ? `（中央値の${(currentQqqRatio / qqqAmplification.medianRatio).toFixed(1)}倍）` : ""}</div>
+      </div>
+
+      <DebugSectionTitle>ポリシー定数（バックテスト結果ではなく、方針として固定で管理している値）</DebugSectionTitle>
+      <div className="mono text-[10px]">
+        <div>EFFICIENCY_FLOOR（効率ウェイトの下限）: {EFFICIENCY_FLOOR}</div>
+        <div>SPEED_MODIFIER: {Object.entries(SPEED_MODIFIER).map(([k, v]) => `${k}=${v}`).join(" / ")}</div>
+        <div>ENTRY_COUNT_MODIFIER: {Object.entries(ENTRY_COUNT_MODIFIER).map(([k, v]) => `${k}=${v}`).join(" / ")}</div>
+        <div>QQQ_AMPLIFICATION_ALERT_MULTIPLIER（中央値の何倍で警戒）: {QQQ_AMPLIFICATION_ALERT_MULTIPLIER}</div>
+        <div>QQQ_MODIFIER_FACTOR（警戒時の抑制係数）: {QQQ_MODIFIER_FACTOR}</div>
+      </div>
+      <div className="text-[10px] mt-3" style={{ color: C.textDim }}>{ANALYSIS_DISCLAIMER}</div>
     </div>
   );
 }
@@ -3057,9 +3392,9 @@ function buildSummaryMarkdown(ctx) {
   }
   L.push(`ブロック: A+B ${blocks.AB.cur.toFixed(1)}%（目標${blocks.AB.tgt}%） / C ${blocks.Cb.cur.toFixed(1)}%（目標${blocks.Cb.tgt}%） / D+E ${blocks.DE.cur.toFixed(1)}%（目標${blocks.DE.tgt}%）`);
   L.push("");
-  L.push("■ DD戦略モデル：全節目（+15%〜DD-50%）のA〜E目標配分と現状比較");
+  L.push("■ DD戦略モデル：全節目（+15%〜DD-50%）のA〜E目標配分と現状比較（DD-5〜DD-30%は効率カーブに基づく動的配分）");
   L.push("節目 | A | B | C | D | E （各セルは 現状%→目標%(差pt) ）");
-  for (const row of MODEL_ROWS) {
+  for (const row of d.trackRecord.dynamicModelRows) {
     const cells = CATS.map((cat) => { const cur = currentHoldingPct[cat]; const diffPt = Number((cur - row[cat]).toFixed(1)); return `${cat} ${cur.toFixed(1)}→${row[cat]}(${diffPt >= 0 ? "+" : ""}${diffPt})`; });
     L.push(`${row.label}${row.label === effectiveModelRow.label ? "（現在地）" : ""}: ${cells.join(" / ")}`);
   }
@@ -3170,14 +3505,15 @@ function buildSummaryJSON(ctx) {
       qqq: dQqq ? seriesToPairs(dQqq) : null,
     },
     dd_strategy: {
-      note: "DD戦略：S&P500がATHから-3%以上下落する節目ごとにA〜E配分をこのモデルに沿って調整する。値は目標構成比(%)。",
+      note: "DD戦略：S&P500がATHから-3%以上下落する節目ごとにA〜E配分をこのモデルに沿って調整する。値は目標構成比(%)。DD-5〜DD-30%はDD到達水準別フォワードリターン効率カーブに基づき、読み込み済みトラックレコードから動的に再配分される（allocation_model_staticは比較用の固定モデル）。",
       milestones_pct: MILESTONES,
-      allocation_model: MODEL_ROWS,
+      allocation_model: d.trackRecord.dynamicModelRows,
+      allocation_model_static: MODEL_ROWS,
       current_model_row: effectiveModelRow.label,
       checkpoints: (checkpoints || []).filter((cp) => cp.enabled).map((cp) => ({ label: cp.label, target_type: cp.targetType, target_values: cp.targetValues, direction: cp.direction, threshold_pct: cp.thresholdPct, evaluation: evaluateCheckpoint(cp, holdings, total)?.text ?? null })),
     },
     allocation: Object.fromEntries(CATS.map((cat) => [cat, { value: val((currentHoldingPct[cat] / 100) * total), pct: currentHoldingPct[cat], model_pct: effectiveModelRow[cat], diff_pt: Number((currentHoldingPct[cat] - effectiveModelRow[cat]).toFixed(1)), categories: rankLabels[cat] }])),
-    allocation_vs_all_milestones: MODEL_ROWS.map((row) => ({ milestone: row.label, is_current: row.label === effectiveModelRow.label, cats: Object.fromEntries(CATS.map((cat) => [cat, { current_pct: currentHoldingPct[cat], target_pct: row[cat], diff_pt: Number((currentHoldingPct[cat] - row[cat]).toFixed(1)) }])) })),
+    allocation_vs_all_milestones: d.trackRecord.dynamicModelRows.map((row) => ({ milestone: row.label, is_current: row.label === effectiveModelRow.label, cats: Object.fromEntries(CATS.map((cat) => [cat, { current_pct: currentHoldingPct[cat], target_pct: row[cat], diff_pt: Number((currentHoldingPct[cat] - row[cat]).toFixed(1)) }])) })),
     blocks: { AB: blocks.AB, C: blocks.Cb, DE: blocks.DE },
     fixed_positions: Object.entries(fixedPositions).map(([name, reason]) => ({ name, reason, value: val(holdings.filter((h) => h.name === name).reduce((s, h) => s + h.amount, 0)) })),
     dd3_rebalance_plan: (() => {
@@ -3681,6 +4017,201 @@ function MobileChartZoomModal({ onClose, chartData, rangeDays, d, hidden, toggle
   );
 }
 
+/* ---------------- 投資収支Excel（月末集計）アップロード・分析 ----------------
+   既存のSP500/QQQトラックレコードCSVアップロードとは完全に独立したデータソース（統合しない）。
+   パース処理自体は lib/investmentPerformance.ts に分離（行番号ではなくA列のラベルで検索する）。 */
+function lastValidPoint(series, field) {
+  for (let i = series.length - 1; i >= 0; i--) if (series[i][field] != null) return series[i];
+  return null;
+}
+function InvestmentUploadModalContent({ existing, onSave, onClose }) {
+  const [fileName, setFileName] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [readError, setReadError] = useState(null);
+
+  const handleFile = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setFileName(file.name);
+    setReadError(null);
+    setPreview(null);
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      try {
+        setPreview(await parseInvestmentExcel(ev.target.result, file.name));
+      } catch (err) {
+        setReadError(`Excelファイルの読み込みに失敗しました：${err?.message ?? err}`);
+      }
+    };
+    reader.onerror = () => setReadError("ファイルの読み込みに失敗しました。");
+    reader.readAsArrayBuffer(file);
+  };
+
+  const yen = (v) => (v == null ? "—" : `¥${Math.round(v).toLocaleString()}`);
+  const latestTotal = preview ? lastValidPoint(preview.series, "totalAssets") : null;
+  const latestPrincipal = preview ? lastValidPoint(preview.series, "principal") : null;
+  const latestTotalReturn = preview ? lastValidPoint(preview.series, "totalReturn") : null;
+  const latestTotalYield = preview ? lastValidPoint(preview.series, "totalYield") : null;
+  const existingLatestDate = existing?.series?.length ? existing.series[existing.series.length - 1].date : null;
+  const isOlder = latestTotal && existingLatestDate && latestTotal.date < existingLatestDate;
+
+  return (
+    <div className="text-sm">
+      <p className="mb-3" style={{ color: C.textMuted }}>毎月月末の投資収支Excel（.xlsx）をアップロードしてください。ファイルには常に開始時点からの全履歴が入っている前提のため、最新版ファイルで既存データを丸ごと置き換えます（差分アップロードは不要です）。生のExcelファイルは保存せず、解析後の構造化データのみを保存します。</p>
+      <label className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded cursor-pointer" style={{ background: C.teal, color: C.bg, fontWeight: 700 }}>
+        <Upload size={13} /> Excelファイルを選択
+        <input type="file" accept=".xlsx" className="hidden" onChange={handleFile} />
+      </label>
+      {fileName && <div className="mt-2 text-xs" style={{ color: C.textDim }}>選択中: {fileName}</div>}
+      {readError && <div className="mt-3 text-xs rounded px-3 py-2" style={{ color: C.rust, background: C.rustSoft }}>{readError}</div>}
+
+      {preview && (
+        <div className="mt-4">
+          {preview.errors.length > 0 && (
+            <div className="mb-3 rounded px-3 py-2 text-xs" style={{ color: C.amber, background: "rgba(217,162,75,0.12)", border: `1px solid ${C.amber}44` }}>
+              <div className="font-semibold mb-1">以下のデータが見つからなかった、または確認が必要です：</div>
+              {preview.errors.map((e, i) => <div key={i}>・{e}</div>)}
+            </div>
+          )}
+          {isOlder && (
+            <div className="mb-3 rounded px-3 py-2 text-xs" style={{ color: C.rust, background: C.rustSoft }}>
+              ※アップロードしたファイルの最新日付（{fmtDateSlash(latestTotal.date)}）が、保存済みデータの最新日付（{fmtDateSlash(existingLatestDate)}）より古いようです。古いファイルの可能性がありますが、内容を確認の上そのまま保存することもできます。
+            </div>
+          )}
+          <div className="text-xs mb-1.5" style={{ color: C.textDim }}>プレビュー（{preview.series.length}件の日付データを検出）</div>
+          <div className="grid grid-cols-2 gap-2 mono text-xs">
+            <div>最新データ日: <b>{latestTotal ? fmtDateSlash(latestTotal.date) : "—"}</b></div>
+            <div>総資産: <b>{yen(latestTotal?.totalAssets)}</b></div>
+            <div>元本: <b>{yen(latestPrincipal?.principal)}</b></div>
+            <div>トータルリターン: <b>{yen(latestTotalReturn?.totalReturn)}</b></div>
+            <div>トータル利回り（年）: <b>{latestTotalYield?.totalYield != null ? `${latestTotalYield.totalYield}%` : "—"}</b></div>
+          </div>
+          <button onClick={() => { onSave(preview); onClose(); }} className="mt-4 text-xs px-3 py-1.5 rounded" style={{ background: C.teal, color: C.bg, fontWeight: 700, border: "none", cursor: "pointer" }}>この内容で保存する</button>
+        </div>
+      )}
+    </div>
+  );
+}
+const INVESTMENT_ACCOUNT_COLORS = { "楽天証券（私＋妻）": C.teal, "moomoo証券": C.blue, "大和コネクト証券": C.violet, "Coin Check": C.amber, "iDeCo": "#7FA37A" };
+function InvestmentPerformanceModalContent({ data, d, dQqq, onOpenUpload, onReset }) {
+  const yen = (v) => (v == null ? "—" : `¥${Math.round(v).toLocaleString()}`);
+  const series = data?.series ?? [];
+  const latestTotalAssets = lastValidPoint(series, "totalAssets");
+  const startDateIso = series[0]?.date, endDateIso = (latestTotalAssets ?? series[series.length - 1])?.date;
+  const ownDD = useMemo(() => (series.length ? computeOwnAssetDrawdown(series) : null), [series]);
+  const spCAGR = useMemo(() => (startDateIso && endDateIso ? computeBenchmarkCAGR(d.FULL, parseDateOnly(startDateIso), parseDateOnly(endDateIso)) : null), [d.FULL, startDateIso, endDateIso]);
+  const qqqCAGR = useMemo(() => (dQqq && startDateIso && endDateIso ? computeBenchmarkCAGR(dQqq.FULL, parseDateOnly(startDateIso), parseDateOnly(endDateIso)) : null), [dQqq, startDateIso, endDateIso]);
+
+  if (!data || !series.length) {
+    return (
+      <div className="text-sm" style={{ color: C.textMuted }}>
+        まだ投資収支Excelがアップロードされていません。
+        <button onClick={onOpenUpload} className="ml-2 text-xs px-3 py-1.5 rounded" style={{ background: C.teal, color: C.bg, fontWeight: 700, border: "none", cursor: "pointer" }}>Excelをアップロード</button>
+      </div>
+    );
+  }
+  const latestPrincipal = lastValidPoint(series, "principal");
+  const latestRealizedReturn = lastValidPoint(series, "realizedReturn");
+  const latestRealizedYield = lastValidPoint(series, "realizedYield");
+  const latestTotalReturn = lastValidPoint(series, "totalReturn");
+  const latestTotalYield = lastValidPoint(series, "totalYield");
+
+  const accountLatest = [...data.accountSeries].reverse().find((p) => Object.values(p.accounts).some((v) => v != null));
+  const accountPieData = accountLatest ? Object.entries(accountLatest.accounts).filter(([, v]) => v != null && v > 0).map(([name, value]) => ({ name, value })) : [];
+  const monthlyChartData = data.monthlySeries.filter((p) => p.monthPerformance != null || p.withdrawal != null || p.excessReturn != null).slice(-24);
+
+  return (
+    <div className="text-sm" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="text-xs" style={{ color: C.textDim }}>データ最終日: {fmtDateSlash(endDateIso)}（出典: {data.sourceFileName}）</div>
+        <div className="flex gap-2">
+          <button onClick={onOpenUpload} className="text-xs px-2.5 py-1 rounded" style={{ background: C.panel2, color: C.textMuted, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>再アップロード</button>
+          <button onClick={onReset} className="text-xs px-2.5 py-1 rounded" style={{ background: C.panel2, color: C.rust, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>削除</button>
+        </div>
+      </div>
+
+      {data.errors.length > 0 && (
+        <div className="rounded px-3 py-2 text-xs" style={{ color: C.amber, background: "rgba(217,162,75,0.12)", border: `1px solid ${C.amber}44` }}>
+          {data.errors.map((e, i) => <div key={i}>・{e}</div>)}
+        </div>
+      )}
+
+      <div>
+        <div className="text-xs font-semibold mb-2">① サマリー</div>
+        <div className="grid grid-cols-3 gap-2 mono text-xs">
+          <div className="rounded px-2 py-1.5" style={{ background: C.panel2 }}>総資産<div className="text-sm font-bold">{yen(latestTotalAssets?.totalAssets)}</div></div>
+          <div className="rounded px-2 py-1.5" style={{ background: C.panel2 }}>元本<div className="text-sm font-bold">{yen(latestPrincipal?.principal)}</div></div>
+          <div className="rounded px-2 py-1.5" style={{ background: C.panel2 }}>実現リターン<div className="text-sm font-bold">{yen(latestRealizedReturn?.realizedReturn)}</div></div>
+          <div className="rounded px-2 py-1.5" style={{ background: C.panel2 }}>実現利回り（年）<div className="text-sm font-bold">{latestRealizedYield?.realizedYield != null ? `${latestRealizedYield.realizedYield}%` : "—"}</div></div>
+          <div className="rounded px-2 py-1.5" style={{ background: C.panel2 }}>トータルリターン<div className="text-sm font-bold">{yen(latestTotalReturn?.totalReturn)}</div></div>
+          <div className="rounded px-2 py-1.5" style={{ background: C.panel2 }}>トータル利回り（年）<div className="text-sm font-bold">{latestTotalYield?.totalYield != null ? `${latestTotalYield.totalYield}%` : "—"}</div></div>
+        </div>
+      </div>
+
+      <div>
+        <div className="text-xs font-semibold mb-2">② 自己資産の最大DD分析</div>
+        {ownDD ? (
+          <div className="mono text-xs" style={{ color: C.textMuted }}>
+            現在DD: <b style={{ color: depthColor(ownDD.currentDD) }}>{ownDD.currentDD.toFixed(1)}%</b>（直近ATH {yen(ownDD.currentATH)}・{fmtDateSlash(ownDD.currentATHDate)}）
+            ／ 過去最大DD: <b style={{ color: C.rust }}>{ownDD.maxDD.toFixed(1)}%</b>（{fmtDateSlash(ownDD.maxDDDate)}）
+          </div>
+        ) : <div className="text-xs" style={{ color: C.textDim }}>算出に必要な総資産データがありません。</div>}
+      </div>
+
+      <div>
+        <div className="text-xs font-semibold mb-2">③ ベンチマーク比較（{fmtDateSlash(startDateIso)} 〜 {fmtDateSlash(endDateIso)}）</div>
+        <div className="mono text-xs" style={{ color: C.textMuted }}>
+          自己トータル利回り（年）: <b>{latestTotalYield?.totalYield != null ? `${latestTotalYield.totalYield}%` : "算出不可"}</b>
+          ／ SP500 CAGR: <b>{spCAGR != null ? `${spCAGR}%` : "算出不可"}</b>
+          ／ QQQ CAGR: <b>{qqqCAGR != null ? `${qqqCAGR}%` : "算出不可（QQQ未取り込み）"}</b>
+        </div>
+        <div className="text-[10px] mt-1" style={{ color: C.textDim }}>※追加投資により元本が段階的に増加しているため、単純な買い持ち（バイ＆ホールド）との厳密な比較ではありません。</div>
+      </div>
+
+      <div>
+        <div className="text-xs font-semibold mb-2">④ 口座別内訳（{accountLatest ? fmtDateSlash(accountLatest.date) : "—"} 時点）</div>
+        {accountPieData.length ? (
+          <div className="flex items-center gap-4 flex-wrap">
+            <div style={{ width: 140, height: 140 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart><Pie data={accountPieData} dataKey="value" nameKey="name" innerRadius="55%" outerRadius="88%" paddingAngle={2} stroke={C.panel} strokeWidth={2} isAnimationActive={false}>{accountPieData.map((p, i) => <Cell key={i} fill={INVESTMENT_ACCOUNT_COLORS[p.name] ?? C.textDim} />)}</Pie><Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} formatter={(v, n) => [yen(v), n]} /></PieChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="flex-1 text-xs space-y-1 min-w-[160px]">
+              {accountPieData.map((p) => (
+                <div key={p.name} className="flex items-center justify-between gap-2">
+                  <span className="flex items-center gap-1.5"><span style={{ width: 8, height: 8, borderRadius: 2, background: INVESTMENT_ACCOUNT_COLORS[p.name] ?? C.textDim, display: "inline-block" }} />{p.name}</span>
+                  <span className="mono">{yen(p.value)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : <div className="text-xs" style={{ color: C.textDim }}>口座別データがありません。</div>}
+      </div>
+
+      <div>
+        <div className="text-xs font-semibold mb-2">⑤ 直近月次パフォーマンス</div>
+        {monthlyChartData.length ? (
+          <div style={{ width: "100%", height: 220 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={monthlyChartData}>
+                <CartesianGrid strokeDasharray="3 3" stroke={C.borderSoft} />
+                <XAxis dataKey="date" tick={{ fontSize: 9, fill: C.textDim }} tickFormatter={(v) => fmtDateSlash(v)} />
+                <YAxis tick={{ fontSize: 9, fill: C.textDim }} tickFormatter={(v) => `${Math.round(v / 10000)}万`} />
+                <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 11 }} labelFormatter={(v) => fmtDateSlash(v)} formatter={(v, n) => [yen(v), n]} />
+                <ReferenceLine y={0} stroke={C.borderSoft} />
+                <Bar dataKey="monthPerformance" name="当月パフォーマンス" fill={C.teal} />
+                <Bar dataKey="withdrawal" name="取り崩し" fill={C.rust} />
+                <Bar dataKey="excessReturn" name="超過収益" fill={C.amber} />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+        ) : <div className="text-xs" style={{ color: C.textDim }}>月次パフォーマンスのデータがありません。</div>}
+      </div>
+    </div>
+  );
+}
+
 /* ---------------- main ---------------- */
 export default function DDDashboard() {
   const [rawSeries, setRawSeries] = useState(SEED_SERIES);
@@ -3722,6 +4253,7 @@ export default function DDDashboard() {
   const [prevSnapshot, setPrevSnapshot] = useState(null); // 詳細サマリー出力の前回スナップショット（差分表示用）
   const [vooQqqSeries, setVooQqqSeries] = useState([]); // 「データ更新」で取得したVOO/QQQ終値（S&P500のDD計算には使わない、CSV出力専用の補助データ）
   const [speedAlertInstrument, setSpeedAlertInstrument] = useState("voo"); // "経過日数"・"DD加速度アラート"の基準をVOO/QQQどちらにするか
+  const [investmentPerformance, setInvestmentPerformance] = useState(null); // 投資収支Excelのパース結果（既存のSP500/QQQトラックレコードとは独立したデータソース）
 
   useEffect(() => {
     (async () => {
@@ -3789,6 +4321,10 @@ export default function DDDashboard() {
         const res8 = await storage.get("summary_prev_snapshot");
         if (res8 && res8.value) setPrevSnapshot(JSON.parse(res8.value));
       } catch (e) { /* no saved summary snapshot yet */ }
+      try {
+        const res9 = await storage.get("investment_performance_data");
+        if (res9 && res9.value) setInvestmentPerformance(JSON.parse(res9.value));
+      } catch (e) { /* no saved investment performance data yet */ }
       setHydrated(true);
     })();
   }, []);
@@ -3829,6 +4365,16 @@ export default function DDDashboard() {
       persistVooQqq(next);
       return next;
     });
+  }
+  // 投資収支Excelの解析結果を保存する（生のExcelファイルは保存せず、パース後の構造化データのみ）。
+  // 毎月最新版を丸ごとアップロードし直す運用のため、常に既存データを置き換える（差分マージはしない）。
+  function handleSaveInvestmentPerformance(data) {
+    setInvestmentPerformance(data);
+    storage.set("investment_performance_data", JSON.stringify(data)).catch(() => { /* storage unavailable */ });
+  }
+  function handleResetInvestmentPerformance() {
+    setInvestmentPerformance(null);
+    storage.delete("investment_performance_data").catch(() => { /* storage unavailable */ });
   }
   async function persistHoldings(list) {
     try { await storage.set("portfolio_holdings", JSON.stringify(list)); } catch (e) { /* storage unavailable */ }
@@ -3997,6 +4543,8 @@ export default function DDDashboard() {
   const qqqRangeDays = useMemo(() => { if (!qqqChartData) return 0; const f = qqqChartData[0].date, l = qqqChartData[qqqChartData.length - 1].date; return Math.round((l - f) / 86400000); }, [qqqChartData]);
   const qqqPeriodRange = useMemo(() => (dQqq ? periodDateRange(dQqq.FULL, dQqq.last, period) : null), [dQqq, period]);
   const qqqPeriodStats = useMemo(() => (qqqPeriodRange ? computePeriodStats(qqqPeriodRange, dQqq.episodes) : null), [qqqPeriodRange, dQqq]);
+  // ④QQQ早期警戒モディファイア用：QQQ/SP500の増幅率の中央値（読み込み済みSP500エピソード×QQQ実データから動的算出）。
+  const qqqAmplification = useMemo(() => (dQqq ? computeQqqAmplificationStats(d.episodes, dQqq.FULL) : null), [d.episodes, dQqq]);
   // 「両方」表示用：SP500（VOO）とQQQを日付キーでマージした{date, sp500Price, qqqPrice}の配列（どちらかが無い日はそのフィールドがundefined）。
   const bothChartData = useMemo(() => {
     if (!qqqChartData) return null;
@@ -4040,7 +4588,7 @@ export default function DDDashboard() {
   const currentHoldingPct = useMemo(() => currentHoldingPctFromHoldings(holdings), [holdings]);
   const currentHoldingAmount = useMemo(() => currentHoldingAmountFromHoldings(holdings), [holdings]);
   const rankLabels = useMemo(() => rankCategoryLabels(holdings), [holdings]);
-  const effectiveModelRow = modelOverride ? (MODEL_ROWS.find((r) => r.label === modelOverride) ?? d.modelRow) : d.modelRow;
+  const effectiveModelRow = modelOverride ? (d.trackRecord.dynamicModelRows.find((r) => r.label === modelOverride) ?? d.modelRow) : d.modelRow;
   const blocks = useMemo(() => {
     const AB = { cur: currentHoldingPct.A + currentHoldingPct.B, tgt: effectiveModelRow.A + effectiveModelRow.B };
     const Cb = { cur: currentHoldingPct.C, tgt: effectiveModelRow.C };
@@ -4049,7 +4597,7 @@ export default function DDDashboard() {
   }, [currentHoldingPct, effectiveModelRow]);
 
   const crashLegendItems = selectedCrash ? [{ key: selectedCrash.id, label: selectedCrash.name, color: C.rust }, { key: "current", label: "現在", color: C.teal }] : [];
-  const analysisText = useMemo(() => buildAnalysisText(d, currentHoldingPct, holdingsTotal(holdings)), [d, currentHoldingPct, holdings]);
+  const analysisText = useMemo(() => buildAnalysisText(d, currentHoldingPct, holdingsTotal(holdings), dQqq, qqqAmplification), [d, currentHoldingPct, holdings, dQqq, qqqAmplification]);
   const checkpointResults = useMemo(() => {
     const total = holdingsTotal(holdings);
     return checkpoints.map((cp) => evaluateCheckpoint(cp, holdings, total)).filter(Boolean);
@@ -4077,7 +4625,10 @@ export default function DDDashboard() {
 
       {modal?.type === "speedAlert" && (speedAlertInstrument === "qqq" ? dQqq : dVoo) && <FullScreenModal title={`DD加速度アラート（速度・経過日数の法則・${speedAlertInstrument.toUpperCase()}基準）`} onClose={() => setModal(null)}><SpeedAlertModalContent d={speedAlertInstrument === "qqq" ? dQqq : dVoo} instrumentLabel={speedAlertInstrument.toUpperCase()} /></FullScreenModal>}
       {modal?.type === "portfolio" && <FullScreenModal title={<>ポートフォリオ構成表{holdingsDateSuffix}</>} onClose={() => setModal(null)}><PortfolioTableContent view={pieView} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
-      {modal?.type === "ddTable" && <FullScreenModal title="DD毎のA〜E配分表" onClose={() => setModal(null)}><DDTableContent modelRow={d.modelRow} holdings={holdings} /></FullScreenModal>}
+      {modal?.type === "ddTable" && <FullScreenModal title="DD毎のA〜E配分表" onClose={() => setModal(null)}><DDTableContent modelRow={d.modelRow} modelRows={d.trackRecord.dynamicModelRows} holdings={holdings} /></FullScreenModal>}
+      {modal?.type === "modelDebug" && <FullScreenModal title="動的配分モデル デバッグビュー" onClose={() => setModal(null)}><ModelDebugContent d={d} dQqq={dQqq} qqqAmplification={qqqAmplification} /></FullScreenModal>}
+      {modal?.type === "investmentUpload" && <FullScreenModal title="投資収支Excel アップロード" onClose={() => setModal(null)}><InvestmentUploadModalContent existing={investmentPerformance} onSave={handleSaveInvestmentPerformance} onClose={() => setModal(null)} /></FullScreenModal>}
+      {modal?.type === "investmentPerformance" && <FullScreenModal title="実績パフォーマンス" onClose={() => setModal(null)}><InvestmentPerformanceModalContent data={investmentPerformance} d={d} dQqq={dQqq} onOpenUpload={() => setModal({ type: "investmentUpload" })} onReset={() => { if (window.confirm("投資収支データを削除しますか？")) { handleResetInvestmentPerformance(); setModal(null); } }} /></FullScreenModal>}
       {modal?.type === "rank" && <FullScreenModal title={`${modal.rank}ランクの保有銘柄`} onClose={() => setModal(null)}><RankHoldingsContent rank={modal.rank} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
       {modal?.type === "crash" && <FullScreenModal title={`${modal.crash.name}（${modal.crash.start} 〜）と現状の比較`} onClose={() => setModal(null)}><CrashModalContent crash={modal.crash} daysSinceATH={d.daysSinceATH} currentDD={d.currentDD} currentEpisodeCurve={d.currentEpisodeCurve} allCrashes={historicalCrashes} onJump={(c) => setModal({ type: "crash", crash: c })} /></FullScreenModal>}
       {modal?.type === "ddChart" && <FullScreenModal title={chartSourceTitle(chartSource)} onClose={() => setModal(null)}><DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} bothChartData={bothChartData} chartSource={chartSource} setChartSource={setChartSource} /></FullScreenModal>}
@@ -4101,6 +4652,9 @@ export default function DDDashboard() {
             <button onClick={() => setModal({ type: "dataInput" })} title="データ入力・出力" className="flex items-center p-1 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
               <Database size={12} />
             </button>
+            <button onClick={() => setModal({ type: "investmentPerformance" })} title="実績パフォーマンス" className="flex items-center p-1 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+              <Wallet size={12} />
+            </button>
             <span className="flex items-center gap-0.5 text-[10px] font-semibold px-1.5 py-1 rounded-full whitespace-nowrap" style={{ color: depthColor(d.currentDD), background: `${depthColor(d.currentDD)}1a`, border: `1px solid ${depthColor(d.currentDD)}44` }}>{d.isDrawdown ? <TrendingDown size={11} /> : <TrendingUp size={11} />} {d.mode}</span>
           </div>
         </div>
@@ -4118,6 +4672,9 @@ export default function DDDashboard() {
           </button>
           <button onClick={() => setModal({ type: "dataInput" })} title="データ入力・出力" className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
             <Database size={12} /> データ入力・出力
+          </button>
+          <button onClick={() => setModal({ type: "investmentPerformance" })} title="実績パフォーマンス" className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+            <Wallet size={12} /> 実績パフォーマンス
           </button>
           <span className="flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full" style={{ color: depthColor(d.currentDD), background: `${depthColor(d.currentDD)}1a`, border: `1px solid ${depthColor(d.currentDD)}44` }}>{d.isDrawdown ? <TrendingDown size={12} /> : <TrendingUp size={12} />} {d.mode}</span>
         </div>
@@ -4269,7 +4826,7 @@ export default function DDDashboard() {
                   <option value="">自動（{d.modelRow.label}）</option>
                   {MODEL_ROWS.map((r) => (<option key={r.label} value={r.label}>{r.label}</option>))}
                 </select>
-                <span className="flex items-center gap-1 text-[9px]" style={{ color: C.textMuted }}><span style={{ width: 8, height: 8, borderRadius: 2, background: C.textMuted, display: "inline-block" }} />実績<span style={{ width: 8, height: 8, borderRadius: 2, background: C.borderSoft, display: "inline-block", marginLeft: 4 }} />モデル</span><button onClick={() => setModal({ type: "ddTable" })} title="DD毎の配分表を表示" style={{ background: "transparent", border: "none", cursor: "pointer" }}><Info size={14} style={{ color: C.textDim }} /></button></div>} className="h-full">
+                <span className="flex items-center gap-1 text-[9px]" style={{ color: C.textMuted }}><span style={{ width: 8, height: 8, borderRadius: 2, background: C.textMuted, display: "inline-block" }} />実績<span style={{ width: 8, height: 8, borderRadius: 2, background: C.borderSoft, display: "inline-block", marginLeft: 4 }} />モデル</span><button onClick={() => setModal({ type: "ddTable" })} title="DD毎の配分表を表示" style={{ background: "transparent", border: "none", cursor: "pointer" }}><Info size={14} style={{ color: C.textDim }} /></button><button onClick={() => setModal({ type: "modelDebug" })} title="動的配分モデル デバッグビュー（バックテスト統計とポリシー定数の確認用）" style={{ background: "transparent", border: "none", cursor: "pointer" }}><Activity size={14} style={{ color: C.textDim }} /></button></div>} className="h-full">
                 <div className="overflow-y-auto h-full">
                   {CATS.map((cat) => (<DiffBar key={cat} cat={cat} current={currentHoldingPct[cat]} amount={currentHoldingAmount[cat]} target={effectiveModelRow[cat]} label={rankLabels[cat]} holdings={holdings} onClick={() => setModal({ type: "rank", rank: cat })} />))}
                   <div className="px-3 py-0.5 grid grid-cols-3 gap-1.5">
