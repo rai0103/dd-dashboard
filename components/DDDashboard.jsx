@@ -691,6 +691,9 @@ const CATEGORY_COLORS = {
   "高配当ETF・投信（米）": "#4FA0A6", "高配当ETF・投信（日）": "#A3A24B",
   "その他ETF・投信（米）": "#7B9BC7", "その他ETF・投信（日）": "#B98F6A",
   "レバレッジETF（米）": C.rust, "レバレッジETF（日）": "#D98F7A", "その他": C.textDim,
+  // 投資収支Excel（実績パフォーマンス）由来の口座単位評価額。個別銘柄の内訳は持たないため、
+  // 口座名そのものをカテゴリー名として扱う（rankCategoryLabelsのフォールバック表示にもそのまま使われる）。
+  "moomoo証券": C.violet, "Coin Check": C.amber, "iDeCo": "#7FA37A", "大和コネクト証券": "#BE7A63",
 };
 // カテゴリー別のデフォルトA〜Eランク（自動推定・分割時に使用。ユーザーは行ごとに自由に上書き可能。
 // データ入力画面の「カテゴリー別ランク設定」で変更でき、その場合はここでの値より優先される）
@@ -797,9 +800,39 @@ function calcNisaBreakdown(holdings, rankClass) {
   };
 }
 const CURRENCY_COLORS = { "ドル": C.teal, "円": C.amber };
-const OWNER_COLORS = { "shin": C.blue, "saki": C.violet };
+const OWNER_COLORS = { "shin": C.blue, "saki": C.violet, "moomoo証券": C.violet, "Coin Check": C.amber, "iDeCo": "#7FA37A", "大和コネクト証券": "#BE7A63" };
 function colorForView(view, key) { return view === "category" ? (CATEGORY_COLORS[key] || C.textDim) : view === "currency" ? CURRENCY_COLORS[key] : view === "owner" ? (OWNER_COLORS[key] || C.textDim) : rankColor(key); }
 function fieldForView(view) { return view === "category" ? "category" : view === "currency" ? "currency" : view === "owner" ? "owner" : "rank"; }
+
+// ---- 投資収支Excel（実績パフォーマンス／investment_performance_data）由来の口座別評価額を、
+//      楽天証券の保有銘柄データ（holdings）とは独立したデータソースとして扱いつつ、
+//      A〜E配分乖離・ポートフォリオ構成の各表示にだけ合算して反映するための変換。
+//      楽天証券のholdings配列自体は一切変更しない（互いに再計算・保存の影響を与えない）ため、
+//      個別銘柄の編集・削除・チェックポイント判定・リバランス提案（楽天証券の保有銘柄が対象）には含めない。
+const VIRTUAL_ACCOUNT_CONFIG = [
+  { label: "moomoo証券", rank: "D", currency: "ドル" },
+  { label: "Coin Check", rank: "E", currency: "ドル" },
+  { label: "iDeCo", rank: "B", currency: "ドル" },
+  { label: "大和コネクト証券", rank: "B", currency: "円" },
+];
+// 口座ごとに直近の非null評価額を取得する（口座間で更新済みの日付がずれていてもそれぞれ独立して最新値を拾う）。
+function latestAccountValue(accountSeries, label) {
+  for (let i = accountSeries.length - 1; i >= 0; i--) {
+    const v = accountSeries[i].accounts[label];
+    if (v != null) return v;
+  }
+  return null;
+}
+function buildVirtualHoldingsFromInvestmentPerformance(investmentPerformance) {
+  if (!investmentPerformance?.accountSeries?.length) return [];
+  return VIRTUAL_ACCOUNT_CONFIG.map((cfg) => {
+    const amount = latestAccountValue(investmentPerformance.accountSeries, cfg.label);
+    if (amount == null || amount <= 0) return null;
+    // category・ownerには口座名をそのまま使う（rankCategoryLabelsのフォールバック表示・「口座別」タブの
+    // グルーピングキーの両方にそのまま使えるため。account="—"はNISA枠外＝特定扱いとして計上される）。
+    return { id: `virtual-${cfg.label}`, name: cfg.label, category: cfg.label, currency: cfg.currency, rank: cfg.rank, account: "—", owner: cfg.label, amount };
+  }).filter(Boolean);
+}
 
 /* ---------------- Rakuten Securities CSV (Shift-JIS) ---------------- */
 function decodeShiftJIS(buffer) { try { return new TextDecoder("shift-jis").decode(buffer); } catch (e) { return new TextDecoder("utf-8").decode(buffer); } }
@@ -4624,9 +4657,15 @@ export default function DDDashboard() {
     return entries.map(([o, v]) => `${OWNER_LABEL[o] ?? o} ${fmtDateSlash(v)}`).join(" / ");
   }, [holdings, holdingsAsOf]);
   const holdingsDateSuffix = holdingsDateLabel ? <span className="font-normal" style={{ color: C.textDim }}>（{holdingsDateLabel} 時点）</span> : null;
-  const currentHoldingPct = useMemo(() => currentHoldingPctFromHoldings(holdings), [holdings]);
-  const currentHoldingAmount = useMemo(() => currentHoldingAmountFromHoldings(holdings), [holdings]);
-  const rankLabels = useMemo(() => rankCategoryLabels(holdings), [holdings]);
+  // 投資収支Excel（実績パフォーマンス）由来のmoomoo証券・Coin Check・iDeCo・大和コネクト証券の評価額を、
+  // 楽天証券のholdings配列とは独立に保持したまま、A〜E配分乖離・ポートフォリオ構成の表示用にのみ合算する。
+  // holdings自体（楽天証券CSV由来・編集/削除対象）とinvestmentPerformance（投資収支Excel由来）は互いに
+  // 影響を与えない：どちらかが更新されても、もう片方の値は再計算されずそのまま使われる。
+  const virtualHoldings = useMemo(() => buildVirtualHoldingsFromInvestmentPerformance(investmentPerformance), [investmentPerformance]);
+  const combinedHoldings = useMemo(() => [...holdings, ...virtualHoldings], [holdings, virtualHoldings]);
+  const currentHoldingPct = useMemo(() => currentHoldingPctFromHoldings(combinedHoldings), [combinedHoldings]);
+  const currentHoldingAmount = useMemo(() => currentHoldingAmountFromHoldings(combinedHoldings), [combinedHoldings]);
+  const rankLabels = useMemo(() => rankCategoryLabels(combinedHoldings), [combinedHoldings]);
   const effectiveModelRow = modelOverride ? (d.trackRecord.dynamicModelRows.find((r) => r.label === modelOverride) ?? d.modelRow) : d.modelRow;
   const blocks = useMemo(() => {
     const AB = { cur: currentHoldingPct.A + currentHoldingPct.B, tgt: effectiveModelRow.A + effectiveModelRow.B };
@@ -4636,7 +4675,7 @@ export default function DDDashboard() {
   }, [currentHoldingPct, effectiveModelRow]);
 
   const crashLegendItems = selectedCrash ? [{ key: selectedCrash.id, label: selectedCrash.name, color: C.rust }, { key: "current", label: "現在", color: C.teal }] : [];
-  const analysisText = useMemo(() => buildAnalysisText(d, currentHoldingPct, holdingsTotal(holdings), dQqq, qqqAmplification), [d, currentHoldingPct, holdings, dQqq, qqqAmplification]);
+  const analysisText = useMemo(() => buildAnalysisText(d, currentHoldingPct, holdingsTotal(combinedHoldings), dQqq, qqqAmplification), [d, currentHoldingPct, combinedHoldings, dQqq, qqqAmplification]);
   const checkpointResults = useMemo(() => {
     const total = holdingsTotal(holdings);
     return checkpoints.map((cp) => evaluateCheckpoint(cp, holdings, total)).filter(Boolean);
@@ -4731,7 +4770,7 @@ export default function DDDashboard() {
               { key: "ath", label: "評価額/ATH", icon: TrendingUp, content: <MobileAthPage d={d} dVoo={dVoo} dQqq={dQqq} /> },
               { key: "speed", label: "経過日数", icon: Clock, content: <MobileSpeedPage dVoo={dVoo} dQqq={dQqq} speedAlertInstrument={speedAlertInstrument} onChangeSpeedAlertInstrument={setSpeedAlertInstrument} onOpenSpeedAlert={() => setModal({ type: "speedAlert" })} /> },
               { key: "chart", label: "チャート", icon: Activity, content: <MobileChartPage d={d} onZoom={() => setModal({ type: "mobileChartZoom" })} /> },
-              { key: "portfolio", label: "構成", icon: Layers, content: <MobilePortfolioPage pieView={pieView} setPieView={setPieView} holdings={holdings} onOpen={() => setModal({ type: "portfolio" })} dateLabel={holdingsDateLabel} /> },
+              { key: "portfolio", label: "構成", icon: Layers, content: <MobilePortfolioPage pieView={pieView} setPieView={setPieView} holdings={combinedHoldings} onOpen={() => setModal({ type: "portfolio" })} dateLabel={holdingsDateLabel} /> },
               { key: "diff", label: "配分乖離", icon: ListChecks, content: <MobileDiffPage modelOverride={modelOverride} setModelOverride={setModelOverride} d={d} currentHoldingPct={currentHoldingPct} currentHoldingAmount={currentHoldingAmount} effectiveModelRow={effectiveModelRow} rankLabels={rankLabels} blocks={blocks} onOpenRank={(rank) => setModal({ type: "rank", rank })} onOpenDDTable={() => setModal({ type: "ddTable" })} dateLabel={holdingsDateLabel} /> },
               { key: "analysis", label: "現状分析", icon: Info, content: <MobileAnalysisPage analysisText={analysisText} checkpointResults={checkpointResults} onOpenCheckpointSettings={() => setModal({ type: "checkpointSettings" })} /> },
             ]}
@@ -4854,7 +4893,7 @@ export default function DDDashboard() {
             {/* bottom-left: portfolio pie */}
             <div style={{ minHeight: 0 }}>
               <Panel title={<>ポートフォリオ構成{holdingsDateSuffix}</>} action={<div className="flex gap-1">{[{ k: "category", l: "カテゴリー別" }, { k: "currency", l: "為替別" }, { k: "rank", l: "A〜Eクラス" }, { k: "owner", l: "口座別" }].map((t) => (<button key={t.k} onClick={() => setPieView(t.k)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: pieView === t.k ? C.bg : C.textMuted, background: pieView === t.k ? C.teal : "transparent", fontWeight: pieView === t.k ? 700 : 400 }}>{t.l}</button>))}</div>} className="h-full">
-                <PortfolioPie view={pieView} holdings={holdings} onOpen={() => setModal({ type: "portfolio" })} />
+                <PortfolioPie view={pieView} holdings={combinedHoldings} onOpen={() => setModal({ type: "portfolio" })} />
               </Panel>
             </div>
 
@@ -4867,7 +4906,7 @@ export default function DDDashboard() {
                 </select>
                 <span className="flex items-center gap-1 text-[9px]" style={{ color: C.textMuted }}><span style={{ width: 8, height: 8, borderRadius: 2, background: C.textMuted, display: "inline-block" }} />実績<span style={{ width: 8, height: 8, borderRadius: 2, background: C.borderSoft, display: "inline-block", marginLeft: 4 }} />モデル</span><button onClick={() => setModal({ type: "ddTable" })} title="DD毎の配分表を表示" style={{ background: "transparent", border: "none", cursor: "pointer" }}><Info size={14} style={{ color: C.textDim }} /></button><button onClick={() => setModal({ type: "modelDebug" })} title="動的配分モデル デバッグビュー（バックテスト統計とポリシー定数の確認用）" style={{ background: "transparent", border: "none", cursor: "pointer" }}><Activity size={14} style={{ color: C.textDim }} /></button></div>} className="h-full">
                 <div className="overflow-y-auto h-full">
-                  {CATS.map((cat) => (<DiffBar key={cat} cat={cat} current={currentHoldingPct[cat]} amount={currentHoldingAmount[cat]} target={effectiveModelRow[cat]} label={rankLabels[cat]} holdings={holdings} onClick={() => setModal({ type: "rank", rank: cat })} />))}
+                  {CATS.map((cat) => (<DiffBar key={cat} cat={cat} current={currentHoldingPct[cat]} amount={currentHoldingAmount[cat]} target={effectiveModelRow[cat]} label={rankLabels[cat]} holdings={combinedHoldings} onClick={() => setModal({ type: "rank", rank: cat })} />))}
                   <div className="px-3 py-0.5 grid grid-cols-3 gap-1.5">
                     {[{ label: "A+B", ...blocks.AB }, { label: "C", ...blocks.Cb }, { label: "D+E", ...blocks.DE }].map((b) => { const diff = Number((b.cur - b.tgt).toFixed(1)); return (<div key={b.label} className="rounded px-2 py-0.5 text-center" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}><div className="text-[10px]" style={{ color: C.textDim }}>{b.label}</div><div className="mono text-xs font-semibold">{Number(b.cur.toFixed(1))}%</div><div className="mono text-[10px]" style={{ color: Math.abs(diff) >= 4 ? C.rust : C.textMuted }}>{diff > 0 ? "+" : ""}{diff}pt</div></div>); })}
                   </div>
