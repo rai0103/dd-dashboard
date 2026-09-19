@@ -7,7 +7,7 @@ import {
 } from "recharts";
 import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Download, RefreshCw, Database, Trash2, Zap, Copy, FileText, Activity, Layers, ListChecks, Smartphone, Monitor, Wallet } from "lucide-react";
 import { storage } from "@/lib/storage";
-import { parseInvestmentExcel, computeOwnAssetDrawdown, computeBenchmarkCAGR } from "@/lib/investmentPerformance";
+import { parseInvestmentExcel, computeOwnAssetDrawdown, computeBenchmarkCAGR, simulateDcaBenchmark } from "@/lib/investmentPerformance";
 
 // Cloudflare Worker（当日のVOO/QQQ終値を返す。SP500はここでは扱わず引き続きCSV取り込み/直接入力で更新する）のエンドポイント。
 // デプロイ先のURLに置き換えてください。
@@ -4101,6 +4101,16 @@ function InvestmentPerformanceModalContent({ data, d, dQqq, onOpenUpload, onRese
   const ownDD = useMemo(() => (series.length ? computeOwnAssetDrawdown(series) : null), [series]);
   const spCAGR = useMemo(() => (startDateIso && endDateIso ? computeBenchmarkCAGR(d.FULL, parseDateOnly(startDateIso), parseDateOnly(endDateIso)) : null), [d.FULL, startDateIso, endDateIso]);
   const qqqCAGR = useMemo(() => (dQqq && startDateIso && endDateIso ? computeBenchmarkCAGR(dQqq.FULL, parseDateOnly(startDateIso), parseDateOnly(endDateIso)) : null), [dQqq, startDateIso, endDateIso]);
+  // ③拠出額・タイミングを揃えたSP500/QQQ積立シミュレーション（総資産の絶対額をそのまま指数と比較しても
+  // 意味がないため、実際の元本増分を都度その指数へ新規投資したとみなして評価額を再現する）。
+  const spSim = useMemo(() => (series.length ? simulateDcaBenchmark(series, d.FULL) : null), [series, d.FULL]);
+  const qqqSim = useMemo(() => (dQqq && series.length ? simulateDcaBenchmark(series, dQqq.FULL) : null), [dQqq, series]);
+  const [showQqqSim, setShowQqqSim] = useState(true);
+  const benchmarkChartData = useMemo(() => {
+    const spMap = new Map((spSim?.points ?? []).map((p) => [p.date, p.simulatedValue]));
+    const qqqMap = new Map((qqqSim?.points ?? []).map((p) => [p.date, p.simulatedValue]));
+    return series.map((p) => ({ date: p.date, actual: p.totalAssets, spSim: spMap.get(p.date) ?? null, qqqSim: qqqMap.get(p.date) ?? null }));
+  }, [series, spSim, qqqSim]);
 
   if (!data || !series.length) {
     return (
@@ -4160,12 +4170,41 @@ function InvestmentPerformanceModalContent({ data, d, dQqq, onOpenUpload, onRese
 
       <div>
         <div className="text-xs font-semibold mb-2">③ ベンチマーク比較（{fmtDateSlash(startDateIso)} 〜 {fmtDateSlash(endDateIso)}）</div>
-        <div className="mono text-xs" style={{ color: C.textMuted }}>
+        {spSim && spSim.points.length ? (
+          <>
+            <div className="flex items-center gap-3 mb-1 flex-wrap text-[10px]" style={{ color: C.textMuted }}>
+              <span className="flex items-center gap-1"><span style={{ width: 10, height: 2, background: C.teal, display: "inline-block" }} />実績（総資産）</span>
+              <span className="flex items-center gap-1"><span style={{ width: 10, height: 2, background: C.amber, display: "inline-block" }} />SP500積立シミュレーション</span>
+              {qqqSim && (
+                <button onClick={() => setShowQqqSim((v) => !v)} className="flex items-center gap-1" style={{ opacity: showQqqSim ? 1 : 0.4, background: "transparent", border: "none", cursor: "pointer", color: C.textMuted, padding: 0 }}>
+                  <span style={{ width: 10, height: 2, background: C.blue, display: "inline-block" }} />QQQ積立シミュレーション{showQqqSim ? "" : "（非表示）"}
+                </button>
+              )}
+            </div>
+            <div style={{ width: "100%", height: 240 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={benchmarkChartData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={C.borderSoft} />
+                  <XAxis dataKey="date" tick={{ fontSize: 9, fill: C.textDim }} tickFormatter={(v) => fmtDateSlash(v)} />
+                  <YAxis tick={{ fontSize: 9, fill: C.textDim }} tickFormatter={(v) => `${Math.round(v / 10000)}万`} />
+                  <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 11 }} labelFormatter={(v) => fmtDateSlash(v)} formatter={(v, n) => [yen(v), n]} />
+                  <Line type="monotone" dataKey="actual" name="実績（総資産）" stroke={C.teal} strokeWidth={2} dot={false} isAnimationActive={false} connectNulls />
+                  <Line type="monotone" dataKey="spSim" name="SP500積立シミュレーション" stroke={C.amber} strokeWidth={1.5} strokeDasharray="4 3" dot={false} isAnimationActive={false} connectNulls />
+                  {qqqSim && showQqqSim && <Line type="monotone" dataKey="qqqSim" name="QQQ積立シミュレーション" stroke={C.blue} strokeWidth={1.5} strokeDasharray="4 3" dot={false} isAnimationActive={false} connectNulls />}
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </>
+        ) : <div className="text-xs" style={{ color: C.textDim }}>グラフ表示に必要なデータ（元本・SP500価格）がありません。</div>}
+        <div className="mono text-xs mt-2" style={{ color: C.textMuted }}>
           自己トータル利回り（年）: <b>{latestTotalYield?.totalYield != null ? `${latestTotalYield.totalYield}%` : "算出不可"}</b>
           ／ SP500 CAGR: <b>{spCAGR != null ? `${spCAGR}%` : "算出不可"}</b>
           ／ QQQ CAGR: <b>{qqqCAGR != null ? `${qqqCAGR}%` : "算出不可（QQQ未取り込み）"}</b>
         </div>
-        <div className="text-[10px] mt-1" style={{ color: C.textDim }}>※追加投資により元本が段階的に増加しているため、単純な買い持ち（バイ＆ホールド）との厳密な比較ではありません。</div>
+        <div className="text-[10px] mt-1" style={{ color: C.textDim }}>
+          ※折れ線は、実際の元本増分を都度その時点でSP500{qqqSim ? "・QQQ" : ""}へ新規投資したとみなす積立シミュレーションです。拠出額・タイミングを揃えているため、総資産の絶対額をそのまま指数と比べるより公正な比較になりますが、実際の運用（個別銘柄選択・為替・手数料等）とは異なる点にご留意ください。
+          {spSim?.truncated && <> ※SP500価格データが{spSim.coverageStartDate ? fmtDateSlash(spSim.coverageStartDate) : "一部期間"}までしか遡れないため、シミュレーションはその範囲のみで行っています。</>}
+        </div>
       </div>
 
       <div>

@@ -331,3 +331,39 @@ export function computeBenchmarkCAGR(FULL: { date: Date; price: number }[], star
   if (startPrice === null || endPrice === null || startPrice <= 0 || days <= 0) return null;
   return Number(((Math.pow(endPrice / startPrice, 365.25 / days) - 1) * 100).toFixed(2));
 }
+
+function parseIsoDate(s: string): Date {
+  const [y, m, d] = s.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d));
+}
+export interface DcaBenchmarkResult {
+  points: { date: string; simulatedValue: number | null }[];
+  truncated: boolean; // 市場価格データが投資収支の開始日まで遡れず、一部期間を除外した場合true
+  coverageStartDate: string | null; // 実際にシミュレーションを開始した日付
+}
+// ③ベンチマーク比較（グラフ用）：総資産の絶対額をそのまま指数と並べても、追加投資で元本が段階的に増える
+// ため意味のある比較にならない。代わりに、投資収支Excelの「元本」の増分を「その日にSP500/QQQへ新規投資した
+// 金額」とみなして口数を積み上げ、各データ日付時点の評価額を算出する「拠出額・タイミングを揃えた積立
+// シミュレーション」を行い、実際の総資産推移と同じ円建て・同じ日付軸で比較できるようにする。
+// 日付は不規則な間隔のため、各拠出・評価時点の価格は直近の取引日（対象日以前で最も新しい日）の価格を使う。
+// 市場価格データが投資収支の開始日まで遡れない場合は、データが存在する範囲のみでシミュレーションし、
+// truncated:trueで呼び出し側に伝える（UI側でその旨を明記する）。
+export function simulateDcaBenchmark(series: InvestmentSeriesPoint[], FULL: { date: Date; price: number }[]): DcaBenchmarkResult | null {
+  const valid = series.filter((p) => p.principal !== null).map((p) => ({ date: parseIsoDate(p.date), principal: p.principal as number }));
+  if (!valid.length || !FULL.length) return null;
+  const truncated = FULL[0].date > valid[0].date;
+  const simStart = truncated ? FULL[0].date : valid[0].date;
+  const included = valid.filter((p) => p.date >= simStart);
+  if (!included.length) return { points: [], truncated, coverageStartDate: null };
+  let units = 0;
+  const points: { date: string; simulatedValue: number | null }[] = [];
+  for (let i = 0; i < included.length; i++) {
+    const p = included[i];
+    // 元本は通常減少しないが、万一減った場合はマイナス拠出（売却シミュレーション）とはせず0円拠出として扱う。
+    const contribution = i === 0 ? p.principal : Math.max(0, p.principal - included[i - 1].principal);
+    const price = nearestPriceOnOrBefore(FULL, p.date);
+    if (price !== null && price > 0 && contribution > 0) units += contribution / price;
+    points.push({ date: ymd(p.date), simulatedValue: price !== null ? Math.round(units * price) : null });
+  }
+  return { points, truncated, coverageStartDate: ymd(included[0].date) };
+}
