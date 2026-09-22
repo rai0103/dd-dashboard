@@ -367,3 +367,22 @@ export function simulateDcaBenchmark(series: InvestmentSeriesPoint[], FULL: { da
   }
   return { points, truncated, coverageStartDate: ymd(included[0].date) };
 }
+
+// FIREトライアル：表示開始月の前月末の総資産を初期投資元本として、その時点でSP500へ全額フルインベスト
+// したと仮定した場合の各月時点（対象日）の評価額を計算する（積立ではなく一括投資のシミュレーション）。
+// 価格データが対象日まで遡れない場合はnullを返す（呼び出し側でUI表示を制御する）。
+export function simulateLumpSumBenchmark(
+  FULL: { date: Date; price: number }[],
+  startDate: Date,
+  principal: number,
+  targetDates: string[],
+): { date: string; simulatedValue: number | null }[] | null {
+  if (!FULL.length || !(principal > 0)) return null;
+  const entryPrice = nearestPriceOnOrBefore(FULL, startDate);
+  if (entryPrice === null || entryPrice <= 0) return null;
+  const units = principal / entryPrice;
+  return targetDates.map((dateStr) => {
+    const price = nearestPriceOnOrBefore(FULL, parseIsoDate(dateStr));
+    return { date: dateStr, simulatedValue: price !== null ? Math.round(units * price) : null };
+  });
+}

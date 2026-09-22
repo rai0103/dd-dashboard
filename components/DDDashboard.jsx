@@ -7,7 +7,7 @@ import {
 } from "recharts";
 import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Download, RefreshCw, Database, Trash2, Zap, Copy, FileText, Activity, Layers, ListChecks, Smartphone, Monitor, Wallet } from "lucide-react";
 import { storage } from "@/lib/storage";
-import { parseInvestmentExcel, computeOwnAssetDrawdown, computeBenchmarkCAGR, simulateDcaBenchmark } from "@/lib/investmentPerformance";
+import { parseInvestmentExcel, computeOwnAssetDrawdown, computeBenchmarkCAGR, simulateDcaBenchmark, simulateLumpSumBenchmark } from "@/lib/investmentPerformance";
 
 // Cloudflare Worker（当日のVOO/QQQ終値を返す。SP500はここでは扱わず引き続きCSV取り込み/直接入力で更新する）のエンドポイント。
 // デプロイ先のURLに置き換えてください。
@@ -4126,6 +4126,21 @@ function InvestmentUploadModalContent({ existing, onSave, onClose }) {
   );
 }
 const INVESTMENT_ACCOUNT_COLORS = { "楽天証券（私＋妻）": C.teal, "moomoo証券": C.blue, "大和コネクト証券": C.violet, "Coin Check": C.amber, "iDeCo": "#7FA37A" };
+// ⑤FIREトライアル用ツールチップ：その月の総資産・当月パフォーマンス・取り崩し・超過収益をまとめて表示する
+// （超過収益はグラフ上に系列として描画しないため、Rechartsの既定payloadではなく元データから直接参照する）。
+function FireTrialTooltipContent({ active, payload, label, yen }) {
+  if (!active || !payload || !payload.length) return null;
+  const p = payload[0].payload;
+  return (
+    <div style={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 11, padding: 8, borderRadius: 4 }}>
+      <div className="mono" style={{ marginBottom: 4, color: C.textMuted }}>{fmtDateSlash(label)}</div>
+      <div>総資産: <b>{yen(p.totalAssets)}</b></div>
+      <div>当月パフォーマンス: <b>{yen(p.monthPerformance)}</b></div>
+      <div>取り崩し: <b>{yen(p.withdrawal)}</b></div>
+      <div>超過収益: <b>{yen(p.excessReturn)}</b></div>
+    </div>
+  );
+}
 function InvestmentPerformanceModalContent({ data, d, dQqq, onOpenUpload, onReset }) {
   const yen = (v) => (v == null ? "—" : `¥${Math.round(v).toLocaleString()}`);
   const series = data?.series ?? [];
@@ -4145,6 +4160,28 @@ function InvestmentPerformanceModalContent({ data, d, dQqq, onOpenUpload, onRese
     return series.map((p) => ({ date: p.date, actual: p.totalAssets, spSim: spMap.get(p.date) ?? null, qqqSim: qqqMap.get(p.date) ?? null }));
   }, [series, spSim, qqqSim]);
 
+  // ⑤FIREトライアル：楽天証券口座のみを対象に、追加投資なしで毎月定額取り崩しをしながら
+  // 純粋な運用パフォーマンスだけでSP500に勝てるかを検証する。表示は2026年1月以降のみ。
+  const monthlySeriesAll = data?.monthlySeries ?? [];
+  const fireMonthly = useMemo(() => monthlySeriesAll.filter((p) =>
+    p.date >= "2026-01-01" && (p.prevMonthTotal != null || p.monthPerformance != null || p.withdrawal != null || p.excessReturn != null)
+  ), [monthlySeriesAll]);
+  // SP500フルインベストメント比較：表示開始月の前月末の総資産（＝表示開始月の「総資産（前月末/月初）」の値）を
+  // 初期投資元本として、その時点で全額SP500へ投資したとみなした場合の各月末評価額を計算する。
+  const fireSpFullInvestSim = useMemo(() => {
+    if (!fireMonthly.length) return null;
+    const initialPrincipal = fireMonthly[0].prevMonthTotal;
+    if (initialPrincipal == null) return null;
+    return simulateLumpSumBenchmark(d.FULL, parseDateOnly(fireMonthly[0].date), initialPrincipal, fireMonthly.map((p) => p.date));
+  }, [fireMonthly, d.FULL]);
+  const fireChartData = useMemo(() => {
+    const spMap = new Map((fireSpFullInvestSim ?? []).map((p) => [p.date, p.simulatedValue]));
+    return fireMonthly.map((p) => ({
+      date: p.date, totalAssets: p.prevMonthTotal, monthPerformance: p.monthPerformance,
+      withdrawal: p.withdrawal, excessReturn: p.excessReturn, spFullInvest: spMap.get(p.date) ?? null,
+    }));
+  }, [fireMonthly, fireSpFullInvestSim]);
+
   if (!data || !series.length) {
     return (
       <div className="text-sm" style={{ color: C.textMuted }}>
@@ -4161,7 +4198,6 @@ function InvestmentPerformanceModalContent({ data, d, dQqq, onOpenUpload, onRese
 
   const accountLatest = [...data.accountSeries].reverse().find((p) => Object.values(p.accounts).some((v) => v != null));
   const accountPieData = accountLatest ? Object.entries(accountLatest.accounts).filter(([, v]) => v != null && v > 0).map(([name, value]) => ({ name, value })) : [];
-  const monthlyChartData = data.monthlySeries.filter((p) => p.monthPerformance != null || p.withdrawal != null || p.excessReturn != null).slice(-24);
 
   return (
     <div className="text-sm" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
@@ -4262,23 +4298,37 @@ function InvestmentPerformanceModalContent({ data, d, dQqq, onOpenUpload, onRese
       </div>
 
       <div>
-        <div className="text-xs font-semibold mb-2">⑤ 直近月次パフォーマンス</div>
-        {monthlyChartData.length ? (
-          <div style={{ width: "100%", height: 220 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={monthlyChartData}>
-                <CartesianGrid strokeDasharray="3 3" stroke={C.borderSoft} />
-                <XAxis dataKey="date" tick={{ fontSize: 9, fill: C.textDim }} tickFormatter={(v) => fmtDateSlash(v)} />
-                <YAxis tick={{ fontSize: 9, fill: C.textDim }} tickFormatter={(v) => `${Math.round(v / 10000)}万`} />
-                <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 11 }} labelFormatter={(v) => fmtDateSlash(v)} formatter={(v, n) => [yen(v), n]} />
-                <ReferenceLine y={0} stroke={C.borderSoft} />
-                <Bar dataKey="monthPerformance" name="当月パフォーマンス" fill={C.teal} />
-                <Bar dataKey="withdrawal" name="取り崩し" fill={C.rust} />
-                <Bar dataKey="excessReturn" name="超過収益" fill={C.amber} />
-              </ComposedChart>
-            </ResponsiveContainer>
-          </div>
-        ) : <div className="text-xs" style={{ color: C.textDim }}>月次パフォーマンスのデータがありません。</div>}
+        <div className="text-xs font-semibold mb-2">⑤ FIREトライアル</div>
+        {fireChartData.length ? (
+          <>
+            <div className="flex items-center gap-3 mb-1 flex-wrap text-[10px]" style={{ color: C.textMuted }}>
+              <span className="flex items-center gap-1"><span style={{ width: 10, height: 2, background: C.teal, display: "inline-block" }} />FIREトライアル総資産（実績）</span>
+              <span className="flex items-center gap-1"><span style={{ width: 10, height: 2, background: C.amber, display: "inline-block" }} />SP500フルインベストメント（比較）</span>
+              <span className="flex items-center gap-1"><span style={{ width: 8, height: 8, background: C.teal, display: "inline-block", opacity: 0.6 }} />当月パフォーマンス</span>
+              <span className="flex items-center gap-1"><span style={{ width: 8, height: 8, background: C.rust, display: "inline-block", opacity: 0.6 }} />取り崩し</span>
+            </div>
+            <div style={{ width: "100%", height: 260 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={fireChartData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={C.borderSoft} />
+                  <XAxis dataKey="date" tick={{ fontSize: 9, fill: C.textDim }} tickFormatter={(v) => fmtDateSlash(v)} />
+                  <YAxis tick={{ fontSize: 9, fill: C.textDim }} tickFormatter={(v) => `${Math.round(v / 10000)}万`} />
+                  <Tooltip content={(props) => <FireTrialTooltipContent {...props} yen={yen} />} />
+                  <ReferenceLine y={0} stroke={C.borderSoft} />
+                  <Bar dataKey="monthPerformance" name="当月パフォーマンス" stackId="fire" fill={C.teal} fillOpacity={0.6} />
+                  <Bar dataKey="withdrawal" name="取り崩し" stackId="fire" fill={C.rust} fillOpacity={0.6} />
+                  <Line type="monotone" dataKey="totalAssets" name="FIREトライアル総資産（実績）" stroke={C.teal} strokeWidth={2} dot={false} isAnimationActive={false} connectNulls />
+                  <Line type="monotone" dataKey="spFullInvest" name="SP500フルインベストメント（比較）" stroke={C.amber} strokeWidth={1.5} strokeDasharray="4 3" dot={false} isAnimationActive={false} connectNulls />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="text-[10px] mt-2 space-y-0.5" style={{ color: C.textDim }}>
+              <div>※FIREトライアルの総資産とは楽天証券口座のみを対象としています。</div>
+              <div>※取り崩しは毎月40万円です。</div>
+              <div>※ボーナスは6月と12月に、超過収益（月次パフォーマンス－取り崩し40万円）の直近6カ月合計の10％を計上しています。</div>
+            </div>
+          </>
+        ) : <div className="text-xs" style={{ color: C.textDim }}>2026年1月以降のFIREトライアルのデータがありません。</div>}
       </div>
     </div>
   );
