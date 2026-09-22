@@ -7,6 +7,7 @@ import {
 } from "recharts";
 import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Download, RefreshCw, Database, Trash2, Zap, Copy, FileText, Activity, Layers, ListChecks, Smartphone, Monitor, Wallet } from "lucide-react";
 import { storage } from "@/lib/storage";
+import { pullSyncAndApply, pushSyncNow, scheduleSyncPush, getLastSyncedAt } from "@/lib/sync";
 import { parseInvestmentExcel, computeOwnAssetDrawdown, computeBenchmarkCAGR, simulateDcaBenchmark, simulateLumpSumBenchmark } from "@/lib/investmentPerformance";
 
 // Cloudflare Worker（当日のVOO/QQQ終値を返す。SP500はここでは扱わず引き続きCSV取り込み/直接入力で更新する）のエンドポイント。
@@ -4547,9 +4548,23 @@ export default function DDDashboard() {
   const [vooQqqSeries, setVooQqqSeries] = useState([]); // 「データ更新」で取得したVOO/QQQ終値（S&P500のDD計算には使わない、CSV出力専用の補助データ）
   const [speedAlertInstrument, setSpeedAlertInstrument] = useState("voo"); // "経過日数"・"DD加速度アラート"の基準をVOO/QQQどちらにするか
   const [investmentPerformance, setInvestmentPerformance] = useState(null); // 投資収支Excelのパース結果（既存のSP500/QQQトラックレコードとは独立したデータソース）
+  const [lastSyncedLabel, setLastSyncedLabel] = useState(() => getLastSyncedAt());
+  const [syncError, setSyncError] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  function setSyncOk(ok) { setLastSyncedLabel(getLastSyncedAt()); setSyncError(!ok); }
+  async function handleManualSync() {
+    setSyncing(true);
+    const pulled = await pullSyncAndApply();
+    if (pulled) { window.location.reload(); return; }
+    const pushed = await pushSyncNow();
+    setSyncOk(pushed);
+    setSyncing(false);
+  }
 
   useEffect(() => {
     (async () => {
+      // 他端末で更新されたデータがあれば、既存キーのIndexedDB読み込みより先に反映しておく。
+      await pullSyncAndApply();
       try {
         const res = await storage.get("voo_price_history");
         if (res && res.value) {
@@ -4622,11 +4637,23 @@ export default function DDDashboard() {
     })();
   }, []);
 
+  // 画面フォーカス復帰時、他端末での更新をチェックする。サーバーの方が新しければIndexedDBへ反映しリロードして表示に反映する。
+  useEffect(() => {
+    function onFocus() {
+      pullSyncAndApply().then((pulled) => {
+        if (pulled) window.location.reload();
+        else setLastSyncedLabel(getLastSyncedAt());
+      });
+    }
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, []);
+
   async function persist(series) {
-    try { await storage.set("voo_price_history", JSON.stringify(series.map((p) => ({ date: p.date.toISOString().slice(0, 10), price: p.price })))); } catch (e) { /* storage unavailable */ }
+    try { await storage.set("voo_price_history", JSON.stringify(series.map((p) => ({ date: p.date.toISOString().slice(0, 10), price: p.price })))); scheduleSyncPush(setSyncOk); } catch (e) { /* storage unavailable */ }
   }
   async function persistVooQqq(series) {
-    try { await storage.set("spy_voo_price_history", JSON.stringify(series.map((p) => ({ date: p.date.toISOString().slice(0, 10), voo: p.voo, qqq: p.qqq })))); } catch (e) { /* storage unavailable */ }
+    try { await storage.set("spy_voo_price_history", JSON.stringify(series.map((p) => ({ date: p.date.toISOString().slice(0, 10), voo: p.voo, qqq: p.qqq })))); scheduleSyncPush(setSyncOk); } catch (e) { /* storage unavailable */ }
   }
   function handleAppendVooQqq(entry) {
     setVooQqqSeries((prev) => {
@@ -4663,23 +4690,23 @@ export default function DDDashboard() {
   // 毎月最新版を丸ごとアップロードし直す運用のため、常に既存データを置き換える（差分マージはしない）。
   function handleSaveInvestmentPerformance(data) {
     setInvestmentPerformance(data);
-    storage.set("investment_performance_data", JSON.stringify(data)).catch(() => { /* storage unavailable */ });
+    storage.set("investment_performance_data", JSON.stringify(data)).then(() => scheduleSyncPush(setSyncOk)).catch(() => { /* storage unavailable */ });
   }
   function handleResetInvestmentPerformance() {
     setInvestmentPerformance(null);
-    storage.delete("investment_performance_data").catch(() => { /* storage unavailable */ });
+    storage.delete("investment_performance_data").then(() => scheduleSyncPush(setSyncOk)).catch(() => { /* storage unavailable */ });
   }
   async function persistHoldings(list) {
-    try { await storage.set("portfolio_holdings", JSON.stringify(list)); } catch (e) { /* storage unavailable */ }
+    try { await storage.set("portfolio_holdings", JSON.stringify(list)); scheduleSyncPush(setSyncOk); } catch (e) { /* storage unavailable */ }
   }
   async function persistHoldingsAsOf(map) {
-    try { await storage.set("holdings_as_of", JSON.stringify(map)); } catch (e) { /* storage unavailable */ }
+    try { await storage.set("holdings_as_of", JSON.stringify(map)); scheduleSyncPush(setSyncOk); } catch (e) { /* storage unavailable */ }
   }
   async function persistOverrides(map) {
-    try { await storage.set("classification_overrides", JSON.stringify(map)); } catch (e) { /* storage unavailable */ }
+    try { await storage.set("classification_overrides", JSON.stringify(map)); scheduleSyncPush(setSyncOk); } catch (e) { /* storage unavailable */ }
   }
   async function persistCategoryDefaultRanks(map) {
-    try { await storage.set("category_default_ranks", JSON.stringify(map)); } catch (e) { /* storage unavailable */ }
+    try { await storage.set("category_default_ranks", JSON.stringify(map)); scheduleSyncPush(setSyncOk); } catch (e) { /* storage unavailable */ }
   }
   function handleCategoryDefaultRankChange(category, rank) {
     setCategoryDefaultRanks((prev) => {
@@ -4689,7 +4716,7 @@ export default function DDDashboard() {
     });
   }
   async function persistCheckpoints(list) {
-    try { await storage.set("portfolio_checkpoints", JSON.stringify(list)); } catch (e) { /* storage unavailable */ }
+    try { await storage.set("portfolio_checkpoints", JSON.stringify(list)); scheduleSyncPush(setSyncOk); } catch (e) { /* storage unavailable */ }
   }
   function handleCheckpointChange(index, field, value) {
     setCheckpoints((prev) => {
@@ -4699,13 +4726,13 @@ export default function DDDashboard() {
     });
   }
   async function persistLifecycle(next) {
-    try { await storage.set("lifecycle_settings", JSON.stringify(next)); } catch (e) { /* storage unavailable */ }
+    try { await storage.set("lifecycle_settings", JSON.stringify(next)); scheduleSyncPush(setSyncOk); } catch (e) { /* storage unavailable */ }
   }
   function handleLifecycleChange(field, value) {
     setLifecycle((prev) => { const next = { ...prev, [field]: value }; persistLifecycle(next); return next; });
   }
   async function persistFixedPositions(next) {
-    try { await storage.set("fixed_positions", JSON.stringify(next)); } catch (e) { /* storage unavailable */ }
+    try { await storage.set("fixed_positions", JSON.stringify(next)); scheduleSyncPush(setSyncOk); } catch (e) { /* storage unavailable */ }
   }
   function handleFixedPositionChange(name, checked, reason) {
     setFixedPositions((prev) => {
@@ -4738,7 +4765,7 @@ export default function DDDashboard() {
   function handleSaveSnapshot(snapshotHoldings, generatedAt) {
     const snapshot = { generatedAt: generatedAt.toISOString(), holdings: snapshotHoldings.map((h) => ({ name: h.name, amount: h.amount })) };
     setPrevSnapshot(snapshot);
-    storage.set("summary_prev_snapshot", JSON.stringify(snapshot)).catch(() => { /* storage unavailable */ });
+    storage.set("summary_prev_snapshot", JSON.stringify(snapshot)).then(() => scheduleSyncPush(setSyncOk)).catch(() => { /* storage unavailable */ });
   }
   function handleReplace(parsed) { setRawSeries(parsed); setDataSource("imported"); persist(parsed); }
   function handleAppend(entry) {
@@ -4751,7 +4778,7 @@ export default function DDDashboard() {
     });
     setDataSource("imported");
   }
-  function handleReset() { setRawSeries(SEED_SERIES); setDataSource("seed"); storage.delete("voo_price_history").catch(() => {}); }
+  function handleReset() { setRawSeries(SEED_SERIES); setDataSource("seed"); storage.delete("voo_price_history").then(() => scheduleSyncPush(setSyncOk)).catch(() => {}); }
   // 「更新」：この口座主の保有データを新CSVの内容に完全同期する（重複銘柄は新データで上書き、新規銘柄は追加、
   // CSVに含まれなくなった銘柄＝売却済み等は削除）。他の口座主のデータ・分類の記憶（overrides）は影響を受けない。
   // asOf: 取り込んだCSVのファイル名から検出したデータ日付（YYYY-MM-DD）。検出できた場合のみその口座主の最新更新日として記憶する。
@@ -4786,7 +4813,7 @@ export default function DDDashboard() {
     setHoldingsAsOf(nextAsOf);
     persistHoldingsAsOf(nextAsOf);
   }
-  function handleResetHoldings() { setHoldings(HOLDINGS_DEFAULT); setHoldingsSource("seed"); setHoldingsAsOf({}); storage.delete("portfolio_holdings").catch(() => {}); storage.delete("holdings_as_of").catch(() => {}); }
+  function handleResetHoldings() { setHoldings(HOLDINGS_DEFAULT); setHoldingsSource("seed"); setHoldingsAsOf({}); storage.delete("portfolio_holdings").catch(() => {}); storage.delete("holdings_as_of").catch(() => {}); scheduleSyncPush(setSyncOk); }
   // カテゴリー/ランクは銘柄名ごとに（同じ銘柄が複数口座・口座主にあっても揃うよう）まとめて更新し、overridesにも記憶する。
   // 口座主は行固有の情報なので、その行だけを更新する。
   function handleHoldingFieldEdit(id, field, value) {
@@ -4972,6 +4999,9 @@ export default function DDDashboard() {
             <button onClick={() => setModal({ type: "investmentPerformance" })} title="実績パフォーマンス" className="flex items-center p-1 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
               <Wallet size={12} />
             </button>
+            <button onClick={handleManualSync} title={`今すぐ同期${lastSyncedLabel ? `（最終同期 ${lastSyncedLabel}）` : ""}`} className="flex items-center p-1 rounded-full" style={{ color: syncError ? C.rust : C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+              <RefreshCw size={12} className={syncing ? "animate-spin" : undefined} />
+            </button>
             <span className="flex items-center gap-0.5 text-[10px] font-semibold px-1.5 py-1 rounded-full whitespace-nowrap" style={{ color: depthColor(d.currentDD), background: `${depthColor(d.currentDD)}1a`, border: `1px solid ${depthColor(d.currentDD)}44` }}>{d.isDrawdown ? <TrendingDown size={11} /> : <TrendingUp size={11} />} {d.mode}</span>
           </div>
         </div>
@@ -4992,6 +5022,9 @@ export default function DDDashboard() {
           </button>
           <button onClick={() => setModal({ type: "investmentPerformance" })} title="実績パフォーマンス" className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
             <Wallet size={12} /> 実績パフォーマンス
+          </button>
+          <button onClick={handleManualSync} title="今すぐ同期" className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full" style={{ color: syncError ? C.rust : C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+            <RefreshCw size={12} className={syncing ? "animate-spin" : undefined} /> {lastSyncedLabel ? `最終同期 ${lastSyncedLabel}` : "今すぐ同期"}
           </button>
           <span className="flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full" style={{ color: depthColor(d.currentDD), background: `${depthColor(d.currentDD)}1a`, border: `1px solid ${depthColor(d.currentDD)}44` }}>{d.isDrawdown ? <TrendingDown size={12} /> : <TrendingUp size={12} />} {d.mode}</span>
         </div>

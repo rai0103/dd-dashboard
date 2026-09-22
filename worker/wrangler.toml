@@ -4,3 +4,7 @@ compatibility_date = "2026-08-01"
 
 [observability]
 enabled = true
+
+[[kv_namespaces]]
+binding = "DD_SYNC_KV"
+id = "677aaf3b5682454d8615f0e760b64b11"
