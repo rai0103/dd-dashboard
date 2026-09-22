@@ -4266,6 +4266,27 @@ function InvestmentPerformanceModalContent({ data, d, dQqq, onOpenUpload, onRese
     }
     return computeBandDomain(negMin, posMax, 0.02, 0.42);
   }, [fireChartData]);
+  // 半期・年間の超過収益合計：新たな計算式は追加せず、既存の月次excessReturn（当月パフォーマンス－取り崩し。
+  // ボーナス加算分も含め既に算出済みの値）をデータ最終月ベースで期間集計するだけ。データ最終月が1〜6月なら
+  // その年のH1（1〜6月）、7〜12月ならH2（7〜12月）を対象とし、いずれもその年・その半期のうち実績データが
+  // ある月だけを合算する（未来の月は存在しないため自動的に含まれない）。年は最終月の年をそのまま使うため、
+  // 年が変わっても（2027年以降になっても）ハードコードなしで自動的に追従する。
+  const fireLatestSummary = useMemo(() => {
+    if (!fireChartData.length) return null;
+    const last = fireChartData[fireChartData.length - 1];
+    const year = last.date.slice(0, 4);
+    const month = Number(last.date.slice(5, 7));
+    const isH1 = month <= 6;
+    const halfStart = `${year}-${isH1 ? "01" : "07"}-01`;
+    const yearStart = `${year}-01-01`;
+    const sumExcess = (fromDate) => fireChartData
+      .filter((p) => p.date >= fromDate && p.date <= last.date && p.excessReturn != null)
+      .reduce((s, p) => s + p.excessReturn, 0);
+    return {
+      halfLabel: isH1 ? "H1（1〜6月）" : "H2（7〜12月）", halfTotal: sumExcess(halfStart),
+      yearLabel: `${year}年1月〜`, yearTotal: sumExcess(yearStart),
+    };
+  }, [fireChartData]);
 
   if (!data || !series.length) {
     return (
@@ -4393,6 +4414,12 @@ function InvestmentPerformanceModalContent({ data, d, dQqq, onOpenUpload, onRese
               <span className="flex items-center gap-1"><span style={{ width: 8, height: 8, background: C.rust, display: "inline-block" }} />取り崩し（絶対値・右軸）</span>
               <span className="flex items-center gap-1"><span style={{ width: 8, height: 8, background: C.rustLight, display: "inline-block" }} />重なり区間</span>
             </div>
+            {fireLatestSummary && (
+              <div className="flex flex-col items-end gap-0.5 mono text-[10px] mb-1" style={{ color: C.textMuted }}>
+                <span style={{ whiteSpace: "nowrap" }}>{fireLatestSummary.halfLabel}超過収益合計: <b style={{ color: fireLatestSummary.halfTotal >= 0 ? C.teal : C.rust }}>{fireLatestSummary.halfTotal >= 0 ? "+" : "-"}¥{Math.abs(Math.round(fireLatestSummary.halfTotal)).toLocaleString()}</b></span>
+                <span style={{ whiteSpace: "nowrap" }}>年間累計（{fireLatestSummary.yearLabel}）超過収益合計: <b style={{ color: fireLatestSummary.yearTotal >= 0 ? C.teal : C.rust }}>{fireLatestSummary.yearTotal >= 0 ? "+" : "-"}¥{Math.abs(Math.round(fireLatestSummary.yearTotal)).toLocaleString()}</b></span>
+              </div>
+            )}
             <div style={{ width: "100%", height: 260 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <ComposedChart data={fireChartData}>
