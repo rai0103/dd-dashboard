@@ -4178,7 +4178,9 @@ function InvestmentPerformanceModalContent({ data, d, dQqq, onOpenUpload, onRese
     const spMap = new Map((fireSpFullInvestSim ?? []).map((p) => [p.date, p.simulatedValue]));
     return fireMonthly.map((p) => ({
       date: p.date, totalAssets: p.prevMonthTotal, monthPerformance: p.monthPerformance,
-      withdrawal: p.withdrawal, excessReturn: p.excessReturn, spFullInvest: spMap.get(p.date) ?? null,
+      // withdrawalはツールチップ表示用にExcelどおりの符号（マイナス）を保持し、グラフの棒描画にはwithdrawalAbs（絶対値）を使う。
+      withdrawal: p.withdrawal, withdrawalAbs: p.withdrawal != null ? Math.abs(p.withdrawal) : null,
+      excessReturn: p.excessReturn, spFullInvest: spMap.get(p.date) ?? null,
     }));
   }, [fireMonthly, fireSpFullInvestSim]);
 
@@ -4302,23 +4304,27 @@ function InvestmentPerformanceModalContent({ data, d, dQqq, onOpenUpload, onRese
         {fireChartData.length ? (
           <>
             <div className="flex items-center gap-3 mb-1 flex-wrap text-[10px]" style={{ color: C.textMuted }}>
-              <span className="flex items-center gap-1"><span style={{ width: 10, height: 2, background: C.teal, display: "inline-block" }} />FIREトライアル総資産（実績）</span>
-              <span className="flex items-center gap-1"><span style={{ width: 10, height: 2, background: C.amber, display: "inline-block" }} />SP500フルインベストメント（比較）</span>
-              <span className="flex items-center gap-1"><span style={{ width: 8, height: 8, background: C.teal, display: "inline-block", opacity: 0.6 }} />当月パフォーマンス</span>
-              <span className="flex items-center gap-1"><span style={{ width: 8, height: 8, background: C.rust, display: "inline-block", opacity: 0.6 }} />取り崩し</span>
+              <span className="flex items-center gap-1"><span style={{ width: 10, height: 2, background: C.teal, display: "inline-block" }} />FIREトライアル総資産（実績・左軸）</span>
+              <span className="flex items-center gap-1"><span style={{ width: 10, height: 2, background: C.amber, display: "inline-block" }} />SP500フルインベストメント（比較・左軸）</span>
+              <span className="flex items-center gap-1"><span style={{ width: 8, height: 8, background: C.teal, display: "inline-block", opacity: 0.55 }} />当月パフォーマンス（右軸）</span>
+              <span className="flex items-center gap-1"><span style={{ width: 8, height: 8, background: C.rust, display: "inline-block", opacity: 0.55 }} />取り崩し（絶対値・右軸）</span>
             </div>
             <div style={{ width: "100%", height: 260 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <ComposedChart data={fireChartData}>
                   <CartesianGrid strokeDasharray="3 3" stroke={C.borderSoft} />
-                  <XAxis dataKey="date" tick={{ fontSize: 9, fill: C.textDim }} tickFormatter={(v) => fmtDateSlash(v)} />
-                  <YAxis tick={{ fontSize: 9, fill: C.textDim }} tickFormatter={(v) => `${Math.round(v / 10000)}万`} />
+                  {/* 棒（取り崩し・当月パフォーマンス）を同じX位置で完全に重ねて表示するため、同じdateを参照する非表示の
+                      2本目のXAxisを用意し、棒ごとに別々のxAxisIdへ割り当てる（積み上げではなく重ね描画にするための手段）。 */}
+                  <XAxis xAxisId="cat" dataKey="date" tick={{ fontSize: 9, fill: C.textDim }} tickFormatter={(v) => fmtDateSlash(v)} />
+                  <XAxis xAxisId="catOverlay" dataKey="date" hide />
+                  <YAxis yAxisId="left" tick={{ fontSize: 9, fill: C.textDim }} tickFormatter={(v) => `${Math.round(v / 10000)}万`} />
+                  <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 9, fill: C.textDim }} tickFormatter={(v) => `${Math.round(v / 10000)}万`} />
                   <Tooltip content={(props) => <FireTrialTooltipContent {...props} yen={yen} />} />
-                  <ReferenceLine y={0} stroke={C.borderSoft} />
-                  <Bar dataKey="monthPerformance" name="当月パフォーマンス" stackId="fire" fill={C.teal} fillOpacity={0.6} />
-                  <Bar dataKey="withdrawal" name="取り崩し" stackId="fire" fill={C.rust} fillOpacity={0.6} />
-                  <Line type="monotone" dataKey="totalAssets" name="FIREトライアル総資産（実績）" stroke={C.teal} strokeWidth={2} dot={false} isAnimationActive={false} connectNulls />
-                  <Line type="monotone" dataKey="spFullInvest" name="SP500フルインベストメント（比較）" stroke={C.amber} strokeWidth={1.5} strokeDasharray="4 3" dot={false} isAnimationActive={false} connectNulls />
+                  <ReferenceLine xAxisId="cat" yAxisId="right" y={0} stroke={C.borderSoft} />
+                  <Bar xAxisId="cat" yAxisId="right" dataKey="withdrawalAbs" name="取り崩し（絶対値）" fill={C.rust} fillOpacity={0.55} isAnimationActive={false} />
+                  <Bar xAxisId="catOverlay" yAxisId="right" dataKey="monthPerformance" name="当月パフォーマンス" fill={C.teal} fillOpacity={0.55} isAnimationActive={false} />
+                  <Line xAxisId="cat" yAxisId="left" type="monotone" dataKey="totalAssets" name="FIREトライアル総資産（実績）" stroke={C.teal} strokeWidth={2} dot={false} isAnimationActive={false} connectNulls />
+                  <Line xAxisId="cat" yAxisId="left" type="monotone" dataKey="spFullInvest" name="SP500フルインベストメント（比較）" stroke={C.amber} strokeWidth={1.5} strokeDasharray="4 3" dot={false} isAnimationActive={false} connectNulls />
                 </ComposedChart>
               </ResponsiveContainer>
             </div>
