@@ -27,6 +27,10 @@ function hexToRgb(hex) { const h = hex.replace("#", ""); return { r: parseInt(h.
 function lerpColor(a, b, t) { const pa = hexToRgb(a), pb = hexToRgb(b); return `rgb(${Math.round(pa.r + (pb.r - pa.r) * t)},${Math.round(pa.g + (pb.g - pa.g) * t)},${Math.round(pa.b + (pb.b - pa.b) * t)})`; }
 // 取り崩し色（rust）を白と50%ブレンドした明るい色。FIREトライアルチャートで「当月パフォーマンスと取り崩しが重なる区間」の色として使う。
 C.rustLight = lerpColor(C.rust, C.white, 0.5);
+// teal/rustを背景色に35%寄せた深い色。FIREトライアルチャートの「H2計・年計」（月次データではなく集計値であることが
+// 一目で分かるよう、月次の当月パフォーマンス色/取り崩し色とは明度を変えた同系色）に使う。
+C.tealDeep = lerpColor(C.teal, C.bg, 0.35);
+C.rustDeep = lerpColor(C.rust, C.bg, 0.35);
 function rankColor(rank) { const order = ["A", "B", "C", "D", "E"]; const idx = order.indexOf(rank); const t = idx / (order.length - 1); return t <= 0.5 ? lerpColor(C.teal, C.amber, t / 0.5) : lerpColor(C.amber, C.rust, (t - 0.5) / 0.5); }
 
 const MILESTONES = [-3, -5, -8, -10, -12, -15, -18, -20, -25, -30, -35, -40, -45, -50];
@@ -4164,19 +4168,45 @@ function InvestmentUploadModalContent({ existing, onSave, onClose }) {
   );
 }
 const INVESTMENT_ACCOUNT_COLORS = { "楽天証券（私＋妻）": C.teal, "moomoo証券": C.blue, "大和コネクト証券": C.violet, "Coin Check": C.amber, "iDeCo": "#7FA37A" };
-// ⑤FIREトライアル用ツールチップ：その月の総資産・当月パフォーマンス・取り崩し・超過収益をまとめて表示する
-// （超過収益はグラフ上に系列として描画しないため、Rechartsの既定payloadではなく元データから直接参照する）。
+// 「日付」列か「H2計／年計」等の集計列かを、値がYYYY-MM-DD形式かどうかで判定する。
+function isFireDateCol(v) { return typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v); }
+// ⑤FIREトライアル用ツールチップ：月次列ではその月の総資産・当月パフォーマンス・取り崩し・超過収益をまとめて
+// 表示する（超過収益はグラフ上に系列として描画しないため、Rechartsの既定payloadではなく元データから直接参照
+// する）。半期計・年計の集計列（isSummaryCol）では、内訳を持たないため超過収益合計のみを表示する。
 function FireTrialTooltipContent({ active, payload, label, yen }) {
   if (!active || !payload || !payload.length) return null;
   const p = payload[0].payload;
+  if (p.isSummaryCol) {
+    const v = p.summaryExcessReturn;
+    return (
+      <div style={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 11, padding: 8, borderRadius: 4 }}>
+        <div className="mono" style={{ marginBottom: 4, color: C.textMuted }}>{label}</div>
+        <div>超過収益合計: <b style={{ color: v >= 0 ? C.teal : C.rust }}>{v >= 0 ? "+" : "-"}{yen(Math.abs(v))}</b></div>
+      </div>
+    );
+  }
   return (
     <div style={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 11, padding: 8, borderRadius: 4 }}>
-      <div className="mono" style={{ marginBottom: 4, color: C.textMuted }}>{fmtDateSlash(label)}</div>
+      <div className="mono" style={{ marginBottom: 4, color: C.textMuted }}>{isFireDateCol(label) ? fmtDateSlash(label) : label}</div>
       <div>総資産: <b>{yen(p.totalAssets)}</b></div>
       <div>当月パフォーマンス: <b>{yen(p.monthPerformance)}</b></div>
       <div>取り崩し: <b>{yen(p.withdrawal)}</b></div>
       <div>超過収益: <b>{yen(p.excessReturn)}</b></div>
     </div>
+  );
+}
+// H2計・年計の棒の上（プラス）／下（マイナス）に金額ラベルを直接添える。値がnull（月次列）の場合は何も描画しない。
+// stackId共有下ではRechartsのlabel描画に渡るvalueがスタック全体の累積値になってしまうため、propsのvalueは
+// 使わず、indexで元データ配列（data.summaryExcessReturn）を直接参照する（月次列ではnullなので確実にスキップできる）。
+function FireSummaryBarLabel({ x, y, width, height, index, data, yen }) {
+  const value = data?.[index]?.summaryExcessReturn;
+  if (value == null) return null;
+  const isPos = value >= 0;
+  const labelY = isPos ? y - 6 : y + height + 12;
+  return (
+    <text x={x + width / 2} y={labelY} textAnchor="middle" fontSize={10} fontFamily="monospace" fill={isPos ? C.teal : C.rust} fontWeight={700}>
+      {isPos ? "+" : "-"}{yen(Math.abs(value))}
+    </text>
   );
 }
 // FIREトライアルチャートで折れ線（左軸）と棒グラフ（右軸）の描画帯が交差しないよう、各軸のdomainを実データより
@@ -4256,16 +4286,6 @@ function InvestmentPerformanceModalContent({ data, d, dQqq, onOpenUpload, onRese
     if (!vals.length) return [0, 1];
     return computeBandDomain(Math.min(...vals), Math.max(...vals), 0.5, 0.98);
   }, [fireChartData]);
-  const fireRightDomain = useMemo(() => {
-    let posMax = 0, negMin = 0;
-    for (const p of fireChartData) {
-      const perf = p.monthPerformance, wAbs = p.withdrawalAbs;
-      if (perf != null && perf < 0) negMin = Math.min(negMin, perf);
-      const posExtent = perf != null && wAbs != null ? (perf >= 0 ? Math.max(perf, wAbs) : wAbs) : (wAbs ?? perf ?? 0);
-      if (posExtent != null) posMax = Math.max(posMax, posExtent);
-    }
-    return computeBandDomain(negMin, posMax, 0.02, 0.42);
-  }, [fireChartData]);
   // 半期・年間の超過収益合計：新たな計算式は追加せず、既存の月次excessReturn（当月パフォーマンス－取り崩し。
   // ボーナス加算分も含め既に算出済みの値）をデータ最終月ベースで期間集計するだけ。データ最終月が1〜6月なら
   // その年のH1（1〜6月）、7〜12月ならH2（7〜12月）を対象とし、いずれもその年・その半期のうち実績データが
@@ -4283,10 +4303,39 @@ function InvestmentPerformanceModalContent({ data, d, dQqq, onOpenUpload, onRese
       .filter((p) => p.date >= fromDate && p.date <= last.date && p.excessReturn != null)
       .reduce((s, p) => s + p.excessReturn, 0);
     return {
-      halfLabel: isH1 ? "H1（1〜6月）" : "H2（7〜12月）", halfTotal: sumExcess(halfStart),
+      halfLabel: isH1 ? "H1（1〜6月）" : "H2（7〜12月）", halfShortLabel: isH1 ? "H1計" : "H2計", halfTotal: sumExcess(halfStart),
       yearLabel: `${year}年1月〜`, yearTotal: sumExcess(yearStart),
     };
   }, [fireChartData]);
+  // 月次の時系列軸の右側に、半期計・年計を独立した「サマリー列」として追加する。総資産・SP500フルインベスト
+  // メント・当月パフォーマンス・取り崩しはこの2列には存在しない（null）ため、月次の折れ線・棒の描画内容には
+  // 一切影響しない。超過収益の合計だけをsummaryExcessReturnとして持たせ、専用のBarで描画する。
+  const fireChartDataWithSummary = useMemo(() => {
+    if (!fireLatestSummary) return fireChartData;
+    const summaryRow = (label, value) => ({
+      date: label, isSummaryCol: true, totalAssets: null, spFullInvest: null,
+      monthPerformance: null, withdrawal: null, withdrawalAbs: null,
+      performanceOnly: null, withdrawalOnly: null, overlapAmount: null,
+      excessReturn: null, summaryExcessReturn: value,
+    });
+    return [...fireChartData, summaryRow(fireLatestSummary.halfShortLabel, fireLatestSummary.halfTotal), summaryRow("年計", fireLatestSummary.yearTotal)];
+  }, [fireChartData, fireLatestSummary]);
+  const fireRightDomain = useMemo(() => {
+    let posMax = 0, negMin = 0;
+    for (const p of fireChartData) {
+      const perf = p.monthPerformance, wAbs = p.withdrawalAbs;
+      if (perf != null && perf < 0) negMin = Math.min(negMin, perf);
+      const posExtent = perf != null && wAbs != null ? (perf >= 0 ? Math.max(perf, wAbs) : wAbs) : (wAbs ?? perf ?? 0);
+      if (posExtent != null) posMax = Math.max(posMax, posExtent);
+    }
+    if (fireLatestSummary) {
+      for (const v of [fireLatestSummary.halfTotal, fireLatestSummary.yearTotal]) {
+        if (v == null) continue;
+        if (v >= 0) posMax = Math.max(posMax, v); else negMin = Math.min(negMin, v);
+      }
+    }
+    return computeBandDomain(negMin, posMax, 0.02, 0.42);
+  }, [fireChartData, fireLatestSummary]);
 
   if (!data || !series.length) {
     return (
@@ -4413,18 +4462,14 @@ function InvestmentPerformanceModalContent({ data, d, dQqq, onOpenUpload, onRese
               <span className="flex items-center gap-1"><span style={{ width: 8, height: 8, background: C.teal, display: "inline-block" }} />当月パフォーマンス（右軸）</span>
               <span className="flex items-center gap-1"><span style={{ width: 8, height: 8, background: C.rust, display: "inline-block" }} />取り崩し（絶対値・右軸）</span>
               <span className="flex items-center gap-1"><span style={{ width: 8, height: 8, background: C.rustLight, display: "inline-block" }} />重なり区間</span>
+              <span className="flex items-center gap-1"><span style={{ width: 8, height: 8, background: C.tealDeep, display: "inline-block" }} />半期計・年計（超過収益）</span>
             </div>
-            {fireLatestSummary && (
-              <div className="flex flex-col items-end gap-0.5 mono text-[10px] mb-1" style={{ color: C.textMuted }}>
-                <span style={{ whiteSpace: "nowrap" }}>{fireLatestSummary.halfLabel}超過収益合計: <b style={{ color: fireLatestSummary.halfTotal >= 0 ? C.teal : C.rust }}>{fireLatestSummary.halfTotal >= 0 ? "+" : "-"}¥{Math.abs(Math.round(fireLatestSummary.halfTotal)).toLocaleString()}</b></span>
-                <span style={{ whiteSpace: "nowrap" }}>年間累計（{fireLatestSummary.yearLabel}）超過収益合計: <b style={{ color: fireLatestSummary.yearTotal >= 0 ? C.teal : C.rust }}>{fireLatestSummary.yearTotal >= 0 ? "+" : "-"}¥{Math.abs(Math.round(fireLatestSummary.yearTotal)).toLocaleString()}</b></span>
-              </div>
-            )}
             <div style={{ width: "100%", height: 260 }}>
               <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart data={fireChartData}>
+                <ComposedChart data={fireChartDataWithSummary}>
                   <CartesianGrid strokeDasharray="3 3" stroke={C.borderSoft} />
-                  <XAxis dataKey="date" tick={{ fontSize: 9, fill: C.textDim }} tickFormatter={(v) => fmtDateSlash(v)} />
+                  {/* 月次（YYYY-MM-DD）に続けてH2計・年計の集計列を並べる。集計列は日付ではないためtickFormatter側で判定する。 */}
+                  <XAxis dataKey="date" tick={{ fontSize: 9, fill: C.textDim }} tickFormatter={(v) => (isFireDateCol(v) ? fmtDateSlash(v) : v)} interval={0} />
                   {/* 左軸（総資産の折れ線）はdomainを上部の帯だけに、右軸（当月パフォーマンス・取り崩しの棒）はdomainを
                       下部の帯だけに収まるよう広げてあるため、折れ線と棒グラフの描画帯が交差しない。 */}
                   <YAxis yAxisId="left" domain={fireLeftDomain} tick={{ fontSize: 9, fill: C.textDim }} tickFormatter={(v) => `${Math.round(v / 10000)}万`} />
@@ -4436,6 +4481,13 @@ function InvestmentPerformanceModalContent({ data, d, dQqq, onOpenUpload, onRese
                   <Bar yAxisId="right" dataKey="overlapAmount" name="重なり区間" stackId="fire" fill={C.rustLight} isAnimationActive={false} />
                   <Bar yAxisId="right" dataKey="performanceOnly" name="当月パフォーマンス" stackId="fire" fill={C.teal} isAnimationActive={false} />
                   <Bar yAxisId="right" dataKey="withdrawalOnly" name="取り崩し（絶対値）" stackId="fire" fill={C.rust} isAnimationActive={false} />
+                  {/* 半期計・年計：月次列ではnullのため何も描画されず、この2列にのみ超過収益合計の棒が立つ。同じstackIdに
+                      乗せることで、月次の3分割棒と同じ幅・同じゼロラインから伸びる棒として描画される。プラス/マイナスで
+                      色（teal系/rust系の深い色＝月次の色とは明度を変えて「集計値」と分かるようにする）を切り替え、
+                      値のラベルを棒の外側（プラスは上・マイナスは下）に直接添える。 */}
+                  <Bar yAxisId="right" dataKey="summaryExcessReturn" name="半期計・年計（超過収益）" stackId="fire" isAnimationActive={false} label={(props) => <FireSummaryBarLabel {...props} yen={yen} data={fireChartDataWithSummary} />}>
+                    {fireChartDataWithSummary.map((p, i) => <Cell key={i} fill={(p.summaryExcessReturn ?? 0) >= 0 ? C.tealDeep : C.rustDeep} />)}
+                  </Bar>
                   <Line yAxisId="left" type="linear" dataKey="totalAssets" name="FIREトライアル総資産（実績）" stroke={C.teal} strokeWidth={2} dot={false} isAnimationActive={false} connectNulls />
                   <Line yAxisId="left" type="linear" dataKey="spFullInvest" name="SP500フルインベストメント（比較）" stroke={C.amber} strokeWidth={1.5} strokeDasharray="4 3" dot={false} isAnimationActive={false} connectNulls />
                 </ComposedChart>
