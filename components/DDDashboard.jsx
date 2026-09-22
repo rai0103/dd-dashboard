@@ -25,6 +25,8 @@ const C = {
 function depthColor(v) { if (v >= -3) return C.teal; if (v >= -18) return C.amber; return C.rust; }
 function hexToRgb(hex) { const h = hex.replace("#", ""); return { r: parseInt(h.substring(0, 2), 16), g: parseInt(h.substring(2, 4), 16), b: parseInt(h.substring(4, 6), 16) }; }
 function lerpColor(a, b, t) { const pa = hexToRgb(a), pb = hexToRgb(b); return `rgb(${Math.round(pa.r + (pb.r - pa.r) * t)},${Math.round(pa.g + (pb.g - pa.g) * t)},${Math.round(pa.b + (pb.b - pa.b) * t)})`; }
+// 取り崩し色（rust）を白と50%ブレンドした明るい色。FIREトライアルチャートで「当月パフォーマンスと取り崩しが重なる区間」の色として使う。
+C.rustLight = lerpColor(C.rust, C.white, 0.5);
 function rankColor(rank) { const order = ["A", "B", "C", "D", "E"]; const idx = order.indexOf(rank); const t = idx / (order.length - 1); return t <= 0.5 ? lerpColor(C.teal, C.amber, t / 0.5) : lerpColor(C.amber, C.rust, (t - 0.5) / 0.5); }
 
 const MILESTONES = [-3, -5, -8, -10, -12, -15, -18, -20, -25, -30, -35, -40, -45, -50];
@@ -4141,6 +4143,16 @@ function FireTrialTooltipContent({ active, payload, label, yen }) {
     </div>
   );
 }
+// FIREトライアルチャートで折れ線（左軸）と棒グラフ（右軸）の描画帯が交差しないよう、各軸のdomainを実データより
+// 広めに取り、[bandStart, bandEnd]（0=チャート下端, 1=上端）の帯の中だけに実データが収まるよう調整する。
+function computeBandDomain(dataMin, dataMax, bandStart, bandEnd) {
+  let range = dataMax - dataMin;
+  if (!(range > 0)) range = Math.max(Math.abs(dataMax), Math.abs(dataMin), 1) * 0.2 || 1;
+  const span = range / (bandEnd - bandStart);
+  const domainMin = dataMin - bandStart * span;
+  const domainMax = domainMin + span;
+  return [domainMin, domainMax];
+}
 function InvestmentPerformanceModalContent({ data, d, dQqq, onOpenUpload, onReset }) {
   const yen = (v) => (v == null ? "—" : `¥${Math.round(v).toLocaleString()}`);
   const series = data?.series ?? [];
@@ -4176,13 +4188,48 @@ function InvestmentPerformanceModalContent({ data, d, dQqq, onOpenUpload, onRese
   }, [fireMonthly, d.FULL]);
   const fireChartData = useMemo(() => {
     const spMap = new Map((fireSpFullInvestSim ?? []).map((p) => [p.date, p.simulatedValue]));
-    return fireMonthly.map((p) => ({
-      date: p.date, totalAssets: p.prevMonthTotal, monthPerformance: p.monthPerformance,
-      // withdrawalはツールチップ表示用にExcelどおりの符号（マイナス）を保持し、グラフの棒描画にはwithdrawalAbs（絶対値）を使う。
-      withdrawal: p.withdrawal, withdrawalAbs: p.withdrawal != null ? Math.abs(p.withdrawal) : null,
-      excessReturn: p.excessReturn, spFullInvest: spMap.get(p.date) ?? null,
-    }));
+    return fireMonthly.map((p) => {
+      const perf = p.monthPerformance;
+      const wAbs = p.withdrawal != null ? Math.abs(p.withdrawal) : null;
+      // 当月パフォーマンスと取り崩し（絶対値）が同符号（＝ともに0以上）の場合のみ重なりが生じる。取り崩しは常に
+      // 絶対値（0以上）で描画するため、実質的にはパフォーマンスが0以上かどうかで判定される。重なり区間は
+      // 「絶対値が小さい方まで」とし、はみ出た方だけを「パフォーマンスのみ」「取り崩しのみ」として積み上げる。
+      let performanceOnly = perf, withdrawalOnly = wAbs, overlapAmount = null;
+      if (perf != null && wAbs != null) {
+        if (perf >= 0) {
+          overlapAmount = Math.min(perf, wAbs);
+          performanceOnly = perf - overlapAmount;
+          withdrawalOnly = wAbs - overlapAmount;
+        } else {
+          overlapAmount = 0; // 符号が異なるため重ならない（パフォーマンスは下方向、取り崩しは上方向に別々に描画）
+        }
+      }
+      return {
+        date: p.date, totalAssets: p.prevMonthTotal, monthPerformance: perf,
+        // withdrawalはツールチップ表示用にExcelどおりの符号（マイナス）を保持し、グラフの棒描画にはwithdrawalAbs（絶対値）を使う。
+        withdrawal: p.withdrawal, withdrawalAbs: wAbs,
+        performanceOnly, withdrawalOnly, overlapAmount,
+        excessReturn: p.excessReturn, spFullInvest: spMap.get(p.date) ?? null,
+      };
+    });
   }, [fireMonthly, fireSpFullInvestSim]);
+  // 左軸（総資産の折れ線）はチャート上部の帯、右軸（当月パフォーマンス・取り崩しの棒）は下部の帯にだけ実データが
+  // 収まるよう、それぞれのdomainを実データ範囲より広く取る。これにより折れ線と棒グラフの描画帯が交差しなくなる。
+  const fireLeftDomain = useMemo(() => {
+    const vals = fireChartData.flatMap((p) => [p.totalAssets, p.spFullInvest]).filter((v) => v != null);
+    if (!vals.length) return [0, 1];
+    return computeBandDomain(Math.min(...vals), Math.max(...vals), 0.5, 0.98);
+  }, [fireChartData]);
+  const fireRightDomain = useMemo(() => {
+    let posMax = 0, negMin = 0;
+    for (const p of fireChartData) {
+      const perf = p.monthPerformance, wAbs = p.withdrawalAbs;
+      if (perf != null && perf < 0) negMin = Math.min(negMin, perf);
+      const posExtent = perf != null && wAbs != null ? (perf >= 0 ? Math.max(perf, wAbs) : wAbs) : (wAbs ?? perf ?? 0);
+      if (posExtent != null) posMax = Math.max(posMax, posExtent);
+    }
+    return computeBandDomain(negMin, posMax, 0.02, 0.42);
+  }, [fireChartData]);
 
   if (!data || !series.length) {
     return (
@@ -4306,25 +4353,28 @@ function InvestmentPerformanceModalContent({ data, d, dQqq, onOpenUpload, onRese
             <div className="flex items-center gap-3 mb-1 flex-wrap text-[10px]" style={{ color: C.textMuted }}>
               <span className="flex items-center gap-1"><span style={{ width: 10, height: 2, background: C.teal, display: "inline-block" }} />FIREトライアル総資産（実績・左軸）</span>
               <span className="flex items-center gap-1"><span style={{ width: 10, height: 2, background: C.amber, display: "inline-block" }} />SP500フルインベストメント（比較・左軸）</span>
-              <span className="flex items-center gap-1"><span style={{ width: 8, height: 8, background: C.teal, display: "inline-block", opacity: 0.55 }} />当月パフォーマンス（右軸）</span>
-              <span className="flex items-center gap-1"><span style={{ width: 8, height: 8, background: C.rust, display: "inline-block", opacity: 0.55 }} />取り崩し（絶対値・右軸）</span>
+              <span className="flex items-center gap-1"><span style={{ width: 8, height: 8, background: C.teal, display: "inline-block" }} />当月パフォーマンス（右軸）</span>
+              <span className="flex items-center gap-1"><span style={{ width: 8, height: 8, background: C.rust, display: "inline-block" }} />取り崩し（絶対値・右軸）</span>
+              <span className="flex items-center gap-1"><span style={{ width: 8, height: 8, background: C.rustLight, display: "inline-block" }} />重なり区間</span>
             </div>
             <div style={{ width: "100%", height: 260 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <ComposedChart data={fireChartData}>
                   <CartesianGrid strokeDasharray="3 3" stroke={C.borderSoft} />
-                  {/* 棒（取り崩し・当月パフォーマンス）を同じX位置で完全に重ねて表示するため、同じdateを参照する非表示の
-                      2本目のXAxisを用意し、棒ごとに別々のxAxisIdへ割り当てる（積み上げではなく重ね描画にするための手段）。 */}
-                  <XAxis xAxisId="cat" dataKey="date" tick={{ fontSize: 9, fill: C.textDim }} tickFormatter={(v) => fmtDateSlash(v)} />
-                  <XAxis xAxisId="catOverlay" dataKey="date" hide />
-                  <YAxis yAxisId="left" tick={{ fontSize: 9, fill: C.textDim }} tickFormatter={(v) => `${Math.round(v / 10000)}万`} />
-                  <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 9, fill: C.textDim }} tickFormatter={(v) => `${Math.round(v / 10000)}万`} />
+                  <XAxis dataKey="date" tick={{ fontSize: 9, fill: C.textDim }} tickFormatter={(v) => fmtDateSlash(v)} />
+                  {/* 左軸（総資産の折れ線）はdomainを上部の帯だけに、右軸（当月パフォーマンス・取り崩しの棒）はdomainを
+                      下部の帯だけに収まるよう広げてあるため、折れ線と棒グラフの描画帯が交差しない。 */}
+                  <YAxis yAxisId="left" domain={fireLeftDomain} tick={{ fontSize: 9, fill: C.textDim }} tickFormatter={(v) => `${Math.round(v / 10000)}万`} />
+                  <YAxis yAxisId="right" orientation="right" domain={fireRightDomain} tick={{ fontSize: 9, fill: C.textDim }} tickFormatter={(v) => `${Math.round(v / 10000)}万`} />
                   <Tooltip content={(props) => <FireTrialTooltipContent {...props} yen={yen} />} />
-                  <ReferenceLine xAxisId="cat" yAxisId="right" y={0} stroke={C.borderSoft} />
-                  <Bar xAxisId="cat" yAxisId="right" dataKey="withdrawalAbs" name="取り崩し（絶対値）" fill={C.rust} fillOpacity={0.55} isAnimationActive={false} />
-                  <Bar xAxisId="catOverlay" yAxisId="right" dataKey="monthPerformance" name="当月パフォーマンス" fill={C.teal} fillOpacity={0.55} isAnimationActive={false} />
-                  <Line xAxisId="cat" yAxisId="left" type="monotone" dataKey="totalAssets" name="FIREトライアル総資産（実績）" stroke={C.teal} strokeWidth={2} dot={false} isAnimationActive={false} connectNulls />
-                  <Line xAxisId="cat" yAxisId="left" type="monotone" dataKey="spFullInvest" name="SP500フルインベストメント（比較）" stroke={C.amber} strokeWidth={1.5} strokeDasharray="4 3" dot={false} isAnimationActive={false} connectNulls />
+                  <ReferenceLine yAxisId="right" y={0} stroke="#ffffff" strokeWidth={1} />
+                  {/* 当月パフォーマンスと取り崩しが重なる区間の色が意図しない混色にならないよう、半透明の重ね描画ではなく
+                      「パフォーマンスのみ」「重なり」「取り崩しのみ」の3値に分解したstacked Barとして描画する。 */}
+                  <Bar yAxisId="right" dataKey="overlapAmount" name="重なり区間" stackId="fire" fill={C.rustLight} isAnimationActive={false} />
+                  <Bar yAxisId="right" dataKey="performanceOnly" name="当月パフォーマンス" stackId="fire" fill={C.teal} isAnimationActive={false} />
+                  <Bar yAxisId="right" dataKey="withdrawalOnly" name="取り崩し（絶対値）" stackId="fire" fill={C.rust} isAnimationActive={false} />
+                  <Line yAxisId="left" type="linear" dataKey="totalAssets" name="FIREトライアル総資産（実績）" stroke={C.teal} strokeWidth={2} dot={false} isAnimationActive={false} connectNulls />
+                  <Line yAxisId="left" type="linear" dataKey="spFullInvest" name="SP500フルインベストメント（比較）" stroke={C.amber} strokeWidth={1.5} strokeDasharray="4 3" dot={false} isAnimationActive={false} connectNulls />
                 </ComposedChart>
               </ResponsiveContainer>
             </div>
