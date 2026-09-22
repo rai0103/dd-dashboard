@@ -3156,6 +3156,14 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
 
 /* ---------------- 詳細サマリー出力（AI相談用） ---------------- */
 const LIFECYCLE_DEFAULT = { spouseWorking: true, phase: 1, annualWithdrawal: 4800000, returnTargetYears: 5, returnTargetMultiple: 2 };
+// 固定ポジション（売却候補から常に除外する銘柄）の自動登録ルール。銘柄コードは保有銘柄データ側で変わりうるため
+// 銘柄名の部分一致で判定する（オリエンタルランドは株主優待目的、ライト工業・コマツハウスはペット名義のため
+// いずれも売却しない方針が確認済み）。保有銘柄データに一致する銘柄が現れた時点でfixedPositionsへ自動登録する。
+const FIXED_POSITION_AUTO_RULES = [
+  { pattern: /オリエンタルランド/, reason: "株主優待目的のため保有継続（売却しない）" },
+  { pattern: /ライト工業/, reason: "ペット名義のため保有継続（売却しない）" },
+  { pattern: /コマツハウス/, reason: "ペット名義のため保有継続（売却しない）" },
+];
 // 指数・テーマファンドの主要銘柄組入比率（目安値。実際の構成比・時期により異なる）。実質エクスポージャーの概算に使用。
 const INDEX_COMPOSITION = {
   "FANG+": { TSLA: 0.10, NVDA: 0.10, MSFT: 0.10, AAPL: 0.10, AMZN: 0.10, GOOGL: 0.10, META: 0.10, NFLX: 0.10, AVGO: 0.10, CRWD: 0.10 },
@@ -3213,9 +3221,15 @@ function computeRecentStats(FULL) {
   };
 }
 // 前回サマリー生成時点の保有スナップショットと今回を比較し、売却・購入・大幅増減（5%超）した銘柄を差分として抽出する。
+// 同じ銘柄名が複数口座主（shin/saki）にまたがって保有されている場合、スナップショットのholdings配列には
+// 口座主ごとに別レコードとして複数件入っている。`new Map(array.map(...))`は同名キーを合算せず後勝ちで
+// 上書きしてしまうため、必ずcurMapと同じ「同名は合算する」ロジックで両方構築すること（片方だけ合算すると、
+// 実際には資産が動いていなくても「前回は片方の口座主分のみ」対「今回は世帯合計」という食い違いが生じ、
+// 数秒しか経っていないのに2倍・3倍のような不自然な差分が出てしまう＝今回発覚した不具合の直接原因）。
 function computeHoldingsDiff(prevSnapshot, holdings) {
   if (!prevSnapshot || !prevSnapshot.holdings) return null;
-  const prevMap = new Map(prevSnapshot.holdings.map((h) => [h.name, h.amount]));
+  const prevMap = new Map();
+  for (const h of prevSnapshot.holdings) prevMap.set(h.name, (prevMap.get(h.name) || 0) + h.amount);
   const curMap = new Map();
   for (const h of holdings) curMap.set(h.name, (curMap.get(h.name) || 0) + h.amount);
   const sold = [], bought = [], changed = [];
@@ -3231,16 +3245,17 @@ function computeHoldingsDiff(prevSnapshot, holdings) {
 }
 // 乖離±この幅（pt）以内のクラスは「ほぼ目標達成」とみなし売買対象から除外する（誤差・端数のノイズ吸収用）。
 const DD3_REBALANCE_DIFF_THRESHOLD_PT = 1;
-// DD-3%到達時のリバランス提案：A〜E各クラスの「現在の評価額 - DD-3%モデル目標額」（diff_value）を求め、
-// 超過している各クラスからはその超過分そのものを、不足している各クラスへはその不足分そのものを目標に
-// （＝乖離幅にそのまま比例して）売却・買付を配分する。乖離±1pt以内のクラスは対象外とする。
+// 汎用リバランス提案：指定したtarget（A〜E目標モデル行、任意の節目を渡せる）に対する「現在の評価額 - 目標額」
+// （diff_value）を求め、超過している各クラスからはその超過分そのものを、不足している各クラスへはその不足分
+// そのものを目標に（＝乖離幅にそのまま比例して）売却・買付を配分する。乖離±1pt以内のクラスは対象外とする。
 // 固定ポジション（fixedPositions）は売却候補から除外し、各クラス内の銘柄選定は金額降順のまま（既存踏襲）。
 // 「現金」については、有効な現金系チェックポイント（direction:min）があれば、その不足額を上限にAクラスの
 // 売却を抑えて現金を残す（Aクラス自体が超過中のみ・Aを現在の水準よりさらに超過させることはない）。
-// 現在のDDが実際に-3%以下かどうかに関わらず常に算出する（到達時のプレビュー）。
-function computeDD3RebalancePlan(holdings, currentHoldingPct, fixedPositions, checkpoints) {
+// targetにDD-3%行を渡せば「DD-3%到達時点を想定したプレビュー」（現在の実際のDDに関わらず算出）になり、
+// effectiveModelRow（現在のDD到達段階の行）を渡せば「今まさに適用されるべき目標との比較」になる。
+// どちらの用途で使うかは呼び出し側がtargetの選び方で決める（呼び出し側のコメント参照）。
+function computeRebalancePlan(holdings, currentHoldingPct, fixedPositions, checkpoints, target) {
   const total = holdingsTotal(holdings);
-  const target = MODEL_ROWS.find((r) => r.label === "DD-3%");
   const deTargetPct = target.D + target.E;
   const deCurrentPct = currentHoldingPct.D + currentHoldingPct.E;
 
@@ -3450,7 +3465,7 @@ function buildSummaryMarkdown(ctx) {
   }
   L.push("");
 
-  const dd3Plan = computeDD3RebalancePlan(holdings, currentHoldingPct, fixedPositions, checkpoints);
+  const dd3Plan = computeRebalancePlan(holdings, currentHoldingPct, fixedPositions, checkpoints, MODEL_ROWS.find((r) => r.label === "DD-3%"));
   L.push(d.currentDD <= -3 ? "⚠ 現在DD-3%以下です。以下は今すぐ実行を検討できる提案です。" : "（現在DD-3%未到達のため、以下はDD-3%到達時点を想定したシミュレーションです）");
   for (const line of buildDD3RebalanceLines(dd3Plan, amt)) L.push(line);
   L.push("");
@@ -3550,12 +3565,33 @@ function buildSummaryJSON(ctx) {
     allocation: Object.fromEntries(CATS.map((cat) => [cat, { value: val((currentHoldingPct[cat] / 100) * total), pct: currentHoldingPct[cat], model_pct: effectiveModelRow[cat], diff_pt: Number((currentHoldingPct[cat] - effectiveModelRow[cat]).toFixed(1)), categories: rankLabels[cat] }])),
     allocation_vs_all_milestones: d.trackRecord.dynamicModelRows.map((row) => ({ milestone: row.label, is_current: row.label === effectiveModelRow.label, cats: Object.fromEntries(CATS.map((cat) => [cat, { current_pct: currentHoldingPct[cat], target_pct: row[cat], diff_pt: Number((currentHoldingPct[cat] - row[cat]).toFixed(1)) }])) })),
     blocks: { AB: blocks.AB, C: blocks.Cb, DE: blocks.DE },
-    fixed_positions: Object.entries(fixedPositions).map(([name, reason]) => ({ name, reason, value: val(holdings.filter((h) => h.name === name).reduce((s, h) => s + h.amount, 0)) })),
+    fixed_positions: Object.entries(fixedPositions).map(([name, reason]) => {
+      const matches = holdings.filter((h) => h.name === name);
+      return { name, rank: matches[0]?.rank ?? null, reason, holding_value: val(matches.reduce((s, h) => s + h.amount, 0)) };
+    }),
     dd3_rebalance_plan: (() => {
-      const plan = computeDD3RebalancePlan(holdings, currentHoldingPct, fixedPositions, checkpoints);
-      if (!plan.needed) return { needed: false, de_current_pct: plan.deCurrentPct, de_target_pct: plan.deTargetPct };
+      // needed / currently_actionable の意味づけ：
+      //   ・needed：DD-3%到達時点を想定した固定ターゲット（dd3Plan）、または「今まさに適用されるべき
+      //     現在のDD到達段階の目標」（currentPlan＝effectiveModelRow基準）のいずれかで、乖離が
+      //     diff_threshold_ptを超えるクラスが1つでもあればtrue。「いつか対応が要りそうか」の先読み指標。
+      //   ・currently_actionable：今すぐ実行すべきかどうか。(a)実際にDD-3%以下へ到達している、または
+      //     (b)実際の到達有無に関わらず現在のDD到達段階（ATH等）の目標からの乖離自体が閾値を超えている、
+      //     のいずれかで独立にtrueになる（ATH更新モード中でも配分が大きく崩れていれば是正が必要なため）。
+      //   ・両者が異なるケース：例えばDD-3%到達時の目標（dd3Plan）だと乖離が出るが、現在のDD到達段階の
+      //     目標（currentPlan）には十分収まっており、かつ実際のDDも-3%に届いていない場合、
+      //     needed:true（将来DD-3%に届けば対応が要る）・currently_actionable:false（今は何もしなくてよい）
+      //     となる。currently_actionable:trueの場合、提示するプラン内容はdd3Planではなく必ずcurrentPlan
+      //     （今の段階の目標に対する是正内容）を使う。DD-3%以下に到達済みの場合はeffectiveModelRowが
+      //     自動的にDD-3%以下の行になるため、currentPlanがその状況も正しく反映する。
+      const dd3Plan = computeRebalancePlan(holdings, currentHoldingPct, fixedPositions, checkpoints, MODEL_ROWS.find((r) => r.label === "DD-3%"));
+      const currentPlan = computeRebalancePlan(holdings, currentHoldingPct, fixedPositions, checkpoints, effectiveModelRow);
+      const currentlyActionable = d.currentDD <= -3 || currentPlan.needed;
+      const needed = dd3Plan.needed || currentPlan.needed;
+      if (!needed) return { needed: false, currently_actionable: false, de_current_pct: dd3Plan.deCurrentPct, de_target_pct: dd3Plan.deTargetPct };
+      const plan = currentlyActionable ? currentPlan : dd3Plan;
       return {
-        needed: true, currently_actionable: d.currentDD <= -3,
+        needed: true, currently_actionable: currentlyActionable,
+        active_target_model: currentlyActionable ? effectiveModelRow.label : dd3Plan.target.label,
         diff_threshold_pt: DD3_REBALANCE_DIFF_THRESHOLD_PT,
         diff_by_class: Object.fromEntries(CATS.map((c) => [c, { diff_pt: plan.diffPct[c], diff_value: val(plan.diffValue[c]) }])),
         sell_total: val(plan.sellTotal), sell_goal: val(plan.sellGoal), shortfall: val(plan.shortfall),
@@ -4601,6 +4637,24 @@ export default function DDDashboard() {
       return next;
     });
   }
+  // 固定ポジションの自動登録：保有銘柄データの中からFIXED_POSITION_AUTO_RULESに一致する銘柄を名称で検索し、
+  // まだ固定登録されていなければ自動でfixedPositionsへ追加する（手動チェックし忘れによる売却候補混入を防ぐ）。
+  useEffect(() => {
+    if (!hydrated || !holdings.length) return;
+    const additions = {};
+    for (const h of holdings) {
+      if (fixedPositions[h.name] !== undefined) continue;
+      const rule = FIXED_POSITION_AUTO_RULES.find((r) => r.pattern.test(h.name));
+      if (rule) additions[h.name] = rule.reason;
+    }
+    if (Object.keys(additions).length) {
+      setFixedPositions((prev) => {
+        const next = { ...prev, ...additions };
+        persistFixedPositions(next);
+        return next;
+      });
+    }
+  }, [hydrated, holdings, fixedPositions]);
   // 詳細サマリー出力モーダルを閉じた時点の保有内容を「次回比較用」として保存する（次回サマリーの差分表示の基準になる）。
   function handleSaveSnapshot(snapshotHoldings, generatedAt) {
     const snapshot = { generatedAt: generatedAt.toISOString(), holdings: snapshotHoldings.map((h) => ({ name: h.name, amount: h.amount })) };
