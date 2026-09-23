@@ -1,7 +1,7 @@
 {
   "asOf": "2026-09-23",
-  "source": "stockanalysis.com（VOO/QQQの保有構成）、MicroSectors FANG+ ETN(FNGS)の保有構成をもとにした概算値",
-  "note": "構成比率は指数連動ETF等の上位保有銘柄をもとにした概算値。S&P500・Nasdaq100は上位25銘柄＋その他をまとめて計上している。実際の比率は日々変動し、指数の定期リバランスでも変わるため、定期的な手動更新が必要。",
+  "source": "stockanalysis.com（VOO/QQQ/iシェアーズ Nasdaq Top 30 ETFの保有構成）、MicroSectors FANG+ ETN(FNGS)の保有構成をもとにした概算値。日経平均は一般に知られる上位銘柄・概算ウエイトを参考にした推定値（未検証・要確認）",
+  "note": "構成比率は指数連動ETF等の上位保有銘柄をもとにした概算値。S&P500・Nasdaq100・日経平均は上位銘柄＋その他をまとめて計上している。S&P500トップ20・テック・トップ20は集中投資型ファンドのため上位20銘柄のみで100%。実際の比率は日々変動し、指数の定期リバランスでも変わるため、定期的な手動更新が必要。",
   "funds": [
     {
       "key": "FANG+",
@@ -83,6 +83,88 @@
         { "ticker": "CRWD", "name": "CrowdStrike（クラウドストライク）", "weight": 0.0106 },
         { "ticker": "KLAC", "name": "KLA（KLA）", "weight": 0.0101 },
         { "ticker": "OTHERS_NASDAQ100", "name": "その他Nasdaq100構成銘柄（約76銘柄）", "weight": 0.2956 }
+      ]
+    },
+    {
+      "key": "SP20",
+      "label": "S&P500トップ20（上位20銘柄への集中投資型ファンド）",
+      "matchNamePattern": "S.?&.?P.?500.{0,6}(TOP.?20|T20|トップ.?20)",
+      "holdings": [
+        { "ticker": "NVDA", "name": "NVIDIA（エヌビディア）", "weight": 0.1677 },
+        { "ticker": "AAPL", "name": "Apple（アップル）", "weight": 0.1459 },
+        { "ticker": "MSFT", "name": "Microsoft（マイクロソフト）", "weight": 0.1183 },
+        { "ticker": "AMZN", "name": "Amazon（アマゾン）", "weight": 0.0797 },
+        { "ticker": "GOOGL", "name": "Alphabet Class A（グーグル）", "weight": 0.0625 },
+        { "ticker": "AVGO", "name": "Broadcom（ブロードコム）", "weight": 0.0550 },
+        { "ticker": "GOOG", "name": "Alphabet Class C（グーグル）", "weight": 0.0498 },
+        { "ticker": "META", "name": "Meta Platforms（メタ）", "weight": 0.0394 },
+        { "ticker": "MU", "name": "Micron Technology（マイクロン・テクノロジー）", "weight": 0.0338 },
+        { "ticker": "TSLA", "name": "Tesla（テスラ）", "weight": 0.0326 },
+        { "ticker": "JPM", "name": "JPMorgan Chase（JPモルガン・チェース）", "weight": 0.0299 },
+        { "ticker": "BRK.B", "name": "Berkshire Hathaway（バークシャー・ハサウェイ）", "weight": 0.0291 },
+        { "ticker": "LLY", "name": "Eli Lilly（イーライリリー）", "weight": 0.0286 },
+        { "ticker": "AMD", "name": "Advanced Micro Devices（AMD）", "weight": 0.0241 },
+        { "ticker": "XOM", "name": "ExxonMobil（エクソンモービル）", "weight": 0.0210 },
+        { "ticker": "JNJ", "name": "Johnson & Johnson（ジョンソン・エンド・ジョンソン）", "weight": 0.0201 },
+        { "ticker": "V", "name": "Visa（ビザ）", "weight": 0.0193 },
+        { "ticker": "MA", "name": "Mastercard（マスターカード）", "weight": 0.0149 },
+        { "ticker": "WMT", "name": "Walmart（ウォルマート）", "weight": 0.0143 },
+        { "ticker": "ABBV", "name": "AbbVie（アッヴィ）", "weight": 0.0141 }
+      ]
+    },
+    {
+      "key": "TechTop20",
+      "label": "米国テック・トップ20（大型テック銘柄への集中投資型ファンド）",
+      "matchNamePattern": "テック.{0,3}トップ.{0,2}20|TECH.{0,3}TOP.{0,2}20",
+      "holdings": [
+        { "ticker": "NVDA", "name": "NVIDIA（エヌビディア）", "weight": 0.1269 },
+        { "ticker": "AAPL", "name": "Apple（アップル）", "weight": 0.1146 },
+        { "ticker": "MSFT", "name": "Microsoft（マイクロソフト）", "weight": 0.0863 },
+        { "ticker": "MU", "name": "Micron Technology（マイクロン・テクノロジー）", "weight": 0.0754 },
+        { "ticker": "AMD", "name": "Advanced Micro Devices（AMD）", "weight": 0.0659 },
+        { "ticker": "META", "name": "Meta Platforms（メタ）", "weight": 0.0523 },
+        { "ticker": "AMZN", "name": "Amazon（アマゾン）", "weight": 0.0504 },
+        { "ticker": "GOOGL", "name": "Alphabet Class A（グーグル）", "weight": 0.0483 },
+        { "ticker": "TSLA", "name": "Tesla（テスラ）", "weight": 0.0468 },
+        { "ticker": "GOOG", "name": "Alphabet Class C（グーグル）", "weight": 0.0449 },
+        { "ticker": "INTC", "name": "Intel（インテル）", "weight": 0.0420 },
+        { "ticker": "AVGO", "name": "Broadcom（ブロードコム）", "weight": 0.0409 },
+        { "ticker": "WMT", "name": "Walmart（ウォルマート）", "weight": 0.0342 },
+        { "ticker": "CSCO", "name": "Cisco Systems（シスコシステムズ）", "weight": 0.0288 },
+        { "ticker": "PLTR", "name": "Palantir（パランティア）", "weight": 0.0276 },
+        { "ticker": "COST", "name": "Costco Wholesale（コストコ）", "weight": 0.0262 },
+        { "ticker": "LRCX", "name": "Lam Research（ラムリサーチ）", "weight": 0.0247 },
+        { "ticker": "AMAT", "name": "Applied Materials（アプライドマテリアルズ）", "weight": 0.0241 },
+        { "ticker": "NFLX", "name": "Netflix（ネットフリックス）", "weight": 0.0200 },
+        { "ticker": "PANW", "name": "Palo Alto Networks（パロアルトネットワークス）", "weight": 0.0199 }
+      ]
+    },
+    {
+      "key": "Nikkei225",
+      "label": "日経平均株価（日経225）",
+      "matchNamePattern": "日経平均|ニッケイ225|NIKKEI.?225|\\bN225\\b",
+      "holdings": [
+        { "ticker": "9983.T", "name": "ファーストリテイリング", "weight": 0.1050 },
+        { "ticker": "8035.T", "name": "東京エレクトロン", "weight": 0.0600 },
+        { "ticker": "9984.T", "name": "ソフトバンクグループ", "weight": 0.0450 },
+        { "ticker": "6857.T", "name": "アドバンテスト", "weight": 0.0400 },
+        { "ticker": "6146.T", "name": "ディスコ", "weight": 0.0300 },
+        { "ticker": "6762.T", "name": "TDK", "weight": 0.0200 },
+        { "ticker": "4543.T", "name": "テルモ", "weight": 0.0180 },
+        { "ticker": "6954.T", "name": "ファナック", "weight": 0.0170 },
+        { "ticker": "9433.T", "name": "KDDI", "weight": 0.0170 },
+        { "ticker": "4063.T", "name": "信越化学工業", "weight": 0.0170 },
+        { "ticker": "6367.T", "name": "ダイキン工業", "weight": 0.0160 },
+        { "ticker": "6920.T", "name": "レーザーテック", "weight": 0.0150 },
+        { "ticker": "7011.T", "name": "三菱重工業", "weight": 0.0140 },
+        { "ticker": "7974.T", "name": "任天堂", "weight": 0.0140 },
+        { "ticker": "6758.T", "name": "ソニーグループ", "weight": 0.0130 },
+        { "ticker": "7741.T", "name": "HOYA", "weight": 0.0130 },
+        { "ticker": "6971.T", "name": "京セラ", "weight": 0.0120 },
+        { "ticker": "9843.T", "name": "ニトリホールディングス", "weight": 0.0110 },
+        { "ticker": "7453.T", "name": "良品計画", "weight": 0.0100 },
+        { "ticker": "6098.T", "name": "リクルートホールディングス", "weight": 0.0100 },
+        { "ticker": "OTHERS_NIKKEI225", "name": "その他日経平均構成銘柄（約205銘柄）", "weight": 0.5030 }
       ]
     }
   ]

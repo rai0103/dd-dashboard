@@ -34,15 +34,22 @@ function normalizeText(s: string): string {
 }
 
 function matchFund(holding: { name: string; category: string }, funds: FundEntry[]): FundEntry | null {
-  for (const fund of funds) {
-    if (fund.matchCategories?.includes(holding.category)) return fund;
-  }
+  // 銘柄名での判定（S&P500トップ20等の集中投資型ファンドを、より汎用的なカテゴリー一致より先に判定するため）を、
+  // カテゴリー一致より優先する。カテゴリーだけが同じ「本家指数」ファンド（例：eMAXIS Slim S&P500）は、
+  // 名前に個別ファンドのパターンが無いので、後段のカテゴリー一致にそのままフォールバックする。
   const normalizedName = normalizeText(holding.name);
   for (const fund of funds) {
     if (fund.matchNamePattern && new RegExp(fund.matchNamePattern, "i").test(normalizedName)) return fund;
   }
+  for (const fund of funds) {
+    if (fund.matchCategories?.includes(holding.category)) return fund;
+  }
   return null;
 }
+
+// ゴールド（GLD・各種「ゴールドプラス」系ファンドのゴールド部分など）は銘柄ごとに分ける意味がないため、
+// 保有ベヒクルによらず「ゴールド」1行にまとめて集計する。
+const GOLD_ROW_KEY = "category:ゴールド";
 
 // 分解後の構成銘柄と、個別直接保有の銘柄を同一ティッカーとして合算できるよう、既知ティッカーの集合を作っておく。
 const ALL_TICKERS = new Map<string, string>();
@@ -82,6 +89,10 @@ export function computeRealHoldingsRanking(holdings: { name: string; category: s
 
   for (const h of holdings) {
     if (!(h.amount > 0)) continue;
+    if (h.category === "ゴールド") {
+      addRow(GOLD_ROW_KEY, "ゴールド", null, h.name, null, h.amount);
+      continue;
+    }
     const fund = matchFund(h, funds);
     if (fund) {
       for (const c of fund.holdings) {
