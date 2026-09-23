@@ -20,8 +20,9 @@ export const SYNC_KEYS = [
 ] as const;
 
 const SYNC_API_URL = "https://stock-prices.shinichiogasawara0103.workers.dev/sync";
-// 個人利用の簡易パスコード（本人のみが使う前提。公開静的サイトのバンドルに含まれるため機密情報ではない）。
-const SYNC_TOKEN = "_lqcQ601gIYh2OKb-af62BXWcugyDJss";
+// 個人利用の簡易パスコード。ビルド時にNEXT_PUBLIC_SYNC_TOKENから埋め込む（.env.local・CIのリポジトリシークレットで設定、
+// git管理下には置かない）。静的サイトのJSバンドルには結局平文で含まれるため機密情報ではないが、リポジトリの検索性を避けるため。
+const SYNC_TOKEN = process.env.NEXT_PUBLIC_SYNC_TOKEN || "";
 
 const LOCAL_UPDATED_AT_KEY = "dd_sync_local_updated_at";
 const LAST_SYNCED_AT_KEY = "dd_sync_last_synced_at";

@@ -36,6 +36,7 @@ jobs:
         env:
           NODE_ENV: production
           DEPLOY_TARGET: github-pages
+          NEXT_PUBLIC_SYNC_TOKEN: ${{ secrets.NEXT_PUBLIC_SYNC_TOKEN }}
 
       - uses: actions/configure-pages@v5
 
