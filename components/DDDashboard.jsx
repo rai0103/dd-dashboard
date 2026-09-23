@@ -9,6 +9,7 @@ import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, 
 import { storage } from "@/lib/storage";
 import { pullSyncAndApply, pushSyncNow, scheduleSyncPush, getLastSyncedAt } from "@/lib/sync";
 import { parseInvestmentExcel, computeOwnAssetDrawdown, computeBenchmarkCAGR, simulateDcaBenchmark, simulateLumpSumBenchmark } from "@/lib/investmentPerformance";
+import { computeRealHoldingsRanking } from "@/lib/realHoldingsRanking";
 
 // Cloudflare Worker（当日のVOO/QQQ終値を返す。SP500はここでは扱わず引き続きCSV取り込み/直接入力で更新する）のエンドポイント。
 // デプロイ先のURLに置き換えてください。
@@ -2343,6 +2344,64 @@ function PortfolioTableContent({ view, holdings, onEditHolding, onDeleteHolding 
   );
 }
 
+// ETF・投資信託を構成銘柄まで分解し、個別直接保有分と合算した「実質保有額」でランキング表示する。
+// 行クリックで「どのファンド経由でいくら」の内訳を展開する。構成データ未整備のファンドは下部に別掲する。
+function RealHoldingsRankingContent({ holdings }) {
+  const result = useMemo(() => computeRealHoldingsRanking(holdings), [holdings]);
+  const [expandedKey, setExpandedKey] = useState(null);
+  return (
+    <div>
+      <div className="text-[11px] mb-4 leading-relaxed" style={{ color: C.textDim }}>
+        ETF・投資信託を構成銘柄まで分解し、個別直接保有分と合算した実質保有額のランキングです。構成比率は{result.asOf}時点の概算値（{result.source}）。{result.note}
+      </div>
+      <div className="flex flex-col gap-1">
+        {result.ranking.map((r, i) => {
+          const isOpen = expandedKey === r.key;
+          const sortedBreakdown = [...r.breakdown].sort((a, b) => b.amount - a.amount);
+          return (
+            <div key={r.key} className="rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
+              <button onClick={() => setExpandedKey(isOpen ? null : r.key)} className="w-full flex flex-col gap-1 px-3 py-2 text-left md:flex-row md:items-center md:gap-2" style={{ background: "transparent", border: "none", cursor: "pointer" }}>
+                <div className="flex items-center gap-2 min-w-0 md:flex-1">
+                  <span className="mono text-[10px] w-5 text-right shrink-0" style={{ color: C.textDim }}>{i + 1}</span>
+                  <span className="text-xs font-medium min-w-0 truncate">{r.displayName}{r.ticker && <span className="ml-1 mono" style={{ color: C.textDim }}>({r.ticker})</span>}</span>
+                </div>
+                <div className="flex items-center justify-end gap-2 shrink-0 pl-7 md:pl-0">
+                  <span className="mono text-xs shrink-0 text-right" style={{ width: 96 }}>¥{r.total.toLocaleString()}</span>
+                  <span className="mono text-xs shrink-0 text-right" style={{ width: 48, color: C.teal }}>{r.pct}%</span>
+                  <ChevronRight size={13} style={{ transform: isOpen ? "rotate(90deg)" : "none", transition: "transform 0.15s", color: C.textDim, flexShrink: 0 }} />
+                </div>
+              </button>
+              {isOpen && (
+                <div className="px-3 pb-2 pt-1 flex flex-col gap-1" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+                  {sortedBreakdown.map((b, bi) => (
+                    <div key={bi} className="flex items-center justify-between gap-2 text-[11px]" style={{ color: C.textMuted }}>
+                      <span className="truncate">{b.fundLabel ? `${b.via}（${b.fundLabel}）経由` : `${b.via}（直接保有）`}</span>
+                      <span className="mono shrink-0">¥{Math.round(b.amount).toLocaleString()}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {result.unmatched.length > 0 && (
+        <div className="mt-5">
+          <div className="text-xs font-semibold mb-1.5" style={{ color: C.textDim }}>未対応（構成比率データなし・分解せずそのまま1銘柄として計上）</div>
+          <div className="flex flex-col gap-1">
+            {result.unmatched.map((u) => (
+              <div key={u.name} className="flex items-center justify-between gap-2 text-[11px] px-3 py-1.5 rounded" style={{ background: C.panel2, color: C.textMuted }}>
+                <span className="truncate">{u.name}<span className="ml-1" style={{ color: C.textDim }}>（{u.category}）</span></span>
+                <span className="mono shrink-0">¥{Math.round(u.amount).toLocaleString()}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 const AXIS_TICKS = [0, 20, 40, 60, 80, 100];
 function DDTableContent({ modelRow, modelRows = MODEL_ROWS, holdings }) {
   const rankLabels = useMemo(() => rankCategoryLabels(holdings), [holdings]);
@@ -3924,7 +3983,7 @@ function MobileChartPage({ d, onZoom }) {
     </div>
   );
 }
-function MobilePortfolioPage({ pieView, setPieView, holdings, onOpen, dateLabel }) {
+function MobilePortfolioPage({ pieView, setPieView, holdings, onOpen, onOpenRealHoldingsRanking, dateLabel }) {
   return (
     <div className="p-3 flex flex-col gap-2 h-full">
       <div className="flex items-center justify-between gap-2 shrink-0">
@@ -3932,6 +3991,7 @@ function MobilePortfolioPage({ pieView, setPieView, holdings, onOpen, dateLabel 
           {[{ k: "category", l: "カテゴリー別" }, { k: "currency", l: "為替別" }, { k: "rank", l: "A〜Eクラス" }, { k: "owner", l: "口座別" }].map((t) => (
             <button key={t.k} onClick={() => setPieView(t.k)} className="text-[11px] px-2 py-1 rounded" style={{ color: pieView === t.k ? C.bg : C.textMuted, background: pieView === t.k ? C.teal : C.panel2, fontWeight: pieView === t.k ? 700 : 400, border: "none", cursor: "pointer" }}>{t.l}</button>
           ))}
+          <button onClick={onOpenRealHoldingsRanking} title="実質保有銘柄ランキング" className="flex items-center p-1 rounded" style={{ background: C.panel2, border: "none", cursor: "pointer" }}><Layers size={13} style={{ color: C.textDim }} /></button>
         </div>
         {dateLabel && <span className="text-[9px] whitespace-nowrap" style={{ color: C.textDim }}>{dateLabel} 時点</span>}
       </div>
@@ -4988,6 +5048,7 @@ export default function DDDashboard() {
       {modal?.type === "ddChart" && <FullScreenModal title={chartSourceTitle(chartSource)} onClose={() => setModal(null)}><DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} bothChartData={bothChartData} chartSource={chartSource} setChartSource={setChartSource} /></FullScreenModal>}
       {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} vooQqqSeries={vooQqqSeries} onAppendVooQqq={handleAppendVooQqq} onImportVooQqq={handleImportVooQqq} onResetVooQqqField={handleResetVooQqqField} />}
       {modal?.type === "checkpointSettings" && <FullScreenModal title="チェックポイント設定" onClose={() => setModal(null)}><CheckpointSettingsContent checkpoints={checkpoints} onCheckpointChange={handleCheckpointChange} holdings={holdings} /></FullScreenModal>}
+      {modal?.type === "realHoldingsRanking" && <FullScreenModal title="実質保有銘柄ランキング" onClose={() => setModal(null)}><RealHoldingsRankingContent holdings={combinedHoldings} /></FullScreenModal>}
       {modal?.type === "summary" && <FullScreenModal title="詳細サマリー出力（AI相談用）" onClose={() => setModal(null)}><SummaryModalContent d={d} dVoo={dVoo} dQqq={dQqq} holdings={holdings} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} blocks={blocks} rankLabels={rankLabels} lifecycle={lifecycle} onLifecycleChange={handleLifecycleChange} fixedPositions={fixedPositions} onFixedPositionChange={handleFixedPositionChange} checkpoints={checkpoints} prevSnapshot={prevSnapshot} onSaveSnapshot={handleSaveSnapshot} /></FullScreenModal>}
       {modal?.type === "mobileChartZoom" && <MobileChartZoomModal onClose={() => setModal(null)} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} bothChartData={bothChartData} chartSource={chartSource} setChartSource={setChartSource} isRealDevice={isMobileAuto} />}
 
@@ -5052,7 +5113,7 @@ export default function DDDashboard() {
               { key: "ath", label: "評価額/ATH", icon: TrendingUp, content: <MobileAthPage d={d} dVoo={dVoo} dQqq={dQqq} /> },
               { key: "speed", label: "経過日数", icon: Clock, content: <MobileSpeedPage dVoo={dVoo} dQqq={dQqq} speedAlertInstrument={speedAlertInstrument} onChangeSpeedAlertInstrument={setSpeedAlertInstrument} onOpenSpeedAlert={() => setModal({ type: "speedAlert" })} /> },
               { key: "chart", label: "チャート", icon: Activity, content: <MobileChartPage d={d} onZoom={() => setModal({ type: "mobileChartZoom" })} /> },
-              { key: "portfolio", label: "構成", icon: Layers, content: <MobilePortfolioPage pieView={pieView} setPieView={setPieView} holdings={combinedHoldings} onOpen={() => setModal({ type: "portfolio" })} dateLabel={holdingsDateLabel} /> },
+              { key: "portfolio", label: "構成", icon: Layers, content: <MobilePortfolioPage pieView={pieView} setPieView={setPieView} holdings={combinedHoldings} onOpen={() => setModal({ type: "portfolio" })} onOpenRealHoldingsRanking={() => setModal({ type: "realHoldingsRanking" })} dateLabel={holdingsDateLabel} /> },
               { key: "diff", label: "配分乖離", icon: ListChecks, content: <MobileDiffPage modelOverride={modelOverride} setModelOverride={setModelOverride} d={d} currentHoldingPct={currentHoldingPct} currentHoldingAmount={currentHoldingAmount} effectiveModelRow={effectiveModelRow} rankLabels={rankLabels} blocks={blocks} onOpenRank={(rank) => setModal({ type: "rank", rank })} onOpenDDTable={() => setModal({ type: "ddTable" })} dateLabel={holdingsDateLabel} /> },
               { key: "analysis", label: "現状分析", icon: Info, content: <MobileAnalysisPage analysisText={analysisText} checkpointResults={checkpointResults} onOpenCheckpointSettings={() => setModal({ type: "checkpointSettings" })} /> },
             ]}
@@ -5174,7 +5235,7 @@ export default function DDDashboard() {
           <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 4, flex: 1, minHeight: 0 }}>
             {/* bottom-left: portfolio pie */}
             <div style={{ minHeight: 0 }}>
-              <Panel title={<>ポートフォリオ構成{holdingsDateSuffix}</>} action={<div className="flex gap-1">{[{ k: "category", l: "カテゴリー別" }, { k: "currency", l: "為替別" }, { k: "rank", l: "A〜Eクラス" }, { k: "owner", l: "口座別" }].map((t) => (<button key={t.k} onClick={() => setPieView(t.k)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: pieView === t.k ? C.bg : C.textMuted, background: pieView === t.k ? C.teal : "transparent", fontWeight: pieView === t.k ? 700 : 400 }}>{t.l}</button>))}</div>} className="h-full">
+              <Panel title={<>ポートフォリオ構成{holdingsDateSuffix}</>} action={<div className="flex items-center gap-1">{[{ k: "category", l: "カテゴリー別" }, { k: "currency", l: "為替別" }, { k: "rank", l: "A〜Eクラス" }, { k: "owner", l: "口座別" }].map((t) => (<button key={t.k} onClick={() => setPieView(t.k)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: pieView === t.k ? C.bg : C.textMuted, background: pieView === t.k ? C.teal : "transparent", fontWeight: pieView === t.k ? 700 : 400 }}>{t.l}</button>))}<button onClick={() => setModal({ type: "realHoldingsRanking" })} title="実質保有銘柄ランキング（ETF・投信を構成銘柄まで分解して合算）" style={{ background: "transparent", border: "none", cursor: "pointer" }}><Layers size={14} style={{ color: C.textDim }} /></button></div>} className="h-full">
                 <PortfolioPie view={pieView} holdings={combinedHoldings} onOpen={() => setModal({ type: "portfolio" })} />
               </Panel>
             </div>

@@ -1,0 +1,89 @@
+{
+  "asOf": "2026-09-23",
+  "source": "stockanalysis.com（VOO/QQQの保有構成）、MicroSectors FANG+ ETN(FNGS)の保有構成をもとにした概算値",
+  "note": "構成比率は指数連動ETF等の上位保有銘柄をもとにした概算値。S&P500・Nasdaq100は上位25銘柄＋その他をまとめて計上している。実際の比率は日々変動し、指数の定期リバランスでも変わるため、定期的な手動更新が必要。",
+  "funds": [
+    {
+      "key": "FANG+",
+      "label": "FANG+（NYSE FANG+指数）",
+      "matchNamePattern": "FANG",
+      "holdings": [
+        { "ticker": "MU", "name": "Micron Technology（マイクロン・テクノロジー）", "weight": 0.1075 },
+        { "ticker": "AVGO", "name": "Broadcom（ブロードコム）", "weight": 0.1031 },
+        { "ticker": "NVDA", "name": "NVIDIA（エヌビディア）", "weight": 0.1019 },
+        { "ticker": "AMZN", "name": "Amazon（アマゾン）", "weight": 0.1011 },
+        { "ticker": "GOOGL", "name": "Alphabet（グーグル）", "weight": 0.0999 },
+        { "ticker": "PLTR", "name": "Palantir（パランティア）", "weight": 0.0999 },
+        { "ticker": "AAPL", "name": "Apple（アップル）", "weight": 0.0991 },
+        { "ticker": "MSFT", "name": "Microsoft（マイクロソフト）", "weight": 0.0987 },
+        { "ticker": "META", "name": "Meta Platforms（メタ）", "weight": 0.0968 },
+        { "ticker": "NFLX", "name": "Netflix（ネットフリックス）", "weight": 0.0921 }
+      ]
+    },
+    {
+      "key": "SP500",
+      "label": "S&P500",
+      "matchCategories": ["SP500"],
+      "holdings": [
+        { "ticker": "NVDA", "name": "NVIDIA（エヌビディア）", "weight": 0.0808 },
+        { "ticker": "AAPL", "name": "Apple（アップル）", "weight": 0.0703 },
+        { "ticker": "MSFT", "name": "Microsoft（マイクロソフト）", "weight": 0.0570 },
+        { "ticker": "AMZN", "name": "Amazon（アマゾン）", "weight": 0.0384 },
+        { "ticker": "GOOGL", "name": "Alphabet Class A（グーグル）", "weight": 0.0301 },
+        { "ticker": "AVGO", "name": "Broadcom（ブロードコム）", "weight": 0.0265 },
+        { "ticker": "GOOG", "name": "Alphabet Class C（グーグル）", "weight": 0.0240 },
+        { "ticker": "META", "name": "Meta Platforms（メタ）", "weight": 0.0190 },
+        { "ticker": "MU", "name": "Micron Technology（マイクロン・テクノロジー）", "weight": 0.0163 },
+        { "ticker": "TSLA", "name": "Tesla（テスラ）", "weight": 0.0157 },
+        { "ticker": "JPM", "name": "JPMorgan Chase（JPモルガン・チェース）", "weight": 0.0144 },
+        { "ticker": "BRK.B", "name": "Berkshire Hathaway（バークシャー・ハサウェイ）", "weight": 0.0140 },
+        { "ticker": "LLY", "name": "Eli Lilly（イーライリリー）", "weight": 0.0138 },
+        { "ticker": "AMD", "name": "Advanced Micro Devices（AMD）", "weight": 0.0116 },
+        { "ticker": "XOM", "name": "ExxonMobil（エクソンモービル）", "weight": 0.0101 },
+        { "ticker": "JNJ", "name": "Johnson & Johnson（ジョンソン・エンド・ジョンソン）", "weight": 0.0097 },
+        { "ticker": "V", "name": "Visa（ビザ）", "weight": 0.0093 },
+        { "ticker": "MA", "name": "Mastercard（マスターカード）", "weight": 0.0072 },
+        { "ticker": "WMT", "name": "Walmart（ウォルマート）", "weight": 0.0069 },
+        { "ticker": "ABBV", "name": "AbbVie（アッヴィ）", "weight": 0.0068 },
+        { "ticker": "INTC", "name": "Intel（インテル）", "weight": 0.0067 },
+        { "ticker": "CSCO", "name": "Cisco Systems（シスコシステムズ）", "weight": 0.0066 },
+        { "ticker": "PLTR", "name": "Palantir（パランティア）", "weight": 0.0065 },
+        { "ticker": "COST", "name": "Costco Wholesale（コストコ）", "weight": 0.0063 },
+        { "ticker": "BAC", "name": "Bank of America（バンク・オブ・アメリカ）", "weight": 0.0061 },
+        { "ticker": "OTHERS_SP500", "name": "その他S&P500構成銘柄（約475銘柄）", "weight": 0.4859 }
+      ]
+    },
+    {
+      "key": "Nasdaq",
+      "label": "Nasdaq100",
+      "matchCategories": ["Nasdaq"],
+      "holdings": [
+        { "ticker": "NVDA", "name": "NVIDIA（エヌビディア）", "weight": 0.0852 },
+        { "ticker": "AAPL", "name": "Apple（アップル）", "weight": 0.0782 },
+        { "ticker": "MSFT", "name": "Microsoft（マイクロソフト）", "weight": 0.0581 },
+        { "ticker": "MU", "name": "Micron Technology（マイクロン・テクノロジー）", "weight": 0.0501 },
+        { "ticker": "AMZN", "name": "Amazon（アマゾン）", "weight": 0.0432 },
+        { "ticker": "AMD", "name": "Advanced Micro Devices（AMD）", "weight": 0.0399 },
+        { "ticker": "GOOGL", "name": "Alphabet Class A（グーグル）", "weight": 0.0322 },
+        { "ticker": "META", "name": "Meta Platforms（メタ）", "weight": 0.0312 },
+        { "ticker": "GOOG", "name": "Alphabet Class C（グーグル）", "weight": 0.0297 },
+        { "ticker": "TSLA", "name": "Tesla（テスラ）", "weight": 0.0288 },
+        { "ticker": "AVGO", "name": "Broadcom（ブロードコム）", "weight": 0.0268 },
+        { "ticker": "INTC", "name": "Intel（インテル）", "weight": 0.0239 },
+        { "ticker": "WMT", "name": "Walmart（ウォルマート）", "weight": 0.0228 },
+        { "ticker": "CSCO", "name": "Cisco Systems（シスコシステムズ）", "weight": 0.0189 },
+        { "ticker": "PLTR", "name": "Palantir（パランティア）", "weight": 0.0178 },
+        { "ticker": "COST", "name": "Costco Wholesale（コストコ）", "weight": 0.0174 },
+        { "ticker": "LRCX", "name": "Lam Research（ラムリサーチ）", "weight": 0.0157 },
+        { "ticker": "AMAT", "name": "Applied Materials（アプライドマテリアルズ）", "weight": 0.0154 },
+        { "ticker": "NFLX", "name": "Netflix（ネットフリックス）", "weight": 0.0132 },
+        { "ticker": "PANW", "name": "Palo Alto Networks（パロアルトネットワークス）", "weight": 0.0130 },
+        { "ticker": "SNDK", "name": "Sandisk（サンディスク）", "weight": 0.0116 },
+        { "ticker": "TXN", "name": "Texas Instruments（テキサス・インスツルメンツ）", "weight": 0.0106 },
+        { "ticker": "CRWD", "name": "CrowdStrike（クラウドストライク）", "weight": 0.0106 },
+        { "ticker": "KLAC", "name": "KLA（KLA）", "weight": 0.0101 },
+        { "ticker": "OTHERS_NASDAQ100", "name": "その他Nasdaq100構成銘柄（約76銘柄）", "weight": 0.2956 }
+      ]
+    }
+  ]
+}
