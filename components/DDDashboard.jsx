@@ -2358,7 +2358,7 @@ function DDTableContent({ modelRow, modelRows = MODEL_ROWS, holdings }) {
       </div>
 
       <div className="flex items-center gap-3 mb-1">
-        <div style={{ width: 96, flexShrink: 0 }} />
+        <div className="hidden md:block" style={{ width: 96, flexShrink: 0 }} />
         <div className="flex-1 relative" style={{ height: 14 }}>
           {AXIS_TICKS.map((t) => (
             <span key={t} className="absolute mono text-[9px]" style={{ left: `${t}%`, top: 0, transform: t === 100 ? "translateX(-100%)" : t === 0 ? "translateX(0)" : "translateX(-50%)", color: C.textDim }}>{t}%</span>
@@ -2369,17 +2369,27 @@ function DDTableContent({ modelRow, modelRows = MODEL_ROWS, holdings }) {
       {modelRows.map((r) => {
         const isCurrent = r.label === modelRow.label;
         return (
-          <div key={r.label} className="flex items-center gap-3 mb-1.5">
-            <div className="mono text-xs text-right shrink-0 whitespace-nowrap" style={{ width: 96, color: isCurrent ? C.teal : C.textMuted, fontWeight: isCurrent ? 700 : 400 }}>
+          <div key={r.label} className="flex flex-col gap-1 mb-3 md:flex-row md:items-center md:gap-3 md:mb-1.5">
+            <div className="mono text-xs md:text-right shrink-0 whitespace-nowrap md:w-24" style={{ color: isCurrent ? C.teal : C.textMuted, fontWeight: isCurrent ? 700 : 400 }}>
               {r.label}{isCurrent && " ←現在"}
             </div>
-            <div className="flex-1 relative flex rounded overflow-hidden" style={{ height: 22, background: C.panel2, outline: isCurrent ? `1.5px solid ${C.teal}` : "none", outlineOffset: 1 }}>
+            <div className="flex-1 relative flex rounded overflow-hidden h-11 md:h-[22px]" style={{ background: C.panel2, outline: isCurrent ? `1.5px solid ${C.teal}` : "none", outlineOffset: 1 }}>
               {AXIS_TICKS.slice(1, -1).map((t) => (<div key={t} className="absolute top-0 bottom-0" style={{ left: `${t}%`, width: 1, background: C.borderSoft, opacity: 0.6 }} />))}
               {CATS.map((cat) => {
                 const v = r[cat];
                 return (
-                  <div key={cat} title={`${cat}（${rankLabels[cat]}）: ${v}%`} className="flex items-center justify-center mono font-semibold" style={{ width: `${v}%`, background: rankColor(cat), color: C.bg, fontSize: 10 }}>
-                    {v >= 8 ? `${cat} ${v}%` : ""}
+                  <div key={cat} title={`${cat}（${rankLabels[cat]}）: ${v}%`} className="flex items-center justify-center mono font-semibold" style={{ width: `${v}%`, background: rankColor(cat), color: C.bg }}>
+                    {/* PC幅：従来通り横一列（8%未満は省略） */}
+                    <span className="hidden md:inline" style={{ fontSize: 10 }}>{v >= 8 ? `${cat} ${v}%` : ""}</span>
+                    {/* スマホ幅：5%未満は省略、狭い区間はラベルを縦2行に分けて幅を節約 */}
+                    <span className="md:hidden leading-tight" style={{ fontSize: v >= 12 ? 10 : 9 }}>
+                      {v < 5 ? "" : v < 12 ? (
+                        <span className="flex flex-col items-center">
+                          <span>{cat}</span>
+                          <span>{v}%</span>
+                        </span>
+                      ) : `${cat} ${v}%`}
+                    </span>
                   </div>
                 );
               })}
