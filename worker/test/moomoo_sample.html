@@ -1,0 +1,45 @@
+<!doctype html>
+<!-- moomoo証券アプリ「口座」画面（保有銘柄一覧）を模したテスト用サンプル。数値は検証用の架空値
+     （IonQ 12株 × $45.48 = $545.76 は実画面の例に合わせている）。
+     純資産 ¥3,200,619 ＝（保有10銘柄 $20,050.31 ＋ 現金 $312.45）× moomoo側の換算レート 157.18 として整合させてある。scripts/test-broker-extract.mjs が画像化して使う。 -->
+<html lang="ja"><head><meta charset="utf-8">
+<style>
+  body { margin: 0; background: #0b0d12; color: #e8eaf0; font-family: -apple-system, "Hiragino Sans", "Yu Gothic", sans-serif; width: 390px; }
+  .top { padding: 14px 16px 10px; border-bottom: 1px solid #1c2029; }
+  .tabs { display: flex; gap: 18px; font-size: 15px; color: #8a90a0; margin-bottom: 14px; }
+  .tabs b { color: #fff; border-bottom: 2px solid #ff7a1a; padding-bottom: 4px; }
+  .label { font-size: 12px; color: #8a90a0; }
+  .nav { font-size: 26px; font-weight: 700; margin: 2px 0 6px; }
+  .sub { display: flex; gap: 24px; font-size: 12px; color: #8a90a0; }
+  .sub span b { color: #e8eaf0; font-weight: 600; margin-left: 4px; }
+  .sec { padding: 12px 16px 6px; font-size: 14px; font-weight: 700; display: flex; justify-content: space-between; }
+  .sec small { color: #8a90a0; font-weight: 400; }
+  .hdr, .row { display: grid; grid-template-columns: 1.25fr 1fr 1fr 0.95fr; padding: 0 16px; }
+  .hdr { font-size: 10.5px; color: #8a90a0; padding-bottom: 6px; border-bottom: 1px solid #1c2029; }
+  .hdr > div, .row > div { text-align: right; } .hdr > div:first-child, .row > div:first-child { text-align: left; }
+  .row { padding-top: 9px; padding-bottom: 9px; border-bottom: 1px solid #161a22; }
+  .n { font-size: 14px; font-weight: 600; } .c { font-size: 11px; color: #8a90a0; margin-top: 3px; }
+  .v { font-size: 13.5px; } .q { font-size: 11px; color: #8a90a0; margin-top: 3px; }
+  .up { color: #1fbf75; } .dn { color: #f04b55; }
+</style></head>
+<body>
+  <div class="top">
+    <div class="tabs"><b>口座</b><span>注文</span><span>履歴</span></div>
+    <div class="label">純資産 (JPY)</div>
+    <div class="nav">3,200,619</div>
+    <div class="sub"><span>当日損益<b class="up">+18,402</b></span></div>
+    <div class="sub" style="margin-top:6px"><span>証券時価 (USD)<b>20,050.31</b></span><span>現金 (USD)<b>312.45</b></span></div>
+  </div>
+  <div class="sec">保有銘柄 (10) <small>USD</small></div>
+  <div class="hdr"><div>銘柄</div><div>時価評価額<br>数量</div><div>現在値<br>取得単価</div><div>損益<br>損益率</div></div>
+  <div class="row"><div><div class="n">IonQ</div><div class="c">IONQ</div></div><div><div class="v">545.76</div><div class="q">12</div></div><div><div class="v">45.48</div><div class="q">38.20</div></div><div><div class="v up">+87.36</div><div class="q up">+19.06%</div></div></div>
+  <div class="row"><div><div class="n">Meta Platforms</div><div class="c">META</div></div><div><div class="v">2,256.90</div><div class="q">3</div></div><div><div class="v">752.30</div><div class="q">612.40</div></div><div><div class="v up">+419.70</div><div class="q up">+22.84%</div></div></div>
+  <div class="row"><div><div class="n">NVIDIA</div><div class="c">NVDA</div></div><div><div class="v">5,614.50</div><div class="q">25</div></div><div><div class="v">224.58</div><div class="q">131.75</div></div><div><div class="v up">+2,320.75</div><div class="q up">+70.46%</div></div></div>
+  <div class="row"><div><div class="n">Palantir</div><div class="c">PLTR</div></div><div><div class="v">2,739.75</div><div class="q">15</div></div><div><div class="v">182.65</div><div class="q">98.40</div></div><div><div class="v up">+1,263.75</div><div class="q up">+85.62%</div></div></div>
+  <div class="row"><div><div class="n">Rocket Lab</div><div class="c">RKLB</div></div><div><div class="v">2,324.80</div><div class="q">40</div></div><div><div class="v">58.12</div><div class="q">24.60</div></div><div><div class="v up">+1,340.80</div><div class="q up">+136.26%</div></div></div>
+  <div class="row"><div><div class="n">SoFi Technologies</div><div class="c">SOFI</div></div><div><div class="v">1,736.40</div><div class="q">60</div></div><div><div class="v">28.94</div><div class="q">15.30</div></div><div><div class="v up">+818.40</div><div class="q up">+89.15%</div></div></div>
+  <div class="row"><div><div class="n">Direxion Semi Bull 3X</div><div class="c">SOXL</div></div><div><div class="v">1,425.00</div><div class="q">20</div></div><div><div class="v">71.25</div><div class="q">38.90</div></div><div><div class="v up">+647.00</div><div class="q up">+83.17%</div></div></div>
+  <div class="row"><div><div class="n">SPCH</div><div class="c">SPCH</div></div><div><div class="v">324.00</div><div class="q">10</div></div><div><div class="v">32.40</div><div class="q">28.10</div></div><div><div class="v up">+43.00</div><div class="q up">+15.30%</div></div></div>
+  <div class="row"><div><div class="n">SpaceX</div><div class="c">SPCX</div></div><div><div class="v">892.20</div><div class="q">6</div></div><div><div class="v">148.70</div><div class="q">120.00</div></div><div><div class="v up">+172.20</div><div class="q up">+23.92%</div></div></div>
+  <div class="row"><div><div class="n">Tesla</div><div class="c">TSLA</div></div><div><div class="v">2,191.00</div><div class="q">5</div></div><div><div class="v">438.20</div><div class="q">251.80</div></div><div><div class="v up">+932.00</div><div class="q up">+74.03%</div></div></div>
+</body></html>

@@ -10,6 +10,7 @@ import { storage } from "@/lib/storage";
 import { pullSyncAndApply, pushSyncNow, scheduleSyncPush, getLastSyncedAt } from "@/lib/sync";
 import { parseInvestmentExcel, computeOwnAssetDrawdown, computeBenchmarkCAGR, simulateDcaBenchmark, simulateLumpSumBenchmark } from "@/lib/investmentPerformance";
 import { computeRealHoldingsRanking } from "@/lib/realHoldingsRanking";
+import { BROKERS, brokerByKey, extractionToPreviewRows, previewRowsToHoldings, replaceBrokerHoldings, aggregateLabelsReplacedByBrokers, exposureCurrency, rowValue, reconcileWithAccountTotal, isPlausibleBrokerRate } from "@/lib/brokerImport";
 import { buildStatsTable, computeMddHoldProbability, LOW_SAMPLE_N } from "@/lib/bottomScore";
 
 // Cloudflare Worker（当日のVOO/QQQ終値を返す。SP500はここでは扱わず引き続きCSV取り込み/直接入力で更新する）のエンドポイント。
@@ -2863,8 +2864,238 @@ function InstrumentPanel({ instrument, vooQqqSeries, fileName, fileMsg, onFileCh
   );
 }
 
-function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, source, holdings, onUpdateHoldings, onResetAndImportHoldings, onResetHoldings, holdingsSource, overrides, categoryDefaultRanks, onCategoryDefaultRankChange, vooQqqSeries, onAppendVooQqq, onImportVooQqq, onResetVooQqqField }) {
-  const [dataset, setDataset] = useState("voo"); // "voo" | "holdings"
+/* ---------------- 証券会社アプリのスクリーンショット取り込み ---------------- */
+// 画像はCloudflare Worker（/api/extract-holdings → Claude Vision）で読み取り、結果は必ずプレビューで確認・修正してから登録する。
+// 対応証券会社・登録ルールは lib/brokerImport.ts の BROKERS で管理する。
+const WORKER_BASE_URL = STOCK_PRICES_API_URL.replace(/\/api\/stock-prices$/, "");
+const WORKER_SYNC_TOKEN = process.env.NEXT_PUBLIC_SYNC_TOKEN || "";
+const SCREENSHOT_MAX_EDGE = 2400; // 長辺の上限（px）。スマホのスクショは縦長なので、文字が潰れない程度に縮小して送る
+function readImageAsJpegBase64(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, SCREENSHOT_MAX_EDGE / Math.max(img.width, img.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
+      URL.revokeObjectURL(url);
+      resolve({ name: file.name, mediaType: "image/jpeg", data: dataUrl.split(",")[1], previewUrl: dataUrl });
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error(`${file.name} を画像として読み込めませんでした`)); };
+    img.src = url;
+  });
+}
+const numOrNull = (v) => { if (v === "" || v == null) return null; const n = parseFloat(String(v).replace(/[,$¥\s]/g, "")); return Number.isFinite(n) ? n : null; };
+const fmtNum = (v, digits = 2) => (v == null ? "" : String(Math.round(v * 10 ** digits) / 10 ** digits));
+
+function BrokerScreenshotImport({ holdings, virtualAggregateLabels, onRegister }) {
+  const [brokerKey, setBrokerKey] = useState(BROKERS[0].key);
+  const broker = brokerByKey(brokerKey);
+  const [images, setImages] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [rows, setRows] = useState(null);
+  const [notes, setNotes] = useState("");
+  const [usdJpy, setUsdJpy] = useState("");
+  const [fxSource, setFxSource] = useState(null);
+  const [marketRate, setMarketRate] = useState(null); // Twelve Dataから取得した市場レート
+  const [accountTotal, setAccountTotal] = useState(null); // スクショに表示された純資産 { account_total, account_total_currency }
+  const [doneMsg, setDoneMsg] = useState(null);
+
+  // 円換算に使うUSD/JPY。Worker経由で取得し、取れなければ手入力してもらう。
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${WORKER_BASE_URL}/api/fx`).then((r) => r.json()).then((j) => {
+      if (cancelled || !j?.rate) return;
+      setMarketRate(j.rate);
+      setUsdJpy(String(Math.round(j.rate * 100) / 100));
+      setFxSource(j.timestamp ? new Date(j.timestamp * 1000).toLocaleString("ja-JP") : "取得済み");
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  const replacedCount = holdings.filter((h) => h.broker === broker.key || (!h.broker && broker.aggregateNames.includes(h.name))).length;
+  const hasVirtualAggregate = broker.aggregateNames.some((n) => virtualAggregateLabels.has(n));
+
+  async function handleFiles(e) {
+    const files = [...(e.target.files || [])];
+    e.target.value = "";
+    if (!files.length) return;
+    setError(null); setDoneMsg(null);
+    try {
+      const loaded = await Promise.all(files.map(readImageAsJpegBase64));
+      setImages((prev) => [...prev, ...loaded].slice(0, 10));
+    } catch (err) { setError(err.message); }
+  }
+
+  async function handleExtract() {
+    if (!images.length) return;
+    setLoading(true); setError(null); setDoneMsg(null);
+    try {
+      const res = await fetch(`${WORKER_BASE_URL}/api/extract-holdings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Sync-Token": WORKER_SYNC_TOKEN },
+        body: JSON.stringify({ broker: broker.key, images: images.map(({ mediaType, data }) => ({ mediaType, data })) }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j.error || `読み取りに失敗しました（HTTP ${res.status}）`);
+      const preview = extractionToPreviewRows(j.extraction, broker);
+      if (!preview.length) throw new Error("画像から保有銘柄を読み取れませんでした。保有銘柄一覧が写っているか確認してください。");
+      setRows(preview);
+      setNotes(j.extraction.notes || "");
+      const total = { account_total: j.extraction.account_total, account_total_currency: j.extraction.account_total_currency };
+      setAccountTotal(total);
+      const rec = reconcileWithAccountTotal(preview, marketRate, total);
+      if (rec && isPlausibleBrokerRate(rec.impliedRate, marketRate)) {
+        setUsdJpy(String(Math.round(rec.impliedRate * 10000) / 10000));
+        setFxSource(`スクショの純資産から逆算した${broker.label}の換算レート（市場レート ${marketRate ? marketRate.toFixed(2) : "—"}）`);
+      }
+    } catch (err) { setError(err.message); } finally { setLoading(false); }
+  }
+
+  const updateRow = (key, field, value) => setRows((prev) => prev.map((r) => (r.key === key ? { ...r, [field]: value } : r)));
+  const addRow = () => setRows((prev) => [...(prev || []), { key: `manual-${Date.now()}`, include: true, name: "", code: "", quantity: null, marketValue: null, currentPrice: null, avgCost: null, valueCurrency: "USD", category: "個別（米）", rank: broker.defaultRank }]);
+
+  function handleRegister() {
+    const rate = numOrNull(usdJpy);
+    const { holdings: incoming, errors } = previewRowsToHoldings(rows, broker, rate, genId);
+    if (errors.length) { setError(errors.join(" / ")); return; }
+    if (!incoming.length) { setError("登録する銘柄がありません"); return; }
+    const total = incoming.reduce((s, h) => s + h.amount, 0);
+    const ok = window.confirm(`${broker.label}の既存エントリ${replacedCount}件${hasVirtualAggregate ? "（＋投資収支Excelの合算額）" : ""}を削除し、${incoming.length}銘柄（合計¥${total.toLocaleString()}）を登録します。よろしいですか？`);
+    if (!ok) return;
+    onRegister(broker, incoming);
+    setDoneMsg(`${incoming.length}銘柄を登録しました（合計¥${total.toLocaleString()}）。${broker.label}の合算エントリは置き換えられました。`);
+    setRows(null); setImages([]); setError(null);
+  }
+
+  const inputCls = "text-xs px-1.5 py-1 rounded mono w-full";
+  const inputStyle = { background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text };
+  const fieldLabel = (t) => <span className="text-[9px] block mb-0.5" style={{ color: C.textDim }}>{t}</span>;
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div>
+        <div className="text-[11px] mb-1" style={{ color: C.textDim }}>1. 証券会社を選択</div>
+        <div className="flex gap-2 flex-wrap">
+          {BROKERS.map((b) => (
+            <button key={b.key} onClick={() => { setBrokerKey(b.key); setRows(null); setImages([]); }} className="text-xs px-3 py-1.5 rounded" style={{ color: brokerKey === b.key ? C.bg : C.textMuted, background: brokerKey === b.key ? C.teal : "transparent", border: `1px solid ${brokerKey === b.key ? C.teal : C.borderSoft}`, fontWeight: brokerKey === b.key ? 700 : 400, cursor: "pointer" }}>{b.label}</button>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <div className="text-[11px] mb-1" style={{ color: C.textDim }}>2. スクリーンショットを選択・撮影（最大10枚）</div>
+        <p className="text-xs mb-2 leading-relaxed" style={{ color: C.textMuted }}>{broker.hint}</p>
+        <div className="flex gap-2 flex-wrap">
+          <label className="inline-flex items-center gap-2 text-xs px-3 py-2 rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.textMuted, cursor: "pointer" }}>
+            <Upload size={13} /> 画像を選択
+            <input type="file" accept="image/*" multiple onChange={handleFiles} style={{ display: "none" }} />
+          </label>
+          <label className="inline-flex items-center gap-2 text-xs px-3 py-2 rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.textMuted, cursor: "pointer" }}>
+            <Smartphone size={13} /> その場で撮影
+            <input type="file" accept="image/*" capture="environment" onChange={handleFiles} style={{ display: "none" }} />
+          </label>
+          {images.length > 0 && (
+            <button onClick={handleExtract} disabled={loading} className="inline-flex items-center gap-1.5 text-xs px-3 py-2 rounded" style={{ background: C.teal, color: C.bg, fontWeight: 700, border: "none", cursor: loading ? "default" : "pointer", opacity: loading ? 0.6 : 1 }}>
+              <RefreshCw size={13} className={loading ? "animate-spin" : ""} /> {loading ? "読み取り中…（数十秒かかります）" : `${images.length}枚を読み取る`}
+            </button>
+          )}
+        </div>
+        {images.length > 0 && (
+          <div className="flex gap-2 mt-2 flex-wrap">
+            {images.map((img, i) => (
+              <div key={i} className="relative">
+                <img src={img.previewUrl} alt={img.name} style={{ height: 96, borderRadius: 4, border: `1px solid ${C.borderSoft}` }} />
+                <button onClick={() => setImages((prev) => prev.filter((_, k) => k !== i))} title="この画像を外す" className="absolute" style={{ top: 2, right: 2, background: C.bg, border: "none", borderRadius: 999, padding: 1, cursor: "pointer" }}><X size={11} style={{ color: C.textMuted }} /></button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {error && <div className="text-xs leading-relaxed" style={{ color: C.rust }}>{error}</div>}
+      {doneMsg && <div className="text-xs leading-relaxed" style={{ color: C.teal }}>{doneMsg}</div>}
+
+      {rows && (
+        <div>
+          <div className="text-[11px] mb-1" style={{ color: C.textDim }}>3. 読み取り結果を確認・修正（読み取り誤りがあり得るため、必ず画面と見比べてください）</div>
+          {notes && <div className="text-[11px] mb-2 leading-relaxed" style={{ color: C.amber }}>読み取り時の注意：{notes}</div>}
+          <div className="flex items-end gap-2 mb-3 flex-wrap">
+            <div style={{ width: 120 }}>{fieldLabel("USD/JPY（円換算に使用）")}<input value={usdJpy} onChange={(e) => setUsdJpy(e.target.value)} inputMode="decimal" className={inputCls} style={inputStyle} /></div>
+            <span className="text-[10px]" style={{ color: C.textDim }}>{fxSource ? `${fxSource.startsWith("スクショ") ? fxSource : `自動取得（${fxSource}）`}・修正可` : "自動取得できませんでした。レートを入力してください"}</span>
+          </div>
+          {(() => {
+            const rec = accountTotal ? reconcileWithAccountTotal(rows, numOrNull(usdJpy), accountTotal) : null;
+            if (!rec) return <div className="text-[10px] mb-3" style={{ color: C.textDim }}>スクショから純資産（JPY）を読み取れなかったため、合計の照合はできません。</div>;
+            const abs = Math.abs(rec.diffJpy);
+            const color = abs <= 100 ? C.teal : Math.abs(rec.diffPct) <= 1 ? C.amber : C.rust;
+            const plausible = isPlausibleBrokerRate(rec.impliedRate, marketRate);
+            return (
+              <div className="rounded p-2 mb-3 text-[11px] leading-relaxed" style={{ background: C.panel2, border: `1px solid ${color}66` }}>
+                <div className="flex flex-wrap gap-x-4 gap-y-0.5 mono">
+                  <span>スクショの純資産 <b>¥{Math.round(rec.accountTotalJpy).toLocaleString()}</b></span>
+                  <span>円換算合計 <b>¥{Math.round(rec.computedJpy).toLocaleString()}</b></span>
+                  <span style={{ color }}>差 {rec.diffJpy >= 0 ? "+" : "−"}¥{Math.round(abs).toLocaleString()}（{rec.diffPct >= 0 ? "+" : ""}{rec.diffPct.toFixed(3)}%）</span>
+                </div>
+                <div style={{ color: C.textDim }}>
+                  {abs <= 100 ? "純資産と一致しています（差はレートの丸め誤差の範囲）。"
+                    : plausible ? `純資産から逆算したレートは ${rec.impliedRate.toFixed(4)} 円です。証券会社の換算レートと市場レートの差によるずれと考えられます。`
+                    : "ずれが大きいため、評価額の読み取り誤り・画面外で読み取れていない銘柄・現金の漏れがないか確認してください。"}
+                  {!plausible && rec.impliedRate ? `（逆算レート ${rec.impliedRate.toFixed(2)} 円）` : ""}
+                </div>
+                {plausible && abs > 100 && <button onClick={() => { setUsdJpy(String(Math.round(rec.impliedRate * 10000) / 10000)); setFxSource(`スクショの純資産から逆算した${broker.label}の換算レート（市場レート ${marketRate ? marketRate.toFixed(2) : "—"}）`); }} className="mt-1 text-[11px] underline" style={{ color: C.teal, background: "transparent", border: "none", cursor: "pointer" }}>逆算レート（{rec.impliedRate.toFixed(4)}）を使う</button>}
+              </div>
+            );
+          })()}
+          <div className="flex flex-col gap-2">
+            {rows.map((r) => {
+              const value = rowValue(r);
+              const yen = value != null ? (r.valueCurrency === "USD" ? (numOrNull(usdJpy) ? value * numOrNull(usdJpy) : null) : value) : null;
+              return (
+                <div key={r.key} className="rounded p-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, opacity: r.include ? 1 : 0.45 }}>
+                  <div className="flex items-center justify-between gap-2 mb-1.5">
+                    <label className="flex items-center gap-1.5 text-xs" style={{ color: C.text }}>
+                      <input type="checkbox" checked={r.include} onChange={(e) => updateRow(r.key, "include", e.target.checked)} /> 登録する
+                    </label>
+                    <span className="mono text-xs" style={{ color: C.teal }}>{yen != null ? `¥${Math.round(yen).toLocaleString()}` : "—"}</span>
+                  </div>
+                  <div className="grid gap-1.5" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(96px, 1fr))" }}>
+                    <div>{fieldLabel("コード")}<input value={r.code} onChange={(e) => updateRow(r.key, "code", e.target.value.toUpperCase())} className={inputCls} style={inputStyle} /></div>
+                    <div style={{ gridColumn: "span 2" }}>{fieldLabel("銘柄名")}<input value={r.name} onChange={(e) => updateRow(r.key, "name", e.target.value)} className={inputCls} style={inputStyle} /></div>
+                    <div>{fieldLabel("数量")}<input value={fmtNum(r.quantity, 4)} onChange={(e) => updateRow(r.key, "quantity", numOrNull(e.target.value))} inputMode="decimal" className={inputCls} style={inputStyle} /></div>
+                    <div>{fieldLabel(`評価額（${r.valueCurrency}）`)}<input value={fmtNum(r.marketValue)} onChange={(e) => updateRow(r.key, "marketValue", numOrNull(e.target.value))} inputMode="decimal" className={inputCls} style={inputStyle} /></div>
+                    <div>{fieldLabel("現在値")}<input value={fmtNum(r.currentPrice, 4)} onChange={(e) => updateRow(r.key, "currentPrice", numOrNull(e.target.value))} inputMode="decimal" className={inputCls} style={inputStyle} /></div>
+                    <div>{fieldLabel("取得単価")}<input value={fmtNum(r.avgCost, 4)} onChange={(e) => updateRow(r.key, "avgCost", numOrNull(e.target.value))} inputMode="decimal" className={inputCls} style={inputStyle} /></div>
+                    <div>{fieldLabel("通貨")}<select value={r.valueCurrency} onChange={(e) => updateRow(r.key, "valueCurrency", e.target.value)} className={inputCls} style={inputStyle}><option value="USD">USD</option><option value="JPY">JPY</option></select></div>
+                    <div style={{ gridColumn: "span 2" }}>{fieldLabel("カテゴリー")}<select value={r.category} onChange={(e) => updateRow(r.key, "category", e.target.value)} className={inputCls} style={inputStyle}>{CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}</select></div>
+                    <div>{fieldLabel("クラス")}<select value={r.rank} onChange={(e) => updateRow(r.key, "rank", e.target.value)} className={inputCls} style={inputStyle}>{CATS.map((c) => <option key={c} value={c}>{c}</option>)}</select></div>
+                    <div>{fieldLabel("為替区分")}<div className="text-xs py-1" style={{ color: C.textMuted }}>{exposureCurrency(r.category, r.valueCurrency)}</div></div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <button onClick={addRow} className="text-xs mt-2 underline" style={{ color: C.textDim, background: "transparent", border: "none", cursor: "pointer" }}>＋ 行を追加</button>
+
+          <div className="mt-4 text-[11px] leading-relaxed" style={{ color: C.textMuted }}>
+            4. 「登録」すると、{broker.label}の既存エントリ{replacedCount}件{hasVirtualAggregate ? "と、投資収支Excel由来の合算額" : ""}を置き換え、上の個別銘柄として保存します（再取り込み時も前回分はすべて削除されるため増殖しません）。評価額はUSD/JPYで円換算して保存し、為替区分は米国株関連＝ドル、日本株関連＝円として集計します。
+          </div>
+          <div className="flex gap-2 mt-2">
+            <button onClick={handleRegister} className="text-xs px-4 py-2 rounded" style={{ background: C.teal, color: C.bg, fontWeight: 700, border: "none", cursor: "pointer" }}>登録</button>
+            <button onClick={() => { setRows(null); setError(null); }} className="text-xs px-3 py-2 rounded" style={{ background: "transparent", color: C.textMuted, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>キャンセル</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, source, holdings, onUpdateHoldings, onResetAndImportHoldings, onResetHoldings, holdingsSource, overrides, categoryDefaultRanks, onCategoryDefaultRankChange, vooQqqSeries, onAppendVooQqq, onImportVooQqq, onResetVooQqqField, virtualAggregateLabels, onRegisterBrokerHoldings }) {
+  const [dataset, setDataset] = useState("voo"); // "voo" | "holdings" | "broker"
   const [instrument, setInstrument] = useState("sp500"); // "sp500" | "voo" | "qqq"（voo/qqqのCSV/手動入力/削除の対象切り替え）
   const [tab, setTab] = useState("csv");
   const [instrManualDate, setInstrManualDate] = useState(localYMD());
@@ -3057,9 +3288,11 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
 
   return (
     <FullScreenModal title="データの入力" onClose={handleModalClose}>
-      <div className="flex gap-2 mb-3">{tabBtn(dataset, setDataset, "voo", "SP500/VOO/QQQ価格データ")}{tabBtn(dataset, setDataset, "holdings", "保有資産データ（ポートフォリオ）")}</div>
+      <div className="flex gap-2 mb-3 flex-wrap">{tabBtn(dataset, setDataset, "voo", "SP500/VOO/QQQ価格データ")}{tabBtn(dataset, setDataset, "holdings", "保有資産データ（ポートフォリオ）")}{tabBtn(dataset, setDataset, "broker", "証券会社スクショ取込")}</div>
 
-      {dataset === "voo" ? (
+      {dataset === "broker" ? (
+        <BrokerScreenshotImport holdings={holdings} virtualAggregateLabels={virtualAggregateLabels} onRegister={onRegisterBrokerHoldings} />
+      ) : dataset === "voo" ? (
         <>
           <div className="flex items-center gap-2 mb-5">
             <button onClick={handleUpdatePrices} disabled={updateLoading} className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.textMuted, cursor: updateLoading ? "default" : "pointer", opacity: updateLoading ? 0.6 : 1 }}>
@@ -5038,6 +5271,15 @@ export default function DDDashboard() {
     });
     if (asOf) setHoldingsAsOf((prev) => { const next = { ...prev, [owner]: asOf }; persistHoldingsAsOf(next); return next; });
   }
+  // 証券会社スクショ取込の「登録」：その証券会社の既存エントリ（前回の個別銘柄＋合算1件）をすべて削除して、新しい個別銘柄に置き換える。
+  function handleRegisterBrokerHoldings(broker, incoming) {
+    setHoldings((prev) => {
+      const merged = replaceBrokerHoldings(prev, broker, incoming);
+      persistHoldings(merged);
+      return merged;
+    });
+    setHoldingsSource("imported");
+  }
   // 「初期化」：既存の保有資産データ・分類の記憶（overrides）を全て消去し、このCSVの内容のみで作り直す。
   function handleResetAndImportHoldings(owner, previewRows, asOf) {
     const incoming = previewRows.map((r) => ({ ...r, owner, id: r.id ?? genId() }));
@@ -5173,7 +5415,11 @@ export default function DDDashboard() {
   // 楽天証券のholdings配列とは独立に保持したまま、A〜E配分乖離・ポートフォリオ構成の表示用にのみ合算する。
   // holdings自体（楽天証券CSV由来・編集/削除対象）とinvestmentPerformance（投資収支Excel由来）は互いに
   // 影響を与えない：どちらかが更新されても、もう片方の値は再計算されずそのまま使われる。
-  const virtualHoldings = useMemo(() => buildVirtualHoldingsFromInvestmentPerformance(investmentPerformance), [investmentPerformance]);
+  // 証券会社スクショ取込で個別銘柄を登録済みの口座（例：moomoo証券）は、投資収支Excel由来の合算額を重複計上しないよう除外する。
+  const brokerReplacedLabels = useMemo(() => aggregateLabelsReplacedByBrokers(holdings), [holdings]);
+  const virtualHoldingsAll = useMemo(() => buildVirtualHoldingsFromInvestmentPerformance(investmentPerformance), [investmentPerformance]);
+  const virtualHoldings = useMemo(() => virtualHoldingsAll.filter((h) => !brokerReplacedLabels.has(h.name)), [virtualHoldingsAll, brokerReplacedLabels]);
+  const virtualAggregateLabels = useMemo(() => new Set(virtualHoldingsAll.map((h) => h.name)), [virtualHoldingsAll]);
   const combinedHoldings = useMemo(() => [...holdings, ...virtualHoldings], [holdings, virtualHoldings]);
   const currentHoldingPct = useMemo(() => currentHoldingPctFromHoldings(combinedHoldings), [combinedHoldings]);
   const currentHoldingAmount = useMemo(() => currentHoldingAmountFromHoldings(combinedHoldings), [combinedHoldings]);
@@ -5222,7 +5468,7 @@ export default function DDDashboard() {
       {modal?.type === "rank" && <FullScreenModal title={`${modal.rank}ランクの保有銘柄`} onClose={() => setModal(null)}><RankHoldingsContent rank={modal.rank} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
       {modal?.type === "crash" && <FullScreenModal title={`${modal.crash.name}（${modal.crash.start} 〜）と現状の比較`} onClose={() => setModal(null)}><CrashModalContent crash={modal.crash} daysSinceATH={d.daysSinceATH} currentDD={d.currentDD} currentEpisodeCurve={d.currentEpisodeCurve} allCrashes={historicalCrashes} onJump={(c) => setModal({ type: "crash", crash: c })} /></FullScreenModal>}
       {modal?.type === "ddChart" && <FullScreenModal title={chartSourceTitle(chartSource)} onClose={() => setModal(null)}><DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} bothChartData={bothChartData} chartSource={chartSource} setChartSource={setChartSource} /></FullScreenModal>}
-      {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} vooQqqSeries={vooQqqSeries} onAppendVooQqq={handleAppendVooQqq} onImportVooQqq={handleImportVooQqq} onResetVooQqqField={handleResetVooQqqField} />}
+      {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} vooQqqSeries={vooQqqSeries} onAppendVooQqq={handleAppendVooQqq} onImportVooQqq={handleImportVooQqq} onResetVooQqqField={handleResetVooQqqField} virtualAggregateLabels={virtualAggregateLabels} onRegisterBrokerHoldings={handleRegisterBrokerHoldings} />}
       {modal?.type === "checkpointSettings" && <FullScreenModal title="チェックポイント設定" onClose={() => setModal(null)}><CheckpointSettingsContent checkpoints={checkpoints} onCheckpointChange={handleCheckpointChange} holdings={holdings} /></FullScreenModal>}
       {modal?.type === "bottomScore" && <FullScreenModal title={bottom.hold.applicable ? `底値判定：${bottomLabel(d.FULL, bottom.hold.state)} が底値として確定する確率（SP500実績から都度算出）` : "底値判定（SP500実績から都度算出）"} onClose={() => setModal(null)}><BottomScoreModalContent bottom={bottom} FULL={d.FULL} /></FullScreenModal>}
       {modal?.type === "realHoldingsRanking" && <FullScreenModal title="実質保有銘柄ランキング" onClose={() => setModal(null)}><RealHoldingsRankingContent holdings={combinedHoldings} /></FullScreenModal>}

@@ -10,8 +10,12 @@
 //   npx wrangler secret put TWELVE_DATA_API_KEY
 // で登録してください（無料プランで動作しますが、レート制限にご注意ください）。
 
+import Anthropic from "@anthropic-ai/sdk";
+import { extractHoldings, type ExtractImage } from "./extractHoldings";
+
 export interface Env {
   TWELVE_DATA_API_KEY: string;
+  ANTHROPIC_API_KEY: string;
   SYNC_TOKEN: string;
   DD_SYNC_KV: KVNamespace;
 }
@@ -22,7 +26,7 @@ const SYNC_KV_KEY = "dd-dashboard-data";
 
 const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, PUT, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, PUT, POST, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, X-Sync-Token",
 };
 
@@ -61,6 +65,51 @@ export default {
         return jsonResponse(payload);
       }
       return jsonResponse({ error: "method not allowed" }, 405);
+    }
+
+    // POST /api/extract-holdings
+    // 証券会社アプリの保有銘柄スクリーンショットをClaude（Vision）で読み取り、銘柄ごとのデータを返す。
+    // APIキーをクライアントに置かないためWorker経由で呼ぶ。/syncと同じX-Sync-Tokenで保護する（第三者による無断利用防止）。
+    // 事前準備: npx wrangler secret put ANTHROPIC_API_KEY
+    // リクエスト: { broker: "moomoo", images: [{ mediaType: "image/jpeg", data: "<base64>" }] }
+    if (url.pathname === "/api/extract-holdings") {
+      if (request.method !== "POST") return jsonResponse({ error: "method not allowed" }, 405);
+      if (request.headers.get("X-Sync-Token") !== env.SYNC_TOKEN) return jsonResponse({ error: "unauthorized" }, 401);
+      if (!env.ANTHROPIC_API_KEY) return jsonResponse({ error: "ANTHROPIC_API_KEY が未設定です" }, 500);
+      let body: { broker?: string; images?: ExtractImage[] };
+      try {
+        body = (await request.json()) as typeof body;
+      } catch {
+        return jsonResponse({ error: "invalid JSON" }, 400);
+      }
+      const images = (body.images ?? []).filter((i) => i && typeof i.data === "string" && /^image\/(jpeg|png|webp|gif)$/.test(i.mediaType));
+      if (!images.length || images.length > 10) return jsonResponse({ error: "画像を1〜10枚指定してください" }, 400);
+      try {
+        const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
+        const result = await extractHoldings(client, String(body.broker ?? ""), images);
+        return jsonResponse(result);
+      } catch (e) {
+        if (e instanceof Anthropic.RateLimitError) return jsonResponse({ error: "混み合っています。少し待って再試行してください" }, 429);
+        if (e instanceof Anthropic.AuthenticationError) return jsonResponse({ error: "ANTHROPIC_API_KEY が無効です" }, 500);
+        if (e instanceof Anthropic.APIError) return jsonResponse({ error: `Claude API エラー（${e.status}）: ${e.message}` }, 502);
+        return jsonResponse({ error: e instanceof Error ? e.message : "読み取りに失敗しました" }, 502);
+      }
+    }
+
+    // GET /api/fx
+    // 米ドル建ての保有額を円換算するためのUSD/JPYレート（Twelve Data exchange_rate）。
+    // 応答: { rate: number, timestamp: number }
+    if (url.pathname === "/api/fx") {
+      try {
+        const res = await fetch(`https://api.twelvedata.com/exchange_rate?symbol=${encodeURIComponent("USD/JPY")}&apikey=${env.TWELVE_DATA_API_KEY}`);
+        if (!res.ok) throw new Error(`twelvedata responded ${res.status}`);
+        const data = (await res.json()) as { rate?: number | string; timestamp?: number };
+        const rate = typeof data.rate === "string" ? parseFloat(data.rate) : data.rate;
+        if (!rate || Number.isNaN(rate)) throw new Error("no rate");
+        return jsonResponse({ rate, timestamp: data.timestamp ?? null });
+      } catch {
+        return jsonResponse({ error: "為替レートの取得に失敗しました" }, 502);
+      }
     }
 
     if (url.pathname !== "/api/stock-prices") return jsonResponse({ error: "not found" }, 404);
