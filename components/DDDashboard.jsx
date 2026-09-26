@@ -12,7 +12,7 @@ import { parseInvestmentExcel, computeOwnAssetDrawdown, computeBenchmarkCAGR, si
 import { computeRealHoldingsRanking } from "@/lib/realHoldingsRanking";
 import { OWNER_RAKUTEN_SAKI, OWNER_RAKUTEN_SHIN, OWNER_MOOMOO, OWNER_OPTIONS, RAKUTEN_OWNERS, migrateHoldingsOwners, migrateAsOfKeys, detectRakutenOwnerFromFileName } from "@/lib/owners";
 import { BROKERS, brokerByKey, extractionToPreviewRows, previewRowsToHoldings, replaceBrokerHoldings, aggregateLabelsReplacedByBrokers, exposureCurrency, rowValue, reconcileWithAccountTotal, isPlausibleBrokerRate } from "@/lib/brokerImport";
-import { buildStatsTable, computeMddHoldProbability, LOW_SAMPLE_N } from "@/lib/bottomScore";
+import { buildStatsTable, computeMddHoldProbability, depthBucketIndex, LOW_SAMPLE_N } from "@/lib/bottomScore";
 
 // Cloudflare Worker（当日のVOO/QQQ終値を返す。SP500はここでは扱わず引き続きCSV取り込み/直接入力で更新する）のエンドポイント。
 // デプロイ先のURLに置き換えてください。
@@ -1234,11 +1234,12 @@ const KNOWN_CRASH_META = [
 const CRASH_DETECT_MIN_DD = -10; // この閾値以上の下落局面をすべて自動検出する（既知イベントに該当しないものは「その他」に分類）
 const OTHER_CRASH_COLORS = ["#7C8DB0", "#C9A06A", "#4FA0A6", "#A3A24B", "#B98F6A", "#7B9BC7", C.textDim];
 // FULL（読み込まれているSP500の全期間データ）からATH比-10%以上の下落局面をすべて自動抽出し、既知イベントを紐付ける。
-function buildHistoricalCrashes(FULL) {
+function buildHistoricalCrashes(FULL, minDD = CRASH_DETECT_MIN_DD) {
   if (!FULL || FULL.length < 2) return [];
-  const episodes = findDDEpisodes(FULL, CRASH_DETECT_MIN_DD).filter((e) => !e.isOngoing); // 現在進行中の局面（＝「現在」として別枠表示）は除外
+  const episodes = findDDEpisodes(FULL, minDD).filter((e) => !e.isOngoing); // 現在進行中の局面（＝「現在」として別枠表示）は除外
   return episodes.map((e, idx) => {
-    const known = KNOWN_CRASH_META.find((k) => e.athDate >= parseDateOnly(k.from) && e.athDate <= parseDateOnly(k.to));
+    // 既知の暴落名は-10%以上の局面にだけ付ける（同じ期間内の浅い押し目に暴落名が付かないように）
+    const known = e.troughDD <= CRASH_DETECT_MIN_DD ? KNOWN_CRASH_META.find((k) => e.athDate >= parseDateOnly(k.from) && e.athDate <= parseDateOnly(k.to)) : null;
     const start = isoFromDate(e.athDate), low = isoFromDate(e.troughDate), athRecoveryDate = isoFromDate(e.recoveryDate);
     const troughDay = e.troughIdx - e.athIdx, recoveryDay = e.recoveryIdx - e.athIdx;
     const curve = FULL.slice(e.athIdx, e.recoveryIdx + 1).map((p, i) => ({ day: i, dd: p.dd, date: p.date }));
@@ -1275,22 +1276,40 @@ function rmse(xs, ys) {
   for (let i = 0; i < n; i++) { const diff = xs[i] - ys[i]; sum += diff * diff; }
   return Math.sqrt(sum / n);
 }
-// 「経過日数ベース」比較に使う類似度ランキング（現在のDD%推移と各過去暴落イベントの同区間を比較）。
-// 現在のDD開始日（day0）からdaysSinceATH日目までの区間のみを比較対象とし、その区間を確保できない
-// （まだそこまで日数が経っていない）イベントは除外する。相関係数（ピアソン）が高い順、
-// 相関が同程度（差がCORR_TIE_EPS未満）の場合は誤差（RMSE）が小さい順に並べる。
-const CORR_TIE_EPS = 0.02;
+// 「経過日数ベース」比較に使う類似度ランキング（現在のDD%推移と各過去局面の同じ経過日数までの推移を比較）。
+// 底値判定（lib/bottomScore.ts）と同じ考え方で、
+//   ① 経過日数：直前ATHから同じ日数（daysSinceATH）が経ってもまだ回復していない局面だけを比較する
+//   ② 深度帯：その時点までのMDDが現在と同じ深度帯（-3〜-5% / -5〜-8% / …）の局面を優先し、無ければ隣接帯まで広げる
+//   ③ 形状と深さ：同区間のDD%推移の誤差（RMSE・%ポイント）が小さい順。同程度ならMDDの差が小さい順
+// 以前は相関係数（形の似方だけで深さを見ない）で並べていたため、浅い押し目でも-30%級の暴落が選ばれていた。
+const RMSE_TIE_EPS = 0.05;
 function rankCrashesBySimilarity(currentEpisodeCurve, daysSinceATH, crashes, excludeIds = []) {
   if (!currentEpisodeCurve || daysSinceATH < 1) return [];
   const currentSeg = currentEpisodeCurve.slice(0, daysSinceATH + 1).map((p) => p.dd);
-  return crashes
+  const currentMdd = Math.min(...currentSeg);
+  const currentBucket = depthBucketIndex(currentMdd);
+  const scored = crashes
     .filter((c) => !excludeIds.includes(c.id) && c.curve.length > daysSinceATH)
     .map((c) => {
       const seg = c.curve.slice(0, daysSinceATH + 1).map((p) => p.dd);
-      return { crash: c, corr: pearsonCorrelation(currentSeg, seg), rmse: rmse(currentSeg, seg) };
-    })
-    .filter((r) => r.corr !== null)
-    .sort((a, b) => (Math.abs(a.corr - b.corr) > CORR_TIE_EPS ? b.corr - a.corr : a.rmse - b.rmse));
+      const mddSoFar = Math.min(...seg);
+      return { crash: c, corr: pearsonCorrelation(currentSeg, seg), rmse: rmse(currentSeg, seg), mddSoFar, bucketGap: Math.abs(depthBucketIndex(mddSoFar) - currentBucket) };
+    });
+  const sameBand = scored.filter((r) => r.bucketGap === 0);
+  const nearBand = scored.filter((r) => r.bucketGap <= 1);
+  const pool = sameBand.length ? sameBand : nearBand.length ? nearBand : scored;
+  return pool.sort((a, b) => (Math.abs(a.rmse - b.rmse) > RMSE_TIE_EPS ? a.rmse - b.rmse : Math.abs(a.mddSoFar - currentMdd) - Math.abs(b.mddSoFar - currentMdd)));
+}
+// 類似度判定の候補にする過去局面の深さ（底値判定・DD戦略の起点と同じ-3%）
+const SIMILARITY_MIN_DD = -3;
+// プルダウンに追加表示する類似局面の件数（-10%未満の浅い局面でも、類似上位はプルダウンから選べるようにする）
+const SIMILAR_IN_DROPDOWN = 5;
+// 暴落比較チャートの縦軸（DD%）の範囲。表示中の曲線の最も深いDDに合わせる（浅い押し目同士の比較でも形が見えるように）。
+function comparisonYDomain(data) {
+  let min = 0;
+  for (const row of data) for (const [k, v] of Object.entries(row)) if (k !== "day" && typeof v === "number" && v < min) min = v;
+  const step = min > -10 ? 1 : min > -30 ? 5 : 10;
+  return [Math.floor((min * 1.1) / step) * step - step, 1];
 }
 function buildComparisonData(currentEpisodeCurve, crashes) {
   const maxDay = crashes.length ? Math.max(...crashes.map((c) => c.recoveryDay)) : Math.max(0, currentEpisodeCurve.length - 1);
@@ -1606,8 +1625,9 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBru
       <YAxis yAxisId="price" domain={["auto", "auto"]} tick={{ fill: C.teal, fontSize }} axisLine={false} tickLine={false} width={48} label={{ value: "評価額", angle: -90, position: "insideLeft", fill: C.teal, fontSize }} />
       <YAxis yAxisId="dd" orientation="right" domain={[ddTicks[ddTicks.length - 1], 0]} ticks={ddTicks} tick={{ fill: C.rust, fontSize }} axisLine={false} tickLine={false} width={46} label={{ value: "DD%", angle: 90, position: "insideRight", fill: C.rust, fontSize }} />
       <Tooltip content={(props) => <EvalTooltipContent {...props} markerByTime={markerByTime} />} />
-      {MILESTONES.filter((t) => t !== -3).map((t) => (<ReferenceLine key={t} yAxisId="dd" y={t} stroke={C.borderSoft} strokeDasharray="2 3" label={{ value: `${t}%`, position: "left", fill: C.textDim, fontSize: Math.max(8, fontSize - 2) }} />))}
-      <ReferenceLine yAxisId="dd" y={-3} stroke={C.rust} strokeDasharray="4 3" strokeWidth={1.3} label={{ value: "-3%", position: "left", fill: C.rust, fontSize: Math.max(8, fontSize - 2) }} />
+      {MILESTONES.filter((t) => t !== -3).map((t) => (<ReferenceLine key={t} yAxisId="dd" y={t} stroke={C.borderSoft} strokeDasharray="2 3" label={{ value: `${t}%`, position: "insideBottomRight", fill: C.textDim, fontSize: Math.max(8, fontSize - 2) }} />))}
+      {/* DD目安ラインは右軸（DD%）の値なので、ラベルも右軸側に置く（右軸の目盛と重ならないようプロット内の右端・線の上） */}
+      <ReferenceLine yAxisId="dd" y={-3} stroke={C.rust} strokeDasharray="4 3" strokeWidth={1.3} label={{ value: "-3%", position: "insideBottomRight", fill: C.rust, fontSize: Math.max(8, fontSize - 2) }} />
       {chartData[0].date < SPY_LISTING_DATE && chartData[chartData.length - 1].date > SPY_LISTING_DATE && (<ReferenceLine yAxisId="price" x={SPY_LISTING_DATE} stroke={C.violet} strokeDasharray="3 3" label={{ value: "S&P500上場", fill: C.violet, fontSize: Math.max(9, fontSize - 1), position: "top" }} />)}
       <Area yAxisId="dd" type="linear" dataKey="dd" stroke={C.rust} fill="url(#ddFill)" strokeWidth={1.3} dot={false} isAnimationActive={false} fillOpacity={hidden.dd ? 0 : 1} strokeOpacity={hidden.dd ? 0 : 1} />
       <Area yAxisId="price" type="linear" dataKey="price" stroke={C.teal} fill="url(#priceFill)" strokeWidth={1.8} dot={false} isAnimationActive={false} fillOpacity={hidden.price ? 0 : 1} strokeOpacity={hidden.price ? 0 : 1} />
@@ -1726,7 +1746,7 @@ function DDChartModalContent({ chartData, rangeDays, d, hidden, toggle, period, 
             <LineChart data={comparisonData} margin={{ top: 12, right: 20, left: 0, bottom: 0 }}>
               <CartesianGrid stroke={C.borderSoft} vertical={false} />
               <XAxis dataKey="day" tick={{ fill: C.textDim, fontSize }} axisLine={{ stroke: C.border }} tickLine={false} label={{ value: "経過日数（下落開始起点）", position: "insideBottom", offset: -2, fill: C.textDim, fontSize }} />
-              <YAxis domain={[-60, 2]} tick={{ fill: C.textDim, fontSize }} axisLine={false} tickLine={false} width={44} />
+              <YAxis domain={comparisonYDomain(comparisonData)} tick={{ fill: C.textDim, fontSize }} axisLine={false} tickLine={false} width={44} />
               <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} />
               {selectedCrash && !hiddenCrash[selectedCrash.id] && <Line type="monotone" dataKey={selectedCrash.id} stroke={C.rust} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls={false} name={selectedCrash.name} />}
               {!hiddenCrash.current && <Line type="monotone" dataKey="current" stroke={C.teal} strokeWidth={2.6} dot={false} isAnimationActive={false} connectNulls={false} name="現在" />}
@@ -5384,18 +5404,23 @@ export default function DDDashboard() {
     }
     return Array.from(map.values()).sort((a, b) => a.date - b.date);
   }, [chartData, qqqChartData]);
-  // SP500の全期間データ（d.FULL）からATH比-10%以上の下落局面を自動検出。全23件をドロップダウンで選択可能にする。
-  const historicalCrashes = useMemo(() => buildHistoricalCrashes(d.FULL), [d.FULL]);
-  // 現在のDD%推移（経過日数分）に最も類似した過去の暴落イベントを判定する。経過日数が進むたび（d.currentEpisodeCurve/d.daysSinceATHの更新時）に再計算される。
-  const rankedSimilarCrashes = useMemo(() => rankCrashesBySimilarity(d.currentEpisodeCurve, d.daysSinceATH, historicalCrashes), [d.currentEpisodeCurve, d.daysSinceATH, historicalCrashes]);
+  // 類似度判定の候補：SP500の全期間データ（d.FULL）からATH比-3%以上の下落局面をすべて検出する。
+  const crashPool = useMemo(() => buildHistoricalCrashes(d.FULL, SIMILARITY_MIN_DD), [d.FULL]);
+  // 現在のDD%推移（経過日数分）に最も類似した過去の局面を判定する。経過日数が進むたび（d.currentEpisodeCurve/d.daysSinceATHの更新時）に再計算される。
+  const rankedSimilarCrashes = useMemo(() => rankCrashesBySimilarity(d.currentEpisodeCurve, d.daysSinceATH, crashPool), [d.currentEpisodeCurve, d.daysSinceATH, crashPool]);
   const autoSimilarCrashId = rankedSimilarCrashes[0]?.crash.id ?? null;
+  // プルダウンに並べる一覧：-10%以上の暴落すべて＋現状に類似した上位の局面（浅い押し目を含む）。
+  const historicalCrashes = useMemo(() => {
+    const similarIds = new Set(rankedSimilarCrashes.slice(0, SIMILAR_IN_DROPDOWN).map((r) => r.crash.id));
+    return crashPool.filter((c) => c.maxDD <= CRASH_DETECT_MIN_DD || similarIds.has(c.id));
+  }, [crashPool, rankedSimilarCrashes]);
   // ユーザーが手動選択（crashAutoFollow=false）していない間は、最類似イベントに自動追従する。手動選択後は次にページを開き直すまで固定。
   useEffect(() => {
     if (crashAutoFollow && autoSimilarCrashId) setSelectedCrashId(autoSimilarCrashId);
   }, [crashAutoFollow, autoSimilarCrashId]);
   const handleSelectCrash = (id) => { setCrashAutoFollow(false); setSelectedCrashId(id); };
   // データ未読込等でidが見つからない場合は先頭にフォールバック。
-  const selectedCrash = useMemo(() => historicalCrashes.find((c) => c.id === selectedCrashId) ?? historicalCrashes[0] ?? null, [historicalCrashes, selectedCrashId]);
+  const selectedCrash = useMemo(() => crashPool.find((c) => c.id === selectedCrashId) ?? historicalCrashes[0] ?? null, [crashPool, historicalCrashes, selectedCrashId]);
   const comparisonData = useMemo(() => buildComparisonData(d.currentEpisodeCurve, selectedCrash ? [selectedCrash] : []), [d.currentEpisodeCurve, selectedCrash]);
   const toggle = (k) => setHidden((p) => ({ ...p, [k]: !p[k] }));
   const toggleCrash = (k) => setHiddenCrash((p) => ({ ...p, [k]: !p[k] }));
@@ -5617,7 +5642,7 @@ export default function DDDashboard() {
                         <LineChart data={comparisonData} margin={{ top: 12, right: 20, left: 0, bottom: 0 }}>
                           <CartesianGrid stroke={C.borderSoft} vertical={false} />
                           <XAxis dataKey="day" tick={{ fill: C.textDim, fontSize: 10 }} axisLine={{ stroke: C.border }} tickLine={false} label={{ value: "経過日数（下落開始起点）", position: "insideBottom", offset: -2, fill: C.textDim, fontSize: 10 }} />
-                          <YAxis domain={[-60, 2]} tick={{ fill: C.textDim, fontSize: 10 }} axisLine={false} tickLine={false} width={44} />
+                          <YAxis domain={comparisonYDomain(comparisonData)} tick={{ fill: C.textDim, fontSize: 10 }} axisLine={false} tickLine={false} width={44} />
                           <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} />
                           {selectedCrash && !hiddenCrash[selectedCrash.id] && <Line type="monotone" dataKey={selectedCrash.id} stroke={C.rust} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls={false} name={selectedCrash.name} />}
                           {!hiddenCrash.current && <Line type="monotone" dataKey="current" stroke={C.teal} strokeWidth={2.6} dot={false} isAnimationActive={false} connectNulls={false} name="現在" />}
