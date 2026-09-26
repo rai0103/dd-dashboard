@@ -51,6 +51,19 @@ function matchFund(holding: { name: string; category: string }, funds: FundEntry
 // 保有ベヒクルによらず「ゴールド」1行にまとめて集計する。
 const GOLD_ROW_KEY = "category:ゴールド";
 
+// 現金は円・ドルを区別せず「キャッシュ（ドル/円）」1行にまとめて集計する。
+const CASH_ROW_KEY = "category:現金";
+const CASH_ROW_NAME = "キャッシュ（ドル/円）";
+
+// 楽天証券CSVの銘柄名は「TSLA テスラ」「4661 オリエンタルランド」のように先頭がティッカー／証券コード。
+// 先頭トークンを取り出し、日本株の4桁（英字混じり含む）コードは構成データの表記（例：9432.T）に揃える。
+function tickerFromHoldingName(name: string): string | null {
+  const head = normalizeText(name).split(/\s+/)[0];
+  if (/^[0-9][0-9A-Z]{3}$/.test(head)) return `${head}.T`;
+  if (/^[A-Z][A-Z0-9.]{0,5}$/.test(head)) return head;
+  return null;
+}
+
 // 分解後の構成銘柄と、個別直接保有の銘柄を同一ティッカーとして合算できるよう、既知ティッカーの集合を作っておく。
 const ALL_TICKERS = new Map<string, string>();
 for (const fund of fundCompositions.funds as FundEntry[]) {
@@ -93,6 +106,10 @@ export function computeRealHoldingsRanking(holdings: { name: string; category: s
       addRow(GOLD_ROW_KEY, "ゴールド", null, h.name, null, h.amount);
       continue;
     }
+    if (h.category === "現金") {
+      addRow(CASH_ROW_KEY, CASH_ROW_NAME, null, h.name, null, h.amount);
+      continue;
+    }
     const fund = matchFund(h, funds);
     if (fund) {
       for (const c of fund.holdings) {
@@ -106,10 +123,11 @@ export function computeRealHoldingsRanking(holdings: { name: string; category: s
       cur.amount += h.amount;
       unmatchedMap.set(h.name, cur);
     }
-    // 個別直接保有（または未対応ファンド）は、既知ティッカーに一致すればそこへ合算し、しなければ単独の行として計上する。
-    const norm = normalizeText(h.name);
-    const knownName = ALL_TICKERS.get(norm);
-    if (knownName) addRow(norm, knownName, norm, h.name, null, h.amount);
+    // 個別直接保有（または未対応ファンド）は、銘柄名先頭のティッカーが構成銘柄の既知ティッカーに一致すればそこへ合算し
+    // （例：「TSLA テスラ」→ S&P500等の分解分「Tesla（テスラ）」と同じ行）、しなければ単独の行として計上する。
+    const ticker = tickerFromHoldingName(h.name) ?? normalizeText(h.name);
+    const knownName = ALL_TICKERS.get(ticker);
+    if (knownName) addRow(ticker, knownName, ticker, h.name, null, h.amount);
     else addRow(`name:${h.name}`, h.name, null, h.name, null, h.amount);
   }
 

@@ -1,88 +1,392 @@
 {
-  "asOf": "2026-09-23",
-  "source": "stockanalysis.com（VOO/QQQ/iシェアーズ Nasdaq Top 30 ETFの保有構成）、MicroSectors FANG+ ETN(FNGS)の保有構成をもとにした概算値。日経平均は一般に知られる上位銘柄・概算ウエイトを参考にした推定値（未検証・要確認）",
-  "note": "構成比率は指数連動ETF等の上位保有銘柄をもとにした概算値。S&P500・Nasdaq100・日経平均は上位銘柄＋その他をまとめて計上している。S&P500トップ20・テック・トップ20は集中投資型ファンドのため上位20銘柄のみで100%。実際の比率は日々変動し、指数の定期リバランスでも変わるため、定期的な手動更新が必要。",
+  "asOf": "2026-09-25",
+  "source": "S&P500＝Direxion SPXL、Nasdaq100＝ProShares TQQQ、SOXL・TECL＝Direxion各ETFの日次保有明細（株式部分を合計100%に正規化）。FANG+はMicroSectors FANG+ ETN(FNGS)、S&P500トップ20・テック・トップ20はstockanalysis.comの保有構成をもとにした概算値。日経平均は一般に知られる上位銘柄・概算ウエイトを参考にした推定値（未検証・要確認）",
+  "note": "S&P500・Nasdaq100・SOXL・TECLは scripts/update-fund-compositions.mjs で最新の保有明細から更新できる（上位30銘柄＋その他）。レバレッジETFは保有額を連動指数・対象銘柄の構成比率で按分しており、レバレッジ倍率は掛けていない。S&P500トップ20・テック・トップ20は上位20銘柄のみで100%。実際の比率は日々変動する。",
   "funds": [
     {
       "key": "FANG+",
       "label": "FANG+（NYSE FANG+指数）",
       "matchNamePattern": "FANG",
       "holdings": [
-        { "ticker": "MU", "name": "Micron Technology（マイクロン・テクノロジー）", "weight": 0.1075 },
-        { "ticker": "AVGO", "name": "Broadcom（ブロードコム）", "weight": 0.1031 },
-        { "ticker": "NVDA", "name": "NVIDIA（エヌビディア）", "weight": 0.1019 },
-        { "ticker": "AMZN", "name": "Amazon（アマゾン）", "weight": 0.1011 },
-        { "ticker": "GOOGL", "name": "Alphabet（グーグル）", "weight": 0.0999 },
-        { "ticker": "PLTR", "name": "Palantir（パランティア）", "weight": 0.0999 },
-        { "ticker": "AAPL", "name": "Apple（アップル）", "weight": 0.0991 },
-        { "ticker": "MSFT", "name": "Microsoft（マイクロソフト）", "weight": 0.0987 },
-        { "ticker": "META", "name": "Meta Platforms（メタ）", "weight": 0.0968 },
-        { "ticker": "NFLX", "name": "Netflix（ネットフリックス）", "weight": 0.0921 }
+        {
+          "ticker": "MU",
+          "name": "Micron Technology（マイクロン・テクノロジー）",
+          "weight": 0.1075
+        },
+        {
+          "ticker": "AVGO",
+          "name": "Broadcom（ブロードコム）",
+          "weight": 0.1031
+        },
+        {
+          "ticker": "NVDA",
+          "name": "NVIDIA（エヌビディア）",
+          "weight": 0.1019
+        },
+        {
+          "ticker": "AMZN",
+          "name": "Amazon（アマゾン）",
+          "weight": 0.1011
+        },
+        {
+          "ticker": "GOOGL",
+          "name": "Alphabet（グーグル）",
+          "weight": 0.0999
+        },
+        {
+          "ticker": "PLTR",
+          "name": "Palantir（パランティア）",
+          "weight": 0.0999
+        },
+        {
+          "ticker": "AAPL",
+          "name": "Apple（アップル）",
+          "weight": 0.0991
+        },
+        {
+          "ticker": "MSFT",
+          "name": "Microsoft（マイクロソフト）",
+          "weight": 0.0987
+        },
+        {
+          "ticker": "META",
+          "name": "Meta Platforms（メタ）",
+          "weight": 0.0968
+        },
+        {
+          "ticker": "NFLX",
+          "name": "Netflix（ネットフリックス）",
+          "weight": 0.0921
+        }
       ]
     },
     {
       "key": "SP500",
       "label": "S&P500",
-      "matchCategories": ["SP500"],
+      "matchCategories": [
+        "SP500"
+      ],
       "holdings": [
-        { "ticker": "NVDA", "name": "NVIDIA（エヌビディア）", "weight": 0.0808 },
-        { "ticker": "AAPL", "name": "Apple（アップル）", "weight": 0.0703 },
-        { "ticker": "MSFT", "name": "Microsoft（マイクロソフト）", "weight": 0.0570 },
-        { "ticker": "AMZN", "name": "Amazon（アマゾン）", "weight": 0.0384 },
-        { "ticker": "GOOGL", "name": "Alphabet Class A（グーグル）", "weight": 0.0301 },
-        { "ticker": "AVGO", "name": "Broadcom（ブロードコム）", "weight": 0.0265 },
-        { "ticker": "GOOG", "name": "Alphabet Class C（グーグル）", "weight": 0.0240 },
-        { "ticker": "META", "name": "Meta Platforms（メタ）", "weight": 0.0190 },
-        { "ticker": "MU", "name": "Micron Technology（マイクロン・テクノロジー）", "weight": 0.0163 },
-        { "ticker": "TSLA", "name": "Tesla（テスラ）", "weight": 0.0157 },
-        { "ticker": "JPM", "name": "JPMorgan Chase（JPモルガン・チェース）", "weight": 0.0144 },
-        { "ticker": "BRK.B", "name": "Berkshire Hathaway（バークシャー・ハサウェイ）", "weight": 0.0140 },
-        { "ticker": "LLY", "name": "Eli Lilly（イーライリリー）", "weight": 0.0138 },
-        { "ticker": "AMD", "name": "Advanced Micro Devices（AMD）", "weight": 0.0116 },
-        { "ticker": "XOM", "name": "ExxonMobil（エクソンモービル）", "weight": 0.0101 },
-        { "ticker": "JNJ", "name": "Johnson & Johnson（ジョンソン・エンド・ジョンソン）", "weight": 0.0097 },
-        { "ticker": "V", "name": "Visa（ビザ）", "weight": 0.0093 },
-        { "ticker": "MA", "name": "Mastercard（マスターカード）", "weight": 0.0072 },
-        { "ticker": "WMT", "name": "Walmart（ウォルマート）", "weight": 0.0069 },
-        { "ticker": "ABBV", "name": "AbbVie（アッヴィ）", "weight": 0.0068 },
-        { "ticker": "INTC", "name": "Intel（インテル）", "weight": 0.0067 },
-        { "ticker": "CSCO", "name": "Cisco Systems（シスコシステムズ）", "weight": 0.0066 },
-        { "ticker": "PLTR", "name": "Palantir（パランティア）", "weight": 0.0065 },
-        { "ticker": "COST", "name": "Costco Wholesale（コストコ）", "weight": 0.0063 },
-        { "ticker": "BAC", "name": "Bank of America（バンク・オブ・アメリカ）", "weight": 0.0061 },
-        { "ticker": "OTHERS_SP500", "name": "その他S&P500構成銘柄（約475銘柄）", "weight": 0.4859 }
-      ]
+        {
+          "ticker": "NVDA",
+          "name": "NVIDIA（エヌビディア）",
+          "weight": 0.0819
+        },
+        {
+          "ticker": "AAPL",
+          "name": "Apple（アップル）",
+          "weight": 0.0739
+        },
+        {
+          "ticker": "MSFT",
+          "name": "Microsoft（マイクロソフト）",
+          "weight": 0.0557
+        },
+        {
+          "ticker": "AMZN",
+          "name": "Amazon（アマゾン）",
+          "weight": 0.0369
+        },
+        {
+          "ticker": "GOOGL",
+          "name": "Alphabet Class A（グーグル）",
+          "weight": 0.0303
+        },
+        {
+          "ticker": "META",
+          "name": "Meta Platforms（メタ）",
+          "weight": 0.0259
+        },
+        {
+          "ticker": "AVGO",
+          "name": "Broadcom（ブロードコム）",
+          "weight": 0.0251
+        },
+        {
+          "ticker": "GOOG",
+          "name": "Alphabet Class C（グーグル）",
+          "weight": 0.0243
+        },
+        {
+          "ticker": "MU",
+          "name": "Micron Technology（マイクロン・テクノロジー）",
+          "weight": 0.0184
+        },
+        {
+          "ticker": "TSLA",
+          "name": "Tesla（テスラ）",
+          "weight": 0.0161
+        },
+        {
+          "ticker": "AMD",
+          "name": "Advanced Micro Devices（AMD）",
+          "weight": 0.0155
+        },
+        {
+          "ticker": "LLY",
+          "name": "Eli Lilly（イーライリリー）",
+          "weight": 0.0143
+        },
+        {
+          "ticker": "BRK.B",
+          "name": "Berkshire Hathaway（バークシャー・ハサウェイ）",
+          "weight": 0.0142
+        },
+        {
+          "ticker": "JPM",
+          "name": "JPMorgan Chase（JPモルガン・チェース）",
+          "weight": 0.0136
+        },
+        {
+          "ticker": "XOM",
+          "name": "ExxonMobil（エクソンモービル）",
+          "weight": 0.0101
+        },
+        {
+          "ticker": "JNJ",
+          "name": "Johnson & Johnson（ジョンソン・エンド・ジョンソン）",
+          "weight": 0.0098
+        },
+        {
+          "ticker": "INTC",
+          "name": "Intel（インテル）",
+          "weight": 0.0095
+        },
+        {
+          "ticker": "V",
+          "name": "Visa（ビザ）",
+          "weight": 0.0095
+        },
+        {
+          "ticker": "WMT",
+          "name": "Walmart（ウォルマート）",
+          "weight": 0.0072
+        },
+        {
+          "ticker": "ABBV",
+          "name": "AbbVie（アッヴィ）",
+          "weight": 0.0071
+        },
+        {
+          "ticker": "MA",
+          "name": "Mastercard（マスターカード）",
+          "weight": 0.0069
+        },
+        {
+          "ticker": "PLTR",
+          "name": "Palantir（パランティア）",
+          "weight": 0.0067
+        },
+        {
+          "ticker": "CSCO",
+          "name": "Cisco Systems（シスコシステムズ）",
+          "weight": 0.0064
+        },
+        {
+          "ticker": "CVX",
+          "name": "Chevron（シェブロン）",
+          "weight": 0.0061
+        },
+        {
+          "ticker": "COST",
+          "name": "Costco Wholesale（コストコ）",
+          "weight": 0.006
+        },
+        {
+          "ticker": "LRCX",
+          "name": "Lam Research（ラムリサーチ）",
+          "weight": 0.0058
+        },
+        {
+          "ticker": "AMAT",
+          "name": "Applied Materials（アプライドマテリアルズ）",
+          "weight": 0.0057
+        },
+        {
+          "ticker": "CAT",
+          "name": "Caterpillar（キャタピラー）",
+          "weight": 0.0056
+        },
+        {
+          "ticker": "MRK",
+          "name": "Merck（メルク）",
+          "weight": 0.0055
+        },
+        {
+          "ticker": "BAC",
+          "name": "Bank of America（バンク・オブ・アメリカ）",
+          "weight": 0.0055
+        },
+        {
+          "ticker": "OTHERS_SP500",
+          "name": "その他S&P500構成銘柄（約472銘柄）",
+          "weight": 0.4405
+        }
+      ],
+      "matchNamePattern": "\\b(SPUU|SPXL)\\b"
     },
     {
       "key": "Nasdaq",
       "label": "Nasdaq100",
-      "matchCategories": ["Nasdaq"],
+      "matchCategories": [
+        "Nasdaq"
+      ],
       "holdings": [
-        { "ticker": "NVDA", "name": "NVIDIA（エヌビディア）", "weight": 0.0852 },
-        { "ticker": "AAPL", "name": "Apple（アップル）", "weight": 0.0782 },
-        { "ticker": "MSFT", "name": "Microsoft（マイクロソフト）", "weight": 0.0581 },
-        { "ticker": "MU", "name": "Micron Technology（マイクロン・テクノロジー）", "weight": 0.0501 },
-        { "ticker": "AMZN", "name": "Amazon（アマゾン）", "weight": 0.0432 },
-        { "ticker": "AMD", "name": "Advanced Micro Devices（AMD）", "weight": 0.0399 },
-        { "ticker": "GOOGL", "name": "Alphabet Class A（グーグル）", "weight": 0.0322 },
-        { "ticker": "META", "name": "Meta Platforms（メタ）", "weight": 0.0312 },
-        { "ticker": "GOOG", "name": "Alphabet Class C（グーグル）", "weight": 0.0297 },
-        { "ticker": "TSLA", "name": "Tesla（テスラ）", "weight": 0.0288 },
-        { "ticker": "AVGO", "name": "Broadcom（ブロードコム）", "weight": 0.0268 },
-        { "ticker": "INTC", "name": "Intel（インテル）", "weight": 0.0239 },
-        { "ticker": "WMT", "name": "Walmart（ウォルマート）", "weight": 0.0228 },
-        { "ticker": "CSCO", "name": "Cisco Systems（シスコシステムズ）", "weight": 0.0189 },
-        { "ticker": "PLTR", "name": "Palantir（パランティア）", "weight": 0.0178 },
-        { "ticker": "COST", "name": "Costco Wholesale（コストコ）", "weight": 0.0174 },
-        { "ticker": "LRCX", "name": "Lam Research（ラムリサーチ）", "weight": 0.0157 },
-        { "ticker": "AMAT", "name": "Applied Materials（アプライドマテリアルズ）", "weight": 0.0154 },
-        { "ticker": "NFLX", "name": "Netflix（ネットフリックス）", "weight": 0.0132 },
-        { "ticker": "PANW", "name": "Palo Alto Networks（パロアルトネットワークス）", "weight": 0.0130 },
-        { "ticker": "SNDK", "name": "Sandisk（サンディスク）", "weight": 0.0116 },
-        { "ticker": "TXN", "name": "Texas Instruments（テキサス・インスツルメンツ）", "weight": 0.0106 },
-        { "ticker": "CRWD", "name": "CrowdStrike（クラウドストライク）", "weight": 0.0106 },
-        { "ticker": "KLAC", "name": "KLA（KLA）", "weight": 0.0101 },
-        { "ticker": "OTHERS_NASDAQ100", "name": "その他Nasdaq100構成銘柄（約76銘柄）", "weight": 0.2956 }
+        {
+          "ticker": "NVDA",
+          "name": "NVIDIA（エヌビディア）",
+          "weight": 0.0818
+        },
+        {
+          "ticker": "AAPL",
+          "name": "Apple（アップル）",
+          "weight": 0.0751
+        },
+        {
+          "ticker": "MSFT",
+          "name": "Microsoft（マイクロソフト）",
+          "weight": 0.0578
+        },
+        {
+          "ticker": "MU",
+          "name": "Micron Technology（マイクロン・テクノロジー）",
+          "weight": 0.0509
+        },
+        {
+          "ticker": "AMD",
+          "name": "Advanced Micro Devices（AMD）",
+          "weight": 0.0429
+        },
+        {
+          "ticker": "AMZN",
+          "name": "Amazon（アマゾン）",
+          "weight": 0.0406
+        },
+        {
+          "ticker": "META",
+          "name": "Meta Platforms（メタ）",
+          "weight": 0.0337
+        },
+        {
+          "ticker": "GOOGL",
+          "name": "Alphabet Class A（グーグル）",
+          "weight": 0.0304
+        },
+        {
+          "ticker": "TSLA",
+          "name": "Tesla（テスラ）",
+          "weight": 0.0295
+        },
+        {
+          "ticker": "GOOG",
+          "name": "Alphabet Class C（グーグル）",
+          "weight": 0.0284
+        },
+        {
+          "ticker": "INTC",
+          "name": "Intel（インテル）",
+          "weight": 0.0269
+        },
+        {
+          "ticker": "SPCX",
+          "name": "SpaceX（スペースX）",
+          "weight": 0.0266
+        },
+        {
+          "ticker": "AVGO",
+          "name": "Broadcom（ブロードコム）",
+          "weight": 0.0253
+        },
+        {
+          "ticker": "WMT",
+          "name": "Walmart（ウォルマート）",
+          "weight": 0.0219
+        },
+        {
+          "ticker": "PLTR",
+          "name": "Palantir（パランティア）",
+          "weight": 0.0182
+        },
+        {
+          "ticker": "CSCO",
+          "name": "Cisco Systems（シスコシステムズ）",
+          "weight": 0.0175
+        },
+        {
+          "ticker": "COST",
+          "name": "Costco Wholesale（コストコ）",
+          "weight": 0.0171
+        },
+        {
+          "ticker": "LRCX",
+          "name": "Lam Research（ラムリサーチ）",
+          "weight": 0.0164
+        },
+        {
+          "ticker": "AMAT",
+          "name": "Applied Materials（アプライドマテリアルズ）",
+          "weight": 0.016
+        },
+        {
+          "ticker": "PANW",
+          "name": "Palo Alto Networks（パロアルトネットワークス）",
+          "weight": 0.0127
+        },
+        {
+          "ticker": "NFLX",
+          "name": "Netflix（ネットフリックス）",
+          "weight": 0.0123
+        },
+        {
+          "ticker": "SNDK",
+          "name": "Sandisk（サンディスク）",
+          "weight": 0.0108
+        },
+        {
+          "ticker": "CRWD",
+          "name": "CrowdStrike（クラウドストライク）",
+          "weight": 0.0108
+        },
+        {
+          "ticker": "TXN",
+          "name": "Texas Instruments（テキサス・インスツルメンツ）",
+          "weight": 0.0106
+        },
+        {
+          "ticker": "KLAC",
+          "name": "KLA（KLA）",
+          "weight": 0.0102
+        },
+        {
+          "ticker": "MRVL",
+          "name": "Marvell Technology（マーベル・テクノロジー）",
+          "weight": 0.0096
+        },
+        {
+          "ticker": "AMGN",
+          "name": "Amgen（アムジェン）",
+          "weight": 0.0093
+        },
+        {
+          "ticker": "LIN",
+          "name": "Linde（リンデ）",
+          "weight": 0.009
+        },
+        {
+          "ticker": "QCOM",
+          "name": "Qualcomm（クアルコム）",
+          "weight": 0.0088
+        },
+        {
+          "ticker": "STX",
+          "name": "Seagate Technology（シーゲイト・テクノロジー）",
+          "weight": 0.0087
+        },
+        {
+          "ticker": "OTHERS_NASDAQ100",
+          "name": "その他Nasdaq100構成銘柄（約71銘柄）",
+          "weight": 0.2302
+        }
       ]
     },
     {
@@ -90,26 +394,106 @@
       "label": "S&P500トップ20（上位20銘柄への集中投資型ファンド）",
       "matchNamePattern": "S.?&.?P.?500.{0,6}(TOP.?20|T20|トップ.?20)",
       "holdings": [
-        { "ticker": "NVDA", "name": "NVIDIA（エヌビディア）", "weight": 0.1677 },
-        { "ticker": "AAPL", "name": "Apple（アップル）", "weight": 0.1459 },
-        { "ticker": "MSFT", "name": "Microsoft（マイクロソフト）", "weight": 0.1183 },
-        { "ticker": "AMZN", "name": "Amazon（アマゾン）", "weight": 0.0797 },
-        { "ticker": "GOOGL", "name": "Alphabet Class A（グーグル）", "weight": 0.0625 },
-        { "ticker": "AVGO", "name": "Broadcom（ブロードコム）", "weight": 0.0550 },
-        { "ticker": "GOOG", "name": "Alphabet Class C（グーグル）", "weight": 0.0498 },
-        { "ticker": "META", "name": "Meta Platforms（メタ）", "weight": 0.0394 },
-        { "ticker": "MU", "name": "Micron Technology（マイクロン・テクノロジー）", "weight": 0.0338 },
-        { "ticker": "TSLA", "name": "Tesla（テスラ）", "weight": 0.0326 },
-        { "ticker": "JPM", "name": "JPMorgan Chase（JPモルガン・チェース）", "weight": 0.0299 },
-        { "ticker": "BRK.B", "name": "Berkshire Hathaway（バークシャー・ハサウェイ）", "weight": 0.0291 },
-        { "ticker": "LLY", "name": "Eli Lilly（イーライリリー）", "weight": 0.0286 },
-        { "ticker": "AMD", "name": "Advanced Micro Devices（AMD）", "weight": 0.0241 },
-        { "ticker": "XOM", "name": "ExxonMobil（エクソンモービル）", "weight": 0.0210 },
-        { "ticker": "JNJ", "name": "Johnson & Johnson（ジョンソン・エンド・ジョンソン）", "weight": 0.0201 },
-        { "ticker": "V", "name": "Visa（ビザ）", "weight": 0.0193 },
-        { "ticker": "MA", "name": "Mastercard（マスターカード）", "weight": 0.0149 },
-        { "ticker": "WMT", "name": "Walmart（ウォルマート）", "weight": 0.0143 },
-        { "ticker": "ABBV", "name": "AbbVie（アッヴィ）", "weight": 0.0141 }
+        {
+          "ticker": "NVDA",
+          "name": "NVIDIA（エヌビディア）",
+          "weight": 0.1677
+        },
+        {
+          "ticker": "AAPL",
+          "name": "Apple（アップル）",
+          "weight": 0.1459
+        },
+        {
+          "ticker": "MSFT",
+          "name": "Microsoft（マイクロソフト）",
+          "weight": 0.1183
+        },
+        {
+          "ticker": "AMZN",
+          "name": "Amazon（アマゾン）",
+          "weight": 0.0797
+        },
+        {
+          "ticker": "GOOGL",
+          "name": "Alphabet Class A（グーグル）",
+          "weight": 0.0625
+        },
+        {
+          "ticker": "AVGO",
+          "name": "Broadcom（ブロードコム）",
+          "weight": 0.055
+        },
+        {
+          "ticker": "GOOG",
+          "name": "Alphabet Class C（グーグル）",
+          "weight": 0.0498
+        },
+        {
+          "ticker": "META",
+          "name": "Meta Platforms（メタ）",
+          "weight": 0.0394
+        },
+        {
+          "ticker": "MU",
+          "name": "Micron Technology（マイクロン・テクノロジー）",
+          "weight": 0.0338
+        },
+        {
+          "ticker": "TSLA",
+          "name": "Tesla（テスラ）",
+          "weight": 0.0326
+        },
+        {
+          "ticker": "JPM",
+          "name": "JPMorgan Chase（JPモルガン・チェース）",
+          "weight": 0.0299
+        },
+        {
+          "ticker": "BRK.B",
+          "name": "Berkshire Hathaway（バークシャー・ハサウェイ）",
+          "weight": 0.0291
+        },
+        {
+          "ticker": "LLY",
+          "name": "Eli Lilly（イーライリリー）",
+          "weight": 0.0286
+        },
+        {
+          "ticker": "AMD",
+          "name": "Advanced Micro Devices（AMD）",
+          "weight": 0.0241
+        },
+        {
+          "ticker": "XOM",
+          "name": "ExxonMobil（エクソンモービル）",
+          "weight": 0.021
+        },
+        {
+          "ticker": "JNJ",
+          "name": "Johnson & Johnson（ジョンソン・エンド・ジョンソン）",
+          "weight": 0.0201
+        },
+        {
+          "ticker": "V",
+          "name": "Visa（ビザ）",
+          "weight": 0.0193
+        },
+        {
+          "ticker": "MA",
+          "name": "Mastercard（マスターカード）",
+          "weight": 0.0149
+        },
+        {
+          "ticker": "WMT",
+          "name": "Walmart（ウォルマート）",
+          "weight": 0.0143
+        },
+        {
+          "ticker": "ABBV",
+          "name": "AbbVie（アッヴィ）",
+          "weight": 0.0141
+        }
       ]
     },
     {
@@ -117,26 +501,106 @@
       "label": "米国テック・トップ20（大型テック銘柄への集中投資型ファンド）",
       "matchNamePattern": "テック.{0,3}トップ.{0,2}20|TECH.{0,3}TOP.{0,2}20",
       "holdings": [
-        { "ticker": "NVDA", "name": "NVIDIA（エヌビディア）", "weight": 0.1269 },
-        { "ticker": "AAPL", "name": "Apple（アップル）", "weight": 0.1146 },
-        { "ticker": "MSFT", "name": "Microsoft（マイクロソフト）", "weight": 0.0863 },
-        { "ticker": "MU", "name": "Micron Technology（マイクロン・テクノロジー）", "weight": 0.0754 },
-        { "ticker": "AMD", "name": "Advanced Micro Devices（AMD）", "weight": 0.0659 },
-        { "ticker": "META", "name": "Meta Platforms（メタ）", "weight": 0.0523 },
-        { "ticker": "AMZN", "name": "Amazon（アマゾン）", "weight": 0.0504 },
-        { "ticker": "GOOGL", "name": "Alphabet Class A（グーグル）", "weight": 0.0483 },
-        { "ticker": "TSLA", "name": "Tesla（テスラ）", "weight": 0.0468 },
-        { "ticker": "GOOG", "name": "Alphabet Class C（グーグル）", "weight": 0.0449 },
-        { "ticker": "INTC", "name": "Intel（インテル）", "weight": 0.0420 },
-        { "ticker": "AVGO", "name": "Broadcom（ブロードコム）", "weight": 0.0409 },
-        { "ticker": "WMT", "name": "Walmart（ウォルマート）", "weight": 0.0342 },
-        { "ticker": "CSCO", "name": "Cisco Systems（シスコシステムズ）", "weight": 0.0288 },
-        { "ticker": "PLTR", "name": "Palantir（パランティア）", "weight": 0.0276 },
-        { "ticker": "COST", "name": "Costco Wholesale（コストコ）", "weight": 0.0262 },
-        { "ticker": "LRCX", "name": "Lam Research（ラムリサーチ）", "weight": 0.0247 },
-        { "ticker": "AMAT", "name": "Applied Materials（アプライドマテリアルズ）", "weight": 0.0241 },
-        { "ticker": "NFLX", "name": "Netflix（ネットフリックス）", "weight": 0.0200 },
-        { "ticker": "PANW", "name": "Palo Alto Networks（パロアルトネットワークス）", "weight": 0.0199 }
+        {
+          "ticker": "NVDA",
+          "name": "NVIDIA（エヌビディア）",
+          "weight": 0.1269
+        },
+        {
+          "ticker": "AAPL",
+          "name": "Apple（アップル）",
+          "weight": 0.1146
+        },
+        {
+          "ticker": "MSFT",
+          "name": "Microsoft（マイクロソフト）",
+          "weight": 0.0863
+        },
+        {
+          "ticker": "MU",
+          "name": "Micron Technology（マイクロン・テクノロジー）",
+          "weight": 0.0754
+        },
+        {
+          "ticker": "AMD",
+          "name": "Advanced Micro Devices（AMD）",
+          "weight": 0.0659
+        },
+        {
+          "ticker": "META",
+          "name": "Meta Platforms（メタ）",
+          "weight": 0.0523
+        },
+        {
+          "ticker": "AMZN",
+          "name": "Amazon（アマゾン）",
+          "weight": 0.0504
+        },
+        {
+          "ticker": "GOOGL",
+          "name": "Alphabet Class A（グーグル）",
+          "weight": 0.0483
+        },
+        {
+          "ticker": "TSLA",
+          "name": "Tesla（テスラ）",
+          "weight": 0.0468
+        },
+        {
+          "ticker": "GOOG",
+          "name": "Alphabet Class C（グーグル）",
+          "weight": 0.0449
+        },
+        {
+          "ticker": "INTC",
+          "name": "Intel（インテル）",
+          "weight": 0.042
+        },
+        {
+          "ticker": "AVGO",
+          "name": "Broadcom（ブロードコム）",
+          "weight": 0.0409
+        },
+        {
+          "ticker": "WMT",
+          "name": "Walmart（ウォルマート）",
+          "weight": 0.0342
+        },
+        {
+          "ticker": "CSCO",
+          "name": "Cisco Systems（シスコシステムズ）",
+          "weight": 0.0288
+        },
+        {
+          "ticker": "PLTR",
+          "name": "Palantir（パランティア）",
+          "weight": 0.0276
+        },
+        {
+          "ticker": "COST",
+          "name": "Costco Wholesale（コストコ）",
+          "weight": 0.0262
+        },
+        {
+          "ticker": "LRCX",
+          "name": "Lam Research（ラムリサーチ）",
+          "weight": 0.0247
+        },
+        {
+          "ticker": "AMAT",
+          "name": "Applied Materials（アプライドマテリアルズ）",
+          "weight": 0.0241
+        },
+        {
+          "ticker": "NFLX",
+          "name": "Netflix（ネットフリックス）",
+          "weight": 0.02
+        },
+        {
+          "ticker": "PANW",
+          "name": "Palo Alto Networks（パロアルトネットワークス）",
+          "weight": 0.0199
+        }
       ]
     },
     {
@@ -144,28 +608,496 @@
       "label": "日経平均株価（日経225）",
       "matchNamePattern": "日経平均|ニッケイ225|NIKKEI.?225|\\bN225\\b",
       "holdings": [
-        { "ticker": "9983.T", "name": "ファーストリテイリング", "weight": 0.1050 },
-        { "ticker": "8035.T", "name": "東京エレクトロン", "weight": 0.0600 },
-        { "ticker": "9984.T", "name": "ソフトバンクグループ", "weight": 0.0450 },
-        { "ticker": "6857.T", "name": "アドバンテスト", "weight": 0.0400 },
-        { "ticker": "6146.T", "name": "ディスコ", "weight": 0.0300 },
-        { "ticker": "6762.T", "name": "TDK", "weight": 0.0200 },
-        { "ticker": "4543.T", "name": "テルモ", "weight": 0.0180 },
-        { "ticker": "6954.T", "name": "ファナック", "weight": 0.0170 },
-        { "ticker": "9433.T", "name": "KDDI", "weight": 0.0170 },
-        { "ticker": "4063.T", "name": "信越化学工業", "weight": 0.0170 },
-        { "ticker": "6367.T", "name": "ダイキン工業", "weight": 0.0160 },
-        { "ticker": "6920.T", "name": "レーザーテック", "weight": 0.0150 },
-        { "ticker": "7011.T", "name": "三菱重工業", "weight": 0.0140 },
-        { "ticker": "7974.T", "name": "任天堂", "weight": 0.0140 },
-        { "ticker": "6758.T", "name": "ソニーグループ", "weight": 0.0130 },
-        { "ticker": "7741.T", "name": "HOYA", "weight": 0.0130 },
-        { "ticker": "6971.T", "name": "京セラ", "weight": 0.0120 },
-        { "ticker": "9843.T", "name": "ニトリホールディングス", "weight": 0.0110 },
-        { "ticker": "7453.T", "name": "良品計画", "weight": 0.0100 },
-        { "ticker": "6098.T", "name": "リクルートホールディングス", "weight": 0.0100 },
-        { "ticker": "OTHERS_NIKKEI225", "name": "その他日経平均構成銘柄（約205銘柄）", "weight": 0.5030 }
+        {
+          "ticker": "9983.T",
+          "name": "ファーストリテイリング",
+          "weight": 0.105
+        },
+        {
+          "ticker": "8035.T",
+          "name": "東京エレクトロン",
+          "weight": 0.06
+        },
+        {
+          "ticker": "9984.T",
+          "name": "ソフトバンクグループ",
+          "weight": 0.045
+        },
+        {
+          "ticker": "6857.T",
+          "name": "アドバンテスト",
+          "weight": 0.04
+        },
+        {
+          "ticker": "6146.T",
+          "name": "ディスコ",
+          "weight": 0.03
+        },
+        {
+          "ticker": "6762.T",
+          "name": "TDK",
+          "weight": 0.02
+        },
+        {
+          "ticker": "4543.T",
+          "name": "テルモ",
+          "weight": 0.018
+        },
+        {
+          "ticker": "6954.T",
+          "name": "ファナック",
+          "weight": 0.017
+        },
+        {
+          "ticker": "9433.T",
+          "name": "KDDI",
+          "weight": 0.017
+        },
+        {
+          "ticker": "4063.T",
+          "name": "信越化学工業",
+          "weight": 0.017
+        },
+        {
+          "ticker": "6367.T",
+          "name": "ダイキン工業",
+          "weight": 0.016
+        },
+        {
+          "ticker": "6920.T",
+          "name": "レーザーテック",
+          "weight": 0.015
+        },
+        {
+          "ticker": "7011.T",
+          "name": "三菱重工業",
+          "weight": 0.014
+        },
+        {
+          "ticker": "7974.T",
+          "name": "任天堂",
+          "weight": 0.014
+        },
+        {
+          "ticker": "6758.T",
+          "name": "ソニーグループ",
+          "weight": 0.013
+        },
+        {
+          "ticker": "7741.T",
+          "name": "HOYA",
+          "weight": 0.013
+        },
+        {
+          "ticker": "6971.T",
+          "name": "京セラ",
+          "weight": 0.012
+        },
+        {
+          "ticker": "9843.T",
+          "name": "ニトリホールディングス",
+          "weight": 0.011
+        },
+        {
+          "ticker": "7453.T",
+          "name": "良品計画",
+          "weight": 0.01
+        },
+        {
+          "ticker": "6098.T",
+          "name": "リクルートホールディングス",
+          "weight": 0.01
+        },
+        {
+          "ticker": "OTHERS_NIKKEI225",
+          "name": "その他日経平均構成銘柄（約205銘柄）",
+          "weight": 0.503
+        }
+      ]
+    },
+    {
+      "key": "SOXL",
+      "label": "SOXL（ICE半導体指数・3倍）",
+      "matchNamePattern": "\\bSOXL\\b",
+      "holdings": [
+        {
+          "ticker": "INTC",
+          "name": "Intel（インテル）",
+          "weight": 0.1022
+        },
+        {
+          "ticker": "AMD",
+          "name": "Advanced Micro Devices（AMD）",
+          "weight": 0.096
+        },
+        {
+          "ticker": "MU",
+          "name": "Micron Technology（マイクロン・テクノロジー）",
+          "weight": 0.0809
+        },
+        {
+          "ticker": "NVDA",
+          "name": "NVIDIA（エヌビディア）",
+          "weight": 0.073
+        },
+        {
+          "ticker": "AVGO",
+          "name": "Broadcom（ブロードコム）",
+          "weight": 0.0679
+        },
+        {
+          "ticker": "MRVL",
+          "name": "Marvell Technology（マーベル・テクノロジー）",
+          "weight": 0.0439
+        },
+        {
+          "ticker": "QCOM",
+          "name": "Qualcomm（クアルコム）",
+          "weight": 0.0409
+        },
+        {
+          "ticker": "KLAC",
+          "name": "KLA（KLA）",
+          "weight": 0.0383
+        },
+        {
+          "ticker": "ADI",
+          "name": "Analog Devices（アナログ・デバイセズ）",
+          "weight": 0.0379
+        },
+        {
+          "ticker": "TXN",
+          "name": "Texas Instruments（テキサス・インスツルメンツ）",
+          "weight": 0.0372
+        },
+        {
+          "ticker": "AMAT",
+          "name": "Applied Materials（アプライドマテリアルズ）",
+          "weight": 0.0372
+        },
+        {
+          "ticker": "LRCX",
+          "name": "Lam Research（ラムリサーチ）",
+          "weight": 0.0366
+        },
+        {
+          "ticker": "MPWR",
+          "name": "Monolithic Power Systems（モノリシック・パワー・システムズ）",
+          "weight": 0.0314
+        },
+        {
+          "ticker": "SKHY",
+          "name": "SK hynix ADR（SKハイニックス）",
+          "weight": 0.0311
+        },
+        {
+          "ticker": "TER",
+          "name": "Teradyne（テラダイン）",
+          "weight": 0.0299
+        },
+        {
+          "ticker": "TSM",
+          "name": "TSMC ADR（台湾積体電路製造）",
+          "weight": 0.0299
+        },
+        {
+          "ticker": "NXPI",
+          "name": "NXP Semiconductors（NXPセミコンダクターズ）",
+          "weight": 0.0288
+        },
+        {
+          "ticker": "ALAB",
+          "name": "Astera Labs（アステラ・ラボ）",
+          "weight": 0.0254
+        },
+        {
+          "ticker": "MCHP",
+          "name": "Microchip Technology（マイクロチップ・テクノロジー）",
+          "weight": 0.0198
+        },
+        {
+          "ticker": "CRDO",
+          "name": "Credo Technology（クレド・テクノロジー）",
+          "weight": 0.0164
+        },
+        {
+          "ticker": "ON",
+          "name": "ON Semiconductor（オン・セミコンダクター）",
+          "weight": 0.014
+        },
+        {
+          "ticker": "ASML",
+          "name": "ASML（ASMLホールディング）",
+          "weight": 0.014
+        },
+        {
+          "ticker": "TSEM",
+          "name": "Tower Semiconductor（タワーセミコンダクター）",
+          "weight": 0.0113
+        },
+        {
+          "ticker": "ENTG",
+          "name": "Entegris（インテグリス）",
+          "weight": 0.0112
+        },
+        {
+          "ticker": "MTSI",
+          "name": "MACOM Technology（メイコム・テクノロジー）",
+          "weight": 0.0101
+        },
+        {
+          "ticker": "CBRS",
+          "name": "Cerebras Systems（セレブラス・システムズ）",
+          "weight": 0.0098
+        },
+        {
+          "ticker": "ASX",
+          "name": "ASE Technology ADR（日月光投資控股）",
+          "weight": 0.0088
+        },
+        {
+          "ticker": "UMC",
+          "name": "UMC ADR（聯華電子）",
+          "weight": 0.0067
+        },
+        {
+          "ticker": "ARM",
+          "name": "Arm Holdings ADR（アーム・ホールディングス）",
+          "weight": 0.0053
+        },
+        {
+          "ticker": "STM",
+          "name": "STMicroelectronics（STマイクロエレクトロニクス）",
+          "weight": 0.004
+        }
+      ]
+    },
+    {
+      "key": "TECL",
+      "label": "TECL（テクノロジー・セレクト・セクター指数・3倍）",
+      "matchNamePattern": "\\bTECL\\b",
+      "holdings": [
+        {
+          "ticker": "NVDA",
+          "name": "NVIDIA（エヌビディア）",
+          "weight": 0.153
+        },
+        {
+          "ticker": "AAPL",
+          "name": "Apple（アップル）",
+          "weight": 0.138
+        },
+        {
+          "ticker": "MSFT",
+          "name": "Microsoft（マイクロソフト）",
+          "weight": 0.1041
+        },
+        {
+          "ticker": "AMD",
+          "name": "Advanced Micro Devices（AMD）",
+          "weight": 0.0523
+        },
+        {
+          "ticker": "AVGO",
+          "name": "Broadcom（ブロードコム）",
+          "weight": 0.0469
+        },
+        {
+          "ticker": "MU",
+          "name": "Micron Technology（マイクロン・テクノロジー）",
+          "weight": 0.0456
+        },
+        {
+          "ticker": "INTC",
+          "name": "Intel（インテル）",
+          "weight": 0.0361
+        },
+        {
+          "ticker": "PLTR",
+          "name": "Palantir（パランティア）",
+          "weight": 0.0252
+        },
+        {
+          "ticker": "CSCO",
+          "name": "Cisco Systems（シスコシステムズ）",
+          "weight": 0.024
+        },
+        {
+          "ticker": "LRCX",
+          "name": "Lam Research（ラムリサーチ）",
+          "weight": 0.0219
+        },
+        {
+          "ticker": "AMAT",
+          "name": "Applied Materials（アプライドマテリアルズ）",
+          "weight": 0.0215
+        },
+        {
+          "ticker": "PANW",
+          "name": "Palo Alto Networks（パロアルトネットワークス）",
+          "weight": 0.0181
+        },
+        {
+          "ticker": "CRWD",
+          "name": "CrowdStrike（クラウドストライク）",
+          "weight": 0.0151
+        },
+        {
+          "ticker": "SNDK",
+          "name": "Sandisk（サンディスク）",
+          "weight": 0.0146
+        },
+        {
+          "ticker": "TXN",
+          "name": "Texas Instruments（テキサス・インスツルメンツ）",
+          "weight": 0.0141
+        },
+        {
+          "ticker": "KLAC",
+          "name": "KLA（KLA）",
+          "weight": 0.0139
+        },
+        {
+          "ticker": "ORCL",
+          "name": "Oracle（オラクル）",
+          "weight": 0.0137
+        },
+        {
+          "ticker": "MRVL",
+          "name": "Marvell Technology（マーベル・テクノロジー）",
+          "weight": 0.0129
+        },
+        {
+          "ticker": "ANET",
+          "name": "Arista Networks（アリスタ・ネットワークス）",
+          "weight": 0.0123
+        },
+        {
+          "ticker": "IBM",
+          "name": "IBM（アイ・ビー・エム）",
+          "weight": 0.0122
+        },
+        {
+          "ticker": "QCOM",
+          "name": "Qualcomm（クアルコム）",
+          "weight": 0.0118
+        },
+        {
+          "ticker": "STX",
+          "name": "Seagate Technology（シーゲイト・テクノロジー）",
+          "weight": 0.0117
+        },
+        {
+          "ticker": "APH",
+          "name": "Amphenol（アンフェノール）",
+          "weight": 0.0117
+        },
+        {
+          "ticker": "CRM",
+          "name": "Salesforce（セールスフォース）",
+          "weight": 0.0111
+        },
+        {
+          "ticker": "ADI",
+          "name": "Analog Devices（アナログ・デバイセズ）",
+          "weight": 0.0106
+        },
+        {
+          "ticker": "WDC",
+          "name": "Western Digital（ウエスタンデジタル）",
+          "weight": 0.0093
+        },
+        {
+          "ticker": "DELL",
+          "name": "Dell Technologies（デル・テクノロジーズ）",
+          "weight": 0.0092
+        },
+        {
+          "ticker": "NOW",
+          "name": "ServiceNow（サービスナウ）",
+          "weight": 0.0081
+        },
+        {
+          "ticker": "GLW",
+          "name": "Corning（コーニング）",
+          "weight": 0.007
+        },
+        {
+          "ticker": "FTNT",
+          "name": "Fortinet（フォーティネット）",
+          "weight": 0.0063
+        },
+        {
+          "ticker": "OTHERS_TECL",
+          "name": "その他テクノロジー・セレクト・セクター指数構成銘柄（約44銘柄）",
+          "weight": 0.1077
+        }
+      ]
+    },
+    {
+      "key": "MSFU",
+      "label": "MSFU（Microsoft 2倍）",
+      "matchNamePattern": "\\bMSFU\\b",
+      "holdings": [
+        {
+          "ticker": "MSFT",
+          "name": "Microsoft（マイクロソフト）",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "key": "METU",
+      "label": "METU（Meta 2倍）",
+      "matchNamePattern": "\\bMETU\\b",
+      "holdings": [
+        {
+          "ticker": "META",
+          "name": "Meta Platforms（メタ）",
+          "weight": 1
+        }
       ]
     }
-  ]
+  ],
+  "displayNames": {
+    "SPCX": "SpaceX（スペースX）",
+    "CVX": "Chevron（シェブロン）",
+    "CAT": "Caterpillar（キャタピラー）",
+    "MRK": "Merck（メルク）",
+    "MRVL": "Marvell Technology（マーベル・テクノロジー）",
+    "AMGN": "Amgen（アムジェン）",
+    "LIN": "Linde（リンデ）",
+    "QCOM": "Qualcomm（クアルコム）",
+    "STX": "Seagate Technology（シーゲイト・テクノロジー）",
+    "ADI": "Analog Devices（アナログ・デバイセズ）",
+    "MPWR": "Monolithic Power Systems（モノリシック・パワー・システムズ）",
+    "SKHY": "SK hynix ADR（SKハイニックス）",
+    "TER": "Teradyne（テラダイン）",
+    "TSM": "TSMC ADR（台湾積体電路製造）",
+    "NXPI": "NXP Semiconductors（NXPセミコンダクターズ）",
+    "ALAB": "Astera Labs（アステラ・ラボ）",
+    "MCHP": "Microchip Technology（マイクロチップ・テクノロジー）",
+    "CRDO": "Credo Technology（クレド・テクノロジー）",
+    "ON": "ON Semiconductor（オン・セミコンダクター）",
+    "ASML": "ASML（ASMLホールディング）",
+    "TSEM": "Tower Semiconductor（タワーセミコンダクター）",
+    "ENTG": "Entegris（インテグリス）",
+    "MTSI": "MACOM Technology（メイコム・テクノロジー）",
+    "CBRS": "Cerebras Systems（セレブラス・システムズ）",
+    "ASX": "ASE Technology ADR（日月光投資控股）",
+    "UMC": "UMC ADR（聯華電子）",
+    "ARM": "Arm Holdings ADR（アーム・ホールディングス）",
+    "STM": "STMicroelectronics（STマイクロエレクトロニクス）",
+    "ORCL": "Oracle（オラクル）",
+    "ANET": "Arista Networks（アリスタ・ネットワークス）",
+    "IBM": "IBM（アイ・ビー・エム）",
+    "APH": "Amphenol（アンフェノール）",
+    "CRM": "Salesforce（セールスフォース）",
+    "WDC": "Western Digital（ウエスタンデジタル）",
+    "DELL": "Dell Technologies（デル・テクノロジーズ）",
+    "NOW": "ServiceNow（サービスナウ）",
+    "GLW": "Corning（コーニング）",
+    "FTNT": "Fortinet（フォーティネット）"
+  },
+  "autoUpdated": "SP500:9/25/2026 / Nasdaq:9/25/2026 / SOXL:9/25/2026 / TECL:9/25/2026"
 }
