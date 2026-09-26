@@ -41,13 +41,14 @@ function rankColor(rank) { const order = ["A", "B", "C", "D", "E"]; const idx = 
 const MILESTONES = [-3, -5, -8, -10, -12, -15, -18, -20, -25, -30, -35, -40, -45, -50];
 // 表示期間内の最大DD%（最も深い下落）に応じてDD%軸の目盛りを動的に切り替える。
 // 浅い局面ではDD3%等の初期リバランスポイントが見やすいよう細かく、深い局面では10%刻みに広げる。
+// DD-3%はDD戦略の起点（最初のリバランスポイント）なので、表示期間に関わらず常に目盛に含める。
 function ddAxisTicksForMaxDrawdown(maxDrawdownPct) {
   const abs = Math.abs(maxDrawdownPct);
   if (abs <= 5) return [0, -3, -5];
   if (abs <= 10) return [0, -3, -5, -8, -10];
-  if (abs <= 20) return [0, -5, -10, -15, -20];
+  if (abs <= 20) return [0, -3, -5, -10, -15, -20];
   const top = Math.ceil(abs / 10) * 10;
-  const ticks = [0];
+  const ticks = [0, -3];
   for (let t = -10; t >= -top; t -= 10) ticks.push(t);
   return ticks;
 }
@@ -1623,11 +1624,11 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBru
       <CartesianGrid stroke={C.borderSoft} vertical={false} />
       <XAxis dataKey="date" tickFormatter={(dt) => fmtAxisDate(dt, rangeDays)} tick={{ fill: C.textDim, fontSize }} axisLine={{ stroke: C.border }} tickLine={false} minTickGap={40} />
       <YAxis yAxisId="price" domain={["auto", "auto"]} tick={{ fill: C.teal, fontSize }} axisLine={false} tickLine={false} width={48} label={{ value: "評価額", angle: -90, position: "insideLeft", fill: C.teal, fontSize }} />
-      <YAxis yAxisId="dd" orientation="right" domain={[ddTicks[ddTicks.length - 1], 0]} ticks={ddTicks} tick={{ fill: C.rust, fontSize }} axisLine={false} tickLine={false} width={46} label={{ value: "DD%", angle: 90, position: "insideRight", fill: C.rust, fontSize }} />
+      <YAxis yAxisId="dd" orientation="right" domain={[ddTicks[ddTicks.length - 1], 0]} ticks={ddTicks} interval={0} tick={{ fill: C.rust, fontSize }} axisLine={false} tickLine={false} width={46} label={{ value: "DD%", angle: 90, position: "insideRight", fill: C.rust, fontSize }} />
       <Tooltip content={(props) => <EvalTooltipContent {...props} markerByTime={markerByTime} />} />
       {MILESTONES.filter((t) => t !== -3).map((t) => (<ReferenceLine key={t} yAxisId="dd" y={t} stroke={C.borderSoft} strokeDasharray="2 3" label={{ value: `${t}%`, position: "insideBottomRight", fill: C.textDim, fontSize: Math.max(8, fontSize - 2) }} />))}
-      {/* DD目安ラインは右軸（DD%）の値なので、ラベルも右軸側に置く（右軸の目盛と重ならないようプロット内の右端・線の上） */}
-      <ReferenceLine yAxisId="dd" y={-3} stroke={C.rust} strokeDasharray="4 3" strokeWidth={1.3} label={{ value: "-3%", position: "insideBottomRight", fill: C.rust, fontSize: Math.max(8, fontSize - 2) }} />
+      {/* DD-3%の目安ライン。値はDD%軸の目盛（常に-3を含む）で示すため、チャート内のラベルは付けない */}
+      <ReferenceLine yAxisId="dd" y={-3} stroke={C.rust} strokeDasharray="4 3" strokeWidth={1.3} />
       {chartData[0].date < SPY_LISTING_DATE && chartData[chartData.length - 1].date > SPY_LISTING_DATE && (<ReferenceLine yAxisId="price" x={SPY_LISTING_DATE} stroke={C.violet} strokeDasharray="3 3" label={{ value: "S&P500上場", fill: C.violet, fontSize: Math.max(9, fontSize - 1), position: "top" }} />)}
       <Area yAxisId="dd" type="linear" dataKey="dd" stroke={C.rust} fill="url(#ddFill)" strokeWidth={1.3} dot={false} isAnimationActive={false} fillOpacity={hidden.dd ? 0 : 1} strokeOpacity={hidden.dd ? 0 : 1} />
       <Area yAxisId="price" type="linear" dataKey="price" stroke={C.teal} fill="url(#priceFill)" strokeWidth={1.8} dot={false} isAnimationActive={false} fillOpacity={hidden.price ? 0 : 1} strokeOpacity={hidden.price ? 0 : 1} />
