@@ -5,11 +5,12 @@ import {
   ComposedChart, LineChart, Area, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ReferenceLine, ReferenceDot, ResponsiveContainer, PieChart, Pie, Cell, Brush, Customized,
 } from "recharts";
-import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Download, RefreshCw, Database, Trash2, Zap, Copy, FileText, Activity, Layers, ListChecks, Smartphone, Monitor, Wallet } from "lucide-react";
+import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Download, RefreshCw, Database, Trash2, Zap, Copy, FileText, Activity, Layers, ListChecks, Smartphone, Monitor, Wallet, Gauge } from "lucide-react";
 import { storage } from "@/lib/storage";
 import { pullSyncAndApply, pushSyncNow, scheduleSyncPush, getLastSyncedAt } from "@/lib/sync";
 import { parseInvestmentExcel, computeOwnAssetDrawdown, computeBenchmarkCAGR, simulateDcaBenchmark, simulateLumpSumBenchmark } from "@/lib/investmentPerformance";
 import { computeRealHoldingsRanking } from "@/lib/realHoldingsRanking";
+import { buildStatsTable, deriveCurrentState, computeBottomScore, findSimilarEpisodes, LOW_SAMPLE_N } from "@/lib/bottomScore";
 
 // Cloudflare Worker（当日のVOO/QQQ終値を返す。SP500はここでは扱わず引き続きCSV取り込み/直接入力で更新する）のエンドポイント。
 // デプロイ先のURLに置き換えてください。
@@ -4089,7 +4090,158 @@ function MobileAnalysisPage({ analysisText, checkpointResults, onOpenCheckpointS
     </div>
   );
 }
-// 6ページをスクロールスナップの横並びで持ち、スワイプ／下部タブバーのタップの両方でページ送りできる。
+/* ---------------- 底値判定スコア ---------------- */
+// 統計テーブルはすべて読み込まれている全期間の価格系列から都度算出する（lib/bottomScore.ts）。
+function bottomScoreColor(score) { if (score >= 85) return C.teal; if (score >= 60) return lerpColor(C.teal, C.amber, 0.5); if (score >= 30) return C.amber; return C.rust; }
+function LowSampleBadge({ n }) {
+  if (n >= LOW_SAMPLE_N) return null;
+  return <span className="text-[9px] px-1 rounded ml-1 whitespace-nowrap" style={{ color: C.amber, border: `1px solid ${C.amber}66` }}>参考値（サンプル少）</span>;
+}
+function BottomScoreGauge({ score, band, size = 150 }) {
+  const r = size / 2 - 10, cx = size / 2, cy = size / 2 + 2, sw = 10;
+  const pt = (v) => { const a = Math.PI * (1 - v / 100); return [cx + r * Math.cos(a), cy - r * Math.sin(a)]; };
+  const arc = (from, to) => { const [x0, y0] = pt(from), [x1, y1] = pt(to); return `M ${x0} ${y0} A ${r} ${r} 0 0 1 ${x1} ${y1}`; };
+  const color = bottomScoreColor(score);
+  return (
+    <svg width={size} height={size / 2 + 26} viewBox={`0 0 ${size} ${size / 2 + 26}`} role="img" aria-label={`底値判定スコア ${score}点（${band}）`}>
+      <path d={arc(0, 100)} stroke={C.panel2} strokeWidth={sw} fill="none" strokeLinecap="round" />
+      {score > 0 && <path d={arc(0, Math.min(score, 100))} stroke={color} strokeWidth={sw} fill="none" strokeLinecap="round" />}
+      {[30, 60, 85].map((v) => { const [x0, y0] = pt(v); const a = Math.PI * (1 - v / 100); return <line key={v} x1={x0 - Math.cos(a) * (sw / 2 + 1)} y1={y0 + Math.sin(a) * (sw / 2 + 1)} x2={x0 + Math.cos(a) * (sw / 2 + 1)} y2={y0 - Math.sin(a) * (sw / 2 + 1)} stroke={C.panel} strokeWidth={2} />; })}
+      <text x={cx} y={cy - 8} textAnchor="middle" fontSize={size / 5} fontWeight={700} fill={C.text} className="mono">{score.toFixed(0)}</text>
+      <text x={cx} y={cy + 16} textAnchor="middle" fontSize={11} fill={color} fontWeight={700}>{band}</text>
+    </svg>
+  );
+}
+function BottomScoreBreakdown({ components, showDetail = false }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      {components.map((c) => (
+        <div key={c.key} title={c.detail}>
+          <div className="grid items-center gap-2" style={{ gridTemplateColumns: showDetail ? "150px 1fr 44px 52px" : "84px 1fr 30px" }}>
+            <span className="text-[10px] truncate" style={{ color: C.textMuted }}>{c.label}</span>
+            <div className="h-2 rounded-full" style={{ background: C.panel2 }}><div className="h-2 rounded-full" style={{ width: `${Math.max(0, Math.min(100, c.value))}%`, background: bottomScoreColor(c.value) }} /></div>
+            <span className="mono text-[10px] text-right" style={{ color: C.text }}>{c.value.toFixed(0)}</span>
+            {showDetail && <span className="mono text-[10px] text-right" style={{ color: C.textDim }}>×{c.weight.toFixed(2)}</span>}
+          </div>
+          {showDetail && <div className="text-[10px] mt-0.5" style={{ color: C.textDim }}>{c.detail}（n={c.n}）<LowSampleBadge n={c.n} /></div>}
+        </div>
+      ))}
+    </div>
+  );
+}
+function BottomScorePanelBody({ bottom, onOpen, large = false }) {
+  const s = bottom.score;
+  return (
+    <div className="h-full flex flex-col p-2.5 gap-1.5 cursor-pointer" onClick={onOpen} title="クリックで詳細（類似ケース・統計テーブル）">
+      {s.applicable ? (
+        <div className="flex flex-col items-center justify-center gap-2 flex-1 min-h-0">
+          <div className="shrink-0 flex flex-col items-center">
+            <BottomScoreGauge score={s.score} band={s.band} size={large ? 190 : 150} />
+            <span className="text-[10px]" style={{ color: C.textDim }}>比較バケット {s.bucket.label}（n={s.bucket.n}）{s.bucketFallback ? "※浅い側で代用" : ""}</span>
+          </div>
+          <div className="flex-1 min-w-0 w-full"><BottomScoreBreakdown components={s.components} /></div>
+        </div>
+      ) : (
+        <div className="flex-1 flex items-center justify-center text-[11px] text-center px-3" style={{ color: C.textDim }}>{s.reason}</div>
+      )}
+      <div className="text-[9px] leading-tight" style={{ color: C.textDim }}>SP500 {bottom.stats.n.toLocaleString()}営業日・対象局面{bottom.stats.episodes.length}件から都度算出。投資助言ではありません。</div>
+    </div>
+  );
+}
+function BottomScoreModalContent({ bottom }) {
+  const { stats, state, score: s, similar } = bottom;
+  const th = "text-left font-normal py-1 px-2", td = "py-1 px-2";
+  const pctCell = (p) => (p === null ? "—" : `${p}%`);
+  const fmt = (dt) => (dt ? fmtYMD(dt) : "未回復");
+  const sectionTitle = (t, sub) => (<div className="text-xs mb-2" style={{ color: C.textDim }}>{t}{sub && <span className="ml-1">{sub}</span>}</div>);
+  return (
+    <div className="flex flex-col gap-7">
+      <div className="grid gap-6" style={{ gridTemplateColumns: "minmax(0,260px) minmax(0,1fr)" }}>
+        <div className="flex flex-col items-center gap-2">
+          {s.applicable ? <BottomScoreGauge score={s.score} band={s.band} size={220} /> : <div className="text-xs py-8 text-center" style={{ color: C.textDim }}>{s.reason}</div>}
+          <div className="text-[10px] leading-relaxed w-full" style={{ color: C.textDim }}>0-30 継続警戒 / 30-60 様子見 / 60-85 部分買い増し目安 / 85-100 積極買い増し目安</div>
+        </div>
+        <div className="flex flex-col gap-3 min-w-0">
+          {state && (
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
+              {[["現局面の最大DD", `${state.current_dd.toFixed(1)}%`], ["最新DD", `${state.latest_dd.toFixed(1)}%`], ["直前ATHからの経過", `${state.days_at_current_level}営業日`], ["だまし上げ回数", `${state.fake_rally_count}回`], ["安値からの反発", `${state.bounce_from_low_pct.toFixed(1)}%`], ["アンカー価格からの反発", state.bounce_from_anchor_pct != null ? `${state.bounce_from_anchor_pct.toFixed(1)}%` : "—"]].map(([k, v]) => (
+                <div key={k} className="flex justify-between gap-2" style={{ borderBottom: `1px solid ${C.borderSoft}` }}><span style={{ color: C.textMuted }}>{k}</span><span className="mono">{v}</span></div>
+              ))}
+            </div>
+          )}
+          {s.applicable && <BottomScoreBreakdown components={s.components} showDetail />}
+        </div>
+      </div>
+
+      {similar.length > 0 && (
+        <div>
+          {sectionTitle("類似ケース（深度バケット・経過日数・だまし上げ回数の正規化ユークリッド距離 上位3件）")}
+          <div className="overflow-x-auto"><table className="w-full text-xs mono"><thead><tr style={{ color: C.textDim }}><th className={th}>直前ATH</th><th className={th}>底値日</th><th className={th}>回復日</th><th className={th}>最終下落幅</th><th className={th}>下落日数</th><th className={th}>だまし上げ</th><th className={th}>最終帰結</th><th className={th}>距離</th></tr></thead>
+            <tbody>{similar.map((c) => (
+              <tr key={c.episode.pre_ath_idx} style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+                <td className={td}>{fmt(c.episode.pre_ath_date)}</td><td className={td}>{fmt(c.episode.trough_date)}</td><td className={td}>{fmt(c.episode.resolve_date)}</td>
+                <td className={td} style={{ color: depthColor(c.episode.min_dd) }}>{c.episode.min_dd.toFixed(1)}%</td><td className={td}>{c.durationDays}日</td><td className={td}>{c.fakeRallyCount}回</td>
+                <td className={td} style={{ color: c.clean ? C.teal : C.amber }}>{c.clean ? "クリーン回復" : "二次押し目あり"}</td><td className={td}>{c.distance}</td>
+              </tr>
+            ))}</tbody></table></div>
+        </div>
+      )}
+
+      <div>
+        {sectionTitle("深度バケット別 基礎統計", "（解消済みエピソードのみ）")}
+        <div className="overflow-x-auto"><table className="w-full text-xs mono"><thead><tr style={{ color: C.textDim }}><th className={th}>最大DD</th><th className={th}>n</th><th className={th}>平均下落日数</th><th className={th}>平均だまし上げ</th><th className={th}>クリーン回復率</th></tr></thead>
+          <tbody>{stats.depthStats.map((b) => (
+            <tr key={b.key} style={{ borderTop: `1px solid ${C.borderSoft}`, color: s.applicable && s.bucket.key === b.key ? C.text : C.textMuted }}>
+              <td className={td}>{b.label}</td><td className={td}>{b.n}<LowSampleBadge n={b.n} /></td><td className={td}>{b.avgDurationDays ?? "—"}日</td><td className={td}>{b.avgFakeRallyCount ?? "—"}回</td><td className={td}>{pctCell(b.cleanRecoveryRate)}（{b.cleanCount}/{b.n}）</td>
+            </tr>
+          ))}</tbody></table></div>
+      </div>
+
+      <div className="grid gap-6" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))" }}>
+        <div>
+          {sectionTitle("節目間 進行確率", "（同一下落局面内）")}
+          <table className="w-full text-xs mono"><thead><tr style={{ color: C.textDim }}><th className={th}>節目</th><th className={th}>進行確率</th><th className={th}>到達/n</th></tr></thead>
+            <tbody>{stats.levelProgression.map((r) => (
+              <tr key={r.from} style={{ borderTop: `1px solid ${C.borderSoft}` }}><td className={td}>{r.from}%→{r.to}%</td><td className={td}>{pctCell(r.p)}</td><td className={td}>{r.progressed}/{r.reached}<LowSampleBadge n={r.reached} /></td></tr>
+            ))}</tbody></table>
+        </div>
+        <div>
+          {sectionTitle("節目間 所要日数", "（初到達日の差・営業日）")}
+          <table className="w-full text-xs mono"><thead><tr style={{ color: C.textDim }}><th className={th}>区間</th><th className={th}>中央値</th><th className={th}>平均</th><th className={th}>25-75%</th><th className={th}>n</th></tr></thead>
+            <tbody>{stats.transitionDays.map((t) => (
+              <tr key={`${t.from}${t.to}`} style={{ borderTop: `1px solid ${C.borderSoft}` }}><td className={td}>{t.from}%→{t.to}%</td><td className={td}>{t.median ?? "—"}</td><td className={td}>{t.mean ?? "—"}</td><td className={td}>{t.p25 ?? "—"}〜{t.p75 ?? "—"}</td><td className={td}>{t.n}<LowSampleBadge n={t.n} /></td></tr>
+            ))}</tbody></table>
+        </div>
+      </div>
+
+      <div>
+        {sectionTitle("反発確認テーブル", "（DD到達価格を基準に、基準割れ前に各上昇幅へ到達した確率。セル内はn）")}
+        <div className="overflow-x-auto"><table className="w-full text-xs mono"><thead><tr style={{ color: C.textDim }}><th className={th}>アンカー</th>{stats.reboundTable[0]?.rungs.map((r) => <th key={r.up} className={th}>+{r.up}%</th>)}</tr></thead>
+          <tbody>{stats.reboundTable.map((row) => (
+            <tr key={row.anchor} style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+              <td className={td}>{row.anchor}%<span className="text-[10px] ml-1" style={{ color: C.textDim }}>(n={row.nAnchor})</span><LowSampleBadge n={row.nAnchor} /></td>
+              {row.rungs.map((r) => <td key={r.up} className={td} style={{ color: r.lowSample ? C.textDim : C.text }}>{pctCell(r.p)}<span className="text-[9px] ml-0.5" style={{ color: C.textDim }}>{r.n}</span></td>)}
+            </tr>
+          ))}</tbody></table></div>
+      </div>
+
+      <div className="text-[11px] leading-relaxed" style={{ color: C.textDim }}>
+        すべての統計は、読み込まれているSP500日次終値（{stats.n.toLocaleString()}営業日）から検出した対象エピソード（dd&lt;0の連続区間のうち最大DD-3%以下、{stats.episodes.length}件）をもとに毎回再計算しています。日次終値を追加すると自動的に反映されます。n&lt;{LOW_SAMPLE_N}の指標は参考値です。過去の統計は将来を保証しません。
+      </div>
+    </div>
+  );
+}
+function MobileBottomScorePage({ bottom, onOpen }) {
+  return (
+    <div className="p-3 h-full">
+      <div className="rounded-lg h-full flex flex-col" style={{ background: C.panel, border: `1px solid ${C.border}` }}>
+        <div className="px-3 pt-2 text-[11px] shrink-0" style={{ color: C.textDim }}>底値判定スコア（タップで詳細）</div>
+        <div className="flex-1 min-h-0"><BottomScorePanelBody bottom={bottom} onOpen={onOpen} large /></div>
+      </div>
+    </div>
+  );
+}
+// 7ページをスクロールスナップの横並びで持ち、スワイプ／下部タブバーのタップの両方でページ送りできる。
 function MobilePager({ activeIndex, onChange, pages }) {
   const scrollerRef = useRef(null);
   const scrollSettleTimer = useRef(null);
@@ -4949,6 +5101,16 @@ export default function DDDashboard() {
   // 現在のDD%・経過日数・速度計測（DD3→5%等）はVOO/QQQ自身の評価額の動きをそのまま使う（DD加速度アラートはVOO/QQQのユーザー選択に応じて切り替える仕様）。
   const dVoo = useMemo(() => (vooCalcSeries.length ? computeAll(vooCalcSeries, d.trackRecord) : null), [vooCalcSeries, d.trackRecord]);
   const dQqq = useMemo(() => (qqqCalcSeries.length ? computeAll(qqqCalcSeries, d.trackRecord) : null), [qqqCalcSeries, d.trackRecord]);
+  // 底値判定スコア：SP500全履歴から統計テーブル（深度別・進行確率・反発確認・所要日数）をキャッシュせず都度算出する。
+  // rawSeriesが更新（日次終値の追加・CSV再取り込み）されるたびにd.FULLが作り直されるため、自動的に再計算される。
+  const bottom = useMemo(() => {
+    const prices = d.FULL.map((p) => p.price), dates = d.FULL.map((p) => p.date);
+    const stats = buildStatsTable(prices, dates);
+    const state = deriveCurrentState(prices);
+    const score = state ? computeBottomScore(state, stats) : { applicable: false, reason: "現在は最高値圏（DD 0%）のため判定対象外です" };
+    const similar = state && score.applicable ? findSimilarEpisodes(state, stats, prices) : [];
+    return { stats, state, score, similar };
+  }, [d.FULL]);
   const chartData = useMemo(() => sliceForPeriod(d.FULL, d.last, period), [d.FULL, d.last, period]);
   const rangeDays = useMemo(() => { const f = chartData[0].date, l = chartData[chartData.length - 1].date; return Math.round((l - f) / 86400000); }, [chartData]);
   const periodRange = useMemo(() => periodDateRange(d.FULL, d.last, period), [d.FULL, d.last, period]);
@@ -5055,6 +5217,7 @@ export default function DDDashboard() {
       {modal?.type === "ddChart" && <FullScreenModal title={chartSourceTitle(chartSource)} onClose={() => setModal(null)}><DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} bothChartData={bothChartData} chartSource={chartSource} setChartSource={setChartSource} /></FullScreenModal>}
       {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} vooQqqSeries={vooQqqSeries} onAppendVooQqq={handleAppendVooQqq} onImportVooQqq={handleImportVooQqq} onResetVooQqqField={handleResetVooQqqField} />}
       {modal?.type === "checkpointSettings" && <FullScreenModal title="チェックポイント設定" onClose={() => setModal(null)}><CheckpointSettingsContent checkpoints={checkpoints} onCheckpointChange={handleCheckpointChange} holdings={holdings} /></FullScreenModal>}
+      {modal?.type === "bottomScore" && <FullScreenModal title="底値判定スコア（SP500実績から都度算出）" onClose={() => setModal(null)}><BottomScoreModalContent bottom={bottom} /></FullScreenModal>}
       {modal?.type === "realHoldingsRanking" && <FullScreenModal title="実質保有銘柄ランキング" onClose={() => setModal(null)}><RealHoldingsRankingContent holdings={combinedHoldings} /></FullScreenModal>}
       {modal?.type === "summary" && <FullScreenModal title="詳細サマリー出力（AI相談用）" onClose={() => setModal(null)}><SummaryModalContent d={d} dVoo={dVoo} dQqq={dQqq} holdings={holdings} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} blocks={blocks} rankLabels={rankLabels} lifecycle={lifecycle} onLifecycleChange={handleLifecycleChange} fixedPositions={fixedPositions} onFixedPositionChange={handleFixedPositionChange} checkpoints={checkpoints} prevSnapshot={prevSnapshot} onSaveSnapshot={handleSaveSnapshot} /></FullScreenModal>}
       {modal?.type === "mobileChartZoom" && <MobileChartZoomModal onClose={() => setModal(null)} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} bothChartData={bothChartData} chartSource={chartSource} setChartSource={setChartSource} isRealDevice={isMobileAuto} />}
@@ -5110,7 +5273,7 @@ export default function DDDashboard() {
       )}
 
       {isMobile ? (
-        // スマホ版は文字・図が小さいという要望に合わせ、6ページ全体をCSS zoomで1.2倍表示する。
+        // スマホ版は文字・図が小さいという要望に合わせ、7ページ全体をCSS zoomで1.2倍表示する。
         // 各ページはoverflow-y-autoで自身の中身をスクロールできるため、拡大で高さが収まらなくなっても問題ない。
         <div className="flex-1 min-h-0 flex flex-col" style={{ zoom: 1.2 }}>
           <MobilePager
@@ -5122,6 +5285,7 @@ export default function DDDashboard() {
               { key: "chart", label: "チャート", icon: Activity, content: <MobileChartPage d={d} onZoom={() => setModal({ type: "mobileChartZoom" })} /> },
               { key: "portfolio", label: "構成", icon: Layers, content: <MobilePortfolioPage pieView={pieView} setPieView={setPieView} holdings={combinedHoldings} onOpen={() => setModal({ type: "portfolio" })} onOpenRealHoldingsRanking={() => setModal({ type: "realHoldingsRanking" })} dateLabel={holdingsDateLabel} /> },
               { key: "diff", label: "配分乖離", icon: ListChecks, content: <MobileDiffPage modelOverride={modelOverride} setModelOverride={setModelOverride} d={d} currentHoldingPct={currentHoldingPct} currentHoldingAmount={currentHoldingAmount} effectiveModelRow={effectiveModelRow} rankLabels={rankLabels} blocks={blocks} onOpenRank={(rank) => setModal({ type: "rank", rank })} onOpenDDTable={() => setModal({ type: "ddTable" })} dateLabel={holdingsDateLabel} /> },
+              { key: "bottom", label: "底値判定", icon: Gauge, content: <MobileBottomScorePage bottom={bottom} onOpen={() => setModal({ type: "bottomScore" })} /> },
               { key: "analysis", label: "現状分析", icon: Info, content: <MobileAnalysisPage analysisText={analysisText} checkpointResults={checkpointResults} onOpenCheckpointSettings={() => setModal({ type: "checkpointSettings" })} /> },
             ]}
           />
@@ -5239,7 +5403,7 @@ export default function DDDashboard() {
             </div>
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 4, flex: 1, minHeight: 0 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "300px minmax(0, 1fr) 380px", gap: 4, flex: 1, minHeight: 0 }}>
             {/* bottom-left: portfolio pie */}
             <div style={{ minHeight: 0 }}>
               <Panel title={<>ポートフォリオ構成{holdingsDateSuffix}</>} action={<div className="flex items-center gap-1">{[{ k: "category", l: "カテゴリー別" }, { k: "currency", l: "為替別" }, { k: "rank", l: "A〜Eクラス" }, { k: "owner", l: "口座別" }].map((t) => (<button key={t.k} onClick={() => setPieView(t.k)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: pieView === t.k ? C.bg : C.textMuted, background: pieView === t.k ? C.teal : "transparent", fontWeight: pieView === t.k ? 700 : 400 }}>{t.l}</button>))}<button onClick={() => setModal({ type: "realHoldingsRanking" })} title="実質保有銘柄ランキング（ETF・投信を構成銘柄まで分解して合算）" style={{ background: "transparent", border: "none", cursor: "pointer" }}><Layers size={14} style={{ color: C.textDim }} /></button></div>} className="h-full">
@@ -5261,6 +5425,13 @@ export default function DDDashboard() {
                     {[{ label: "A+B", ...blocks.AB }, { label: "C", ...blocks.Cb }, { label: "D+E", ...blocks.DE }].map((b) => { const diff = Number((b.cur - b.tgt).toFixed(1)); return (<div key={b.label} className="rounded px-2 py-0.5 text-center" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}><div className="text-[10px]" style={{ color: C.textDim }}>{b.label}</div><div className="mono text-xs font-semibold">{Number(b.cur.toFixed(1))}%</div><div className="mono text-[10px]" style={{ color: Math.abs(diff) >= 4 ? C.rust : C.textMuted }}>{diff > 0 ? "+" : ""}{diff}pt</div></div>); })}
                   </div>
                 </div>
+              </Panel>
+            </div>
+
+            {/* bottom-far-right: 底値判定スコア */}
+            <div style={{ minHeight: 0 }}>
+              <Panel title="底値判定スコア" action={<button onClick={() => setModal({ type: "bottomScore" })} title="類似ケース・統計テーブルを表示" style={{ background: "transparent", border: "none", cursor: "pointer" }}><Info size={14} style={{ color: C.textDim }} /></button>} className="h-full">
+                <BottomScorePanelBody bottom={bottom} onOpen={() => setModal({ type: "bottomScore" })} />
               </Panel>
             </div>
           </div>
