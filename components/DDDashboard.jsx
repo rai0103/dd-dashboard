@@ -4104,49 +4104,35 @@ function HoldProbGauge({ p, size = 150 }) {
   const arc = (from, to) => { const [x0, y0] = pt(from), [x1, y1] = pt(to); return `M ${x0} ${y0} A ${r} ${r} 0 0 1 ${x1} ${y1}`; };
   const color = holdProbColor(p);
   return (
-    <svg width={size} height={size / 2 + 26} viewBox={`0 0 ${size} ${size / 2 + 26}`} role="img" aria-label={`底値確定確率 ${p}%`}>
+    <svg width={size} height={size / 2 + 8} viewBox={`0 0 ${size} ${size / 2 + 8}`} role="img" aria-label={`底値確定確率 ${p}%`}>
       <path d={arc(0, 100)} stroke={C.panel2} strokeWidth={sw} fill="none" strokeLinecap="round" />
       {p > 0 && <path d={arc(0, Math.min(p, 100))} stroke={color} strokeWidth={sw} fill="none" strokeLinecap="round" />}
       <text x={cx} y={cy - 8} textAnchor="middle" fontSize={size / 5.5} fontWeight={700} fill={C.text} className="mono">{p.toFixed(1)}%</text>
-      <text x={cx} y={cy + 16} textAnchor="middle" fontSize={11} fill={color} fontWeight={700}>底値確定→ATH更新</text>
     </svg>
   );
 }
-// 底値確定（ATH更新）と底割れ（更に下落）の2択を100%積み上げの1本バーで示す。
-function HoldBreakBar({ tier }) {
+// 半円ゲージ直下に、底値確定（緑）／底割れ（赤）の割合と件数を1行で示す。
+function HoldSplitLine({ tier, large = false }) {
   return (
-    <div className="w-full">
-      <div className="flex h-2.5 rounded-full overflow-hidden" style={{ background: C.panel2, gap: 2 }} title={`底値確定 ${tier.held}件 / 底割れ ${tier.broke}件（n=${tier.n}）`}>
-        <div style={{ width: `${tier.pHold ?? 0}%`, background: C.teal }} />
-        <div style={{ width: `${tier.pBreak ?? 0}%`, background: C.rust }} />
-      </div>
-      <div className="flex justify-between text-[10px] mt-1">
-        <span style={{ color: C.textMuted }}><span style={{ color: C.teal }}>■</span> 底値確定 <span className="mono" style={{ color: C.text }}>{tier.pHold}%</span>（{tier.held}件）</span>
-        <span style={{ color: C.textMuted }}><span style={{ color: C.rust }}>■</span> 底割れ <span className="mono" style={{ color: C.text }}>{tier.pBreak}%</span>（{tier.broke}件）</span>
-      </div>
+    <div className={`mono ${large ? "text-[12px]" : "text-[11px]"} text-center whitespace-nowrap`} title={`n=${tier.n}`}>
+      <span style={{ color: C.teal, fontWeight: 700 }}>底値確定 {tier.pHold}%</span><span style={{ color: C.textMuted }}>（{tier.held}件）</span>
+      <span style={{ color: C.textDim }}> / </span>
+      <span style={{ color: C.rust, fontWeight: 700 }}>底割れ {tier.pBreak}%</span><span style={{ color: C.textMuted }}>（{tier.broke}件）</span>
     </div>
   );
 }
 function fmtIdxDate(FULL, idx) { return FULL[idx] ? fmtYMD(FULL[idx].date) : "—"; }
 function bottomLabel(FULL, state) { return `${fmtIdxDate(FULL, state.trough_idx)}（${state.mdd.toFixed(2)}%）`; }
-// どの日の底値を判定しているかを明示する見出し（例：判定中の底値 2026/9/16（-3.17%））
-function JudgedBottomHeading({ FULL, state, size = "sm" }) {
-  return (
-    <div className="flex flex-col items-center leading-tight">
-      <span className={size === "lg" ? "text-[11px]" : "text-[10px]"} style={{ color: C.textDim }}>判定中の底値（MDD）</span>
-      <span className={`mono font-bold ${size === "lg" ? "text-lg" : "text-sm"}`} style={{ color: depthColor(state.mdd) }}>{bottomLabel(FULL, state)}</span>
-    </div>
-  );
-}
 function BottomScorePanelBody({ bottom, FULL, onOpen, large = false }) {
   const h = bottom.hold;
   return (
     <div className="h-full flex flex-col p-2.5 gap-1.5 cursor-pointer" onClick={onOpen} title="クリックで詳細（条件別の確率・過去事例・統計テーブル）">
       {h.applicable ? (
         <div className="flex flex-col items-center justify-center gap-2 flex-1 min-h-0">
-          <JudgedBottomHeading FULL={FULL} state={h.state} size={large ? "lg" : "sm"} />
-          <HoldProbGauge p={h.tier.pHold ?? 0} size={large ? 190 : 150} />
-          <HoldBreakBar tier={h.tier} />
+          <div className="flex flex-col items-center gap-0.5">
+            <HoldProbGauge p={h.tier.pHold ?? 0} size={large ? 190 : 150} />
+            <HoldSplitLine tier={h.tier} large={large} />
+          </div>
           <div className="text-[10px] text-center leading-snug" style={{ color: C.textDim }}>条件：{h.tier.label}（n={h.tier.n}）<LowSampleBadge n={h.tier.n} /></div>
         </div>
       ) : (
@@ -4165,17 +4151,16 @@ function BottomScoreModalContent({ bottom, FULL }) {
     <div className="flex flex-col gap-7">
       {h.applicable ? (
         <>
-          <div className="grid gap-6" style={{ gridTemplateColumns: "minmax(0,260px) minmax(0,1fr)" }}>
-            <div className="flex flex-col items-center gap-2"><JudgedBottomHeading FULL={FULL} state={h.state} size="lg" /><HoldProbGauge p={h.tier.pHold ?? 0} size={220} /><span className="text-[10px] text-center" style={{ color: C.textDim }}>{bottomLabel(FULL, h.state)} を割らずにATHを更新する確率</span></div>
+          <div className="grid gap-6" style={{ gridTemplateColumns: "minmax(0,300px) minmax(0,1fr)" }}>
+            <div className="flex flex-col items-center gap-1"><HoldProbGauge p={h.tier.pHold ?? 0} size={220} /><HoldSplitLine tier={h.tier} /><span className="text-[10px] text-center" style={{ color: C.textDim }}>この底値を割らずにATHを更新する確率</span></div>
             <div className="flex flex-col gap-3 min-w-0">
               <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
-                {[["判定中の底値（MDD）", bottomLabel(FULL, h.state)], ["直前ATH", fmtIdxDate(FULL, h.state.pre_ath_idx)], ["最新DD", `${h.state.latest_dd.toFixed(2)}%`], ["底値からの反発", `+${h.state.bounce_from_low_pct.toFixed(2)}%`], ["下落幅の戻し率", `${(h.state.recovery_ratio * 100).toFixed(1)}%`], ["底値からの経過", `${h.state.days_since_trough}営業日（ATHから${h.state.days_since_ath}営業日）`]].map(([k, v]) => (
+                {[["直前ATH", fmtIdxDate(FULL, h.state.pre_ath_idx)], ["最新DD", `${h.state.latest_dd.toFixed(2)}%`], ["底値からの反発", `+${h.state.bounce_from_low_pct.toFixed(2)}%`], ["下落幅の戻し率", `${(h.state.recovery_ratio * 100).toFixed(1)}%`], ["底値からの経過", `${h.state.days_since_trough}営業日（ATHから${h.state.days_since_ath}営業日）`]].map(([k, v]) => (
                   <div key={k} className="flex justify-between gap-2" style={{ borderBottom: `1px solid ${C.borderSoft}` }}><span style={{ color: C.textMuted }}>{k}</span><span className="mono">{v}</span></div>
                 ))}
               </div>
-              <HoldBreakBar tier={h.tier} />
               <div className="text-[11px] leading-relaxed" style={{ color: C.textMuted }}>
-                底値 {bottomLabel(FULL, h.state)} について、採用条件「{h.tier.label}」に当てはまる過去{h.tier.n}件のうち、{h.tier.held}件はその底値を割らずにATHを更新しました（ATH更新まで中央値{h.medianDaysToAth ?? "—"}営業日）。
+                採用条件「{h.tier.label}」に当てはまる過去{h.tier.n}件のうち、{h.tier.held}件はその底値を割らずにATHを更新しました（ATH更新まで中央値{h.medianDaysToAth ?? "—"}営業日）。
                 {h.tier.broke > 0 ? `${h.tier.broke}件は底値を割り（割るまで中央値${h.medianDaysToBreak}営業日）、最終MDDは ${h.breakDistribution.filter((b) => b.count).map((b) => `${b.label}:${b.count}件`).join(" / ")} でした。` : "底値を割ったケースはありません。"}
               </div>
             </div>
@@ -4254,7 +4239,10 @@ function MobileBottomScorePage({ bottom, FULL, onOpen }) {
   return (
     <div className="p-3 h-full">
       <div className="rounded-lg h-full flex flex-col" style={{ background: C.panel, border: `1px solid ${C.border}` }}>
-        <div className="px-3 pt-2 text-[11px] shrink-0" style={{ color: C.textDim }}>底値判定（タップで詳細）</div>
+        <div className="px-3 pt-2 text-[11px] shrink-0 flex items-baseline justify-between gap-2 whitespace-nowrap" style={{ color: C.textDim }}>
+          <span>底値判定{bottom.hold.applicable && <> <span className="mono font-bold text-[12px]" style={{ color: depthColor(bottom.hold.state.mdd) }}>{bottomLabel(FULL, bottom.hold.state)}</span></>}</span>
+          <span className="text-[10px]">詳細 ›</span>
+        </div>
         <div className="flex-1 min-h-0"><BottomScorePanelBody bottom={bottom} FULL={FULL} onOpen={onOpen} large /></div>
       </div>
     </div>
