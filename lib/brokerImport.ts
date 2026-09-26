@@ -21,7 +21,7 @@ export const BROKERS: BrokerConfig[] = [
   {
     key: "moomoo",
     label: "moomoo証券",
-    owner: "moomoo証券",
+    owner: "moomoo", // 口座主（lib/owners.ts の OWNER_MOOMOO と同じ値）
     account: "—",
     aggregateNames: ["moomoo証券"],
     defaultRank: "D",

@@ -10,6 +10,7 @@ import { storage } from "@/lib/storage";
 import { pullSyncAndApply, pushSyncNow, scheduleSyncPush, getLastSyncedAt } from "@/lib/sync";
 import { parseInvestmentExcel, computeOwnAssetDrawdown, computeBenchmarkCAGR, simulateDcaBenchmark, simulateLumpSumBenchmark } from "@/lib/investmentPerformance";
 import { computeRealHoldingsRanking } from "@/lib/realHoldingsRanking";
+import { OWNER_RAKUTEN_SAKI, OWNER_RAKUTEN_SHIN, OWNER_MOOMOO, OWNER_OPTIONS, RAKUTEN_OWNERS, migrateHoldingsOwners, migrateAsOfKeys, detectRakutenOwnerFromFileName } from "@/lib/owners";
 import { BROKERS, brokerByKey, extractionToPreviewRows, previewRowsToHoldings, replaceBrokerHoldings, aggregateLabelsReplacedByBrokers, exposureCurrency, rowValue, reconcileWithAccountTotal, isPlausibleBrokerRate } from "@/lib/brokerImport";
 import { buildStatsTable, computeMddHoldProbability, LOW_SAMPLE_N } from "@/lib/bottomScore";
 
@@ -744,23 +745,23 @@ function evaluateCheckpoint(cp, holdings, totalValue) {
 
 /* ---------------- portfolio holdings (default/seed — replaced once real data is imported) ---------------- */
 const HOLDINGS_DEFAULT = [
-  { id: "seed-1", name: "eMAXIS Slim 米国株式(S&P500)", category: "SP500", currency: "円", rank: "C", account: "特定", owner: "shin", amount: 8200000 },
-  { id: "seed-2", name: "S&P500", category: "SP500", currency: "ドル", rank: "C", account: "特定", owner: "saki", amount: 6400000 },
-  { id: "seed-3", name: "楽天SP500", category: "SP500", currency: "円", rank: "C", account: "NISA成長", owner: "shin", amount: 3100000 },
-  { id: "seed-4", name: "2521 円ヘッジSP500", category: "SP500", currency: "円", rank: "B", account: "特定", owner: "saki", amount: 1400000 },
-  { id: "seed-5", name: "QQQ", category: "Nasdaq", currency: "ドル", rank: "D", account: "特定", owner: "shin", amount: 4200000 },
-  { id: "seed-6", name: "eMAXIS NASDAQ100", category: "Nasdaq", currency: "円", rank: "D", account: "NISA成長", owner: "saki", amount: 2600000 },
-  { id: "seed-7", name: "FANG+", category: "テックETF・投信（米）", currency: "円", rank: "D", account: "特定", owner: "shin", amount: 1800000 },
-  { id: "seed-8", name: "金プラス(株分)", category: "テックETF・投信（米）", currency: "円", rank: "D", account: "特定", owner: "shin", amount: 700000 },
-  { id: "seed-9", name: "SPXL", category: "SP500", currency: "ドル", rank: "E", account: "特定", owner: "shin", amount: 1500000 },
-  { id: "seed-10", name: "SOXL", category: "テックETF・投信（米）", currency: "ドル", rank: "E", account: "特定", owner: "shin", amount: 900000 },
-  { id: "seed-11", name: "GLD", category: "ゴールド", currency: "ドル", rank: "B", account: "特定", owner: "saki", amount: 3300000 },
-  { id: "seed-12", name: "金プラス(金分)", category: "ゴールド", currency: "円", rank: "A", account: "特定", owner: "shin", amount: 700000 },
-  { id: "seed-13", name: "HDV", category: "高配当ETF・投信（米）", currency: "ドル", rank: "A", account: "特定", owner: "saki", amount: 2100000 },
-  { id: "seed-14", name: "日経高配当(399A)", category: "高配当ETF・投信（日）", currency: "円", rank: "A", account: "NISAつみたて", owner: "shin", amount: 1900000 },
-  { id: "seed-15", name: "ITA(防衛)", category: "その他ETF・投信（米）", currency: "ドル", rank: "B", account: "特定", owner: "shin", amount: 1600000 },
-  { id: "seed-16", name: "現金(円)", category: "現金", currency: "円", rank: "A", account: "—", owner: "shin", amount: 4800000 },
-  { id: "seed-17", name: "現金(ドル)", category: "現金", currency: "ドル", rank: "A", account: "—", owner: "saki", amount: 2200000 },
+  { id: "seed-1", name: "eMAXIS Slim 米国株式(S&P500)", category: "SP500", currency: "円", rank: "C", account: "特定", owner: OWNER_RAKUTEN_SHIN, amount: 8200000 },
+  { id: "seed-2", name: "S&P500", category: "SP500", currency: "ドル", rank: "C", account: "特定", owner: OWNER_RAKUTEN_SAKI, amount: 6400000 },
+  { id: "seed-3", name: "楽天SP500", category: "SP500", currency: "円", rank: "C", account: "NISA成長", owner: OWNER_RAKUTEN_SHIN, amount: 3100000 },
+  { id: "seed-4", name: "2521 円ヘッジSP500", category: "SP500", currency: "円", rank: "B", account: "特定", owner: OWNER_RAKUTEN_SAKI, amount: 1400000 },
+  { id: "seed-5", name: "QQQ", category: "Nasdaq", currency: "ドル", rank: "D", account: "特定", owner: OWNER_RAKUTEN_SHIN, amount: 4200000 },
+  { id: "seed-6", name: "eMAXIS NASDAQ100", category: "Nasdaq", currency: "円", rank: "D", account: "NISA成長", owner: OWNER_RAKUTEN_SAKI, amount: 2600000 },
+  { id: "seed-7", name: "FANG+", category: "テックETF・投信（米）", currency: "円", rank: "D", account: "特定", owner: OWNER_RAKUTEN_SHIN, amount: 1800000 },
+  { id: "seed-8", name: "金プラス(株分)", category: "テックETF・投信（米）", currency: "円", rank: "D", account: "特定", owner: OWNER_RAKUTEN_SHIN, amount: 700000 },
+  { id: "seed-9", name: "SPXL", category: "SP500", currency: "ドル", rank: "E", account: "特定", owner: OWNER_RAKUTEN_SHIN, amount: 1500000 },
+  { id: "seed-10", name: "SOXL", category: "テックETF・投信（米）", currency: "ドル", rank: "E", account: "特定", owner: OWNER_RAKUTEN_SHIN, amount: 900000 },
+  { id: "seed-11", name: "GLD", category: "ゴールド", currency: "ドル", rank: "B", account: "特定", owner: OWNER_RAKUTEN_SAKI, amount: 3300000 },
+  { id: "seed-12", name: "金プラス(金分)", category: "ゴールド", currency: "円", rank: "A", account: "特定", owner: OWNER_RAKUTEN_SHIN, amount: 700000 },
+  { id: "seed-13", name: "HDV", category: "高配当ETF・投信（米）", currency: "ドル", rank: "A", account: "特定", owner: OWNER_RAKUTEN_SAKI, amount: 2100000 },
+  { id: "seed-14", name: "日経高配当(399A)", category: "高配当ETF・投信（日）", currency: "円", rank: "A", account: "NISAつみたて", owner: OWNER_RAKUTEN_SHIN, amount: 1900000 },
+  { id: "seed-15", name: "ITA(防衛)", category: "その他ETF・投信（米）", currency: "ドル", rank: "B", account: "特定", owner: OWNER_RAKUTEN_SHIN, amount: 1600000 },
+  { id: "seed-16", name: "現金(円)", category: "現金", currency: "円", rank: "A", account: "—", owner: OWNER_RAKUTEN_SHIN, amount: 4800000 },
+  { id: "seed-17", name: "現金(ドル)", category: "現金", currency: "ドル", rank: "A", account: "—", owner: OWNER_RAKUTEN_SAKI, amount: 2200000 },
 ];
 function groupByField(holdings, field) { const map = {}; for (const h of holdings) { map[h[field]] = (map[h[field]] || 0) + h.amount; } return Object.entries(map).map(([k, v]) => ({ name: k, value: v })); }
 // A〜Eランク別表示は割合に関わらずA→B→C→D→Eの固定順、それ以外の表示は構成比の大きい順（降順）。
@@ -810,7 +811,7 @@ function calcNisaBreakdown(holdings, rankClass) {
   };
 }
 const CURRENCY_COLORS = { "ドル": C.teal, "円": C.amber };
-const OWNER_COLORS = { "shin": C.blue, "saki": C.violet, "moomoo証券": C.violet, "Coin Check": C.amber, "iDeCo": "#7FA37A", "大和コネクト証券": "#BE7A63" };
+const OWNER_COLORS = { [OWNER_RAKUTEN_SHIN]: C.blue, [OWNER_RAKUTEN_SAKI]: "#C77FB0", [OWNER_MOOMOO]: C.violet, "moomoo証券": C.violet, "Coin Check": C.amber, "iDeCo": "#7FA37A", "大和コネクト証券": "#BE7A63" };
 function colorForView(view, key) { return view === "category" ? (CATEGORY_COLORS[key] || C.textDim) : view === "currency" ? CURRENCY_COLORS[key] : view === "owner" ? (OWNER_COLORS[key] || C.textDim) : rankColor(key); }
 function fieldForView(view) { return view === "category" ? "category" : view === "currency" ? "currency" : view === "owner" ? "owner" : "rank"; }
 
@@ -929,13 +930,8 @@ function pickCurrency(...units) {
   for (const u of units) { if (u === "USD") return "ドル"; if (u === "円") return "円"; }
   return "円";
 }
-// ファイル名（例: assetbalance(all)_20260831_shin.csv）に含まれる "shin"/"saki" から口座主を判定する。
-function detectOwnerFromFileName(name) {
-  const lower = String(name ?? "").toLowerCase();
-  if (/saki/.test(lower)) return "saki";
-  if (/shin/.test(lower)) return "shin";
-  return null;
-}
+// ファイル名（例: assetbalance(all)_20260831_shin.csv）に含まれる "shin"/"saki" から口座主（楽天(shin)/楽天(saki)）を判定する。
+const detectOwnerFromFileName = detectRakutenOwnerFromFileName;
 // ファイル名（例: assetbalance(all)_20260909_saki.csv）に含まれる8桁の日付（YYYYMMDD）から、
 // このCSVが出力された日付を "YYYY-MM-DD" 形式で返す。見つからない場合はnull。
 function detectDateFromFileName(name) {
@@ -944,7 +940,6 @@ function detectDateFromFileName(name) {
   const [, y, mo, day] = m;
   return `${y}-${mo}-${day}`;
 }
-const OWNER_LABEL = { shin: "Shin", saki: "Saki" };
 function normalizeAccount(a) {
   if (a === "-" || a === "‐" || a === "―") return "—";
   return a.replace(/投資枠$/, "");
@@ -2332,7 +2327,7 @@ function PortfolioTableContent({ view, holdings, onEditHolding, onDeleteHolding 
     { key: "currency", label: "為替", editable: true, options: ["円", "ドル"] },
     { key: "rank", label: "ランク", editable: true, options: CATS },
     { key: "account", label: "口座" },
-    { key: "owner", label: "口座主", editable: true, options: ["shin", "saki"] },
+    { key: "owner", label: "口座主", editable: true, options: OWNER_OPTIONS },
     { key: "amount", label: "金額", align: "right", format: (v) => `¥${v.toLocaleString()}` },
     { key: "share", label: "構成比", align: "right", format: (v) => `${v.toFixed(1)}%` },
   ];
@@ -2565,7 +2560,7 @@ function RankHoldingsContent({ rank, holdings, onEditHolding, onDeleteHolding })
     { key: "name", label: "銘柄" },
     { key: "category", label: "カテゴリー", editable: true, options: CATEGORIES },
     { key: "account", label: "口座" },
-    { key: "owner", label: "口座主", editable: true, options: ["shin", "saki"] },
+    { key: "owner", label: "口座主", editable: true, options: OWNER_OPTIONS },
     { key: "rank", label: "ランク", editable: true, options: CATS },
     { key: "amount", label: "金額", align: "right", format: (v) => `¥${v.toLocaleString()}` },
     { key: "share", label: "構成比", align: "right", format: (v) => `${v.toFixed(1)}%` },
@@ -3110,7 +3105,7 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
   const [rakutenFileName, setRakutenFileName] = useState(null);
   const [rakutenMsg, setRakutenMsg] = useState(null);
   const [preview, setPreview] = useState(null); // rows pending confirmation
-  const [previewOwner, setPreviewOwner] = useState("shin");
+  const [previewOwner, setPreviewOwner] = useState(OWNER_RAKUTEN_SHIN);
   const [ownerAutoDetected, setOwnerAutoDetected] = useState(false);
   const [previewAsOf, setPreviewAsOf] = useState(null); // ファイル名から検出したCSVのデータ日付（YYYY-MM-DD）
   const [showCategoryRankSettings, setShowCategoryRankSettings] = useState(false);
@@ -3371,7 +3366,7 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
                 <div>
                   <label className="text-[10px] block mb-1" style={{ color: C.textDim }}>このCSVの口座主{ownerAutoDetected && <span style={{ color: C.teal }}>（ファイル名から自動判定）</span>}</label>
                   <select value={previewOwner} onChange={(e) => { setPreviewOwner(e.target.value); setOwnerAutoDetected(false); }} className="text-xs px-2 py-1.5 rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }}>
-                    <option value="shin">shin</option><option value="saki">saki</option>
+                    {RAKUTEN_OWNERS.map((o) => <option key={o} value={o}>{o}</option>)}
                   </select>
                 </div>
                 <label className="inline-flex items-center gap-2 text-xs px-3 py-2 rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.textMuted, cursor: "pointer" }}>
@@ -3536,7 +3531,7 @@ function computeRecentStats(FULL) {
   };
 }
 // 前回サマリー生成時点の保有スナップショットと今回を比較し、売却・購入・大幅増減（5%超）した銘柄を差分として抽出する。
-// 同じ銘柄名が複数口座主（shin/saki）にまたがって保有されている場合、スナップショットのholdings配列には
+// 同じ銘柄名が複数口座主（楽天(shin)/楽天(saki)/moomoo）にまたがって保有されている場合、スナップショットのholdings配列には
 // 口座主ごとに別レコードとして複数件入っている。`new Map(array.map(...))`は同名キーを合算せず後勝ちで
 // 上書きしてしまうため、必ずcurMapと同じ「同名は合算する」ロジックで両方構築すること（片方だけ合算すると、
 // 実際には資産が動いていなくても「前回は片方の口座主分のみ」対「今回は世帯合計」という食い違いが生じ、
@@ -3673,12 +3668,11 @@ function buildHoldingsDetailLines(holdings, amt) {
   const L = [];
   L.push("【保有銘柄詳細（楽天証券CSVデータ）】");
   L.push("");
-  const ownerLabel = { shin: "Shin", saki: "Saki" };
   const owners = [...new Set(holdings.map((h) => h.owner))];
   for (const owner of owners) {
     const rows = [...holdings.filter((h) => h.owner === owner)].sort((a, b) => b.amount - a.amount);
     const subtotal = rows.reduce((s, h) => s + h.amount, 0);
-    L.push(`■ ${ownerLabel[owner] ?? owner}口座の保有銘柄`);
+    L.push(`■ ${owner}口座の保有銘柄`);
     L.push("銘柄名 | カテゴリー | ランク | 口座種別 | 評価額 | 構成比 | 前日比");
     for (const h of rows) L.push(`${h.name} | ${h.category} | ${h.rank} | ${h.account} | ${amt(h.amount)} | ${((h.amount / (total || 1)) * 100).toFixed(1)}% | —`);
     L.push(`小計: ${amt(subtotal)}（世帯全体に占める割合: ${((subtotal / (total || 1)) * 100).toFixed(1)}%）`);
@@ -4068,8 +4062,7 @@ function SummaryModalContent({ d, dVoo, dQqq, holdings, currentHoldingPct, effec
             <div className="flex items-center gap-1.5">
               <span className="text-[9px]" style={{ color: C.textDim }}>一括選択：</span>
               {[
-                { label: "shin口座", pred: (h) => h.owner === "shin" },
-                { label: "saki口座", pred: (h) => h.owner === "saki" },
+                ...OWNER_OPTIONS.map((o) => ({ label: `${o}口座`, pred: (h) => h.owner === o })),
                 { label: "NISA口座", pred: (h) => h.account.includes("NISA") },
                 { label: "特定口座", pred: (h) => h.account === "特定" },
               ].map(({ label, pred }) => (
@@ -5069,13 +5062,19 @@ export default function DDDashboard() {
         if (res2 && res2.value) {
           const raw2 = JSON.parse(res2.value);
           const hadMissingId = raw2.some((h) => !h.id);
-          const parsed2 = raw2.map((h) => (h.id ? h : { ...h, id: genId() })); // 旧バージョンで保存されたデータにidを補完
-          if (parsed2.length) { setHoldings(parsed2); setHoldingsSource("imported"); if (hadMissingId) persistHoldings(parsed2); }
+          const withIds = raw2.map((h) => (h.id ? h : { ...h, id: genId() })); // 旧バージョンで保存されたデータにidを補完
+          // 口座主の旧値（shin/saki・moomoo証券）を 楽天(shin)/楽天(saki)/moomoo に移行する
+          const { list: parsed2, changed: ownerMigrated } = migrateHoldingsOwners(withIds);
+          if (parsed2.length) { setHoldings(parsed2); setHoldingsSource("imported"); if (hadMissingId || ownerMigrated) persistHoldings(parsed2); }
         }
       } catch (e) { /* no saved holdings yet — keep default */ }
       try {
         const resAsOf = await storage.get("holdings_as_of");
-        if (resAsOf && resAsOf.value) setHoldingsAsOf(JSON.parse(resAsOf.value));
+        if (resAsOf && resAsOf.value) {
+          const { map, changed } = migrateAsOfKeys(JSON.parse(resAsOf.value));
+          setHoldingsAsOf(map);
+          if (changed) persistHoldingsAsOf(map);
+        }
       } catch (e) { /* no saved holdings-as-of dates yet */ }
       try {
         const res3 = await storage.get("classification_overrides");
@@ -5408,7 +5407,7 @@ export default function DDDashboard() {
     if (!entries.length) return null;
     const uniqueDates = [...new Set(entries.map(([, v]) => v))];
     if (uniqueDates.length === 1) return fmtDateSlash(uniqueDates[0]);
-    return entries.map(([o, v]) => `${OWNER_LABEL[o] ?? o} ${fmtDateSlash(v)}`).join(" / ");
+    return entries.map(([o, v]) => `${o} ${fmtDateSlash(v)}`).join(" / ");
   }, [holdings, holdingsAsOf]);
   const holdingsDateSuffix = holdingsDateLabel ? <span className="font-normal" style={{ color: C.textDim }}>（{holdingsDateLabel} 時点）</span> : null;
   // 投資収支Excel（実績パフォーマンス）由来のmoomoo証券・Coin Check・iDeCo・大和コネクト証券の評価額を、

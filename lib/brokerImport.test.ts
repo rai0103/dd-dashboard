@@ -68,7 +68,7 @@ test("moomoo 10銘柄：USD評価額を円換算して個別登録し、合算�
   assert.equal(ionq.name, "IONQ IonQ");
   assert.equal(ionq.amount, Math.round(545.76 * 150)); // 81,864円
   assert.equal(ionq.currency, "ドル");
-  assert.equal(ionq.owner, "moomoo証券");
+  assert.equal(ionq.owner, "moomoo");
   assert.equal(ionq.broker, "moomoo");
   assert.equal(holdings.find((h) => h.ticker === "SPCX")!.amount, Math.round(446.1 * 150));
 
