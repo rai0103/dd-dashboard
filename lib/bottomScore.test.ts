@@ -5,8 +5,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   detectEpisodes, countFakeRalliesInRange, isCleanRecovery, computeDepthStats, computeLevelProgression,
-  computeReboundProgression, computeLevelTransitionDays, buildStatsTable, computeBottomScore, deriveCurrentState,
-  findSimilarEpisodes, depthBucketIndex, scoreBand,
+  computeReboundProgression, computeLevelTransitionDays, buildStatsTable, deriveCurrentState, depthBucketIndex,
+  collectHoldSamples, computeMddHoldProbability,
 } from "./bottomScore.ts";
 
 function loadSp500(): { prices: number[]; dates: Date[] } {
@@ -45,16 +45,13 @@ test("isCleanRecovery: 回復局面でローカルDD-3%以下があれば二次�
   assert.equal(isCleanRecovery(detectEpisodes([100, 90, 95])[0], [100, 90, 95]), null);
 });
 
-test("depthBucketIndex / scoreBand の境界", () => {
+test("depthBucketIndex の境界", () => {
   assert.equal(depthBucketIndex(-2.9), -1);
   assert.equal(depthBucketIndex(-3), 0);
   assert.equal(depthBucketIndex(-4.99), 0);
   assert.equal(depthBucketIndex(-5), 1); // ちょうど-5%は「-5%到達」として-5〜-8%側
   assert.equal(depthBucketIndex(-5.01), 1);
   assert.equal(depthBucketIndex(-45), 6);
-  assert.equal(scoreBand(29.9).label, "継続警戒");
-  assert.equal(scoreBand(30).label, "様子見");
-  assert.equal(scoreBand(85).label, "積極買い増し目安");
 });
 
 test("computeLevelProgression / computeLevelTransitionDays: 合成データで手計算と一致", () => {
@@ -104,37 +101,52 @@ test("SP500全履歴: 統計テーブルが全データから算出され、日�
   assert.equal(newEp.resolve_idx, prices2.length - 1);
   assert.equal(isCleanRecovery(newEp, prices2), true);
 
-  // (b) 下落途中の日次データを追加すると、未解消エピソードとして検出され、現在状態・スコアが更新される
+  // (a') 追加した局面（MDD-13.7%→戻し50%→ATH更新）が底値確定サンプルとして1件増える
+  const cond = { mddUpper: -10, mddLower: -15, minRecovery: 0.5, minDaysSinceTrough: 0 };
+  const s1 = collectHoldSamples(prices, cond), s2 = collectHoldSamples(prices2, cond);
+  assert.equal(s2.length, s1.length + 1);
+  assert.equal(s2[s2.length - 1].held, true);
+
+  // (b) 下落途中の日次データを追加すると、未解消エピソードとして検出され、現在状態・底値確定確率が更新される
   const prices3 = [...prices, ...[1.01, 0.97, 0.94, 0.91, 0.94].map((m) => lastP * m)];
   const stats3 = buildStatsTable(prices3);
   assert.equal(stats3.episodes[stats3.episodes.length - 1].resolve_idx, null);
   const cur = deriveCurrentState(prices3)!;
-  assert.ok(Math.abs(cur.current_dd - (0.91 / 1.01 - 1) * 100) < 1e-6);
-  assert.equal(cur.days_at_current_level, 4);
-  assert.ok(cur.bounce_from_low_pct > 3);
-  const score = computeBottomScore(cur, stats3);
-  assert.equal(score.applicable, true);
-  if (score.applicable) {
-    assert.ok(score.score >= 0 && score.score <= 100);
-    assert.equal(score.components.length, 4);
-    assert.ok(score.components.find((c) => c.key === "confirm")!.value > 0);
+  assert.ok(Math.abs(cur.mdd - (0.91 / 1.01 - 1) * 100) < 1e-6);
+  assert.equal(cur.days_since_ath, 4);
+  assert.equal(cur.days_since_trough, 1);
+  assert.ok(Math.abs(cur.recovery_ratio - 0.3) < 1e-9);
+  const h3 = computeMddHoldProbability(prices3, stats3);
+  assert.equal(h3.applicable, true);
+  if (h3.applicable) {
+    assert.equal(h3.tiers.length, 3);
+    assert.ok(h3.tier.n > 0 && h3.tier.pHold! + h3.tier.pBreak! === 100);
+    assert.equal(h3.tier.held + h3.tier.broke, h3.tier.n);
+    assert.equal(h3.breakDistribution.reduce((s, b) => s + b.count, 0), h3.tier.broke);
   }
-  const sim = findSimilarEpisodes(cur, stats3, prices3);
-  assert.equal(sim.length, 3);
-  assert.ok(sim[0].distance <= sim[1].distance && sim[1].distance <= sim[2].distance);
+  // さらに底値を割る日を追加すると、MDD（底値）が更新される
+  const prices4 = [...prices3, lastP * 0.88];
+  const h4 = computeMddHoldProbability(prices4, buildStatsTable(prices4));
+  assert.ok(h4.applicable && Math.abs(h4.state.mdd - (0.88 / 1.01 - 1) * 100) < 1e-6 && h4.state.days_since_trough === 0);
+  // ATHを更新すると判定対象外になる
+  const prices5 = [...prices4, lastP * 1.05];
+  assert.equal(computeMddHoldProbability(prices5, buildStatsTable(prices5)).applicable, false);
 });
 
-test("computeBottomScore: DD-3%未満は対象外、反発3%未満は反発確認0点", () => {
-  const { prices } = loadSp500();
-  const stats = buildStatsTable(prices);
-  assert.equal(computeBottomScore({ current_dd: -1, days_at_current_level: 3, fake_rally_count: 0, bounce_from_low_pct: 0 }, stats).applicable, false);
-  const r = computeBottomScore({ current_dd: -12, days_at_current_level: 1000, fake_rally_count: 99, bounce_from_low_pct: 1 }, stats);
-  assert.equal(r.applicable, true);
-  if (r.applicable) {
-    assert.equal(r.components.find((c) => c.key === "confirm")!.value, 0);
-    assert.equal(r.components.find((c) => c.key === "duration")!.value, 100);
-    assert.equal(r.components.find((c) => c.key === "fakeRally")!.value, 100);
-  }
+test("collectHoldSamples / computeMddHoldProbability: 底値確定と底割れの判定", () => {
+  const cond = { mddUpper: -3, mddLower: -5, minRecovery: 0.5, minDaysSinceTrough: 0 };
+  // 底値96(-4%)→99.5まで戻す→ATH更新：底値確定
+  const held = collectHoldSamples([100, 96, 99.5, 101], cond);
+  assert.deepEqual(held.map((s) => [s.trough_idx, s.sample_idx, s.held, s.days_to_ath]), [[1, 2, true, 1]]);
+  // 底値96→99.5→95で底割れ（新しい底値95は-5%でレンジ外）
+  const broke = collectHoldSamples([100, 96, 99.5, 95, 101], cond);
+  assert.deepEqual(broke.map((s) => [s.trough_idx, s.held, s.days_to_break, s.final_mdd]), [[1, false, 1, -5]]);
+  // 戻し率・経過日数の条件を満たさなければサンプルにならない
+  assert.equal(collectHoldSamples([100, 96, 97, 101], cond).length, 0);
+  assert.equal(collectHoldSamples([100, 96, 99.5, 101], { ...cond, minDaysSinceTrough: 2 }).length, 0);
+  // DD-3%未満の局面は判定対象外
+  const shallow = [100, 98, 99];
+  assert.equal(computeMddHoldProbability(shallow, buildStatsTable(shallow)).applicable, false);
 });
 
 test("computeReboundProgression: アンカー割れ前の到達を判定し、未確定分は分母から除外", () => {

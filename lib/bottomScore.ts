@@ -1,5 +1,5 @@
-// 底値判定スコア：SP500日次終値の全履歴から下落エピソードを検出し、各種統計テーブルを都度算出して
-// 現在の下落局面の「底値確信度」を0-100でスコアリングする。
+// 底値判定：SP500日次終値の全履歴から下落エピソードを検出して各種統計テーブルを都度算出し、
+// 現局面のMDD（底値）が確定してATH更新に至る確率を過去の似た状況から算出する。
 // 統計値は一切ハードコードせず、渡された価格系列から毎回再計算する（日次データが追加されれば自動的に反映される）。
 // このファイルは外部importを持たない純粋関数のみで構成し、`node --test` から直接実行できるようにしている。
 
@@ -234,105 +234,21 @@ export function buildStatsTable(prices: number[], dates?: (Date | string)[]): St
   };
 }
 
-/* ---------------- 3. 底値確信度スコア ---------------- */
+/* ---------------- 3. 底値（MDD）確定確率 ---------------- */
+// 底値＝DD-3%を越えた下落局面における、その時点までの最大下落（MDD）の日。
+// 「現在のMDDがこの局面の底値として確定し、それを割らずにATHを更新する」確率を、過去の似た状況から算出する。
 
 export type CurrentState = {
-  current_dd: number; // スコア算出に使う深度（現局面のこれまでの最大DDを渡す想定）
-  days_at_current_level: number; // 直前ATHからの経過営業日数
-  fake_rally_count: number;
+  pre_ath_idx: number; trough_idx: number;
+  mdd: number; // 現局面のこれまでのMDD（%、負値）
+  latest_dd: number;
+  days_since_ath: number; days_since_trough: number;
+  recovery_ratio: number; // 底値から直前ATHまでの下落幅のうち、現在までに戻した割合（0=底値、1=ATH）
   bounce_from_low_pct: number;
-  bounce_from_anchor_pct?: number; // アンカー水準価格からの反発率（省略時は bounce_from_low_pct で代用）
 };
-
-export const CONFIRM_THRESHOLD = 3; // ConfirmScoreを算出する最小反発率（%）
-export const CONFIRM_TARGET_UP = 10; // 「底値確定」とみなす、アンカー価格からの上昇幅（%）
-
-// 現局面が到達済みの最も深いアンカー行について、「現在の反発幅（以下で最も近い節目k）まで達したケースのうち、
-// アンカー価格を割らずに+CONFIRM_TARGET_UP%まで到達した割合」＝ P(target | k) を返す（0-100）。
-export function lookupConfirmWeight(currentDD: number, reboundTable: ReboundRow[], bouncePct = CONFIRM_THRESHOLD): { weight: number | null; anchor: number | null; fromUp: number | null; n: number } {
-  const rows = reboundTable.filter((r) => currentDD <= r.anchor);
-  const row = rows.length ? rows[rows.length - 1] : reboundTable[0];
-  if (!row) return { weight: null, anchor: null, fromUp: null, n: 0 };
-  const target = row.rungs.find((r) => r.up === CONFIRM_TARGET_UP) ?? row.rungs[row.rungs.length - 1];
-  if (bouncePct >= target.up) return { weight: 100, anchor: row.anchor, fromUp: target.up, n: target.n };
-  const base = [...row.rungs].reverse().find((r) => r.up <= bouncePct);
-  if (!base || !base.p || target.p === null) return { weight: target.p, anchor: row.anchor, fromUp: null, n: target.n };
-  return { weight: Math.min(100, round1(target.p / base.p * 100)!), anchor: row.anchor, fromUp: base.up, n: base.n };
-}
-
-export const SCORE_WEIGHTS = { depth: 0.3, duration: 0.25, fakeRally: 0.2, confirm: 0.25 };
-export const SCORE_BANDS = [
-  { min: 85, label: "積極買い増し目安" },
-  { min: 60, label: "部分買い増し目安" },
-  { min: 30, label: "様子見" },
-  { min: 0, label: "継続警戒" },
-];
-export function scoreBand(score: number) { return SCORE_BANDS.find((b) => score >= b.min)!; }
-
-export type ScoreComponent = { key: string; label: string; value: number; weight: number; n: number; lowSample: boolean; detail: string };
-export type BottomScore = { applicable: false; reason: string } | {
-  applicable: true; score: number; band: string; bucket: DepthStat; bucketFallback: boolean; components: ScoreComponent[];
-};
-
-// 母数が0件のバケットは、より浅い側で直近のデータがあるバケットにフォールバックする（深い局面ほど実績が少ないため）。
-function bucketWithData(stats: StatsTable, dd: number): { bucket: DepthStat | null; fallback: boolean } {
-  let i = depthBucketIndex(dd);
-  if (i === -1) return { bucket: null, fallback: false };
-  const orig = i;
-  while (i > 0 && stats.depthStats[i].n === 0) i--;
-  return { bucket: stats.depthStats[i], fallback: i !== orig };
-}
-
-const clamp100 = (v: number) => Math.max(0, Math.min(100, v));
-
-export function computeBottomScore(s: CurrentState, stats: StatsTable): BottomScore {
-  if (s.current_dd > MIN_EPISODE_DD) return { applicable: false, reason: `DDが${MIN_EPISODE_DD}%に達していないため判定対象外です` };
-  const { bucket, fallback } = bucketWithData(stats, s.current_dd);
-  if (!bucket || bucket.n === 0) return { applicable: false, reason: "比較可能な過去エピソードがありません" };
-
-  const depth = bucket.cleanRecoveryRate ?? 0;
-  const duration = bucket.avgDurationDays ? clamp100(s.days_at_current_level / bucket.avgDurationDays * 100) : 100;
-  const fake = bucket.avgFakeRallyCount ? clamp100(s.fake_rally_count / bucket.avgFakeRallyCount * 100) : 100;
-  const cw = lookupConfirmWeight(s.current_dd, stats.reboundTable, s.bounce_from_anchor_pct ?? s.bounce_from_low_pct);
-  const confirm = s.bounce_from_low_pct >= CONFIRM_THRESHOLD ? (cw.weight ?? 0) : 0;
-
-  const components: ScoreComponent[] = [
-    { key: "depth", label: "深度（クリーン回復率）", value: depth, weight: SCORE_WEIGHTS.depth, n: bucket.n, lowSample: bucket.lowSample, detail: `${bucket.label}の解消済み${bucket.n}件中${bucket.cleanCount}件がクリーン回復` },
-    { key: "duration", label: "経過日数", value: duration, weight: SCORE_WEIGHTS.duration, n: bucket.n, lowSample: bucket.lowSample, detail: `ATHから${s.days_at_current_level}日 / 平均下落日数${bucket.avgDurationDays ?? "—"}日` },
-    { key: "fakeRally", label: "だまし上げ回数", value: fake, weight: SCORE_WEIGHTS.fakeRally, n: bucket.n, lowSample: bucket.lowSample, detail: `${s.fake_rally_count}回 / 平均${bucket.avgFakeRallyCount ?? "—"}回` },
-    { key: "confirm", label: "反発確認", value: confirm, weight: SCORE_WEIGHTS.confirm, n: cw.n, lowSample: cw.n < LOW_SAMPLE_N,
-      detail: s.bounce_from_low_pct < CONFIRM_THRESHOLD ? `安値からの反発${s.bounce_from_low_pct.toFixed(1)}%（+${CONFIRM_THRESHOLD}%未満のため0点）`
-        : `アンカー${cw.anchor}%基準：+${cw.fromUp ?? 0}%到達後に+${CONFIRM_TARGET_UP}%まで割れずに進んだ割合` },
-  ];
-  const score = round1(components.reduce((sum, c) => sum + c.value * c.weight, 0))!;
-  return { applicable: true, score, band: scoreBand(score).label, bucket, bucketFallback: fallback, components };
-}
-
-/* ---------------- 類似ケース ---------------- */
-
-export type SimilarCase = { episode: Episode; distance: number; durationDays: number; fakeRallyCount: number; clean: boolean; bucketLabel: string };
-
-// (深度バケット, 経過日数, だまし上げ回数) の3次元で、解消済みの過去エピソードとのユークリッド距離が近い順に返す。
-// 各軸は単位が大きく異なるため、過去エピソード全体の標準偏差で割って正規化してから距離を測る。
-export function findSimilarEpisodes(s: CurrentState, stats: StatsTable, prices: number[], k = 3): SimilarCase[] {
-  const cands = stats.episodes.filter((e) => e.resolve_idx !== null).map((e) => ({
-    episode: e, b: depthBucketIndex(e.min_dd), durationDays: e.trough_idx - e.pre_ath_idx, fakeRallyCount: countFakeRallies(e, prices), clean: isCleanRecovery(e, prices) === true,
-  }));
-  if (!cands.length) return [];
-  const sd = (xs: number[]) => { const m = mean(xs)!; return Math.sqrt(mean(xs.map((x) => (x - m) ** 2))!) || 1; };
-  const sb = sd(cands.map((c) => c.b)), sdur = sd(cands.map((c) => c.durationDays)), sf = sd(cands.map((c) => c.fakeRallyCount));
-  const cb = depthBucketIndex(s.current_dd);
-  return cands
-    .map((c) => ({ ...c, distance: Math.hypot((c.b - cb) / sb, (c.durationDays - s.days_at_current_level) / sdur, (c.fakeRallyCount - s.fake_rally_count) / sf) }))
-    .sort((a, b) => a.distance - b.distance)
-    .slice(0, k)
-    .map((c) => ({ episode: c.episode, distance: round1(c.distance)!, durationDays: c.durationDays, fakeRallyCount: c.fakeRallyCount, clean: c.clean, bucketLabel: DEPTH_BUCKETS[c.b]?.label ?? "—" }));
-}
-
-/* ---------------- 現在状態の導出 ---------------- */
 
 // 価格系列の末尾（最新日）を現在として CurrentState を組み立てる。現局面が dd<0 でなければ null。
-export function deriveCurrentState(prices: number[]): (CurrentState & { pre_ath_idx: number; trough_idx: number; latest_dd: number }) | null {
+export function deriveCurrentState(prices: number[]): CurrentState | null {
   const { dd } = computeDrawdowns(prices);
   const last = prices.length - 1;
   if (last < 1 || dd[last] >= 0) return null;
@@ -340,19 +256,84 @@ export function deriveCurrentState(prices: number[]): (CurrentState & { pre_ath_
   while (pre > 0 && dd[pre] < 0) pre--;
   let trough = pre + 1;
   for (let k = pre + 1; k <= last; k++) if (prices[k] < prices[trough]) trough = k;
-  const minDD = dd[trough];
-  let bounceFromAnchor: number | undefined;
-  const anchors = [-5, -8, -10, -15, -20, -25].filter((a) => minDD <= a);
-  if (anchors.length) {
-    const a = anchors[anchors.length - 1];
-    let ai = pre + 1; while (dd[ai] > a) ai++;
-    bounceFromAnchor = (prices[last] / prices[ai] - 1) * 100;
-  }
   return {
-    current_dd: minDD, latest_dd: dd[last], pre_ath_idx: pre, trough_idx: trough,
-    days_at_current_level: last - pre,
-    fake_rally_count: countFakeRalliesInRange(prices, pre, last),
+    pre_ath_idx: pre, trough_idx: trough, mdd: dd[trough], latest_dd: dd[last],
+    days_since_ath: last - pre, days_since_trough: last - trough,
+    recovery_ratio: (prices[last] - prices[trough]) / (prices[pre] - prices[trough]),
     bounce_from_low_pct: (prices[last] / prices[trough] - 1) * 100,
-    bounce_from_anchor_pct: bounceFromAnchor,
+  };
+}
+
+export type HoldCondition = { mddUpper: number; mddLower: number; minRecovery: number; minDaysSinceTrough: number };
+export type HoldSample = {
+  pre_ath_idx: number; trough_idx: number; sample_idx: number; resolve_idx: number;
+  mdd: number; // サンプル時点のMDD
+  held: boolean; // true=その底値を割らずにATH更新 / false=底値を割って更に下落
+  days_to_ath: number | null; days_to_break: number | null; // サンプル日からの営業日数
+  final_mdd: number; // その局面の最終MDD
+};
+
+// 解消済みの各局面を日次で走査し、「その時点のMDDが条件レンジ内」かつ「底値から minRecovery 以上戻している」かつ
+// 「底値から minDaysSinceTrough 営業日以上経過」を満たした最初の日を、その底値（MDD日）ごとに1サンプルとして採る。
+// 結果は、その底値を終値で割るのが先か（底割れ）、ATH更新が先か（底値確定）で判定する。
+export function collectHoldSamples(prices: number[], cond: HoldCondition, episodes?: Episode[]): HoldSample[] {
+  const eps = (episodes ?? detectEpisodes(prices)).filter((e) => e.resolve_idx !== null);
+  const out: HoldSample[] = [];
+  for (const e of eps) {
+    const athP = prices[e.pre_ath_idx], end = e.resolve_idx!;
+    let tr = e.start_idx, lastUsed = -1;
+    for (let k = e.start_idx; k < end; k++) {
+      if (prices[k] < prices[tr]) tr = k;
+      if (tr === lastUsed) continue;
+      const mdd = (prices[tr] / athP - 1) * 100;
+      if (mdd > cond.mddUpper || mdd <= cond.mddLower) continue;
+      if (k - tr < cond.minDaysSinceTrough) continue;
+      if ((prices[k] - prices[tr]) / (athP - prices[tr]) < cond.minRecovery) continue;
+      lastUsed = tr;
+      let brk = -1;
+      for (let j = k + 1; j < end; j++) if (prices[j] < prices[tr]) { brk = j; break; }
+      out.push({ pre_ath_idx: e.pre_ath_idx, trough_idx: tr, sample_idx: k, resolve_idx: end, mdd, held: brk === -1, days_to_ath: brk === -1 ? end - k : null, days_to_break: brk === -1 ? null : brk - k, final_mdd: e.min_dd });
+    }
+  }
+  return out;
+}
+
+export type HoldTier = {
+  label: string; cond: HoldCondition; n: number; held: number; broke: number;
+  pHold: number | null; pBreak: number | null; lowSample: boolean; samples: HoldSample[];
+};
+export type MddHoldResult = { applicable: false; reason: string } | {
+  applicable: true; state: CurrentState; tier: HoldTier; tiers: HoldTier[];
+  medianDaysToAth: number | null; medianDaysToBreak: number | null;
+  breakDistribution: { label: string; count: number }[]; // 底割れしたケースの最終MDD内訳（深度バケット別）
+};
+
+function tierOf(label: string, cond: HoldCondition, prices: number[], episodes: Episode[]): HoldTier {
+  const samples = collectHoldSamples(prices, cond, episodes);
+  const held = samples.filter((s) => s.held).length, n = samples.length;
+  return { label, cond, n, held, broke: n - held, pHold: n ? round1(held / n * 100) : null, pBreak: n ? round1((n - held) / n * 100) : null, lowSample: n < LOW_SAMPLE_N, samples };
+}
+
+// 条件を厳しい順に並べ、サンプル数がLOW_SAMPLE_N以上になる最初の段を採用する（どれも満たさなければ最も緩い段）。
+export function computeMddHoldProbability(prices: number[], stats: StatsTable, state: CurrentState | null = deriveCurrentState(prices)): MddHoldResult {
+  if (!state) return { applicable: false, reason: "現在は最高値圏（DD 0%）のため判定対象外です" };
+  if (state.mdd > MIN_EPISODE_DD) return { applicable: false, reason: `現局面のMDD（${state.mdd.toFixed(2)}%）が${MIN_EPISODE_DD}%に達していないため判定対象外です` };
+  const bi = depthBucketIndex(state.mdd), b = DEPTH_BUCKETS[bi];
+  const wide = { upper: DEPTH_BUCKETS[Math.max(0, bi - 1)].upper, lower: DEPTH_BUCKETS[Math.min(DEPTH_BUCKETS.length - 1, bi + 1)].lower };
+  const r = Math.max(0, Math.min(1, state.recovery_ratio)), dts = state.days_since_trough;
+  const rl = `${Math.round(r * 100)}%`;
+  const tiers = [
+    tierOf(`MDD ${b.label}・戻し${rl}以上・底値から${dts}日以上`, { mddUpper: b.upper, mddLower: b.lower, minRecovery: r, minDaysSinceTrough: dts }, prices, stats.episodes),
+    tierOf(`MDD ${b.label}・戻し${rl}以上`, { mddUpper: b.upper, mddLower: b.lower, minRecovery: r, minDaysSinceTrough: 0 }, prices, stats.episodes),
+    tierOf(`MDD ${wide.upper}〜${wide.lower === -Infinity ? "" : wide.lower}%（隣接バケット含む）・戻し${rl}以上`, { mddUpper: wide.upper, mddLower: wide.lower, minRecovery: r, minDaysSinceTrough: 0 }, prices, stats.episodes),
+  ];
+  const tier = tiers.find((t) => !t.lowSample) ?? tiers.reduce((a, t) => (t.n > a.n ? t : a));
+  const med = (xs: number[]) => percentile([...xs].sort((x, y) => x - y), 0.5);
+  const broken = tier.samples.filter((s) => !s.held);
+  return {
+    applicable: true, state, tier, tiers,
+    medianDaysToAth: med(tier.samples.filter((s) => s.held).map((s) => s.days_to_ath!)),
+    medianDaysToBreak: med(broken.map((s) => s.days_to_break!)),
+    breakDistribution: DEPTH_BUCKETS.map((bk, i) => ({ label: bk.label, count: broken.filter((s) => depthBucketIndex(s.final_mdd) === i).length })),
   };
 }
