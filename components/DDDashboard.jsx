@@ -2133,14 +2133,15 @@ function PortfolioPie({ view, holdings, onOpen, layout = "row" }) {
   const isColumn = layout === "column";
   return (
     <div onClick={onOpen} className={`h-full flex cursor-pointer ${isColumn ? "flex-col" : "items-center"}`} style={{ padding: "6px 8px", gap: 6 }}>
-      <div className="relative shrink-0" style={isColumn ? { width: "100%", height: "64%" } : { width: "40%", height: "92%" }}>
+      <div className="relative shrink-0" style={isColumn ? { width: "100%", height: "64%" } : { width: "32%", height: "92%" }}>
         <ResponsiveContainer width="100%" height="100%">
           <PieChart><Pie data={data} dataKey="value" nameKey="name" startAngle={90} endAngle={-270} innerRadius="55%" outerRadius="88%" paddingAngle={2} stroke={C.panel} strokeWidth={2} isAnimationActive={false}>{data.map((d, i) => (<Cell key={i} fill={colorForView(view, d.name)} />))}</Pie><Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} formatter={(v, n) => [`¥${v.toLocaleString()}`, n]} /></PieChart>
         </ResponsiveContainer>
         <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none"><span className="text-[9px]" style={{ color: C.textDim }}>合計評価額</span><span className="mono text-xs font-bold">¥{Math.round(total / 10000).toLocaleString()}万</span></div>
       </div>
       <div className={`flex-1 min-w-0 min-h-0 flex flex-col justify-center gap-1 overflow-y-auto ${isColumn ? "w-full" : ""}`}>
-        {data.map((d) => (<div key={d.name} className="flex items-center gap-1 text-[10px]"><span style={{ width: 7, height: 7, borderRadius: 2, background: colorForView(view, d.name), flexShrink: 0 }} /><span style={{ color: C.textMuted }} className="flex-1 truncate">{d.name}</span><span className="mono shrink-0 text-right whitespace-nowrap" style={{ color: C.textDim, width: 76 }}>¥{Math.round(d.value).toLocaleString()}</span><span className="mono shrink-0 text-right" style={{ color: C.text, width: 36 }}>{((d.value / total) * 100).toFixed(1)}%</span></div>))}
+        {/* PC（横並び）は幅が狭いため金額を万円単位にして凡例名の表示幅を確保する。省略された名前・正確な金額はホバーで確認できる */}
+        {data.map((d) => (<div key={d.name} title={`${d.name}：¥${Math.round(d.value).toLocaleString()}`} className="flex items-center gap-1 text-[10px]"><span style={{ width: 7, height: 7, borderRadius: 2, background: colorForView(view, d.name), flexShrink: 0 }} /><span style={{ color: C.textMuted }} className={`flex-1 min-w-0 ${isColumn ? "truncate" : "line-clamp-2 leading-tight"}`}>{d.name}</span><span className="mono shrink-0 text-right whitespace-nowrap" style={{ color: C.textDim, width: isColumn ? 76 : 50 }}>{isColumn ? `¥${Math.round(d.value).toLocaleString()}` : `¥${Math.round(d.value / 10000).toLocaleString()}万`}</span><span className="mono shrink-0 text-right" style={{ color: C.text, width: 36 }}>{((d.value / total) * 100).toFixed(1)}%</span></div>))}
       </div>
     </div>
   );
