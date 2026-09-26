@@ -4105,7 +4105,8 @@ function HoldProbGauge({ p, size = 150 }) {
   const color = holdProbColor(p);
   return (
     <svg width={size} height={size / 2 + 8} viewBox={`0 0 ${size} ${size / 2 + 8}`} role="img" aria-label={`底値確定確率 ${p}%`}>
-      <path d={arc(0, 100)} stroke={C.panel2} strokeWidth={sw} fill="none" strokeLinecap="round" />
+      {/* 残り（底割れ確率）の部分は底割れと同じ色で埋め、その上に底値確定分を重ねる */}
+      <path d={arc(0, 100)} stroke={p < 100 ? C.rust : C.panel2} strokeWidth={sw} fill="none" strokeLinecap="round" />
       {p > 0 && <path d={arc(0, Math.min(p, 100))} stroke={color} strokeWidth={sw} fill="none" strokeLinecap="round" />}
       <text x={cx} y={cy - 8} textAnchor="middle" fontSize={size / 5.5} fontWeight={700} fill={C.text} className="mono">{p.toFixed(1)}%</text>
     </svg>
