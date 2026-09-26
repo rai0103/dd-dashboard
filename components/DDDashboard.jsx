@@ -3991,15 +3991,17 @@ function MobileChartPage({ d, onZoom }) {
     </div>
   );
 }
+// ポートフォリオ構成の表示種別ボタン（ラベルは短縮表記、正式名はtitleで補足）
+const PIE_VIEW_TABS = [{ k: "category", l: "CAT", title: "カテゴリー別" }, { k: "currency", l: "為替", title: "為替別" }, { k: "rank", l: "クラス", title: "A〜Eクラス別" }, { k: "owner", l: "口座", title: "口座別" }];
 function MobilePortfolioPage({ pieView, setPieView, holdings, onOpen, onOpenRealHoldingsRanking, dateLabel }) {
   return (
     <div className="p-3 flex flex-col gap-2 h-full">
       <div className="flex items-center justify-between gap-2 shrink-0">
         <div className="flex gap-1 flex-wrap">
-          {[{ k: "category", l: "カテゴリー別" }, { k: "currency", l: "為替別" }, { k: "rank", l: "A〜Eクラス" }, { k: "owner", l: "口座別" }].map((t) => (
-            <button key={t.k} onClick={() => setPieView(t.k)} className="text-[11px] px-2 py-1 rounded" style={{ color: pieView === t.k ? C.bg : C.textMuted, background: pieView === t.k ? C.teal : C.panel2, fontWeight: pieView === t.k ? 700 : 400, border: "none", cursor: "pointer" }}>{t.l}</button>
+          {PIE_VIEW_TABS.map((t) => (
+            <button key={t.k} onClick={() => setPieView(t.k)} title={t.title} className="text-[11px] px-2 py-1 rounded whitespace-nowrap" style={{ color: pieView === t.k ? C.bg : C.textMuted, background: pieView === t.k ? C.teal : C.panel2, fontWeight: pieView === t.k ? 700 : 400, border: "none", cursor: "pointer" }}>{t.l}</button>
           ))}
-          <button onClick={onOpenRealHoldingsRanking} title="実質保有銘柄ランキング" className="flex items-center p-1 rounded" style={{ background: C.panel2, border: "none", cursor: "pointer" }}><Layers size={13} style={{ color: C.textDim }} /></button>
+          <button onClick={onOpenRealHoldingsRanking} title="実質保有銘柄ランキング" className="text-[11px] px-2 py-1 rounded whitespace-nowrap" style={{ color: C.textMuted, background: C.panel2, border: "none", cursor: "pointer" }}>Rkg</button>
         </div>
         {dateLabel && <span className="text-[9px] whitespace-nowrap" style={{ color: C.textDim }}>{dateLabel} 時点</span>}
       </div>
@@ -5411,7 +5413,7 @@ export default function DDDashboard() {
           <div style={{ display: "grid", gridTemplateColumns: "300px minmax(0, 1fr) 380px", gap: 4, flex: 1, minHeight: 0 }}>
             {/* bottom-left: portfolio pie */}
             <div style={{ minHeight: 0 }}>
-              <Panel title={<>ポートフォリオ構成{holdingsDateSuffix}</>} action={<div className="flex items-center gap-1">{[{ k: "category", l: "カテゴリー別" }, { k: "currency", l: "為替別" }, { k: "rank", l: "A〜Eクラス" }, { k: "owner", l: "口座別" }].map((t) => (<button key={t.k} onClick={() => setPieView(t.k)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: pieView === t.k ? C.bg : C.textMuted, background: pieView === t.k ? C.teal : "transparent", fontWeight: pieView === t.k ? 700 : 400 }}>{t.l}</button>))}<button onClick={() => setModal({ type: "realHoldingsRanking" })} title="実質保有銘柄ランキング（ETF・投信を構成銘柄まで分解して合算）" style={{ background: "transparent", border: "none", cursor: "pointer" }}><Layers size={14} style={{ color: C.textDim }} /></button></div>} className="h-full">
+              <Panel title={<><span className="whitespace-nowrap">ポートフォリオ構成</span>{holdingsDateLabel && <span className="block text-[10px] font-normal" style={{ color: C.textDim }}>（{holdingsDateLabel} 時点）</span>}</>} action={<div className="flex items-center gap-0.5">{PIE_VIEW_TABS.map((t) => (<button key={t.k} onClick={() => setPieView(t.k)} title={t.title} className="text-[10px] px-1 py-0.5 rounded whitespace-nowrap" style={{ color: pieView === t.k ? C.bg : C.textMuted, background: pieView === t.k ? C.teal : "transparent", fontWeight: pieView === t.k ? 700 : 400 }}>{t.l}</button>))}<button onClick={() => setModal({ type: "realHoldingsRanking" })} title="実質保有銘柄ランキング（ETF・投信を構成銘柄まで分解して合算）" className="text-[10px] px-1 py-0.5 rounded whitespace-nowrap" style={{ color: C.textMuted, background: "transparent", border: "none", cursor: "pointer" }}>Rkg</button></div>} className="h-full">
                 <PortfolioPie view={pieView} holdings={combinedHoldings} onOpen={() => setModal({ type: "portfolio" })} />
               </Panel>
             </div>
@@ -5424,7 +5426,7 @@ export default function DDDashboard() {
                   {MODEL_ROWS.map((r) => (<option key={r.label} value={r.label}>{r.label}</option>))}
                 </select>
                 <span className="flex items-center gap-1 text-[9px]" style={{ color: C.textMuted }}><span style={{ width: 8, height: 8, borderRadius: 2, background: C.textMuted, display: "inline-block" }} />実績<span style={{ width: 8, height: 8, borderRadius: 2, background: C.borderSoft, display: "inline-block", marginLeft: 4 }} />モデル</span><button onClick={() => setModal({ type: "ddTable" })} title="DD毎の配分表を表示" style={{ background: "transparent", border: "none", cursor: "pointer" }}><Info size={14} style={{ color: C.textDim }} /></button><button onClick={() => setModal({ type: "modelDebug" })} title="動的配分モデル デバッグビュー（バックテスト統計とポリシー定数の確認用）" style={{ background: "transparent", border: "none", cursor: "pointer" }}><Activity size={14} style={{ color: C.textDim }} /></button></div>} className="h-full">
-                <div className="overflow-y-auto h-full">
+                <div className="overflow-y-auto no-scrollbar h-full">
                   {CATS.map((cat) => (<DiffBar key={cat} cat={cat} current={currentHoldingPct[cat]} amount={currentHoldingAmount[cat]} target={effectiveModelRow[cat]} label={rankLabels[cat]} holdings={combinedHoldings} onClick={() => setModal({ type: "rank", rank: cat })} />))}
                   <div className="px-3 py-0.5 grid grid-cols-3 gap-1.5">
                     {[{ label: "A+B", ...blocks.AB }, { label: "C", ...blocks.Cb }, { label: "D+E", ...blocks.DE }].map((b) => { const diff = Number((b.cur - b.tgt).toFixed(1)); return (<div key={b.label} className="rounded px-2 py-0.5 text-center" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}><div className="text-[10px]" style={{ color: C.textDim }}>{b.label}</div><div className="mono text-xs font-semibold">{Number(b.cur.toFixed(1))}%</div><div className="mono text-[10px]" style={{ color: Math.abs(diff) >= 4 ? C.rust : C.textMuted }}>{diff > 0 ? "+" : ""}{diff}pt</div></div>); })}

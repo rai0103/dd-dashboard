@@ -17,3 +17,11 @@ html, body {
 * {
   box-sizing: border-box;
 }
+
+/* スクロールは維持したままスクロールバーだけ隠す */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
