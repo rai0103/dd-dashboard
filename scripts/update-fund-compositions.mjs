@@ -11,6 +11,8 @@
 //   ITA              … stockanalysis.com の上位25銘柄
 //   上場日経高配当50（399A）… みんかぶ（PCF上位20銘柄）
 //   JPXプライム150（2017）   … みんかぶ（PCF上位20銘柄）
+//   TOPIX Core30（1311）     … みんかぶ（PCF上位20銘柄）
+//   グローバルリーダーズ日本株（2641）… みんかぶ（PCF上位20銘柄）
 // SMTモメンタム（日本・米国・欧州）・Zテック20は月次レポートの上位10銘柄を手作業で登録している（このスクリプトの対象外）。
 // 実行: node scripts/update-fund-compositions.mjs
 import { readFileSync, writeFileSync } from "node:fs";
@@ -120,6 +122,8 @@ const targets = [
   { key: "ITA", kind: "partial", src: () => fetchStockAnalysis("ITA"), others: ["OTHERS_ITA", "その他ITA構成銘柄"] },
   { key: "NikkeiHighDiv50", kind: "partial", src: () => fetchMinkabuEtf("399A"), others: ["OTHERS_NHD50", "その他日経平均高配当株50構成銘柄"] },
   { key: "JPXPrime150", kind: "partial", src: () => fetchMinkabuEtf("2017"), others: ["OTHERS_JPXP150", "その他JPXプライム150構成銘柄"] },
+  { key: "TopixCore30", kind: "partial", src: () => fetchMinkabuEtf("1311"), others: ["OTHERS_TPXC30", "その他TOPIX Core30構成銘柄"] },
+  { key: "GXGlobalLeadersJP", kind: "partial", src: () => fetchMinkabuEtf("2641"), others: ["OTHERS_GXGLJP", "その他グローバルリーダーズ日本株構成銘柄"] },
 ];
 const asOfs = [];
 for (const t of targets) {

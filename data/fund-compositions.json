@@ -1,8 +1,232 @@
 {
   "asOf": "2026-09-25",
-  "source": "S&P500＝Direxion SPXL、Nasdaq100＝ProShares TQQQ、SOXL・TECL＝Direxion各ETFの日次保有明細（株式部分を合計100%に正規化）。HDV（2013も同じ）・ITA＝stockanalysis.comの上位25銘柄、日経平均高配当株50（399A）・JPXプライム150＝みんかぶ掲載のPCF上位20銘柄。SMTモメンタム（日本・米国・欧州）・Zテック20＝月次レポート（2026年8月末）の上位10銘柄。FANG+はMicroSectors FANG+ ETN(FNGS)、S&P500トップ20・テック・トップ20はstockanalysis.comの保有構成をもとにした概算値。日経平均は一般に知られる上位銘柄・概算ウエイトを参考にした推定値（未検証・要確認）",
-  "note": "S&P500・Nasdaq100・SOXL・TECL・HDV・ITA・日経平均高配当株50・JPXプライム150は scripts/update-fund-compositions.mjs で最新化できる。上位銘柄のみ公表されているファンドは、残りを「その他」1行にまとめている。SMTモメンタム・Zテック20は月次レポートをもとに手動更新（SMTモメンタムは年4回銘柄入替）。レバレッジETFは保有額を連動指数・対象銘柄の構成比率で按分しており、レバレッジ倍率は掛けていない。実際の比率は日々変動する。",
+  "source": "S&P500＝Direxion SPXL、Nasdaq100＝ProShares TQQQ、SOXL・TECL＝Direxion各ETFの日次保有明細（株式部分を合計100%に正規化）。HDV（2013も同じ）・ITA＝stockanalysis.comの上位25銘柄、日経平均高配当株50（399A）・JPXプライム150・TOPIX Core30（1311）・グローバルリーダーズ日本株（2641）＝みんかぶ掲載のPCF上位20銘柄。SMTモメンタム（日本・米国・欧州）・Zテック20＝月次レポート（2026年8月末）の上位10銘柄。FANG+はMicroSectors FANG+ ETN(FNGS)、S&P500トップ20・テック・トップ20はstockanalysis.comの保有構成をもとにした概算値。日経平均は一般に知られる上位銘柄・概算ウエイトを参考にした推定値（未検証・要確認）",
+  "note": "S&P500・Nasdaq100・SOXL・TECL・HDV・ITA・日経平均高配当株50・JPXプライム150・TOPIX Core30・グローバルリーダーズ日本株は scripts/update-fund-compositions.mjs で最新化できる。上位銘柄のみ公表されているファンドは、残りを「その他」1行にまとめている。SMTモメンタム・Zテック20は月次レポートをもとに手動更新（SMTモメンタムは年4回銘柄入替）。レバレッジETFは保有額を連動指数・対象銘柄の構成比率で按分しており、レバレッジ倍率は掛けていない。実際の比率は日々変動する。",
   "funds": [
+    {
+      "key": "TopixCore30",
+      "label": "TOPIX Core30指数",
+      "matchNamePattern": "^1311\\s|NFTPX.?30|TOPIX.?CORE.?30",
+      "holdings": [
+        {
+          "ticker": "8306.T",
+          "name": "三菱ＵＦＪ",
+          "weight": 0.0902
+        },
+        {
+          "ticker": "7203.T",
+          "name": "トヨタ自",
+          "weight": 0.0593
+        },
+        {
+          "ticker": "8316.T",
+          "name": "三井住友",
+          "weight": 0.0583
+        },
+        {
+          "ticker": "6501.T",
+          "name": "日立",
+          "weight": 0.0568
+        },
+        {
+          "ticker": "6758.T",
+          "name": "ソニーグループ",
+          "weight": 0.0498
+        },
+        {
+          "ticker": "9984.T",
+          "name": "ソフトバンクグループ",
+          "weight": 0.0496
+        },
+        {
+          "ticker": "6098.T",
+          "name": "リクルートホールディングス",
+          "weight": 0.0465
+        },
+        {
+          "ticker": "8035.T",
+          "name": "東京エレクトロン",
+          "weight": 0.0462
+        },
+        {
+          "ticker": "8411.T",
+          "name": "みずほ",
+          "weight": 0.0461
+        },
+        {
+          "ticker": "6857.T",
+          "name": "アドバンテスト",
+          "weight": 0.0404
+        },
+        {
+          "ticker": "8058.T",
+          "name": "三菱商事",
+          "weight": 0.038
+        },
+        {
+          "ticker": "8766.T",
+          "name": "東京海上",
+          "weight": 0.0326
+        },
+        {
+          "ticker": "8001.T",
+          "name": "伊藤忠",
+          "weight": 0.0321
+        },
+        {
+          "ticker": "6861.T",
+          "name": "キーエンス",
+          "weight": 0.0316
+        },
+        {
+          "ticker": "8031.T",
+          "name": "三井物産",
+          "weight": 0.0307
+        },
+        {
+          "ticker": "7011.T",
+          "name": "三菱重工業",
+          "weight": 0.0302
+        },
+        {
+          "ticker": "6503.T",
+          "name": "三菱電",
+          "weight": 0.0237
+        },
+        {
+          "ticker": "4063.T",
+          "name": "信越化学工業",
+          "weight": 0.0214
+        },
+        {
+          "ticker": "4502.T",
+          "name": "武田薬",
+          "weight": 0.0214
+        },
+        {
+          "ticker": "7974.T",
+          "name": "任天堂",
+          "weight": 0.0208
+        },
+        {
+          "ticker": "OTHERS_TPXC30",
+          "name": "その他TOPIX Core30構成銘柄（上位20銘柄以外）",
+          "weight": 0.1743
+        }
+      ]
+    },
+    {
+      "key": "GXGlobalLeadersJP",
+      "label": "グローバルX グローバルリーダーズ日本株",
+      "matchNamePattern": "^2641\\s|GXGリーダーズ|グローバルリーダーズ日本株",
+      "holdings": [
+        {
+          "ticker": "6501.T",
+          "name": "日立",
+          "weight": 0.1097
+        },
+        {
+          "ticker": "7203.T",
+          "name": "トヨタ自",
+          "weight": 0.1005
+        },
+        {
+          "ticker": "6758.T",
+          "name": "ソニーグループ",
+          "weight": 0.0797
+        },
+        {
+          "ticker": "6098.T",
+          "name": "リクルートホールディングス",
+          "weight": 0.0767
+        },
+        {
+          "ticker": "8031.T",
+          "name": "三井物産",
+          "weight": 0.072
+        },
+        {
+          "ticker": "8058.T",
+          "name": "三菱商事",
+          "weight": 0.0679
+        },
+        {
+          "ticker": "6981.T",
+          "name": "村田製",
+          "weight": 0.0585
+        },
+        {
+          "ticker": "9983.T",
+          "name": "ファーストリテイリング",
+          "weight": 0.058
+        },
+        {
+          "ticker": "7011.T",
+          "name": "三菱重工業",
+          "weight": 0.057
+        },
+        {
+          "ticker": "6503.T",
+          "name": "三菱電",
+          "weight": 0.0449
+        },
+        {
+          "ticker": "8002.T",
+          "name": "丸紅",
+          "weight": 0.0399
+        },
+        {
+          "ticker": "8053.T",
+          "name": "住友商",
+          "weight": 0.0351
+        },
+        {
+          "ticker": "4502.T",
+          "name": "武田薬",
+          "weight": 0.0339
+        },
+        {
+          "ticker": "7974.T",
+          "name": "任天堂",
+          "weight": 0.0325
+        },
+        {
+          "ticker": "7267.T",
+          "name": "ホンダ",
+          "weight": 0.0284
+        },
+        {
+          "ticker": "6367.T",
+          "name": "ダイキン工業",
+          "weight": 0.0272
+        },
+        {
+          "ticker": "8015.T",
+          "name": "豊田通商",
+          "weight": 0.0219
+        },
+        {
+          "ticker": "4568.T",
+          "name": "第一三共",
+          "weight": 0.0214
+        },
+        {
+          "ticker": "7751.T",
+          "name": "キヤノン",
+          "weight": 0.0167
+        },
+        {
+          "ticker": "3382.T",
+          "name": "７＆ｉＨＤ",
+          "weight": 0.0166
+        },
+        {
+          "ticker": "OTHERS_GXGLJP",
+          "name": "その他グローバルリーダーズ日本株構成銘柄（上位20銘柄以外）",
+          "weight": 0.0015
+        }
+      ]
+    },
     {
       "key": "HDV",
       "label": "HDV（Morningstar配当利回りフォーカス指数）",
@@ -148,87 +372,87 @@
         {
           "ticker": "GE",
           "name": "GE Aerospace",
-          "weight": 0.2078
+          "weight": 0.2091
         },
         {
           "ticker": "RTX",
           "name": "RTX Corporation",
-          "weight": 0.1622
+          "weight": 0.1602
         },
         {
           "ticker": "BA",
           "name": "The Boeing Company",
-          "weight": 0.0779
+          "weight": 0.0771
         },
         {
           "ticker": "LMT",
           "name": "Lockheed Martin Corporation",
-          "weight": 0.0459
+          "weight": 0.0461
         },
         {
           "ticker": "NOC",
           "name": "Northrop Grumman Corporation",
-          "weight": 0.0458
+          "weight": 0.0456
         },
         {
           "ticker": "HWM",
           "name": "Howmet Aerospace Inc.",
-          "weight": 0.0451
+          "weight": 0.0455
         },
         {
           "ticker": "TDG",
           "name": "TransDigm Group Incorporated",
-          "weight": 0.045
+          "weight": 0.0453
         },
         {
           "ticker": "GD",
           "name": "General Dynamics Corporation",
-          "weight": 0.0446
+          "weight": 0.044
         },
         {
           "ticker": "HONA",
           "name": "Honeywell Aerospace Inc.",
-          "weight": 0.0389
+          "weight": 0.038
         },
         {
           "ticker": "LHX",
           "name": "L3Harris Technologies, Inc.",
-          "weight": 0.0335
+          "weight": 0.0336
         },
         {
           "ticker": "RKLB",
           "name": "Rocket Lab Corporation",
-          "weight": 0.0291
+          "weight": 0.0307
         },
         {
           "ticker": "AXON",
           "name": "Axon Enterprise, Inc.",
-          "weight": 0.0275
+          "weight": 0.0274
         },
         {
           "ticker": "ATI",
           "name": "ATI Inc.",
-          "weight": 0.0189
+          "weight": 0.0192
         },
         {
           "ticker": "CW",
           "name": "Curtiss-Wright Corporation",
-          "weight": 0.0151
+          "weight": 0.0152
         },
         {
           "ticker": "CRS",
           "name": "Carpenter Technology Corporation",
-          "weight": 0.0147
+          "weight": 0.015
         },
         {
           "ticker": "WWD",
           "name": "Woodward, Inc.",
-          "weight": 0.0145
+          "weight": 0.0146
         },
         {
           "ticker": "FTAI",
           "name": "FTAI Aviation Ltd.",
-          "weight": 0.0144
+          "weight": 0.0136
         },
         {
           "ticker": "HEI.A",
@@ -243,7 +467,7 @@
         {
           "ticker": "BWXT",
           "name": "BWX Technologies, Inc.",
-          "weight": 0.0098
+          "weight": 0.0096
         },
         {
           "ticker": "HEI",
@@ -253,17 +477,17 @@
         {
           "ticker": "MOG.A",
           "name": "Moog Inc.",
-          "weight": 0.008
+          "weight": 0.0082
         },
         {
           "ticker": "HII",
           "name": "Huntington Ingalls Industries, Inc.",
-          "weight": 0.008
+          "weight": 0.0079
         },
         {
           "ticker": "KTOS",
           "name": "Kratos Defense & Security Solutions, Inc.",
-          "weight": 0.0065
+          "weight": 0.0067
         },
         {
           "ticker": "HXL",
@@ -273,7 +497,7 @@
         {
           "ticker": "OTHERS_ITA",
           "name": "その他ITA構成銘柄（上位25銘柄以外）",
-          "weight": 0.0494
+          "weight": 0.05
         }
       ]
     },
@@ -1845,5 +2069,5 @@
     "GLW": "Corning（コーニング）",
     "FTNT": "Fortinet（フォーティネット）"
   },
-  "autoUpdated": "SP500:9/25/2026 / Nasdaq:9/25/2026 / SOXL:9/25/2026 / TECL:9/25/2026 / HDV:Sep 24, 2026 / ITA:Sep 23, 2026 / NikkeiHighDiv50:2026/09/24 / JPXPrime150:2026/09/24"
+  "autoUpdated": "SP500:9/25/2026 / Nasdaq:9/25/2026 / SOXL:9/25/2026 / TECL:9/25/2026 / HDV:Sep 24, 2026 / ITA:Sep 24, 2026 / NikkeiHighDiv50:2026/09/24 / JPXPrime150:2026/09/24 / TopixCore30:2026/09/24 / GXGlobalLeadersJP:2026/09/24"
 }
