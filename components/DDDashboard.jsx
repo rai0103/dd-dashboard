@@ -1512,10 +1512,6 @@ function ChartMarkers({ xAxisMap, yAxisMap, points, activeDate }) {
               <rect x={pt.cx - 4} y={pt.cy - 4} width={8} height={8} fill={pt.currentFill || "#fff"} stroke={C.bg} strokeWidth={1.5} />
             ) : pt.shape === "up" ? (
               <path d={`M${pt.cx},${pt.cy - 5.5} L${pt.cx + 5},${pt.cy + 3.5} L${pt.cx - 5},${pt.cy + 3.5} Z`} fill={pt.color} stroke={C.bg} strokeWidth={1.2} />
-            ) : pt.shape === "down" ? (
-              <path d={`M${pt.cx},${pt.cy + 5.5} L${pt.cx + 5},${pt.cy - 3.5} L${pt.cx - 5},${pt.cy - 3.5} Z`} fill={pt.color} stroke={C.bg} strokeWidth={1.2} />
-            ) : pt.shape === "diamond" ? (
-              <path d={`M${pt.cx},${pt.cy - 5} L${pt.cx + 5},${pt.cy} L${pt.cx},${pt.cy + 5} L${pt.cx - 5},${pt.cy} Z`} fill={pt.color} stroke={C.bg} strokeWidth={1.2} />
             ) : (
               <circle cx={pt.cx} cy={pt.cy} r={4} fill={pt.color} stroke={C.bg} strokeWidth={1.5} />
             )}
@@ -1578,16 +1574,16 @@ function PeriodStatsBar({ periodStats }) {
   );
 }
 // DD局面（DD開始＝ATH・大底・DD回復）と現在値のマーカー点を組み立てる。単体表示（EvalDDChartBody）と「両方」表示（DualPriceChartBody）で共通。
-// series指定時（両方表示）は色を銘柄の系列色に統一し、種別は形（▲DD開始／▼大底／◆DD回復／■現在）で区別する。
+// series指定時（両方表示）は色を単体表示と同じ種別色（DD開始=緑／大底=オレンジ／DD回復=青）にし、銘柄は形（series.shape：VOO=丸／QQQ=▲、現在値は系列色の■）で区別する。
 // あわせてラベル先頭に銘柄名と種別を付け、ツールチップ内でどちらの銘柄のどのポイントか分かるようにする。
 function buildEpisodeMarkers({ chartData, d, periodStats, fontSize, series = null }) {
   const chartFirst = chartData[0].date, chartLast = chartData[chartData.length - 1].date;
   const markerPoints = [];
   const seenIdx = new Set();
   const KIND = {
-    ath: { color: C.teal, shape: "up", name: "DD開始" },
-    trough: { color: C.rust, shape: "down", name: "大底" },
-    recovery: { color: C.blue, shape: "diamond", name: "DD回復" },
+    ath: { color: C.teal, name: "DD開始" },
+    trough: { color: C.rust, name: "大底" },
+    recovery: { color: C.blue, name: "DD回復" },
   };
   const tag = (kind, label) => (series ? `${series.name} ${kind ? KIND[kind].name : "現在"}　${label}` : label);
   // DD開始・底値・回復ポイントのラベルは期間を問わず常時表示せず点のみ描画し、ホバー時のツールチップ
@@ -1597,7 +1593,7 @@ function buildEpisodeMarkers({ chartData, d, periodStats, fontSize, series = nul
     seenIdx.add(idx);
     const p = nearestChartPoint(chartData, date);
     markerPoints.push({
-      date: p.date, price: p.price, color: series ? series.color : KIND[kind].color, shape: series ? KIND[kind].shape : "circle",
+      date: p.date, price: p.price, color: KIND[kind].color, shape: series?.shape || "circle",
       yAxisId: series?.yAxisId, anchor: "middle", fontSize, label: tag(kind, label), dotOnly: true,
     });
   };
@@ -1694,8 +1690,8 @@ function ChartSourceToggle({ value, onChange, qqqAvailable, size = "sm" }) {
 // 単体表示と同じDD開始・大底・DD回復マーカーを銘柄ごとの系列色（VOO=テール／QQQ=バイオレット）で重ねて描画し、
 // ツールチップには両銘柄の評価額・DD%・ATHと、ホバー日付に該当するマーカー注釈（銘柄名付き）をまとめて表示する。
 const BOTH_SERIES = {
-  sp500: { name: "SP500（VOO）", title: "SP500（VOO）", color: C.teal, yAxisId: "sp500", hiddenKey: "sp500Line", priceKey: "sp500Price", ddKey: "sp500DD", athKey: "sp500Ath" },
-  qqq: { name: "QQQ", title: "QQQ", color: C.violet, yAxisId: "qqq", hiddenKey: "qqqLine", priceKey: "qqqPrice", ddKey: "qqqDD", athKey: "qqqAth" },
+  sp500: { name: "SP500（VOO）", title: "SP500（VOO）", color: C.teal, shape: "circle", yAxisId: "sp500", hiddenKey: "sp500Line", priceKey: "sp500Price", ddKey: "sp500DD", athKey: "sp500Ath" },
+  qqq: { name: "QQQ", title: "QQQ", color: C.violet, shape: "up", yAxisId: "qqq", hiddenKey: "qqqLine", priceKey: "qqqPrice", ddKey: "qqqDD", athKey: "qqqAth" },
 };
 function BothTooltipContent({ active, payload, label, markersByTime, hidden }) {
   if (!active || !payload || !payload.length || !label) return null;
@@ -1790,7 +1786,7 @@ function DDChartModalContent({ chartData, rangeDays, d, hidden, toggle, period, 
               </ResponsiveContainer>
             )}
           </div>
-          <div className="mt-3 text-[10px]" style={{ color: C.textDim }}>{isBothSource ? "SP500（VOO）は左軸、QQQは右軸で表示しています。マーカーは▲DD開始・▼大底・◆DD回復・■現在（色は銘柄の系列色）で、カーソルを合わせると銘柄名付きで詳細を表示します。凡例クリックで系列の表示/非表示を切り替えられます。" : "下部のスクロールバーをドラッグして期間を絞り込み（ズーム）できます。グラフ上にカーソルを合わせるとツールチップが表示されます。"}</div>
+          <div className="mt-3 text-[10px]" style={{ color: C.textDim }}>{isBothSource ? "SP500（VOO）は左軸、QQQは右軸で表示しています。マーカーは色が種別（緑=DD開始・オレンジ=大底・青=DD回復）、形が銘柄（●SP500（VOO）・▲QQQ、■は現在値）で、カーソルを合わせると銘柄名付きで詳細を表示します。凡例クリックで系列の表示/非表示を切り替えられます。" : "下部のスクロールバーをドラッグして期間を絞り込み（ズーム）できます。グラフ上にカーソルを合わせるとツールチップが表示されます。"}</div>
         </>
       ) : (
         <div style={{ height: "min(70vh, 640px)" }}>
