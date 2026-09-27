@@ -1486,12 +1486,13 @@ function nearestChartPoint(chartData, targetDate) {
 // カーソル追従ツールチップと重なって読めなくなるのを避けるため一時的に非表示にする（詳細はツールチップ側に統合表示済み）。
 function ChartMarkers({ xAxisMap, yAxisMap, points, activeDate }) {
   const xAxis = xAxisMap && xAxisMap[Object.keys(xAxisMap)[0]];
-  const yAxis = yAxisMap && yAxisMap.price;
-  if (!xAxis || !yAxis) return null;
-  const xScale = xAxis.scale, yScale = yAxis.scale;
+  if (!xAxis || !yAxisMap) return null;
+  const xScale = xAxis.scale;
   const bandOffset = xScale && xScale.bandwidth ? xScale.bandwidth() / 2 : 0;
+  // 点ごとにyAxisId（既定は"price"）を持てるようにし、「両方」表示の2軸チャート（sp500/qqq軸）でも同じ描画を使えるようにする。
   const positioned = points
-    .map((pt) => ({ ...pt, cx: xScale(pt.date) + bandOffset, cy: yScale(pt.price) }))
+    .filter((pt) => yAxisMap[pt.yAxisId || "price"])
+    .map((pt) => ({ ...pt, cx: xScale(pt.date) + bandOffset, cy: yAxisMap[pt.yAxisId || "price"].scale(pt.price) }))
     .filter((pt) => pt.cx != null && pt.cy != null && !Number.isNaN(pt.cx) && !Number.isNaN(pt.cy));
   // ラベル同士が近接して重なる場合は、後の点（x座標が右側）のラベルを上に積んでずらす（常時ラベル表示の点のみ対象）。
   const sorted = [...positioned].sort((a, b) => a.cx - b.cx);
@@ -1508,7 +1509,13 @@ function ChartMarkers({ xAxisMap, yAxisMap, points, activeDate }) {
         return (
           <g key={i}>
             {pt.isCurrent ? (
-              <rect x={pt.cx - 4} y={pt.cy - 4} width={8} height={8} fill="#fff" stroke={C.bg} strokeWidth={1.5} />
+              <rect x={pt.cx - 4} y={pt.cy - 4} width={8} height={8} fill={pt.currentFill || "#fff"} stroke={C.bg} strokeWidth={1.5} />
+            ) : pt.shape === "up" ? (
+              <path d={`M${pt.cx},${pt.cy - 5.5} L${pt.cx + 5},${pt.cy + 3.5} L${pt.cx - 5},${pt.cy + 3.5} Z`} fill={pt.color} stroke={C.bg} strokeWidth={1.2} />
+            ) : pt.shape === "down" ? (
+              <path d={`M${pt.cx},${pt.cy + 5.5} L${pt.cx + 5},${pt.cy - 3.5} L${pt.cx - 5},${pt.cy - 3.5} Z`} fill={pt.color} stroke={C.bg} strokeWidth={1.2} />
+            ) : pt.shape === "diamond" ? (
+              <path d={`M${pt.cx},${pt.cy - 5} L${pt.cx + 5},${pt.cy} L${pt.cx},${pt.cy + 5} L${pt.cx - 5},${pt.cy} Z`} fill={pt.color} stroke={C.bg} strokeWidth={1.2} />
             ) : (
               <circle cx={pt.cx} cy={pt.cy} r={4} fill={pt.color} stroke={C.bg} strokeWidth={1.5} />
             )}
@@ -1570,46 +1577,63 @@ function PeriodStatsBar({ periodStats }) {
     </div>
   );
 }
+// DD局面（DD開始＝ATH・大底・DD回復）と現在値のマーカー点を組み立てる。単体表示（EvalDDChartBody）と「両方」表示（DualPriceChartBody）で共通。
+// series指定時（両方表示）は色を銘柄の系列色に統一し、種別は形（▲DD開始／▼大底／◆DD回復／■現在）で区別する。
+// あわせてラベル先頭に銘柄名と種別を付け、ツールチップ内でどちらの銘柄のどのポイントか分かるようにする。
+function buildEpisodeMarkers({ chartData, d, periodStats, fontSize, series = null }) {
+  const chartFirst = chartData[0].date, chartLast = chartData[chartData.length - 1].date;
+  const markerPoints = [];
+  const seenIdx = new Set();
+  const KIND = {
+    ath: { color: C.teal, shape: "up", name: "DD開始" },
+    trough: { color: C.rust, shape: "down", name: "大底" },
+    recovery: { color: C.blue, shape: "diamond", name: "DD回復" },
+  };
+  const tag = (kind, label) => (series ? `${series.name} ${kind ? KIND[kind].name : "現在"}　${label}` : label);
+  // DD開始・底値・回復ポイントのラベルは期間を問わず常時表示せず点のみ描画し、ホバー時のツールチップ
+  // （マーカー注釈を統合表示）でのみ内容を見せる（全期間で共通の挙動に統一）。
+  const addPt = (idx, date, price, kind, label) => {
+    if (seenIdx.has(idx) || !(chartFirst <= date && date <= chartLast)) return;
+    seenIdx.add(idx);
+    const p = nearestChartPoint(chartData, date);
+    markerPoints.push({
+      date: p.date, price: p.price, color: series ? series.color : KIND[kind].color, shape: series ? KIND[kind].shape : "circle",
+      yAxisId: series?.yAxisId, anchor: "middle", fontSize, label: tag(kind, label), dotOnly: true,
+    });
+  };
+  // 過去の各DD局面（ATH→底値→回復）
+  for (const ep of d.episodes) {
+    if (ep.isOngoing) continue;
+    addPt(ep.athIdx, ep.athDate, ep.athPrice, "ath", `$${ep.athPrice.toFixed(2)}（${fmtYMD(ep.athDate)}）`);
+    if (ep.troughIdx !== ep.athIdx) {
+      const isWorst = periodStats?.worstEpisode?.troughIdx === ep.troughIdx;
+      addPt(ep.troughIdx, ep.troughDate, ep.troughPrice, "trough", troughLabel(d.FULL, ep.athIdx, ep.troughIdx, ep.troughDate, ep.troughPrice, ep.troughDD, ep.recoveryIdx, isWorst));
+    }
+    if (ep.recoveryIdx !== ep.troughIdx) addPt(ep.recoveryIdx, ep.recoveryDate, ep.recoveryPrice, "recovery", `$${ep.recoveryPrice.toFixed(2)}（${fmtYMD(ep.recoveryDate)}）`);
+  }
+  // 現在進行中の局面（ATH→底値→現在）
+  addPt(d.episode.athIdx, d.athDate, d.currentATH, "ath", `$${d.currentATH.toFixed(2)}（${fmtYMD(d.athDate)}）`);
+  const troughIsToday = d.trough.i === d.last.i; // 底値がまだ今日（未回復）の場合は現在値マーカーと重なるため統合する
+  const troughIsWorst = periodStats?.worstEpisode?.troughIdx === d.trough.i;
+  if (!troughIsToday && d.trough.i !== d.episode.athIdx) addPt(d.trough.i, d.trough.date, d.trough.price, "trough", troughLabel(d.FULL, d.episode.athIdx, d.trough.i, d.trough.date, d.trough.price, d.trough.dd, null, troughIsWorst));
+  const currentLabel = troughIsToday
+    ? troughLabel(d.FULL, d.episode.athIdx, d.trough.i, d.trough.date, d.trough.price, d.currentDD, null, troughIsWorst)
+    : `$${d.currentPrice.toFixed(2)}（${fmtYMD(d.last.date)}）`;
+  markerPoints.push({
+    date: chartLast, price: d.currentPrice, color: series ? series.color : depthColor(d.currentDD), currentFill: series?.color,
+    yAxisId: series?.yAxisId, anchor: "end", fontSize, label: tag(troughIsToday ? "trough" : null, currentLabel), dotOnly: true, isCurrent: true,
+  });
+  return markerPoints;
+}
 /* ---------------- reusable evaluation/DD composed chart ---------------- */
 function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBrush = false, fontSize = 10, width, height }) {
   // 現在カーソル追従ツールチップが指している日付。ChartMarkersの常時表示ラベルをこの日付と重ならないよう
   // 一時的に隠す判定と、EvalTooltipContentでマーカー注釈を同じ吹き出しに統合するための照合の両方に使う。
   const [activeDate, setActiveDate] = useState(null);
-  const chartFirst = chartData[0].date, chartLast = chartData[chartData.length - 1].date;
   const markerFontSize = Math.max(8, fontSize - 1);
   const maxDrawdownInView = Math.min(0, ...chartData.map((p) => p.dd)); // 表示期間内の最大DD%（最も深い下落）
   const ddTicks = ddAxisTicksForMaxDrawdown(maxDrawdownInView);
-  const markerPoints = [];
-  if (!hidden.price) {
-    const seenIdx = new Set();
-    // DD開始・底値・回復ポイントのラベルは期間を問わず常時表示せず点のみ描画し、ホバー時のツールチップ
-    // （EvalTooltipContent側でマーカー注釈を統合表示）でのみ内容を見せる（全期間で共通の挙動に統一）。
-    const addPt = (idx, date, price, color, label) => {
-      if (seenIdx.has(idx) || !(chartFirst <= date && date <= chartLast)) return;
-      seenIdx.add(idx);
-      const p = nearestChartPoint(chartData, date);
-      markerPoints.push({ date: p.date, price: p.price, color, anchor: "middle", fontSize: markerFontSize, label, dotOnly: true });
-    };
-    // 過去の各DD局面（ATH→底値→回復）
-    for (const ep of d.episodes) {
-      if (ep.isOngoing) continue;
-      addPt(ep.athIdx, ep.athDate, ep.athPrice, C.teal, `$${ep.athPrice.toFixed(2)}（${fmtYMD(ep.athDate)}）`);
-      if (ep.troughIdx !== ep.athIdx) {
-        const isWorst = periodStats?.worstEpisode?.troughIdx === ep.troughIdx;
-        addPt(ep.troughIdx, ep.troughDate, ep.troughPrice, C.rust, troughLabel(d.FULL, ep.athIdx, ep.troughIdx, ep.troughDate, ep.troughPrice, ep.troughDD, ep.recoveryIdx, isWorst));
-      }
-      if (ep.recoveryIdx !== ep.troughIdx) addPt(ep.recoveryIdx, ep.recoveryDate, ep.recoveryPrice, C.blue, `$${ep.recoveryPrice.toFixed(2)}（${fmtYMD(ep.recoveryDate)}）`);
-    }
-    // 現在進行中の局面（ATH→底値→現在）
-    addPt(d.episode.athIdx, d.athDate, d.currentATH, C.teal, `$${d.currentATH.toFixed(2)}（${fmtYMD(d.athDate)}）`);
-    const troughIsToday = d.trough.i === d.last.i; // 底値がまだ今日（未回復）の場合は現在値マーカーと重なるため統合する
-    const troughIsWorst = periodStats?.worstEpisode?.troughIdx === d.trough.i;
-    if (!troughIsToday && d.trough.i !== d.episode.athIdx) addPt(d.trough.i, d.trough.date, d.trough.price, C.rust, troughLabel(d.FULL, d.episode.athIdx, d.trough.i, d.trough.date, d.trough.price, d.trough.dd, null, troughIsWorst));
-    const currentLabel = troughIsToday
-      ? troughLabel(d.FULL, d.episode.athIdx, d.trough.i, d.trough.date, d.trough.price, d.currentDD, null, troughIsWorst)
-      : `$${d.currentPrice.toFixed(2)}（${fmtYMD(d.last.date)}）`;
-    markerPoints.push({ date: chartLast, price: d.currentPrice, color: depthColor(d.currentDD), anchor: "end", fontSize: markerFontSize, label: currentLabel, dotOnly: true, isCurrent: true });
-  }
+  const markerPoints = hidden.price ? [] : buildEpisodeMarkers({ chartData, d, periodStats, fontSize: markerFontSize });
   const markerByTime = new Map(markerPoints.map((m) => [m.date.getTime(), m]));
   return (
     <ComposedChart
@@ -1667,21 +1691,48 @@ function ChartSourceToggle({ value, onChange, qqqAvailable, size = "sm" }) {
 }
 // SP500（VOO）とQQQを同時に比較表示するための、評価額のみ（DD%なし）の2軸チャート（左軸=SP500（VOO）、右軸=QQQ）。
 // 価格水準が大きく異なる（SP500は$千〜、QQQは$百〜）ため、軸を分けてそれぞれ独立にautoスケールさせ、一画面に収める。
-function DualPriceChartBody({ data, rangeDays, hidden, fontSize = 10, width, height }) {
-  const fmt = (v) => (v == null ? "" : `$${Number(v).toFixed(2)}`);
+// 単体表示と同じDD開始・大底・DD回復マーカーを銘柄ごとの系列色（VOO=テール／QQQ=バイオレット）で重ねて描画し、
+// ツールチップには両銘柄の評価額・DD%・ATHと、ホバー日付に該当するマーカー注釈（銘柄名付き）をまとめて表示する。
+const BOTH_SERIES = {
+  sp500: { name: "SP500（VOO）", title: "SP500（VOO）", color: C.teal, yAxisId: "sp500", hiddenKey: "sp500Line", priceKey: "sp500Price", ddKey: "sp500DD", athKey: "sp500Ath" },
+  qqq: { name: "QQQ", title: "QQQ", color: C.violet, yAxisId: "qqq", hiddenKey: "qqqLine", priceKey: "qqqPrice", ddKey: "qqqDD", athKey: "qqqAth" },
+};
+function BothTooltipContent({ active, payload, label, markersByTime, hidden }) {
+  if (!active || !payload || !payload.length || !label) return null;
+  const row = payload[0].payload;
+  const markers = markersByTime.get(label.getTime()) || [];
+  return (
+    <div style={{ margin: 0, padding: 10, background: C.panel, border: `1px solid ${C.border}`, fontSize: 12, whiteSpace: "nowrap" }}>
+      <p style={{ margin: 0, color: C.textMuted }}>{label.toLocaleDateString("ja-JP")}</p>
+      {Object.values(BOTH_SERIES).filter((s) => !hidden[s.hiddenKey] && row[s.priceKey] != null).map((s) => (
+        <div key={s.name} style={{ paddingTop: 4, color: s.color }}>
+          <b>{s.title}</b>　評価額 : ${row[s.priceKey]}　<span style={{ color: C.rust }}>DD : {row[s.ddKey]}%</span>　<span style={{ color: C.textDim }}>ATH : ${row[s.athKey]}</span>
+        </div>
+      ))}
+      {markers.map((m, i) => (
+        <div key={i} className="mono" style={{ marginTop: 4, paddingTop: 4, borderTop: `1px solid ${C.borderSoft}`, color: m.color, fontWeight: 700 }}>{m.label}</div>
+      ))}
+    </div>
+  );
+}
+function DualPriceChartBody({ data, rangeDays, hidden, d, dQqq, sp500ChartData, qqqChartData, periodStats, qqqPeriodStats, fontSize = 10, width, height }) {
+  const markerFontSize = Math.max(8, fontSize - 1);
+  const markerPoints = [];
+  if (!hidden.sp500Line && d && sp500ChartData?.length) markerPoints.push(...buildEpisodeMarkers({ chartData: sp500ChartData, d, periodStats, fontSize: markerFontSize, series: BOTH_SERIES.sp500 }));
+  if (!hidden.qqqLine && dQqq && qqqChartData?.length) markerPoints.push(...buildEpisodeMarkers({ chartData: qqqChartData, d: dQqq, periodStats: qqqPeriodStats, fontSize: markerFontSize, series: BOTH_SERIES.qqq }));
+  // 同じ日付に両銘柄のマーカーが来る場合があるため、日付ごとに配列で保持してツールチップに全件（銘柄名付き）を並べる。
+  const markersByTime = new Map();
+  for (const m of markerPoints) { const k = m.date.getTime(); if (!markersByTime.has(k)) markersByTime.set(k, []); markersByTime.get(k).push(m); }
   return (
     <ComposedChart width={width} height={height} data={data} margin={{ top: 12, right: 44, left: 0, bottom: 0 }}>
       <CartesianGrid stroke={C.borderSoft} vertical={false} />
       <XAxis dataKey="date" tickFormatter={(dt) => fmtAxisDate(dt, rangeDays)} tick={{ fill: C.textDim, fontSize }} axisLine={{ stroke: C.border }} tickLine={false} minTickGap={40} />
       <YAxis yAxisId="sp500" domain={["auto", "auto"]} tick={{ fill: C.teal, fontSize }} axisLine={false} tickLine={false} width={52} label={{ value: "SP500（VOO）", angle: -90, position: "insideLeft", fill: C.teal, fontSize }} />
       <YAxis yAxisId="qqq" orientation="right" domain={["auto", "auto"]} tick={{ fill: C.violet, fontSize }} axisLine={false} tickLine={false} width={52} label={{ value: "QQQ", angle: 90, position: "insideRight", fill: C.violet, fontSize }} />
-      <Tooltip
-        contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }}
-        labelFormatter={(dt) => fmtYMD(dt)}
-        formatter={(value, name) => [fmt(value), name]}
-      />
+      <Tooltip content={(props) => <BothTooltipContent {...props} markersByTime={markersByTime} hidden={hidden} />} />
       <Line yAxisId="sp500" type="linear" dataKey="sp500Price" stroke={C.teal} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls hide={!!hidden.sp500Line} name="SP500（VOO）" />
       <Line yAxisId="qqq" type="linear" dataKey="qqqPrice" stroke={C.violet} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls hide={!!hidden.qqqLine} name="QQQ" />
+      {markerPoints.length > 0 && <Customized component={<ChartMarkers points={markerPoints} />} />}
     </ComposedChart>
   );
 }
@@ -1734,12 +1785,12 @@ function DDChartModalContent({ chartData, rangeDays, d, hidden, toggle, period, 
             ) : (
               <ResponsiveContainer width="100%" height="100%" key={`${period}-${chartSource}`}>
                 {isBothSource
-                  ? <DualPriceChartBody data={bothChartData} rangeDays={rangeDays} hidden={hidden} fontSize={fontSize} />
+                  ? <DualPriceChartBody data={bothChartData} rangeDays={rangeDays} hidden={hidden} d={d} dQqq={dQqq} sp500ChartData={chartData} qqqChartData={qqqChartData} periodStats={periodStats} qqqPeriodStats={qqqPeriodStats} fontSize={fontSize} />
                   : <EvalDDChartBody chartData={activeChartData} rangeDays={activeRangeDays} d={activeD} hidden={hidden} periodStats={activePeriodStats} withBrush fontSize={fontSize} />}
               </ResponsiveContainer>
             )}
           </div>
-          <div className="mt-3 text-[10px]" style={{ color: C.textDim }}>{isBothSource ? "SP500（VOO）は左軸、QQQは右軸で表示しています。凡例クリックで系列の表示/非表示を切り替えられます。" : "下部のスクロールバーをドラッグして期間を絞り込み（ズーム）できます。グラフ上にカーソルを合わせるとツールチップが表示されます。"}</div>
+          <div className="mt-3 text-[10px]" style={{ color: C.textDim }}>{isBothSource ? "SP500（VOO）は左軸、QQQは右軸で表示しています。マーカーは▲DD開始・▼大底・◆DD回復・■現在（色は銘柄の系列色）で、カーソルを合わせると銘柄名付きで詳細を表示します。凡例クリックで系列の表示/非表示を切り替えられます。" : "下部のスクロールバーをドラッグして期間を絞り込み（ズーム）できます。グラフ上にカーソルを合わせるとツールチップが表示されます。"}</div>
         </>
       ) : (
         <div style={{ height: "min(70vh, 640px)" }}>
@@ -5396,12 +5447,13 @@ export default function DDDashboard() {
   const bothChartData = useMemo(() => {
     if (!qqqChartData) return null;
     const map = new Map();
-    for (const p of chartData) map.set(p.date.getTime(), { date: p.date, sp500Price: p.price });
+    for (const p of chartData) map.set(p.date.getTime(), { date: p.date, sp500Price: p.price, sp500DD: p.dd, sp500Ath: p.ath });
     for (const p of qqqChartData) {
       const key = p.date.getTime();
+      const fields = { qqqPrice: p.price, qqqDD: p.dd, qqqAth: p.ath };
       const existing = map.get(key);
-      if (existing) existing.qqqPrice = p.price;
-      else map.set(key, { date: p.date, qqqPrice: p.price });
+      if (existing) Object.assign(existing, fields);
+      else map.set(key, { date: p.date, ...fields });
     }
     return Array.from(map.values()).sort((a, b) => a.date - b.date);
   }, [chartData, qqqChartData]);
@@ -5611,7 +5663,7 @@ export default function DDDashboard() {
                       ) : (
                         <ResponsiveContainer width="100%" height="100%" key={`${period}-${chartSource}`}>
                           {chartSource === "both"
-                            ? <DualPriceChartBody data={bothChartData} rangeDays={rangeDays} hidden={hidden} />
+                            ? <DualPriceChartBody data={bothChartData} rangeDays={rangeDays} hidden={hidden} d={d} dQqq={dQqq} sp500ChartData={chartData} qqqChartData={qqqChartData} periodStats={periodStats} qqqPeriodStats={qqqPeriodStats} />
                             : chartSource === "qqq"
                               ? <EvalDDChartBody chartData={qqqChartData} rangeDays={qqqRangeDays} d={dQqq} hidden={hidden} periodStats={qqqPeriodStats} />
                               : <EvalDDChartBody chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} periodStats={periodStats} />}
