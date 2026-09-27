@@ -1728,6 +1728,9 @@ function DualPriceChartBody({ data, rangeDays, hidden, d, dQqq, sp500ChartData, 
       <Tooltip content={(props) => <BothTooltipContent {...props} markersByTime={markersByTime} hidden={hidden} />} />
       <Line yAxisId="sp500" type="linear" dataKey="sp500Price" stroke={C.teal} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls hide={!!hidden.sp500Line} name="SP500（VOO）" />
       <Line yAxisId="qqq" type="linear" dataKey="qqqPrice" stroke={C.violet} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls hide={!!hidden.qqqLine} name="QQQ" />
+      {/* 単体表示と同様のATH補助線（DD開始～回復の間は水平になり、ドローダウン区間が分かる）。各銘柄の系列色の点線で描く */}
+      <Line yAxisId="sp500" type="linear" dataKey="sp500Ath" stroke={C.teal} strokeDasharray="3 4" strokeWidth={1} strokeOpacity={0.7} dot={false} activeDot={false} isAnimationActive={false} connectNulls hide={!!hidden.sp500Line} name="SP500（VOO） ATH" />
+      <Line yAxisId="qqq" type="linear" dataKey="qqqAth" stroke={C.violet} strokeDasharray="3 4" strokeWidth={1} strokeOpacity={0.7} dot={false} activeDot={false} isAnimationActive={false} connectNulls hide={!!hidden.qqqLine} name="QQQ ATH" />
       {markerPoints.length > 0 && <Customized component={<ChartMarkers points={markerPoints} />} />}
     </ComposedChart>
   );
