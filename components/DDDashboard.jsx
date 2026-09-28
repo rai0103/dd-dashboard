@@ -1232,6 +1232,405 @@ const KNOWN_CRASH_META = [
       { date: "2026-01-01", text: "中国経済対策の効果が表れ始め、世界経済の減速懸念が緩和" },
     ] },
 ];
+// KNOWN_CRASH_METAに該当しない下落局面（-3%〜-10%級の押し目など）のうち、下落の主因となった出来事が特定できるものの名称・トピックス。
+// キーは局面のATH日（DD開始日、YYYY-MM-DD）。ここに無い局面は目立った材料の無い通常の調整として、名称なし＋ROUTINE_PULLBACK_TEXTを表示する。
+const MINOR_EPISODE_META = {
+  "1959-05-29": { name: "FRB公定歩合引き上げ",
+    annotations: [
+      { date: "1959-05-29", text: "FRBが公定歩合を3.5%へ引き上げ（同年3月に続く連続利上げ）" },
+      { date: "1959-06-09", text: "金融引き締めの長期化懸念から株価が調整" },
+    ] },
+  "1961-04-17": { name: "ピッグス湾事件",
+    annotations: [
+      { date: "1961-04-17", text: "米国支援の亡命キューバ人部隊がピッグス湾に上陸、侵攻は失敗に終わる" },
+      { date: "1961-04-24", text: "ケネディ政権の外交失策と冷戦激化への懸念から株価が底値" },
+    ] },
+  "1963-10-28": { name: "ケネディ大統領暗殺",
+    annotations: [
+      { date: "1963-11-22", text: "ダラスでケネディ大統領が暗殺。NY証券取引所は取引を途中停止" },
+      { date: "1963-11-26", text: "ジョンソン新大統領のもとで政策継続の見通しが立ち、株価が急反発" },
+    ] },
+  "1964-07-17": { name: "トンキン湾事件",
+    annotations: [
+      { date: "1964-08-04", text: "トンキン湾事件。米軍が北ベトナムへの報復爆撃を実施" },
+      { date: "1964-08-07", text: "議会がトンキン湾決議を可決、ベトナム戦争本格介入への警戒が広がる" },
+    ] },
+  "1964-11-20": { name: "英ポンド危機",
+    annotations: [
+      { date: "1964-11-23", text: "英国がポンド防衛のため公定歩合を7%へ急引き上げ" },
+      { date: "1964-11-24", text: "FRBも公定歩合を4%へ引き上げ、国際通貨不安が米市場に波及" },
+    ] },
+  "1965-05-13": { name: "マーティンFRB議長の警告発言",
+    annotations: [
+      { date: "1965-06-01", text: "マーティンFRB議長が講演で現在の繁栄と1929年の類似性を指摘" },
+      { date: "1965-06-28", text: "信用取引残高の膨張・ベトナム戦争拡大への警戒も重なり底値" },
+    ] },
+  "1967-05-08": { name: "第3次中東戦争（六日戦争）",
+    annotations: [
+      { date: "1967-05-22", text: "エジプトがチラン海峡を封鎖、中東の軍事的緊張が急上昇" },
+      { date: "1967-06-05", text: "第3次中東戦争が勃発。開戦当日に株価が底値" },
+      { date: "1967-06-10", text: "イスラエルの短期勝利で停戦、不透明感が後退" },
+    ] },
+  "1967-08-04": { name: "ジョンソン政権の増税案",
+    annotations: [
+      { date: "1967-08-03", text: "ジョンソン大統領が戦費調達のため10%の所得税付加税を議会に要請" },
+      { date: "1967-08-28", text: "増税による景気減速懸念から株価が底値" },
+    ] },
+  "1972-04-12": { name: "ハイフォン港機雷封鎖",
+    annotations: [
+      { date: "1972-04-16", text: "米軍がハノイ・ハイフォンへの爆撃を再開" },
+      { date: "1972-05-08", text: "ニクソン大統領が北ベトナムのハイフォン港の機雷封鎖を発表" },
+      { date: "1972-05-22", text: "ニクソン訪ソが予定どおり実現し、米ソ対立激化の懸念が後退" },
+    ] },
+  "1972-12-11": { name: "パリ和平交渉決裂・北爆再開",
+    annotations: [
+      { date: "1972-12-13", text: "ベトナム和平をめぐるパリ交渉が決裂" },
+      { date: "1972-12-18", text: "米軍が北ベトナムへの大規模爆撃（ラインバッカーII作戦）を開始" },
+      { date: "1972-12-30", text: "北爆停止と交渉再開の発表で不安が後退" },
+    ] },
+  "1980-09-24": { name: "イラン・イラク戦争勃発",
+    annotations: [
+      { date: "1980-09-22", text: "イラクがイランへ侵攻し、イラン・イラク戦争が勃発" },
+      { date: "1980-09-29", text: "原油供給不安とインフレ再燃懸念から株価が底値" },
+    ] },
+  "1980-10-15": { name: "金利再上昇（FRB引き締め再開）",
+    annotations: [
+      { date: "1980-10-15", text: "景気回復とインフレ高止まりでFRBが引き締めを再開、短期金利が再び急上昇" },
+      { date: "1980-10-30", text: "高金利の長期化懸念から株価が底値" },
+    ] },
+  "1983-06-22": { name: "金利上昇懸念",
+    annotations: [
+      { date: "1983-06-22", text: "景気回復の加速でFRBが金融緩和を打ち止め、長期金利が上昇に転じる" },
+      { date: "1983-08-08", text: "財政赤字拡大と金利上昇への警戒から株価が底値" },
+    ] },
+  "1985-07-17": { name: "景気減速懸念・プラザ合意",
+    annotations: [
+      { date: "1985-07-17", text: "ドル高による製造業の不振で米国景気の減速懸念が強まる" },
+      { date: "1985-09-22", text: "G5がドル高是正で合意（プラザ合意）" },
+      { date: "1985-09-25", text: "ドル安・金利低下への期待から株価が底打ち" },
+    ] },
+  "1986-01-07": { name: "プログラム売買による急落",
+    annotations: [
+      { date: "1986-01-08", text: "ダウが当時の過去最大の下げ幅を記録。コンピューターによるプログラム売買が下落を加速" },
+      { date: "1986-01-22", text: "金利上昇懸念も重なり株価が底値" },
+    ] },
+  "1986-04-21": { name: "チェルノブイリ原発事故・金利反発",
+    annotations: [
+      { date: "1986-04-26", text: "ソ連でチェルノブイリ原発事故が発生" },
+      { date: "1986-05-16", text: "長期金利の反発と原油動向への警戒から株価が底値" },
+    ] },
+  "1986-07-02": { name: "プログラム売買による急落",
+    annotations: [
+      { date: "1986-07-07", text: "企業業績への不安とプログラム売買でダウが過去最大の下げ幅を更新" },
+      { date: "1986-07-15", text: "景気減速懸念から株価が底値" },
+    ] },
+  "1986-09-04": { name: "金利上昇懸念による記録的急落",
+    annotations: [
+      { date: "1986-09-11", text: "金利上昇懸念とプログラム売買でダウが1日で4.6%下落（過去最大の下げ幅）" },
+      { date: "1986-09-29", text: "海外金利の上昇懸念が残り株価が底値" },
+    ] },
+  "1986-12-02": { name: "税制改革前の節税売り",
+    annotations: [
+      { date: "1986-12-02", text: "翌年からキャピタルゲイン税率が引き上げられる税制改革法を前に、年内の利益確定売りが増加" },
+      { date: "1986-12-31", text: "年末の節税売りが一巡し、年明けから反発" },
+    ] },
+  "1987-03-24": { name: "日米半導体摩擦（対日報復関税）",
+    annotations: [
+      { date: "1987-03-27", text: "レーガン政権が日米半導体協定違反を理由に日本製電子製品への100%報復関税を発表" },
+      { date: "1987-03-30", text: "貿易摩擦とドル急落への懸念から株価が底値" },
+    ] },
+  "1987-04-06": { name: "債券急落・ドル安",
+    annotations: [
+      { date: "1987-04-14", text: "ドル安とインフレ懸念で長期金利が急騰、債券相場が急落" },
+      { date: "1987-05-20", text: "30年国債利回りが9%台に上昇し株価が底値" },
+    ] },
+  "1991-08-07": { name: "ソ連8月クーデター",
+    annotations: [
+      { date: "1991-08-19", text: "ソ連で保守派がゴルバチョフ大統領を軟禁するクーデター。株価が急落" },
+      { date: "1991-08-21", text: "クーデターが3日で失敗し、株価が急反発して高値を回復" },
+    ] },
+  "1991-11-13": { name: "クレジットカード金利上限法案騒動",
+    annotations: [
+      { date: "1991-11-15", text: "上院がクレジットカード金利の上限規制案を可決し銀行株が急落、ダウが120ドル安" },
+      { date: "1991-11-29", text: "景気回復の鈍さも重なり株価が底値" },
+      { date: "1991-12-20", text: "FRBの大幅利下げ（1%）で株価が急反発" },
+    ] },
+  "1992-09-14": { name: "欧州通貨危機（ポンドERM離脱）",
+    annotations: [
+      { date: "1992-09-16", text: "ポンドが投機売りを受け欧州為替相場メカニズム（ERM）を離脱（ブラック・ウェンズデー）" },
+      { date: "1992-10-09", text: "欧州の通貨不安と大統領選の不透明感から株価が底値" },
+    ] },
+  "1993-02-04": { name: "クリントン政権の増税案",
+    annotations: [
+      { date: "1993-02-17", text: "クリントン大統領が富裕層・法人の増税を含む財政赤字削減策を発表" },
+      { date: "1993-02-18", text: "医療保険改革による製薬株への逆風も重なり株価が底値" },
+    ] },
+  "1994-02-02": { name: "FRB利上げ開始（債券大虐殺）",
+    annotations: [
+      { date: "1994-02-04", text: "FRBが5年ぶりの利上げ。市場の想定外で債券・株式が同時に急落" },
+      { date: "1994-03-22", text: "FRBが追加利上げ。長期金利の急騰が続く（「1994年の債券大虐殺」）" },
+      { date: "1994-04-04", text: "株価が底値。以後、年内に計6回の利上げが続く中でもみ合い" },
+      { date: "1995-02-01", text: "FRBが利上げを打ち止め、株式市場が本格上昇へ" },
+    ] },
+  "1995-12-13": { name: "米政府閉鎖・ハイテク株調整",
+    annotations: [
+      { date: "1995-12-16", text: "予算を巡る対立で米連邦政府が2度目の閉鎖（翌年1月まで長期化）" },
+      { date: "1996-01-10", text: "ハイテク企業の業績下方修正も重なり株価が底値" },
+    ] },
+  "1996-02-12": { name: "雇用統計ショック",
+    annotations: [
+      { date: "1996-03-08", text: "2月の雇用統計が大幅に上振れ、利下げ観測が後退しダウが3%安" },
+      { date: "1996-04-11", text: "長期金利が上昇し株価が底値" },
+    ] },
+  "1996-05-24": { name: "ハイテク株急落・利上げ懸念",
+    annotations: [
+      { date: "1996-07-05", text: "6月の雇用統計が上振れ、利上げ懸念でダウが3%安" },
+      { date: "1996-07-16", text: "ハイテク株の業績懸念が広がりナスダックが急落" },
+      { date: "1996-07-24", text: "株価が底値。FRBが利上げを見送り反発へ" },
+    ] },
+  "1996-11-29": { name: "グリーンスパン「根拠なき熱狂」発言",
+    annotations: [
+      { date: "1996-12-05", text: "グリーンスパンFRB議長が講演で株式市場の「根拠なき熱狂」に言及" },
+      { date: "1996-12-06", text: "発言を受けて世界の株式市場が一斉に下落" },
+    ] },
+  "1997-02-18": { name: "FRB利上げ・株価割高警告",
+    annotations: [
+      { date: "1997-02-26", text: "グリーンスパン議長が議会証言で株価の割高感を示唆" },
+      { date: "1997-03-25", text: "FRBがインフレ予防のため利上げを実施" },
+      { date: "1997-04-11", text: "追加利上げへの警戒から株価が底値" },
+    ] },
+  "1997-08-06": { name: "アジア通貨危機の初期波及",
+    annotations: [
+      { date: "1997-08-15", text: "タイ・バーツ急落に始まったアジア通貨不安が波及し、ダウが3%安" },
+      { date: "1997-08-29", text: "アジア諸国の通貨下落が続き株価が底値" },
+    ] },
+  "1997-12-05": { name: "アジア通貨危機の再燃",
+    annotations: [
+      { date: "1997-12-03", text: "韓国がIMFの緊急支援を受け入れ" },
+      { date: "1998-01-08", text: "インドネシア・ルピアが暴落しアジア危機が再燃" },
+      { date: "1998-01-09", text: "アジア景気悪化の米企業業績への影響懸念から株価が底値" },
+    ] },
+  "1998-04-22": { name: "円安・日本の金融不安",
+    annotations: [
+      { date: "1998-06-12", text: "日本がマイナス成長に。円安が進み日本の金融システム不安が強まる" },
+      { date: "1998-06-15", text: "円が1ドル146円台まで下落し株価が底値" },
+      { date: "1998-06-17", text: "日米協調の円買い介入で不安が後退" },
+    ] },
+  "1999-01-08": { name: "ブラジル通貨危機",
+    annotations: [
+      { date: "1999-01-13", text: "ブラジルがレアルを事実上切り下げ、新興国危機の再燃が懸念される" },
+      { date: "1999-01-15", text: "レアルの変動相場制移行で混乱が一服、株価が反発" },
+    ] },
+  "1999-01-29": { name: "長期金利上昇",
+    annotations: [
+      { date: "1999-02-05", text: "景気の強さを背景に長期金利が上昇し、ハイテク株が下落" },
+      { date: "1999-02-09", text: "利上げ観測の高まりから株価が底値" },
+    ] },
+  "1999-03-18": { name: "コソボ紛争（NATO空爆前夜）",
+    annotations: [
+      { date: "1999-03-23", text: "コソボ和平交渉の決裂でNATOによるユーゴスラビア空爆が不可避となり株価が底値" },
+      { date: "1999-03-24", text: "NATOが空爆を開始。不透明感の後退で株価は反発" },
+    ] },
+  "1999-04-12": { name: "インターネット株急落",
+    annotations: [
+      { date: "1999-04-19", text: "過熱していたインターネット株が急落し、ナスダックが大幅安" },
+      { date: "1999-04-20", text: "景気敏感株への資金シフトで相場全体は持ち直す" },
+    ] },
+  "1999-05-13": { name: "インフレ指標上振れ・利上げ観測",
+    annotations: [
+      { date: "1999-05-14", text: "4月のCPIが大幅上振れ、インフレ再燃懸念でダウが2%安" },
+      { date: "1999-05-18", text: "FRBが引き締め方向への政策バイアス転換を発表" },
+      { date: "1999-06-30", text: "FRBが利上げを実施するも、今後は中立姿勢と示し株価が高値を回復" },
+    ] },
+  "1999-12-31": { name: "FRB利上げ継続・旧経済株売り",
+    annotations: [
+      { date: "2000-02-02", text: "FRBが4度目の利上げ。オールドエコノミー株からハイテク株への資金シフトが加速" },
+      { date: "2000-02-25", text: "ハイテク以外の銘柄の下落が続き株価が底値" },
+      { date: "2000-03-16", text: "ハイテクから割安株への資金回帰でダウが過去最大の上げ幅" },
+    ] },
+  "2007-06-04": { name: "長期金利5%突破",
+    annotations: [
+      { date: "2007-06-07", text: "米10年債利回りが5%を突破し、株価が急落" },
+      { date: "2007-06-13", text: "金利上昇が一服し株価が反発" },
+    ] },
+  "2007-07-19": { name: "サブプライム問題の表面化（パリバ・ショック）",
+    annotations: [
+      { date: "2007-07-17", text: "ベアー・スターンズ傘下のヘッジファンド2本がほぼ全損と判明" },
+      { date: "2007-08-09", text: "BNPパリバが傘下ファンドを凍結（パリバ・ショック）、短期金融市場が混乱" },
+      { date: "2007-08-17", text: "FRBが公定歩合を緊急に引き下げ" },
+      { date: "2007-09-18", text: "FRBが0.5%の大幅利下げを実施し株価が高値圏を回復" },
+    ] },
+  "2013-04-11": { name: "金価格急落・中国成長鈍化",
+    annotations: [
+      { date: "2013-04-15", text: "中国のGDPが予想を下回り、金価格が1日で9%急落。ボストン・マラソン爆弾テロも発生" },
+      { date: "2013-04-18", text: "企業業績への警戒から株価が底値" },
+    ] },
+  "2013-05-21": { name: "テーパー・タントラム",
+    annotations: [
+      { date: "2013-05-22", text: "バーナンキFRB議長が量的緩和の縮小（テーパリング）の可能性に言及" },
+      { date: "2013-06-19", text: "FOMC後の会見で年内の縮小開始を示唆、長期金利が急騰" },
+      { date: "2013-06-24", text: "新興国からの資金流出も重なり株価が底値" },
+    ] },
+  "2013-08-02": { name: "シリア攻撃懸念・QE縮小観測",
+    annotations: [
+      { date: "2013-08-21", text: "シリアで化学兵器使用の疑い。米国の軍事介入観測が浮上" },
+      { date: "2013-08-27", text: "シリア攻撃への警戒と9月のQE縮小観測から株価が底値" },
+      { date: "2013-09-18", text: "FRBがQE縮小を見送り、株価が高値を回復" },
+    ] },
+  "2013-09-18": { name: "米政府閉鎖・債務上限問題",
+    annotations: [
+      { date: "2013-10-01", text: "予算不成立で米連邦政府が一部閉鎖" },
+      { date: "2013-10-08", text: "債務上限到達によるデフォルト懸念から株価が底値" },
+      { date: "2013-10-16", text: "議会が債務上限引き上げで合意し、政府閉鎖が終了" },
+    ] },
+  "2014-01-15": { name: "新興国通貨不安",
+    annotations: [
+      { date: "2014-01-23", text: "アルゼンチン・ペソが急落し、トルコなど新興国通貨が軒並み下落" },
+      { date: "2014-01-29", text: "FRBがQE縮小の継続を決定、新興国からの資金流出懸念が強まる" },
+      { date: "2014-02-03", text: "米ISM製造業景況指数の急低下も重なり株価が底値" },
+    ] },
+  "2014-04-02": { name: "モメンタム株・バイオ株急落",
+    annotations: [
+      { date: "2014-04-10", text: "高成長のネット株・バイオ株からの資金流出でナスダックが3%安" },
+      { date: "2014-04-11", text: "割高なモメンタム株の調整が続き株価が底値" },
+    ] },
+  "2014-07-24": { name: "アルゼンチン債務不履行・ウクライナ情勢",
+    annotations: [
+      { date: "2014-07-17", text: "ウクライナ上空でマレーシア航空機が撃墜され、対ロ制裁が強化される" },
+      { date: "2014-07-30", text: "アルゼンチンが13年ぶりのデフォルトに陥る" },
+      { date: "2014-08-07", text: "ポルトガルの大手銀行の経営不安も重なり株価が底値" },
+    ] },
+  "2014-09-18": { name: "世界景気減速懸念・エボラ出血熱",
+    annotations: [
+      { date: "2014-10-01", text: "米国内でエボラ出血熱の感染者が確認される" },
+      { date: "2014-10-14", text: "IMFの世界成長見通し下方修正と欧州景気の悪化懸念が強まる" },
+      { date: "2014-10-15", text: "米国債市場でフラッシュ・ラリーが発生し株価が底値" },
+      { date: "2014-10-29", text: "FRBがQE3の終了を決定するも、日銀の追加緩和で株価が高値を回復" },
+    ] },
+  "2014-12-05": { name: "原油急落・ロシア通貨危機",
+    annotations: [
+      { date: "2014-11-27", text: "OPECが減産見送りを決定し、原油価格の急落が加速" },
+      { date: "2014-12-16", text: "ロシアが政策金利を17%へ緊急利上げ、ルーブルが暴落し株価が底値" },
+      { date: "2014-12-17", text: "FRBが利上げに「忍耐強く」臨むと表明し、株価が急反発" },
+    ] },
+  "2014-12-29": { name: "原油安・ギリシャ不安・スイスフラン・ショック",
+    annotations: [
+      { date: "2015-01-05", text: "原油価格が1バレル50ドルを割り込み、ギリシャのユーロ離脱懸念も浮上" },
+      { date: "2015-01-15", text: "スイス国立銀行が対ユーロ上限を突然撤廃（スイスフラン・ショック）" },
+      { date: "2015-01-22", text: "ECBが量的緩和の導入を決定し、株価が持ち直す" },
+    ] },
+  "2015-03-02": { name: "ドル高・米利上げ観測",
+    annotations: [
+      { date: "2015-03-06", text: "2月の雇用統計が上振れ、年内の利上げ観測が強まる" },
+      { date: "2015-03-11", text: "ECBの量的緩和開始でドル高が加速、米企業業績への悪影響懸念から株価が底値" },
+      { date: "2015-03-18", text: "FOMCが利上げを急がない姿勢を示し株価が反発" },
+    ] },
+  "2016-08-15": { name: "米大統領選の不透明感",
+    annotations: [
+      { date: "2016-09-09", text: "FRB高官のタカ派発言で利上げ観測が強まり、S&P500が2.5%安" },
+      { date: "2016-10-28", text: "FBIがクリントン候補のメール問題の再捜査を表明し、選挙の不透明感が増す" },
+      { date: "2016-11-04", text: "S&P500が9日続落し株価が底値" },
+      { date: "2016-11-09", text: "トランプ氏の勝利後、減税・規制緩和への期待から株価が急騰" },
+    ] },
+  "2019-04-30": { name: "米中貿易摩擦の再燃",
+    annotations: [
+      { date: "2019-05-05", text: "トランプ大統領が対中関税を10%から25%へ引き上げると表明" },
+      { date: "2019-05-15", text: "米政府がファーウェイへの禁輸措置を発表" },
+      { date: "2019-05-30", text: "メキシコからの全輸入品への関税を表明し、株価が底値へ" },
+      { date: "2019-06-04", text: "パウエルFRB議長が利下げを示唆し株価が急反発" },
+    ] },
+  "2019-07-26": { name: "対中追加関税・人民元安・逆イールド",
+    annotations: [
+      { date: "2019-08-01", text: "トランプ大統領が対中追加関税（第4弾）を表明" },
+      { date: "2019-08-05", text: "人民元が1ドル7元を突破。米国が中国を為替操作国に認定" },
+      { date: "2019-08-14", text: "米2年債と10年債の利回りが逆転（景気後退シグナル）し株価が底値" },
+    ] },
+  "2020-01-17": { name: "新型コロナウイルス感染拡大（初期）",
+    annotations: [
+      { date: "2020-01-23", text: "中国・武漢が都市封鎖" },
+      { date: "2020-01-30", text: "WHOが「国際的に懸念される公衆衛生上の緊急事態」を宣言" },
+      { date: "2020-01-31", text: "米国が中国からの入国制限を発表し株価が底値" },
+    ] },
+  "2020-09-02": { name: "ハイテク株急落・追加経済対策の停滞",
+    annotations: [
+      { date: "2020-09-03", text: "過熱したハイテク株が急落。ナスダックが5%安" },
+      { date: "2020-09-08", text: "ソフトバンクの巨額コールオプション取引の報道で、ハイテク株の調整が続く" },
+      { date: "2020-09-23", text: "追加経済対策の協議停滞と大統領選の不透明感から株価が底値" },
+    ] },
+  "2021-01-25": { name: "ゲームストップ騒動",
+    annotations: [
+      { date: "2021-01-27", text: "個人投資家の買いでゲームストップ株が急騰、空売りしていたヘッジファンドが持ち高を圧縮" },
+      { date: "2021-01-29", text: "ヘッジファンドのリスク削減売りが波及し株価が底値" },
+    ] },
+  "2021-02-12": { name: "長期金利急上昇",
+    annotations: [
+      { date: "2021-02-25", text: "米10年債利回りが一時1.6%台に急上昇し、ハイテク株が急落" },
+      { date: "2021-03-04", text: "パウエルFRB議長が金利上昇への懸念を示さず、株価が底値" },
+    ] },
+  "2021-05-07": { name: "インフレ率上振れ",
+    annotations: [
+      { date: "2021-05-12", text: "4月のCPIが前年比4.2%と大幅に上振れ、インフレ懸念から株価が底値" },
+      { date: "2021-05-13", text: "インフレは一時的との見方が広がり株価が持ち直す" },
+    ] },
+  "2021-09-02": { name: "恒大集団問題・債務上限・テーパリング観測",
+    annotations: [
+      { date: "2021-09-20", text: "中国恒大集団の債務危機懸念から世界的に株価が下落" },
+      { date: "2021-09-22", text: "FRBが年内のテーパリング開始を示唆" },
+      { date: "2021-09-28", text: "長期金利の上昇と米国の債務上限問題が重なり、ハイテク株が下落" },
+      { date: "2021-10-04", text: "株価が底値。その後、債務上限の短期引き上げで合意" },
+    ] },
+  "2021-11-18": { name: "オミクロン株・FRBのタカ派転換",
+    annotations: [
+      { date: "2021-11-26", text: "新型コロナの変異株「オミクロン株」が確認され、株価が急落" },
+      { date: "2021-11-30", text: "パウエルFRB議長がインフレを「一時的」とする表現の撤回を表明" },
+      { date: "2021-12-01", text: "米国内で初のオミクロン株感染者が確認され株価が底値" },
+    ] },
+  "2021-12-10": { name: "FRB利上げ前倒し観測・オミクロン拡大",
+    annotations: [
+      { date: "2021-12-15", text: "FOMCがテーパリング加速と2022年の3回利上げ見通しを示す" },
+      { date: "2021-12-19", text: "マンチン上院議員が大型歳出法案への不支持を表明" },
+      { date: "2021-12-20", text: "オミクロン株の感染急拡大も重なり株価が底値" },
+    ] },
+  "2024-03-28": { name: "インフレ再加速・中東緊迫",
+    annotations: [
+      { date: "2024-04-10", text: "3月のCPIが予想を上回り、年内の利下げ観測が後退" },
+      { date: "2024-04-13", text: "イランがイスラエルへ大規模な無人機・ミサイル攻撃" },
+      { date: "2024-04-19", text: "イスラエルの報復攻撃報道で株価が底値" },
+    ] },
+  "2024-07-16": { name: "円キャリートレード巻き戻し",
+    annotations: [
+      { date: "2024-07-17", text: "半導体の対中輸出規制強化の報道で、AI・半導体株が急落" },
+      { date: "2024-07-31", text: "日銀が追加利上げを決定し、円高が急進" },
+      { date: "2024-08-02", text: "7月の雇用統計が大幅に悪化し、景気後退懸念が浮上（サーム・ルール抵触）" },
+      { date: "2024-08-05", text: "円キャリートレードの巻き戻しで世界同時株安。VIX指数が急騰し株価が底値" },
+    ] },
+  "2024-12-06": { name: "FRBのタカ派姿勢・長期金利上昇",
+    annotations: [
+      { date: "2024-12-18", text: "FOMCが2025年の利下げ見通しを4回から2回に減らし、株価が急落" },
+      { date: "2025-01-10", text: "12月の雇用統計が上振れ、米10年債利回りが4.7%台へ上昇し株価が底値" },
+      { date: "2025-01-15", text: "CPIのコア指数が鈍化し、株価が反発" },
+    ] },
+  "2025-10-29": { name: "AIバブル懸念・利下げ観測後退",
+    annotations: [
+      { date: "2025-10-29", text: "FRBが利下げを決定するも、パウエル議長が12月の追加利下げは既定路線でないと発言" },
+      { date: "2025-11-12", text: "約6週間続いた米政府機関の閉鎖が終了" },
+      { date: "2025-11-20", text: "AI関連株の割高感への警戒からエヌビディア決算後に株価が反落し底値" },
+    ] },
+  "2026-01-27": { name: "AI投資懸念・イラン情勢緊迫",
+    annotations: [
+      { date: "2026-02-04", text: "1月の民間雇用が低調。大手テックの巨額AI投資計画への懸念からハイテク株が下落" },
+      { date: "2026-03-02", text: "2月下旬の米・イスラエルによるイラン攻撃を受け、原油高とインフレ再燃懸念が強まる" },
+      { date: "2026-03-27", text: "ホルムズ海峡の航行停止で原油がイラン戦争後の高値に。ダウが調整局面入り" },
+      { date: "2026-04-15", text: "情勢の落ち着きとともに株価が急回復し、高値を更新" },
+    ] },
+  "2026-06-02": { name: "半導体株急落・利下げ観測後退",
+    annotations: [
+      { date: "2026-06-04", text: "ブロードコムのAI半導体売上見通しが市場予想に届かず、半導体株が急落" },
+      { date: "2026-06-05", text: "5月の雇用統計が大幅に上振れし、利下げ観測が後退。米10年債利回りが4.5%台へ上昇" },
+      { date: "2026-06-10", text: "ハイテク株の調整が続き株価が底値" },
+    ] },
+};
+const ROUTINE_PULLBACK_TEXT = "特に目立った材料はなく、通常のレンジ内の調整";
 const CRASH_DETECT_MIN_DD = -10; // この閾値以上の下落局面をすべて自動検出する（既知イベントに該当しないものは「その他」に分類）
 const OTHER_CRASH_COLORS = ["#7C8DB0", "#C9A06A", "#4FA0A6", "#A3A24B", "#B98F6A", "#7B9BC7", C.textDim];
 // FULL（読み込まれているSP500の全期間データ）からATH比-10%以上の下落局面をすべて自動抽出し、既知イベントを紐付ける。
@@ -1245,24 +1644,31 @@ function buildHistoricalCrashes(FULL, minDD = CRASH_DETECT_MIN_DD) {
     const troughDay = e.troughIdx - e.athIdx, recoveryDay = e.recoveryIdx - e.athIdx;
     const curve = FULL.slice(e.athIdx, e.recoveryIdx + 1).map((p, i) => ({ day: i, dd: p.dd, date: p.date }));
     const maxDD = Number(e.troughDD.toFixed(1));
+    // KNOWN_CRASH_METAに該当しない局面は、ATH日（DD開始日）をキーにMINOR_EPISODE_METAの名称・トピックスを引く。
+    // 登録が無い（＝目立った材料の無い通常の調整）局面は名称なし（null）とし、その旨のトピックスを1件付ける。
+    const minor = known ? null : MINOR_EPISODE_META[start] ?? null;
+    const meta = known ?? minor;
     return {
       id: known ? known.key : `auto-${start}`,
-      name: known ? known.name : `DD${maxDD}%（${yearMonthLabel(start)}）`, // 名前不明な暴落の自動ラベル
+      name: meta ? meta.name : null,
       start, low, athRecoveryDate, athRecovery: `${e.recoveryDate.getUTCFullYear()}年${e.recoveryDate.getUTCMonth() + 1}月頃`,
       maxDD, troughDay, recoveryDay,
       color: known?.color ?? OTHER_CRASH_COLORS[idx % OTHER_CRASH_COLORS.length],
-      cause: known?.cause ?? (known ? known.name : "自動検出された下落局面です（詳細な解説は未登録）。"),
+      cause: meta?.cause ?? (meta ? meta.name : ROUTINE_PULLBACK_TEXT),
       resolution: known?.resolution ?? "—",
       lesson: known?.lesson ?? "—",
-      annotations: known?.annotations ?? [],
+      annotations: meta?.annotations ?? [{ date: low, text: ROUTINE_PULLBACK_TEXT }],
       curve,
       isKnown: !!known,
       featured: !!known?.featured,
     };
   }).sort((a, b) => a.start.localeCompare(b.start));
 }
-// 既知/自動検出を問わず、ボタン・プルダウンで使う表示ラベル（例：「2000年3月 ドットコムバブル崩壊（-49%）」）。
-function crashButtonLabel(c) { return c.isKnown ? `${yearMonthLabel(c.start)} ${c.name}（${c.maxDD}%）` : c.name; }
+// 既知/自動検出を問わず、ボタン・プルダウンで使う表示ラベル。「年月 イベント名（下落率）」（例：「2000年3月 ドットコムバブル崩壊（-49%）」）、
+// イベント名の無い通常の調整は「年月（下落率）」（例：「1995年12月（-3.7%）」）に統一する。
+function crashButtonLabel(c) { return `${yearMonthLabel(c.start)}${c.name ? ` ${c.name}` : ""}（${c.maxDD}%）`; }
+// 凡例・見出しなど名称単体を出す箇所用。名称の無い局面は年月＋下落率のラベルで代用する。
+function crashDisplayName(c) { return c.name ?? crashButtonLabel(c); }
 function pearsonCorrelation(xs, ys) {
   const n = xs.length;
   const mx = xs.reduce((s, v) => s + v, 0) / n, my = ys.reduce((s, v) => s + v, 0) / n;
@@ -1799,7 +2205,7 @@ function DDChartModalContent({ chartData, rangeDays, d, hidden, toggle, period, 
               <XAxis dataKey="day" tick={{ fill: C.textDim, fontSize }} axisLine={{ stroke: C.border }} tickLine={false} label={{ value: "経過日数（下落開始起点）", position: "insideBottom", offset: -2, fill: C.textDim, fontSize }} />
               <YAxis domain={comparisonYDomain(comparisonData)} tick={{ fill: C.textDim, fontSize }} axisLine={false} tickLine={false} width={44} />
               <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} />
-              {selectedCrash && !hiddenCrash[selectedCrash.id] && <Line type="monotone" dataKey={selectedCrash.id} stroke={C.rust} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls={false} name={selectedCrash.name} />}
+              {selectedCrash && !hiddenCrash[selectedCrash.id] && <Line type="monotone" dataKey={selectedCrash.id} stroke={C.rust} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls={false} name={crashDisplayName(selectedCrash)} />}
               {!hiddenCrash.current && <Line type="monotone" dataKey="current" stroke={C.teal} strokeWidth={2.6} dot={false} isAnimationActive={false} connectNulls={false} name="現在" />}
             </LineChart>
           </ResponsiveContainer>
@@ -2649,8 +3055,9 @@ function CrashDetailChart({ crash, compareCrashes = [], daysSinceATH, currentDD,
   const [newsHover, setNewsHover] = useState(false);
   const nameFor = (id) => {
     if (id === "current") return "現在";
-    if (id === crash.id) return crash.name;
-    return compareCrashes.find((c) => c.id === id)?.name ?? id;
+    if (id === crash.id) return crashDisplayName(crash);
+    const found = compareCrashes.find((c) => c.id === id);
+    return found ? crashDisplayName(found) : id;
   };
   return (
     <LineChart width={width} height={height} margin={{ top: 34, right: 20, left: 0, bottom: 28 }}>
@@ -2773,7 +3180,7 @@ function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve
           const { ddAtSameDay, isDeeper } = comparisonRow(c);
           return (
             <div key={c.id}>
-              {c.name}の同じ経過日数時点ではDD{ddAtSameDay}%でした（現状の方が<span style={{ color: isDeeper ? C.rust : C.teal, fontWeight: 700 }}>{isDeeper ? "深い" : "浅い"}</span>ペース）。
+              {crashDisplayName(c)}の同じ経過日数時点ではDD{ddAtSameDay}%でした（現状の方が<span style={{ color: isDeeper ? C.rust : C.teal, fontWeight: 700 }}>{isDeeper ? "深い" : "浅い"}</span>ペース）。
             </div>
           );
         })}
@@ -2792,7 +3199,7 @@ function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve
           )}
         </div>
       ) : (
-        <div className="text-[11px]" style={{ color: C.textDim }}>自動検出された下落局面です（詳細な解説は未登録）。</div>
+        <div className="text-[11px]" style={{ color: C.textDim }}>{crash.cause}</div>
       )}
       <div className="mt-2 text-[10px]" style={{ color: C.textDim }}>※ 読み込まれているSP500の実日次終値をもとに算出しています。ATH・底値・回復日の判定は終値ベースです。</div>
     </div>
@@ -5509,7 +5916,7 @@ export default function DDDashboard() {
     return { AB, Cb, DE };
   }, [currentHoldingPct, effectiveModelRow]);
 
-  const crashLegendItems = selectedCrash ? [{ key: selectedCrash.id, label: selectedCrash.name, color: C.rust }, { key: "current", label: "現在", color: C.teal }] : [];
+  const crashLegendItems = selectedCrash ? [{ key: selectedCrash.id, label: crashDisplayName(selectedCrash), color: C.rust }, { key: "current", label: "現在", color: C.teal }] : [];
   const analysisText = useMemo(() => buildAnalysisText(d, currentHoldingPct, holdingsTotal(combinedHoldings), dQqq, qqqAmplification), [d, currentHoldingPct, combinedHoldings, dQqq, qqqAmplification]);
   const checkpointResults = useMemo(() => {
     const total = holdingsTotal(holdings);
@@ -5543,7 +5950,7 @@ export default function DDDashboard() {
       {modal?.type === "investmentUpload" && <FullScreenModal title="投資収支Excel アップロード" onClose={() => setModal(null)}><InvestmentUploadModalContent existing={investmentPerformance} onSave={handleSaveInvestmentPerformance} onClose={() => setModal(null)} /></FullScreenModal>}
       {modal?.type === "investmentPerformance" && <FullScreenModal title="実績パフォーマンス" onClose={() => setModal(null)}><InvestmentPerformanceModalContent data={investmentPerformance} d={d} dQqq={dQqq} onOpenUpload={() => setModal({ type: "investmentUpload" })} onReset={() => { if (window.confirm("投資収支データを削除しますか？")) { handleResetInvestmentPerformance(); setModal(null); } }} /></FullScreenModal>}
       {modal?.type === "rank" && <FullScreenModal title={`${modal.rank}ランクの保有銘柄`} onClose={() => setModal(null)}><RankHoldingsContent rank={modal.rank} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
-      {modal?.type === "crash" && <FullScreenModal title={`${modal.crash.name}（${modal.crash.start} 〜）と現状の比較`} onClose={() => setModal(null)}><CrashModalContent crash={modal.crash} daysSinceATH={d.daysSinceATH} currentDD={d.currentDD} currentEpisodeCurve={d.currentEpisodeCurve} allCrashes={historicalCrashes} onJump={(c) => setModal({ type: "crash", crash: c })} /></FullScreenModal>}
+      {modal?.type === "crash" && <FullScreenModal title={`${crashDisplayName(modal.crash)}（${modal.crash.start} 〜）と現状の比較`} onClose={() => setModal(null)}><CrashModalContent crash={modal.crash} daysSinceATH={d.daysSinceATH} currentDD={d.currentDD} currentEpisodeCurve={d.currentEpisodeCurve} allCrashes={historicalCrashes} onJump={(c) => setModal({ type: "crash", crash: c })} /></FullScreenModal>}
       {modal?.type === "ddChart" && <FullScreenModal title={chartSourceTitle(chartSource)} onClose={() => setModal(null)}><DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} bothChartData={bothChartData} chartSource={chartSource} setChartSource={setChartSource} /></FullScreenModal>}
       {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} vooQqqSeries={vooQqqSeries} onAppendVooQqq={handleAppendVooQqq} onImportVooQqq={handleImportVooQqq} onResetVooQqqField={handleResetVooQqqField} virtualAggregateLabels={virtualAggregateLabels} onRegisterBrokerHoldings={handleRegisterBrokerHoldings} />}
       {modal?.type === "checkpointSettings" && <FullScreenModal title="チェックポイント設定" onClose={() => setModal(null)}><CheckpointSettingsContent checkpoints={checkpoints} onCheckpointChange={handleCheckpointChange} holdings={holdings} /></FullScreenModal>}
@@ -5696,7 +6103,7 @@ export default function DDDashboard() {
                           <XAxis dataKey="day" tick={{ fill: C.textDim, fontSize: 10 }} axisLine={{ stroke: C.border }} tickLine={false} label={{ value: "経過日数（下落開始起点）", position: "insideBottom", offset: -2, fill: C.textDim, fontSize: 10 }} />
                           <YAxis domain={comparisonYDomain(comparisonData)} tick={{ fill: C.textDim, fontSize: 10 }} axisLine={false} tickLine={false} width={44} />
                           <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} />
-                          {selectedCrash && !hiddenCrash[selectedCrash.id] && <Line type="monotone" dataKey={selectedCrash.id} stroke={C.rust} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls={false} name={selectedCrash.name} />}
+                          {selectedCrash && !hiddenCrash[selectedCrash.id] && <Line type="monotone" dataKey={selectedCrash.id} stroke={C.rust} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls={false} name={crashDisplayName(selectedCrash)} />}
                           {!hiddenCrash.current && <Line type="monotone" dataKey="current" stroke={C.teal} strokeWidth={2.6} dot={false} isAnimationActive={false} connectNulls={false} name="現在" />}
                         </LineChart>
                       </ResponsiveContainer>
