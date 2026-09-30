@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   ComposedChart, LineChart, Area, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ReferenceLine, ReferenceDot, ResponsiveContainer, PieChart, Pie, Cell, Brush, Customized,
@@ -5385,12 +5385,13 @@ function InvestmentPerformanceModalContent({ data, d, dQqq, onOpenUpload, onRese
                 <PieChart><Pie data={accountPieData} dataKey="value" nameKey="name" innerRadius="55%" outerRadius="88%" paddingAngle={2} stroke={C.panel} strokeWidth={2} isAnimationActive={false}>{accountPieData.map((p, i) => <Cell key={i} fill={INVESTMENT_ACCOUNT_COLORS[p.name] ?? C.textDim} />)}</Pie><Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} formatter={(v, n) => [yen(v), n]} /></PieChart>
               </ResponsiveContainer>
             </div>
-            <div className="flex-1 text-xs space-y-1 min-w-[160px]">
+            {/* ラベル列は最長ラベルの幅、金額列は最長金額の幅に揃える2列グリッド。金額は右揃え＋等幅数字で桁位置を上下で揃える。 */}
+            <div className="text-xs" style={{ display: "grid", gridTemplateColumns: "max-content max-content", columnGap: 20, rowGap: 4, alignItems: "center" }}>
               {accountPieData.map((p) => (
-                <div key={p.name} className="flex items-center justify-between gap-2">
-                  <span className="flex items-center gap-1.5"><span style={{ width: 8, height: 8, borderRadius: 2, background: INVESTMENT_ACCOUNT_COLORS[p.name] ?? C.textDim, display: "inline-block" }} />{p.name}</span>
-                  <span className="mono">{yen(p.value)}</span>
-                </div>
+                <Fragment key={p.name}>
+                  <span className="flex items-center gap-1.5 whitespace-nowrap"><span style={{ width: 8, height: 8, borderRadius: 2, background: INVESTMENT_ACCOUNT_COLORS[p.name] ?? C.textDim, display: "inline-block", flexShrink: 0 }} />{p.name}</span>
+                  <span className="mono whitespace-nowrap" style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{yen(p.value)}</span>
+                </Fragment>
               ))}
             </div>
           </div>
