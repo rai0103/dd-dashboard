@@ -30,7 +30,20 @@ const BROKER_HINTS: Record<string, string> = {
     "評価額・単価はすべて円建て（currency は JPY）です。損益・損益率・前日比は抽出不要です。証券コードが画面に表示されていなければ code は空文字。",
     "預り金・現金の残高が表示されていれば cash に入れてください（資産を見るの合計に含まれていない場合は notes にその旨を書く）。",
   ].join("\n"),
+  ideco: [
+    "これはiDeCo（個人型確定拠出年金）の加入者サイト「SMBC・DCナビ」の資産状況画面のスクリーンショットです。画面が縦に長いため複数枚に分かれていることがあります。",
+    "・資産サマリー：「資産評価額」は account_total（JPY）に、「評価損益」は summary.unrealized_pl に、「運用利回り（当初から）」は summary.return_rate_pct（%の数値。例：5.23% → 5.23）に、「リスク」は summary.risk に画面の表記のまま（例：「12.34%」「中」）入れてください。",
+    "・画面に基準日・時点の日付（例：2026/10/02時点）があれば as_of に YYYY-MM-DD で入れてください。無ければ空文字。",
+    "・商品別内訳：各行の「カテゴリー」（例：国内株式、外国株式、国内債券、外国債券、バランス、元本確保型）を section に、「商品名」を name に、「資産評価額」を market_value に、「取得価額」を cost_basis に、「簿価損益」を unrealized_pl に、「損益率」を unrealized_pl_pct（%の数値）に入れてください。",
+    "・数量（口数）・基準価額が表示されていれば quantity・current_price に、無ければ null。avg_cost は null。code は空文字。評価額はすべて円建て（currency は JPY）です。",
+    "・損益がマイナス（▲、△、-、赤字表示）の場合は負の数にしてください。",
+    "・商品名が「…」で省略されている場合は画面の表記のまま（省略記号も含めて）書き起こしてください。",
+    "・資産配分の円グラフ・凡例の行や、拠出金額・掛金の履歴は holdings に入れないでください。",
+    "section_totals は空配列、cash は空配列にしてください（元本確保型の定期預金・保険も holdings の1行として扱う）。",
+  ].join("\n"),
 };
+// 証券会社によって画面に無い項目（取得価額・損益・運用利回りなど）は、ヒントに書いていなくても null／空文字で返させる。
+const COMMON_HINT = "画面に表示されていない項目（cost_basis・unrealized_pl・unrealized_pl_pct・summary の各値・as_of など）は null（文字列は空文字）にしてください。";
 
 export const ExtractedHoldingSchema = z.object({
   name: z.string().describe("銘柄名（画面の表記のまま）"),
@@ -40,7 +53,10 @@ export const ExtractedHoldingSchema = z.object({
   current_price: z.number().nullable().describe("現在値（1株あたり）"),
   avg_cost: z.number().nullable().describe("取得単価（平均取得単価）"),
   currency: z.enum(["USD", "JPY"]).describe("この銘柄の評価額・単価の通貨"),
-  section: z.string().describe("どの画面・区分の銘柄か（例：株式、投資信託）。区分が無ければ空文字"),
+  section: z.string().describe("どの画面・区分の銘柄か（例：株式、投資信託、iDeCoの商品カテゴリー）。区分が無ければ空文字"),
+  cost_basis: z.number().nullable().describe("取得価額（この銘柄の取得金額の合計）"),
+  unrealized_pl: z.number().nullable().describe("簿価損益・評価損益（マイナスは負の数）"),
+  unrealized_pl_pct: z.number().nullable().describe("損益率（%の数値。例：12.5% → 12.5）"),
 });
 export const ExtractionSchema = z.object({
   holdings: z.array(ExtractedHoldingSchema),
@@ -48,6 +64,12 @@ export const ExtractionSchema = z.object({
   account_total_currency: z.enum(["USD", "JPY"]).nullable(),
   cash: z.array(z.object({ currency: z.enum(["USD", "JPY"]), amount: z.number() })).describe("口座の現金残高（通貨ごと）。表示が無ければ空配列"),
   section_totals: z.array(z.object({ section: z.string(), amount: z.number() })).describe("画面・区分ごとに表示されている合計評価額（JPY）。無ければ空配列"),
+  summary: z.object({
+    unrealized_pl: z.number().nullable().describe("口座全体の評価損益（JPY）"),
+    return_rate_pct: z.number().nullable().describe("運用利回り（当初から・%の数値）"),
+    risk: z.string().describe("リスク（画面の表記のまま）。無ければ空文字"),
+  }).describe("口座全体の損益サマリー（iDeCoなど）。無い項目は null／空文字"),
+  as_of: z.string().describe("画面に表示された基準日（YYYY-MM-DD）。無ければ空文字"),
   notes: z.string().describe("読み取れなかった箇所・画面外で途切れていそうな銘柄などの注意点。無ければ空文字"),
 });
 export type Extraction = z.infer<typeof ExtractionSchema>;
@@ -59,7 +81,8 @@ export type ResolvedExtraction = Omit<Extraction, "holdings"> & { holdings: Reso
 export function resolveHoldingNames(extraction: Extraction): ResolvedExtraction {
   return {
     ...extraction,
-    holdings: extraction.holdings.map((h) => {
+    // 名称も評価額も無い空行（モデルがまれに返す）は除く
+    holdings: extraction.holdings.filter((h) => h.name?.trim() || h.market_value != null).map((h) => {
       const hit = resolveFundName(h.name);
       if (!hit) return h;
       const code = h.code?.trim() ? h.code : hit.code ?? "";
@@ -90,7 +113,7 @@ export async function extractHoldings(client: Anthropic, broker: string, images:
         role: "user",
         content: [
           ...images.map((img) => ({ type: "image" as const, source: { type: "base64" as const, media_type: img.mediaType, data: img.data } })),
-          { type: "text", text: `${hint}\n\n画面に表示されている保有銘柄を、上から順にすべて抽出してください。` },
+          { type: "text", text: `${hint}\n${COMMON_HINT}\n\n画面に表示されている保有銘柄を、上から順にすべて抽出してください。` },
         ],
       },
     ],

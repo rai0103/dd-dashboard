@@ -1,0 +1,53 @@
+<!doctype html>
+<!-- iDeCo加入者サイト「SMBC・DCナビ」の資産状況画面を模したテスト用サンプル。画面構成・数値は検証用の架空値（実画面のレイアウトとは異なる可能性がある）。
+     資産評価額 2,181,860円 ＝ 取得価額合計 1,700,000円 ＋ 評価損益 481,860円（商品別の簿価損益の合計と一致）。
+     scripts/test-ideco-extract.mjs がサマリー部分と商品別内訳部分を別々に画像化して使う（lib/brokerImportIdeco.test.ts の IDECO_SAMPLE と同じ値）。 -->
+<html lang="ja"><head><meta charset="utf-8">
+<style>
+  body { margin: 0; background: #eef1f5; color: #222; font-family: -apple-system, "Hiragino Sans", "Yu Gothic", sans-serif; }
+  .screen { width: 390px; background: #fff; margin-bottom: 30px; padding-bottom: 16px; }
+  .hd { background: #00523b; color: #fff; padding: 12px 16px; font-size: 15px; font-weight: 700; display: flex; justify-content: space-between; }
+  .hd small { font-weight: 400; font-size: 11px; opacity: .85; }
+  .ttl { padding: 12px 16px 4px; font-size: 15px; font-weight: 700; border-left: 4px solid #8cc63f; margin: 12px 0 6px; }
+  .asof { padding: 0 16px; font-size: 11px; color: #666; }
+  .big { padding: 6px 16px 10px; } .big .l { font-size: 12px; color: #555; } .big .v { font-size: 28px; font-weight: 700; } .big .v small { font-size: 14px; }
+  table { width: calc(100% - 32px); margin: 0 16px; border-collapse: collapse; font-size: 13px; }
+  td, th { border: 1px solid #d5dae1; padding: 7px 8px; }
+  th { background: #f3f6f9; font-weight: 600; text-align: left; width: 48%; font-size: 12px; color: #444; }
+  td { text-align: right; } .pos { color: #c8102e; } .neg { color: #0057b8; }
+  .item { margin: 0 16px; border: 1px solid #d5dae1; border-top: none; padding: 9px 10px; font-size: 12px; }
+  .item:first-of-type { border-top: 1px solid #d5dae1; }
+  .cat { display: inline-block; font-size: 10.5px; color: #fff; background: #5b7c99; border-radius: 3px; padding: 1px 6px; margin-bottom: 4px; }
+  .nm { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 10px; }
+  .grid span { color: #666; } .grid b { font-weight: 600; text-align: right; }
+  .head { margin: 0 16px; display: grid; grid-template-columns: 1fr 1fr; font-size: 10.5px; color: #666; padding: 4px 10px; background: #f3f6f9; border: 1px solid #d5dae1; }
+</style></head>
+<body>
+  <div class="screen" id="summary">
+    <div class="hd">SMBC・DCナビ <small>資産状況</small></div>
+    <div class="ttl">資産評価額</div>
+    <div class="asof">2026年10月02日時点</div>
+    <div class="big"><div class="l">資産評価額</div><div class="v">2,181,860<small>円</small></div></div>
+    <table>
+      <tr><th>評価損益</th><td class="pos">+481,860円</td></tr>
+      <tr><th>運用利回り（当初から）</th><td>6.82%</td></tr>
+      <tr><th>リスク</th><td>11.25%</td></tr>
+      <tr><th>拠出金累計</th><td>1,700,000円</td></tr>
+    </table>
+  </div>
+
+  <div class="screen" id="products">
+    <div class="hd">SMBC・DCナビ <small>資産状況</small></div>
+    <div class="ttl">商品別資産残高</div>
+    <div class="asof">2026年10月02日時点</div>
+    <div style="height:8px"></div>
+    <div class="head"><span>資産評価額 / 取得価額</span><span style="text-align:right">簿価損益 / 損益率</span></div>
+    <div class="item"><span class="cat">国内株式</span><div class="nm">三井住友・DC日本株式インデックスファンドS</div><div class="grid"><span>資産評価額</span><b>412,350円</b><span>取得価額</span><b>300,000円</b><span>簿価損益</span><b class="pos">+112,350円</b><span>損益率</span><b class="pos">+37.45%</b></div></div>
+    <div class="item"><span class="cat">外国株式</span><div class="nm">三井住友・DC外国株式インデックスファンドS</div><div class="grid"><span>資産評価額</span><b>685,920円</b><span>取得価額</span><b>450,000円</b><span>簿価損益</span><b class="pos">+235,920円</b><span>損益率</span><b class="pos">+52.43%</b></div></div>
+    <div class="item"><span class="cat">外国株式</span><div class="nm">eMAXIS Slim 米国株式(S&amp;P500)</div><div class="grid"><span>資産評価額</span><b>528,400円</b><span>取得価額</span><b>400,000円</b><span>簿価損益</span><b class="pos">+128,400円</b><span>損益率</span><b class="pos">+32.10%</b></div></div>
+    <div class="item"><span class="cat">外国債券</span><div class="nm">三井住友・DC外国債券インデックスファンド</div><div class="grid"><span>資産評価額</span><b>156,780円</b><span>取得価額</span><b>150,000円</b><span>簿価損益</span><b class="pos">+6,780円</b><span>損益率</span><b class="pos">+4.52%</b></div></div>
+    <div class="item"><span class="cat">バランス</span><div class="nm">三井住友・DC年金バランス30（債券重点型）</div><div class="grid"><span>資産評価額</span><b>98,410円</b><span>取得価額</span><b>100,000円</b><span>簿価損益</span><b class="neg">▲1,590円</b><span>損益率</span><b class="neg">▲1.59%</b></div></div>
+    <div class="item"><span class="cat">元本確保型</span><div class="nm">三井住友銀行確定拠出年金定期預金（5年）</div><div class="grid"><span>資産評価額</span><b>300,000円</b><span>取得価額</span><b>300,000円</b><span>簿価損益</span><b>0円</b><span>損益率</span><b>0.00%</b></div></div>
+  </div>
+</body></html>

@@ -18,6 +18,7 @@ export type BrokerConfig = {
   totalLabel: string; // 照合に使う口座合計の画面上の呼び名（プレビューの差分表示に使う）
   hint: string; // 取り込み画面に表示する撮影のコツ
   available?: boolean; // false＝選択肢として表示するだけ（読み取り未対応）
+  allFunds?: boolean; // 保有商品がすべて投資信託・預金等（iDeCo）。区分の無い銘柄を個別株ではなく投信として分類する
 };
 
 // 既存のポートフォリオ分類（A：ゴールド・現金、B：高配当ETF・投信、C：SP500、D：テックETF・投信(米)・個別、
@@ -58,9 +59,17 @@ export const BROKERS: BrokerConfig[] = [
     hint: "大和コネクト証券は保有銘柄が画面ごとに分かれているため、「株式」画面・「投資信託」画面（外国株があれば「外国株」画面も）と、合計額の照合用に「資産を見る」画面のスクリーンショットをまとめて選択してください。複数枚の読み取り結果を合算して1回で登録します。",
   },
   {
-    key: "ideco", label: "iDeCo", owner: "iDeCo", account: "—", aggregateNames: ["iDeCo"],
-    defaultRank: "B", defaultCurrency: "JPY", totalLabel: "スクショの合計", available: false,
-    hint: "iDeCoのスクリーンショット取り込みは準備中です。",
+    key: "ideco",
+    label: "iDeCo",
+    owner: "iDeCo", // 口座主（lib/owners.ts の OWNER_IDECO と同じ値）
+    account: "—",
+    aggregateNames: ["iDeCo"],
+    defaultRank: "E",
+    rankByCategory: RANK_BY_CATEGORY_STANDARD,
+    defaultCurrency: "JPY",
+    totalLabel: "スクショの資産評価額",
+    allFunds: true,
+    hint: "SMBC・DCナビの「資産状況」画面で、資産サマリー（資産評価額・評価損益・運用利回り・リスク）と商品別内訳（カテゴリー・商品名・資産評価額・取得価額・簿価損益・損益率）が写るように撮影してください。縦に長い場合はスクロールして複数枚選択できます。",
   },
   {
     key: "coincheck", label: "Coincheck", owner: "Coin Check", account: "—", aggregateNames: ["Coin Check"],
@@ -73,13 +82,20 @@ export const brokerByKey = (key: string) => BROKERS.find((b) => b.key === key) ?
 export type ExtractedHolding = {
   name: string; code: string; quantity: number | null; market_value: number | null;
   current_price: number | null; avg_cost: number | null; currency: "USD" | "JPY";
-  section?: string; // 画面区分（大和コネクト証券の「株式」「投資信託」など）
+  section?: string; // 画面区分（大和コネクト証券の「株式」「投資信託」、iDeCoの商品カテゴリーなど）
   name_raw?: string; // Workerの辞書で正式名称に補完した場合の、画面上の表記
+  cost_basis?: number | null; // 取得価額（合計）
+  unrealized_pl?: number | null; // 簿価損益
+  unrealized_pl_pct?: number | null; // 損益率（%）
 };
+// 口座全体の損益サマリー（iDeCoの「評価損益」「運用利回り（当初から）」「リスク」など）
+export type ExtractionSummary = { unrealized_pl: number | null; return_rate_pct: number | null; risk: string };
 export type Extraction = {
   holdings: ExtractedHolding[]; account_total: number | null; account_total_currency: "USD" | "JPY" | null;
   cash?: { currency: "USD" | "JPY"; amount: number }[];
   section_totals?: { section: string; amount: number }[]; // 画面ごとの合計評価額（JPY）
+  summary?: ExtractionSummary | null;
+  as_of?: string; // 画面の基準日（YYYY-MM-DD）
   notes: string;
 };
 
@@ -87,6 +103,7 @@ export type PreviewRow = {
   key: string; include: boolean;
   name: string; code: string;
   nameRaw?: string; section?: string;
+  costBasis?: number | null; unrealizedPl?: number | null; unrealizedPlPct?: number | null;
   quantity: number | null; marketValue: number | null; currentPrice: number | null; avgCost: number | null;
   valueCurrency: "USD" | "JPY";
   category: string; rank: string;
@@ -97,6 +114,8 @@ export type BrokerHolding = {
   account: string; owner: string; amount: number;
   broker: string; ticker: string; quantity: number | null; valueCurrency: "USD" | "JPY";
   valueOriginal: number; price: number | null; avgCost: number | null; fxRate: number | null;
+  // 取得価額・簿価損益・損益率・商品カテゴリー（画面に表示される証券会社のみ。iDeCoなど）
+  costBasis?: number; unrealizedPl?: number; unrealizedPlPct?: number; productCategory?: string;
 };
 
 // 米国上場のレバレッジETF（銘柄名にBull/2x/3x等を含むものも対象）
@@ -107,10 +126,10 @@ const GOLD_ETF = new Set(["GLD", "GLDM", "IAU", "AAAU"]);
 const HIGH_DIV_ETF = new Set(["HDV", "VYM", "SPYD", "SCHD", "DGRO", "JEPI", "JEPQ"]);
 
 // 銘柄コード・名称からカテゴリーを推定する（ユーザーがプレビューで変更可能）。
-export function guessBrokerCategory(code: string, name: string, valueCurrency: "USD" | "JPY", section = ""): string {
+export function guessBrokerCategory(code: string, name: string, valueCurrency: "USD" | "JPY", section = "", allFunds = false): string {
   const c = String(code ?? "").trim().toUpperCase();
   const n = String(name ?? "").normalize("NFKC");
-  if (valueCurrency === "JPY") return guessJpyCategory(n, section);
+  if (valueCurrency === "JPY") return guessJpyCategory(n, String(section ?? "").normalize("NFKC"), allFunds);
   if (LEVERAGED.has(c) || /\b(BULL|[23]X)\b|ブル|レバレッジ/i.test(n)) return "レバレッジETF（米）";
   if (SP500_ETF.has(c)) return "SP500";
   if (NASDAQ_ETF.has(c)) return "Nasdaq";
@@ -122,16 +141,18 @@ export function guessBrokerCategory(code: string, name: string, valueCurrency: "
 // 円建て（日本上場のETF・投資信託・国内株）の銘柄名から推定する。名称は正式名称に補完済みの前提。
 // FANG+・NASDAQ100は、レバレッジ型（例：iFreeレバレッジ FANG+）でも既存のFANG+投信・QQQと同じテック/Nasdaqに揃えるため、
 // レバレッジ判定より先に見る（日経平均レバレッジなど日本株のレバレッジ型はレバレッジETF（日））。
-function guessJpyCategory(n: string, section: string): string {
-  const isFund = /投資信託|投信/.test(section);
-  const us = /米国|全世界|オール・?カントリー|先進国|S&P|NASDAQ|ナスダック|FANG/i.test(n);
+// iDeCoは商品名に加えて画面のカテゴリー（国内株式・外国株式・元本確保型など）も手掛かりにする。
+function guessJpyCategory(n: string, section: string, allFunds = false): string {
+  const isFund = allFunds || /投資信託|投信/.test(section);
+  const us = /米国|全世界|オール・?カントリー|先進国|新興国|外国|海外|S&P|NASDAQ|ナスダック|FANG/i.test(n) || /外国|海外|先進国|新興国|全世界/.test(section);
+  if (/元本確保|定期預金|預金|保険|積立年金/.test(section + " " + n)) return "現金";
   if (/純金|ゴールド|GOLD|金の果実|金上場/i.test(n)) return "ゴールド";
   if (/S&P\s*500|SP500/i.test(n)) return "SP500";
   if (/FANG|テック/i.test(n)) return us || !/日本|国内/.test(n) ? "テックETF・投信（米）" : "テックETF・投信（日）";
   if (/NASDAQ|ナスダック/i.test(n)) return "Nasdaq";
   if (/高配当/.test(n)) return us ? "高配当ETF・投信（米）" : "高配当ETF・投信（日）";
   if (/レバレッジ|レバ|ブル|ベア|インバース|[23]倍/.test(n)) return us ? "レバレッジETF（米）" : "レバレッジETF（日）";
-  if (/日経|N225|TOPIX|JPX|国内株式|日本株/i.test(n)) return "日本（N225・Topix）";
+  if (/日経|N225|TOPIX|JPX|国内株式|日本株/i.test(n) || (/国内株式|日本株/.test(section) && !us)) return "日本（N225・Topix）";
   if (/現金|MRF|預り金/.test(n)) return "現金";
   if (us) return "その他ETF・投信（米）";
   if (isFund || /ETF|上場投信|インデックス/i.test(n)) return "その他ETF・投信（日）";
@@ -166,15 +187,18 @@ export function extractionToPreviewRows(extraction: Extraction, broker: BrokerCo
     quantity: null, marketValue: c.amount, currentPrice: null, avgCost: null,
     valueCurrency: c.currency, category: "現金", rank: "A",
   }));
-  return [...extraction.holdings.map((h, i) => {
+  // 名称も評価額も無い空行（読み取り時にまれに混ざる）は除く。残すと登録時に「評価額がありません」で止まる
+  const holdings = extraction.holdings.filter((h) => String(h.name ?? "").trim() || h.market_value != null);
+  return [...holdings.map((h, i) => {
     const code = String(h.code ?? "").trim().toUpperCase();
     const valueCurrency = h.currency === "JPY" ? "JPY" : "USD";
     const name = String(h.name ?? "").trim();
     const section = String(h.section ?? "").trim();
-    const category = guessBrokerCategory(code, name, valueCurrency, section);
+    const category = guessBrokerCategory(code, name, valueCurrency, section, broker.allFunds);
     return {
       key: `${i}-${code || name}`, include: true,
       name, code, nameRaw: h.name_raw && h.name_raw !== name ? h.name_raw : undefined, section: section || undefined,
+      costBasis: h.cost_basis ?? null, unrealizedPl: h.unrealized_pl ?? null, unrealizedPlPct: h.unrealized_pl_pct ?? null,
       quantity: h.quantity, marketValue: h.market_value, currentPrice: h.current_price, avgCost: h.avg_cost,
       valueCurrency, category, rank: guessBrokerRank(broker, category),
     } as PreviewRow;
@@ -206,6 +230,10 @@ export function previewRowsToHoldings(rows: PreviewRow[], broker: BrokerConfig, 
       account: broker.account, owner: broker.owner, amount,
       broker: broker.key, ticker: r.code, quantity: r.quantity, valueCurrency: r.valueCurrency,
       valueOriginal: value, price: r.currentPrice, avgCost: r.avgCost, fxRate: r.valueCurrency === "USD" ? usdJpy : null,
+      ...(r.costBasis != null ? { costBasis: r.costBasis } : {}),
+      ...(r.unrealizedPl != null ? { unrealizedPl: r.unrealizedPl } : {}),
+      ...(r.unrealizedPlPct != null ? { unrealizedPlPct: r.unrealizedPlPct } : {}),
+      ...(r.section ? { productCategory: r.section } : {}),
     });
   }
   return { holdings, errors };
@@ -278,4 +306,42 @@ export function isPlausibleBrokerRate(impliedRate: number | null, marketRate: nu
   if (!impliedRate || impliedRate <= 0) return false;
   if (!marketRate) return impliedRate > 50 && impliedRate < 400;
   return Math.abs(impliedRate / marketRate - 1) * 100 <= maxGapPct;
+}
+
+/* ---------------- 口座サマリー（iDeCoの評価損益・運用利回り・リスク） ---------------- */
+
+// 登録時に保存する口座サマリー（保存キー broker_summaries の値。{ [broker.key]: BrokerSummary }）。
+export type BrokerSummary = {
+  broker: string; label: string; importedAt: string; asOf: string | null;
+  totalValue: number; // 登録した銘柄の評価額合計（円）
+  screenTotal: number | null; // 画面の資産評価額・純資産
+  costBasis: number | null; unrealizedPl: number | null; returnRatePct: number | null; risk: string | null;
+};
+export function buildBrokerSummary(broker: BrokerConfig, extraction: Pick<Extraction, "account_total" | "account_total_currency" | "summary" | "as_of">, holdings: BrokerHolding[], now: Date): BrokerSummary {
+  const totalValue = holdings.reduce((s, h) => s + h.amount, 0);
+  const withCost = holdings.filter((h) => h.costBasis != null);
+  const costBasis = withCost.length ? withCost.reduce((s, h) => s + (h.costBasis as number), 0) : null;
+  const sm = extraction.summary;
+  return {
+    broker: broker.key, label: broker.label, importedAt: now.toISOString(),
+    asOf: /^\d{4}-\d{2}-\d{2}$/.test(extraction.as_of ?? "") ? (extraction.as_of as string) : null,
+    totalValue,
+    screenTotal: extraction.account_total_currency === "JPY" ? extraction.account_total : null,
+    costBasis,
+    // 画面の評価損益が無ければ、全銘柄の取得価額が揃っている場合だけ 評価額−取得価額 で補完
+    unrealizedPl: sm?.unrealized_pl ?? (costBasis != null && withCost.length === holdings.length ? totalValue - costBasis : null),
+    returnRatePct: sm?.return_rate_pct ?? null,
+    risk: sm?.risk?.trim() ? sm.risk.trim() : null,
+  };
+}
+
+// 商品別内訳の照合：簿価損益の合計と画面の評価損益の差、各行の「評価額−取得価額」と簿価損益の食い違い（読み取り誤りの検出）。
+export type ProfitCheck = { rowsPl: number | null; screenPl: number | null; diff: number | null; mismatchedRows: string[] };
+export function profitChecks(rows: PreviewRow[], summary: ExtractionSummary | null | undefined): ProfitCheck {
+  const inc = rows.filter((r) => r.include);
+  const pls = inc.map((r) => r.unrealizedPl).filter((v): v is number => v != null);
+  const rowsPl = pls.length ? pls.reduce((s, v) => s + v, 0) : null;
+  const screenPl = summary?.unrealized_pl ?? null;
+  const mismatchedRows = inc.filter((r) => r.costBasis != null && r.unrealizedPl != null && rowValue(r) != null && Math.abs((rowValue(r) as number) - (r.costBasis as number) - (r.unrealizedPl as number)) > 1).map((r) => r.name);
+  return { rowsPl, screenPl, diff: rowsPl != null && screenPl != null ? rowsPl - screenPl : null, mismatchedRows };
 }

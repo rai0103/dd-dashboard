@@ -11,7 +11,7 @@ import { pullSyncAndApply, pushSyncNow, scheduleSyncPush, getLastSyncedAt } from
 import { parseInvestmentExcel, computeOwnAssetDrawdown, computeBenchmarkCAGR, simulateDcaBenchmark, simulateLumpSumBenchmark } from "@/lib/investmentPerformance";
 import { computeRealHoldingsRanking } from "@/lib/realHoldingsRanking";
 import { OWNER_RAKUTEN_SAKI, OWNER_RAKUTEN_SHIN, OWNER_MOOMOO, OWNER_OPTIONS, RAKUTEN_OWNERS, migrateHoldingsOwners, migrateAsOfKeys, detectRakutenOwnerFromFileName } from "@/lib/owners";
-import { BROKERS, brokerByKey, extractionToPreviewRows, previewRowsToHoldings, replaceBrokerHoldings, aggregateLabelsReplacedByBrokers, exposureCurrency, rowValue, reconcileWithAccountTotal, isPlausibleBrokerRate, guessBrokerRank, reconciliationTarget, sectionChecks } from "@/lib/brokerImport";
+import { BROKERS, brokerByKey, extractionToPreviewRows, previewRowsToHoldings, replaceBrokerHoldings, aggregateLabelsReplacedByBrokers, exposureCurrency, rowValue, reconcileWithAccountTotal, isPlausibleBrokerRate, guessBrokerRank, reconciliationTarget, sectionChecks, buildBrokerSummary, profitChecks } from "@/lib/brokerImport";
 import { buildStatsTable, computeMddHoldProbability, depthBucketIndex, LOW_SAMPLE_N } from "@/lib/bottomScore";
 
 // Cloudflare Worker（当日のVOO/QQQ終値を返す。SP500はここでは扱わず引き続きCSV取り込み/直接入力で更新する）のエンドポイント。
@@ -2789,7 +2789,7 @@ function SpeedAlertModalContent({ d, instrumentLabel = "VOO" }) {
 }
 
 const BREAKDOWN_COLLAPSE_LIMIT = 10;
-function PortfolioTableContent({ view, holdings, onEditHolding, onDeleteHolding }) {
+function PortfolioTableContent({ view, holdings, brokerSummaries = {}, onEditHolding, onDeleteHolding }) {
   const [showAllBreakdown, setShowAllBreakdown] = useState(false);
   useEffect(() => { setShowAllBreakdown(false); }, [view]);
   const field = fieldForView(view);
@@ -2820,8 +2820,35 @@ function PortfolioTableContent({ view, holdings, onEditHolding, onDeleteHolding 
           </button>
         )}
       </div>
+      <BrokerSummaryCards summaries={Object.values(brokerSummaries).filter((s) => holdings.some((h) => h.broker === s.broker))} />
       <div className="text-xs mb-2" style={{ color: C.textDim }}>保有銘柄一覧（列見出しクリックでソート・カテゴリー/ランク/口座主は変更可・右端の🗑で削除）</div>
       <SortableTable columns={columns} rows={rows} defaultSortKey="amount" onEditCell={(row, key, value) => onEditHolding && onEditHolding(row.id, key, value)} onDeleteRow={(row) => onDeleteHolding && onDeleteHolding(row.id)} />
+    </div>
+  );
+}
+
+// 証券会社スクショ取込で保存した口座サマリー（iDeCoの資産評価額・評価損益・運用利回り・リスク）。表示する項目があるものだけ出す。
+const fmtSignedYen = (v) => `${v >= 0 ? "+" : "−"}¥${Math.round(Math.abs(v)).toLocaleString()}`;
+function BrokerSummaryCards({ summaries }) {
+  const list = summaries.filter((s) => s.unrealizedPl != null || s.returnRatePct != null || s.risk);
+  if (!list.length) return null;
+  return (
+    <div className="mb-6">
+      <div className="text-xs mb-2" style={{ color: C.textDim }}>口座サマリー（スクショ取込）</div>
+      <div className="flex flex-col gap-2">
+        {list.map((s) => (
+          <div key={s.broker} className="rounded p-2 text-xs" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
+            <div className="flex items-center gap-1.5 mb-1"><span style={{ width: 8, height: 8, borderRadius: 2, background: OWNER_COLORS[s.label] ?? C.textDim, display: "inline-block" }} /><b>{s.label}</b><span className="text-[10px]" style={{ color: C.textDim }}>{s.asOf ? `${fmtDateSlash(s.asOf)} 時点` : `${new Date(s.importedAt).toLocaleDateString("ja-JP")} 取込`}</span></div>
+            <div className="flex flex-wrap gap-x-4 gap-y-0.5 mono">
+              <span>資産評価額 <b>¥{Math.round(s.screenTotal ?? s.totalValue).toLocaleString()}</b></span>
+              {s.costBasis != null && <span>取得価額 ¥{Math.round(s.costBasis).toLocaleString()}</span>}
+              {s.unrealizedPl != null && <span style={{ color: s.unrealizedPl >= 0 ? C.teal : C.rust }}>評価損益 {fmtSignedYen(s.unrealizedPl)}</span>}
+              {s.returnRatePct != null && <span>運用利回り（当初から） {s.returnRatePct.toFixed(2)}%</span>}
+              {s.risk && <span>リスク {s.risk}</span>}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -3365,7 +3392,7 @@ function readImageAsJpegBase64(file) {
 const numOrNull = (v) => { if (v === "" || v == null) return null; const n = parseFloat(String(v).replace(/[,$¥\s]/g, "")); return Number.isFinite(n) ? n : null; };
 const fmtNum = (v, digits = 2) => (v == null ? "" : String(Math.round(v * 10 ** digits) / 10 ** digits));
 
-function BrokerScreenshotImport({ holdings, virtualAggregateLabels, onRegister }) {
+function BrokerScreenshotImport({ holdings, virtualAggregateLabels, onRegister, brokerSummaries = {} }) {
   const [brokerKey, setBrokerKey] = useState(BROKERS[0].key);
   const broker = brokerByKey(brokerKey);
   const [images, setImages] = useState([]);
@@ -3377,7 +3404,8 @@ function BrokerScreenshotImport({ holdings, virtualAggregateLabels, onRegister }
   const [fxSource, setFxSource] = useState(null);
   const [marketRate, setMarketRate] = useState(null); // Twelve Dataから取得した市場レート
   const [accountTotal, setAccountTotal] = useState(null); // 照合に使う口座合計 { account_total, account_total_currency, fromSections }（reconciliationTarget）
-  const [sectionTotals, setSectionTotals] = useState([]); // 画面ごとの合計評価額（大和コネクト証券の「株式」「投資信託」など）
+  const [sectionTotals, setSectionTotals] = useState([]);
+  const [summaryExt, setSummaryExt] = useState(null); // 口座サマリー（評価損益・運用利回り・リスク）と基準日 { summary, as_of, account_total, account_total_currency } // 画面ごとの合計評価額（大和コネクト証券の「株式」「投資信託」など）
   const [doneMsg, setDoneMsg] = useState(null);
 
   // 円換算に使うUSD/JPY。Worker経由で取得し、取れなければ手入力してもらう。
@@ -3424,6 +3452,7 @@ function BrokerScreenshotImport({ holdings, virtualAggregateLabels, onRegister }
       const total = reconciliationTarget(j.extraction);
       setAccountTotal(total);
       setSectionTotals(j.extraction.section_totals || []);
+      setSummaryExt({ summary: j.extraction.summary ?? null, as_of: j.extraction.as_of ?? "", account_total: j.extraction.account_total, account_total_currency: j.extraction.account_total_currency });
       const rec = reconcileWithAccountTotal(preview, marketRate, total);
       if (rec && isPlausibleBrokerRate(rec.impliedRate, marketRate)) {
         setUsdJpy(String(Math.round(rec.impliedRate * 10000) / 10000));
@@ -3436,7 +3465,7 @@ function BrokerScreenshotImport({ holdings, virtualAggregateLabels, onRegister }
   const updateRow = (key, field, value) => setRows((prev) => prev.map((r) => (r.key === key ? { ...r, [field]: value, ...(field === "category" && broker.rankByCategory ? { rank: guessBrokerRank(broker, value) } : {}) } : r)));
   const addRow = () => setRows((prev) => {
     const category = broker.defaultCurrency === "JPY" ? "その他ETF・投信（日）" : "個別（米）";
-    return [...(prev || []), { key: `manual-${Date.now()}`, include: true, name: "", code: "", quantity: null, marketValue: null, currentPrice: null, avgCost: null, valueCurrency: broker.defaultCurrency, category, rank: guessBrokerRank(broker, category) }];
+    return [...(prev || []), { key: `manual-${Date.now()}`, include: true, name: "", code: "", costBasis: null, unrealizedPl: null, unrealizedPlPct: null, quantity: null, marketValue: null, currentPrice: null, avgCost: null, valueCurrency: broker.defaultCurrency, category, rank: guessBrokerRank(broker, category) }];
   });
 
   function handleRegister() {
@@ -3447,9 +3476,9 @@ function BrokerScreenshotImport({ holdings, virtualAggregateLabels, onRegister }
     const total = incoming.reduce((s, h) => s + h.amount, 0);
     const ok = window.confirm(`${broker.label}の既存エントリ${replacedCount}件${hasVirtualAggregate ? "（＋投資収支Excelの合算額）" : ""}を削除し、${incoming.length}銘柄（合計¥${total.toLocaleString()}）を登録します。よろしいですか？`);
     if (!ok) return;
-    onRegister(broker, incoming);
+    onRegister(broker, incoming, summaryExt ? buildBrokerSummary(broker, summaryExt, incoming, new Date()) : null);
     setDoneMsg(`${incoming.length}銘柄を登録しました（合計¥${total.toLocaleString()}）。${broker.label}の合算エントリは置き換えられました。`);
-    setRows(null); setImages([]); setError(null);
+    setRows(null); setImages([]); setError(null); setSummaryExt(null);
   }
 
   const inputCls = "text-xs px-1.5 py-1 rounded mono w-full";
@@ -3473,6 +3502,7 @@ function BrokerScreenshotImport({ holdings, virtualAggregateLabels, onRegister }
       <div>
         <div className="text-[11px] mb-1" style={{ color: C.textDim }}>2. スクリーンショットを選択・撮影（最大10枚）</div>
         <p className="text-xs mb-2 leading-relaxed" style={{ color: C.textMuted }}>{broker.hint}</p>
+        {brokerSummaries[broker.key] && <div className="text-[10px] mb-2" style={{ color: C.textDim }}>前回の取込：{new Date(brokerSummaries[broker.key].importedAt).toLocaleString("ja-JP")}（{brokerSummaries[broker.key].asOf ? `${fmtDateSlash(brokerSummaries[broker.key].asOf)}時点・` : ""}¥{Math.round(brokerSummaries[broker.key].totalValue).toLocaleString()}）。新しいスクショを取り込むと置き換わります。</div>}
         <div className="flex gap-2 flex-wrap">
           <label className="inline-flex items-center gap-2 text-xs px-3 py-2 rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.textMuted, cursor: "pointer" }}>
             <Upload size={13} /> 画像を選択
@@ -3512,6 +3542,23 @@ function BrokerScreenshotImport({ holdings, virtualAggregateLabels, onRegister }
             <div style={{ width: 120 }}>{fieldLabel("USD/JPY（円換算に使用）")}<input value={usdJpy} onChange={(e) => setUsdJpy(e.target.value)} inputMode="decimal" className={inputCls} style={inputStyle} /></div>
             <span className="text-[10px]" style={{ color: C.textDim }}>{fxSource ? `${fxSource.startsWith("スクショ") ? fxSource : `自動取得（${fxSource}）`}・修正可` : "自動取得できませんでした。レートを入力してください"}</span>
           </div>}
+          {summaryExt?.summary && (summaryExt.summary.unrealized_pl != null || summaryExt.summary.return_rate_pct != null || summaryExt.summary.risk) && (() => {
+            const sm = summaryExt.summary;
+            const pc = profitChecks(rows, sm);
+            return (
+              <div className="rounded p-2 mb-3 text-[11px] leading-relaxed" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
+                <div className="mb-0.5" style={{ color: C.textDim }}>資産サマリー{summaryExt.as_of ? `（${fmtDateSlash(summaryExt.as_of)} 時点）` : ""}</div>
+                <div className="flex flex-wrap gap-x-4 gap-y-0.5 mono">
+                  {summaryExt.account_total != null && <span>資産評価額 <b>¥{Math.round(summaryExt.account_total).toLocaleString()}</b></span>}
+                  {sm.unrealized_pl != null && <span style={{ color: sm.unrealized_pl >= 0 ? C.teal : C.rust }}>評価損益 {fmtSignedYen(sm.unrealized_pl)}</span>}
+                  {sm.return_rate_pct != null && <span>運用利回り（当初から） {sm.return_rate_pct.toFixed(2)}%</span>}
+                  {sm.risk && <span>リスク {sm.risk}</span>}
+                </div>
+                {pc.diff != null && <div style={{ color: Math.abs(pc.diff) <= 1 ? C.textDim : C.rust }}>商品別の簿価損益の合計 {fmtSignedYen(pc.rowsPl)}：{Math.abs(pc.diff) <= 1 ? "評価損益と一致しています。" : `評価損益と ${fmtSignedYen(pc.diff)} ずれています。読み取り誤り・画面外の商品がないか確認してください。`}</div>}
+                {pc.mismatchedRows.length > 0 && <div style={{ color: C.rust }}>評価額−取得価額が簿価損益と合わない商品：{pc.mismatchedRows.join("、")}</div>}
+              </div>
+            );
+          })()}
           {(() => {
             const rec = accountTotal ? reconcileWithAccountTotal(rows, numOrNull(usdJpy), accountTotal) : null;
             if (!rec) return <div className="text-[10px] mb-3" style={{ color: C.textDim }}>スクショから{broker.totalLabel.replace(/^スクショの/, "")}（JPY）を読み取れなかったため、合計の照合はできません。</div>;
@@ -3537,7 +3584,8 @@ function BrokerScreenshotImport({ holdings, virtualAggregateLabels, onRegister }
             );
           })()}
           <div className="flex flex-col gap-2">
-            {rows.map((r) => {
+            {rows.map((r, _i, all) => {
+              const showPl = broker.key === "ideco" || all.some((x) => x.costBasis != null || x.unrealizedPl != null);
               const value = rowValue(r);
               const yen = value != null ? (r.valueCurrency === "USD" ? (numOrNull(usdJpy) ? value * numOrNull(usdJpy) : null) : value) : null;
               return (
@@ -3560,6 +3608,11 @@ function BrokerScreenshotImport({ holdings, virtualAggregateLabels, onRegister }
                     <div style={{ gridColumn: "span 2" }}>{fieldLabel("カテゴリー")}<select value={r.category} onChange={(e) => updateRow(r.key, "category", e.target.value)} className={inputCls} style={inputStyle}>{CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}</select></div>
                     <div>{fieldLabel("クラス")}<select value={r.rank} onChange={(e) => updateRow(r.key, "rank", e.target.value)} className={inputCls} style={inputStyle}>{CATS.map((c) => <option key={c} value={c}>{c}</option>)}</select></div>
                     <div>{fieldLabel("為替区分")}<div className="text-xs py-1" style={{ color: C.textMuted }}>{exposureCurrency(r.category, r.valueCurrency)}</div></div>
+                    {showPl && <>
+                      <div>{fieldLabel("取得価額")}<input value={fmtNum(r.costBasis)} onChange={(e) => updateRow(r.key, "costBasis", numOrNull(e.target.value))} inputMode="decimal" className={inputCls} style={inputStyle} /></div>
+                      <div>{fieldLabel("簿価損益")}<input value={fmtNum(r.unrealizedPl)} onChange={(e) => updateRow(r.key, "unrealizedPl", numOrNull(e.target.value.replace(/[▲△−]/g, "-")))} inputMode="decimal" className={inputCls} style={{ ...inputStyle, color: r.unrealizedPl != null && r.unrealizedPl < 0 ? C.rust : C.text }} /></div>
+                      <div>{fieldLabel("損益率（%）")}<input value={fmtNum(r.unrealizedPlPct)} onChange={(e) => updateRow(r.key, "unrealizedPlPct", numOrNull(e.target.value.replace(/[▲△−]/g, "-")))} inputMode="decimal" className={inputCls} style={inputStyle} /></div>
+                    </>}
                   </div>
                 </div>
               );
@@ -3591,7 +3644,7 @@ function BrokerScreenshotImport({ holdings, virtualAggregateLabels, onRegister }
   );
 }
 
-function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, source, holdings, onUpdateHoldings, onResetAndImportHoldings, onResetHoldings, holdingsSource, overrides, categoryDefaultRanks, onCategoryDefaultRankChange, vooQqqSeries, onAppendVooQqq, onImportVooQqq, onResetVooQqqField, virtualAggregateLabels, onRegisterBrokerHoldings }) {
+function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, source, holdings, onUpdateHoldings, onResetAndImportHoldings, onResetHoldings, holdingsSource, overrides, categoryDefaultRanks, onCategoryDefaultRankChange, vooQqqSeries, onAppendVooQqq, onImportVooQqq, onResetVooQqqField, virtualAggregateLabels, onRegisterBrokerHoldings, brokerSummaries }) {
   const [dataset, setDataset] = useState("voo"); // "voo" | "holdings" | "broker"
   const [instrument, setInstrument] = useState("sp500"); // "sp500" | "voo" | "qqq"（voo/qqqのCSV/手動入力/削除の対象切り替え）
   const [tab, setTab] = useState("csv");
@@ -3788,7 +3841,7 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
       <div className="flex gap-2 mb-3 flex-wrap">{tabBtn(dataset, setDataset, "voo", "SP500/VOO/QQQ価格データ")}{tabBtn(dataset, setDataset, "holdings", "保有資産データ（ポートフォリオ）")}{tabBtn(dataset, setDataset, "broker", "証券会社スクショ取込")}</div>
 
       {dataset === "broker" ? (
-        <BrokerScreenshotImport holdings={holdings} virtualAggregateLabels={virtualAggregateLabels} onRegister={onRegisterBrokerHoldings} />
+        <BrokerScreenshotImport holdings={holdings} virtualAggregateLabels={virtualAggregateLabels} onRegister={onRegisterBrokerHoldings} brokerSummaries={brokerSummaries || {}} />
       ) : dataset === "voo" ? (
         <>
           <div className="flex items-center gap-2 mb-5">
@@ -5481,6 +5534,7 @@ export default function DDDashboard() {
   const [holdings, setHoldings] = useState(HOLDINGS_DEFAULT);
   const [holdingsSource, setHoldingsSource] = useState("seed");
   const [holdingsAsOf, setHoldingsAsOf] = useState({}); // 口座主ごとの最新CSVデータ日付（YYYY-MM-DD）。楽天証券CSVのファイル名から検出。
+  const [brokerSummaries, setBrokerSummaries] = useState({}); // 証券会社スクショ取込の口座サマリー（iDeCoの評価損益・運用利回り・リスクなど）。{ [broker.key]: BrokerSummary }
   const [overrides, setOverrides] = useState({});
   const [categoryDefaultRanks, setCategoryDefaultRanks] = useState(CATEGORY_DEFAULT_RANK);
   const [checkpoints, setCheckpoints] = useState(DEFAULT_CHECKPOINTS);
@@ -5580,6 +5634,10 @@ export default function DDDashboard() {
         }
       } catch (e) { /* no saved holdings-as-of dates yet */ }
       try {
+        const resBs = await storage.get("broker_summaries");
+        if (resBs && resBs.value) setBrokerSummaries(JSON.parse(resBs.value));
+      } catch (e) { /* no saved broker summaries yet */ }
+      try {
         const res3 = await storage.get("classification_overrides");
         if (res3 && res3.value) setOverrides(JSON.parse(res3.value));
       } catch (e) { /* no saved overrides yet */ }
@@ -5672,6 +5730,9 @@ export default function DDDashboard() {
   }
   async function persistHoldings(list) {
     try { await storage.set("portfolio_holdings", JSON.stringify(list)); scheduleSyncPush(setSyncOk); } catch (e) { /* storage unavailable */ }
+  }
+  async function persistBrokerSummaries(map) {
+    try { await storage.set("broker_summaries", JSON.stringify(map)); scheduleSyncPush(setSyncOk); } catch (e) { /* storage unavailable */ }
   }
   async function persistHoldingsAsOf(map) {
     try { await storage.set("holdings_as_of", JSON.stringify(map)); scheduleSyncPush(setSyncOk); } catch (e) { /* storage unavailable */ }
@@ -5774,13 +5835,18 @@ export default function DDDashboard() {
     if (asOf) setHoldingsAsOf((prev) => { const next = { ...prev, [owner]: asOf }; persistHoldingsAsOf(next); return next; });
   }
   // 証券会社スクショ取込の「登録」：その証券会社の既存エントリ（前回の個別銘柄＋合算1件）をすべて削除して、新しい個別銘柄に置き換える。
-  function handleRegisterBrokerHoldings(broker, incoming) {
+  // summary（buildBrokerSummary）があれば口座サマリーとして保存し、画面の基準日を口座主のデータ日付（「◯◯時点」表示）にする。
+  function handleRegisterBrokerHoldings(broker, incoming, summary) {
     setHoldings((prev) => {
       const merged = replaceBrokerHoldings(prev, broker, incoming);
       persistHoldings(merged);
       return merged;
     });
     setHoldingsSource("imported");
+    if (summary) {
+      setBrokerSummaries((prev) => { const next = { ...prev, [broker.key]: summary }; persistBrokerSummaries(next); return next; });
+      if (summary.asOf) setHoldingsAsOf((prev) => { const next = { ...prev, [broker.owner]: summary.asOf }; persistHoldingsAsOf(next); return next; });
+    }
   }
   // 「初期化」：既存の保有資産データ・分類の記憶（overrides）を全て消去し、このCSVの内容のみで作り直す。
   function handleResetAndImportHoldings(owner, previewRows, asOf) {
@@ -5796,7 +5862,7 @@ export default function DDDashboard() {
     setHoldingsAsOf(nextAsOf);
     persistHoldingsAsOf(nextAsOf);
   }
-  function handleResetHoldings() { setHoldings(HOLDINGS_DEFAULT); setHoldingsSource("seed"); setHoldingsAsOf({}); storage.delete("portfolio_holdings").catch(() => {}); storage.delete("holdings_as_of").catch(() => {}); scheduleSyncPush(setSyncOk); }
+  function handleResetHoldings() { setHoldings(HOLDINGS_DEFAULT); setHoldingsSource("seed"); setHoldingsAsOf({}); storage.delete("portfolio_holdings").catch(() => {}); storage.delete("holdings_as_of").catch(() => {}); setBrokerSummaries({}); storage.delete("broker_summaries").catch(() => {}); scheduleSyncPush(setSyncOk); }
   // カテゴリー/ランクは銘柄名ごとに（同じ銘柄が複数口座・口座主にあっても揃うよう）まとめて更新し、overridesにも記憶する。
   // 口座主は行固有の情報なので、その行だけを更新する。
   function handleHoldingFieldEdit(id, field, value) {
@@ -5968,7 +6034,7 @@ export default function DDDashboard() {
       `}</style>
 
       {modal?.type === "speedAlert" && (speedAlertInstrument === "qqq" ? dQqq : dVoo) && <FullScreenModal title={`DD加速度アラート（速度・経過日数の法則・${speedAlertInstrument.toUpperCase()}基準）`} onClose={() => setModal(null)}><SpeedAlertModalContent d={speedAlertInstrument === "qqq" ? dQqq : dVoo} instrumentLabel={speedAlertInstrument.toUpperCase()} /></FullScreenModal>}
-      {modal?.type === "portfolio" && <FullScreenModal title={<>ポートフォリオ構成表{holdingsDateSuffix}</>} onClose={() => setModal(null)}><PortfolioTableContent view={pieView} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
+      {modal?.type === "portfolio" && <FullScreenModal title={<>ポートフォリオ構成表{holdingsDateSuffix}</>} onClose={() => setModal(null)}><PortfolioTableContent view={pieView} holdings={holdings} brokerSummaries={brokerSummaries} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
       {modal?.type === "ddTable" && <FullScreenModal title="DD毎のA〜E配分表" onClose={() => setModal(null)}><DDTableContent modelRow={d.modelRow} modelRows={d.trackRecord.dynamicModelRows} holdings={holdings} /></FullScreenModal>}
       {modal?.type === "modelDebug" && <FullScreenModal title="動的配分モデル デバッグビュー" onClose={() => setModal(null)}><ModelDebugContent d={d} dQqq={dQqq} qqqAmplification={qqqAmplification} /></FullScreenModal>}
       {modal?.type === "investmentUpload" && <FullScreenModal title="投資収支Excel アップロード" onClose={() => setModal(null)}><InvestmentUploadModalContent existing={investmentPerformance} onSave={handleSaveInvestmentPerformance} onClose={() => setModal(null)} /></FullScreenModal>}
@@ -5976,7 +6042,7 @@ export default function DDDashboard() {
       {modal?.type === "rank" && <FullScreenModal title={`${modal.rank}ランクの保有銘柄`} onClose={() => setModal(null)}><RankHoldingsContent rank={modal.rank} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
       {modal?.type === "crash" && <FullScreenModal title={`${crashDisplayName(modal.crash)}（${modal.crash.start} 〜）と現状の比較`} onClose={() => setModal(null)}><CrashModalContent crash={modal.crash} daysSinceATH={d.daysSinceATH} currentDD={d.currentDD} currentEpisodeCurve={d.currentEpisodeCurve} allCrashes={historicalCrashes} onJump={(c) => setModal({ type: "crash", crash: c })} /></FullScreenModal>}
       {modal?.type === "ddChart" && <FullScreenModal title={chartSourceTitle(chartSource)} onClose={() => setModal(null)}><DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} bothChartData={bothChartData} chartSource={chartSource} setChartSource={setChartSource} /></FullScreenModal>}
-      {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} vooQqqSeries={vooQqqSeries} onAppendVooQqq={handleAppendVooQqq} onImportVooQqq={handleImportVooQqq} onResetVooQqqField={handleResetVooQqqField} virtualAggregateLabels={virtualAggregateLabels} onRegisterBrokerHoldings={handleRegisterBrokerHoldings} />}
+      {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} vooQqqSeries={vooQqqSeries} onAppendVooQqq={handleAppendVooQqq} onImportVooQqq={handleImportVooQqq} onResetVooQqqField={handleResetVooQqqField} virtualAggregateLabels={virtualAggregateLabels} onRegisterBrokerHoldings={handleRegisterBrokerHoldings} brokerSummaries={brokerSummaries} />}
       {modal?.type === "checkpointSettings" && <FullScreenModal title="チェックポイント設定" onClose={() => setModal(null)}><CheckpointSettingsContent checkpoints={checkpoints} onCheckpointChange={handleCheckpointChange} holdings={holdings} /></FullScreenModal>}
       {modal?.type === "bottomScore" && <FullScreenModal title={bottom.hold.applicable ? `底値判定：${bottomLabel(d.FULL, bottom.hold.state)} が底値として確定する確率（SP500実績から都度算出）` : "底値判定（SP500実績から都度算出）"} onClose={() => setModal(null)}><BottomScoreModalContent bottom={bottom} FULL={d.FULL} /></FullScreenModal>}
       {modal?.type === "realHoldingsRanking" && <FullScreenModal title="実質保有銘柄ランキング" onClose={() => setModal(null)}><RealHoldingsRankingContent holdings={combinedHoldings} /></FullScreenModal>}

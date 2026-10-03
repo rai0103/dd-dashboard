@@ -10,6 +10,7 @@ export const SYNC_KEYS = [
   "spy_voo_price_history",
   "portfolio_holdings",
   "holdings_as_of",
+  "broker_summaries",
   "classification_overrides",
   "category_default_ranks",
   "portfolio_checkpoints",
