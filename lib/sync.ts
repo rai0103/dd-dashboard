@@ -1,4 +1,5 @@
 import { storage } from "@/lib/storage";
+import { mergeSyncData, type SyncData } from "@/lib/syncMerge";
 
 // PC⇔スマホ間で共有する必要があるキーのみを対象にする。
 // voo_price_history: 名前に反しTwelve Data自動取得の値ではなく、S&P500本系列（Stooq CSV取り込み・直接入力）。
@@ -63,6 +64,40 @@ function markSynced(label: string) {
 
 let pushTimer: ReturnType<typeof setTimeout> | null = null;
 
+// 前回この端末が同期した時点のサーバーデータ（3-wayマージの基準）。IndexedDBに保存し、同期対象（SYNC_KEYS）には含めない。
+const SYNC_BASE_KEY = "dd_sync_base";
+type SyncBase = { updatedAt: string; data: SyncData };
+async function loadBase(): Promise<SyncBase | null> {
+  const res = await storage.get(SYNC_BASE_KEY);
+  try { return res?.value ? (JSON.parse(res.value) as SyncBase) : null; } catch { return null; }
+}
+async function saveBase(updatedAt: string, data: SyncData) {
+  await storage.set(SYNC_BASE_KEY, JSON.stringify({ updatedAt, data }));
+}
+async function readLocal(): Promise<SyncData> {
+  const data: SyncData = {};
+  for (const key of SYNC_KEYS) {
+    const res = await storage.get(key);
+    if (res && res.value != null) data[key] = res.value;
+  }
+  return data;
+}
+// マージ結果をIndexedDBに書き戻す。書き換えたキーがあればtrue
+async function writeLocal(local: SyncData, merged: SyncData): Promise<boolean> {
+  let changed = false;
+  for (const key of SYNC_KEYS) {
+    if (merged[key] === local[key]) continue;
+    changed = true;
+    if (merged[key] === undefined) await storage.delete(key);
+    else await storage.set(key, merged[key]);
+  }
+  return changed;
+}
+
+// 送信時のマージで他端末の更新をこの端末のIndexedDBに取り込んだときの通知先（画面側で再読み込みして表示に反映する）
+let mergedHandler: (() => void) | null = null;
+export function onSyncMergedFromRemote(handler: (() => void) | null) { mergedHandler = handler; }
+
 // 対象キーいずれかのローカル保存直後に呼ぶ。連続保存をまとめて1回のPUTにするためデバウンスする。
 export function scheduleSyncPush(onResult?: (ok: boolean) => void) {
   markLocalUpdated();
@@ -73,13 +108,24 @@ export function scheduleSyncPush(onResult?: (ok: boolean) => void) {
   }, 800);
 }
 
+// 送信前にサーバーの現在値を取得し、前回同期以降に他端末で更新されていれば3-wayマージしてから送る
+// （丸ごと上書きすると、開きっぱなしの端末が他端末での取り込み・更新日を消してしまうため）。
 export async function pushSyncNow(): Promise<boolean> {
   try {
-    const data: Record<string, string> = {};
-    for (const key of SYNC_KEYS) {
-      const res = await storage.get(key);
-      if (res && res.value != null) data[key] = res.value;
-    }
+    const local = await readLocal();
+    let data = local;
+    let mergedRemote = false;
+    try {
+      const cur = await fetch(SYNC_API_URL, { headers: { "X-Sync-Token": SYNC_TOKEN }, cache: "no-store" });
+      if (cur.ok) {
+        const server = await cur.json();
+        const base = await loadBase();
+        if (server?.updatedAt && server?.data && server.updatedAt !== base?.updatedAt) {
+          data = mergeSyncData(base?.data ?? null, local, server.data);
+          mergedRemote = await writeLocal(local, data);
+        }
+      }
+    } catch { /* 取得できなければ従来どおりこの端末の値を送る */ }
     const res = await fetch(SYNC_API_URL, {
       method: "PUT",
       headers: { "Content-Type": "application/json", "X-Sync-Token": SYNC_TOKEN },
@@ -88,9 +134,11 @@ export async function pushSyncNow(): Promise<boolean> {
     if (!res.ok) throw new Error(`sync PUT failed: ${res.status}`);
     const body = await res.json();
     if (body?.updatedAt) {
+      await saveBase(body.updatedAt, data);
       markLocalUpdated(new Date(body.updatedAt).getTime());
       markSynced(new Date(body.updatedAt).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" }));
     }
+    if (mergedRemote) mergedHandler?.();
     return true;
   } catch (e) {
     console.error("dd-dashboard sync push failed", e);
@@ -98,21 +146,25 @@ export async function pushSyncNow(): Promise<boolean> {
   }
 }
 
-// サーバー側が新しければIndexedDBを上書きする。上書きが発生した場合はtrueを返す（呼び出し側でリロード等の反映を行う）。
+// サーバー側が新しければIndexedDBに反映する（未送信のこの端末の変更があれば3-wayマージで残す）。
+// 反映が発生した場合はtrueを返す（呼び出し側でリロード等の反映を行う）。
 export async function pullSyncAndApply(): Promise<boolean> {
   try {
-    const res = await fetch(SYNC_API_URL, { headers: { "X-Sync-Token": SYNC_TOKEN } });
+    const res = await fetch(SYNC_API_URL, { headers: { "X-Sync-Token": SYNC_TOKEN }, cache: "no-store" });
     if (!res.ok) throw new Error(`sync GET failed: ${res.status}`);
     const body = await res.json();
     if (!body?.updatedAt || !body?.data) return false;
     const serverMs = new Date(body.updatedAt).getTime();
     markSynced(new Date(body.updatedAt).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" }));
     if (serverMs <= getLocalUpdatedAtMs()) return false;
-    for (const key of SYNC_KEYS) {
-      const value = body.data[key];
-      if (typeof value === "string") await storage.set(key, value);
-    }
+    const local = await readLocal();
+    const base = await loadBase();
+    const merged = base ? mergeSyncData(base.data, local, body.data) : (body.data as SyncData);
+    await writeLocal(local, merged);
+    await saveBase(body.updatedAt, body.data);
     markLocalUpdated(serverMs);
+    // この端末の未送信の変更を残した場合は、それを送る
+    if (SYNC_KEYS.some((k) => merged[k] !== body.data[k])) scheduleSyncPush();
     return true;
   } catch (e) {
     console.error("dd-dashboard sync pull failed", e);

@@ -7,7 +7,7 @@ import {
 } from "recharts";
 import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Download, RefreshCw, Database, Trash2, Zap, Copy, FileText, Activity, Layers, ListChecks, Smartphone, Monitor, Wallet, Gauge } from "lucide-react";
 import { storage } from "@/lib/storage";
-import { pullSyncAndApply, pushSyncNow, scheduleSyncPush, getLastSyncedAt } from "@/lib/sync";
+import { pullSyncAndApply, pushSyncNow, scheduleSyncPush, getLastSyncedAt, onSyncMergedFromRemote } from "@/lib/sync";
 import { parseInvestmentExcel, computeOwnAssetDrawdown, computeBenchmarkCAGR, simulateDcaBenchmark, simulateLumpSumBenchmark } from "@/lib/investmentPerformance";
 import { computeRealHoldingsRanking } from "@/lib/realHoldingsRanking";
 import { OWNER_RAKUTEN_SAKI, OWNER_RAKUTEN_SHIN, OWNER_MOOMOO, OWNER_OPTIONS, RAKUTEN_OWNERS, migrateHoldingsOwners, migrateAsOfKeys, detectRakutenOwnerFromFileName } from "@/lib/owners";
@@ -2626,17 +2626,29 @@ function PortfolioPie({ view, holdings, onOpen, layout = "row", ownerDates = {} 
   }, [holdings, field, view]);
   const isColumn = layout === "column";
   return (
-    <div onClick={onOpen} className={`h-full flex cursor-pointer ${isColumn ? "flex-col" : "items-center"}`} style={{ padding: "6px 8px", gap: 6 }}>
-      <div className="relative shrink-0" style={isColumn ? { width: "100%", height: "64%" } : { width: "32%", height: "92%" }}>
+    <div onClick={onOpen} className={`h-full flex cursor-pointer ${isColumn ? "flex-col" : "items-center"}`} style={isColumn ? { padding: "6px 8px", gap: 6 } : { padding: "4px 6px", gap: 8 }}>
+      <div className="relative shrink-0" style={isColumn ? { width: "100%", height: "64%" } : { width: 130, height: "92%" }}>
         <ResponsiveContainer width="100%" height="100%">
           <PieChart><Pie data={data} dataKey="value" nameKey="name" startAngle={90} endAngle={-270} innerRadius="55%" outerRadius="88%" paddingAngle={2} stroke={C.panel} strokeWidth={2} isAnimationActive={false}>{data.map((d, i) => (<Cell key={i} fill={colorForView(view, d.name)} />))}</Pie><Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} formatter={(v, n) => [`¥${v.toLocaleString()}`, n]} /></PieChart>
         </ResponsiveContainer>
         <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none"><span className="text-[9px]" style={{ color: C.textDim }}>合計評価額</span><span className="mono text-xs font-bold">¥{Math.round(total / 10000).toLocaleString()}万</span></div>
       </div>
-      <div className={`flex-1 min-w-0 min-h-0 flex flex-col justify-center gap-1 overflow-y-auto ${isColumn ? "w-full" : ""}`}>
-        {/* PC（横並び）は幅が狭いため金額を万円単位にして凡例名の表示幅を確保する。省略された名前・正確な金額はホバーで確認できる */}
-        {data.map((d) => (<div key={d.name} title={`${d.name}：¥${Math.round(d.value).toLocaleString()}`} className="flex items-center gap-1 text-[10px]"><span style={{ width: 7, height: 7, borderRadius: 2, background: colorForView(view, d.name), flexShrink: 0 }} /><span style={{ color: C.textMuted }} className={`flex-1 min-w-0 ${isColumn ? "truncate" : "line-clamp-2 leading-tight"}`}>{d.name}{view === "owner" && ownerDates[d.name] && <span className="mono text-[9px] ml-1" title={`最終更新 ${fmtDateSlash(ownerDates[d.name])}`} style={{ color: C.textDim }}>{fmtUpdatedShort(ownerDates[d.name])}更新</span>}</span><span className="mono shrink-0 text-right whitespace-nowrap" style={{ color: C.textDim, width: isColumn ? 76 : 50 }}>{isColumn ? `¥${Math.round(d.value).toLocaleString()}` : `¥${Math.round(d.value / 10000).toLocaleString()}万`}</span><span className="mono shrink-0 text-right" style={{ color: C.text, width: 36 }}>{((d.value / total) * 100).toFixed(1)}%</span></div>))}
-      </div>
+      {isColumn ? (
+        <div className="flex-1 min-w-0 min-h-0 flex flex-col justify-center gap-1 overflow-y-auto w-full">
+          {data.map((d) => (<div key={d.name} title={`${d.name}：¥${Math.round(d.value).toLocaleString()}`} className="flex items-center gap-1 text-[10px]"><span style={{ width: 7, height: 7, borderRadius: 2, background: colorForView(view, d.name), flexShrink: 0 }} /><span style={{ color: C.textMuted }} className={`flex-1 min-w-0 ${isColumn ? "truncate" : "line-clamp-2 leading-tight"}`}>{d.name}{view === "owner" && ownerDates[d.name] && <span className="mono text-[9px] ml-1" title={`最終更新 ${fmtDateSlash(ownerDates[d.name])}`} style={{ color: C.textDim }}>{fmtUpdatedShort(ownerDates[d.name])}更新</span>}</span><span className="mono shrink-0 text-right whitespace-nowrap" style={{ color: C.textDim, width: isColumn ? 76 : 50 }}>{isColumn ? `¥${Math.round(d.value).toLocaleString()}` : `¥${Math.round(d.value / 10000).toLocaleString()}万`}</span><span className="mono shrink-0 text-right" style={{ color: C.text, width: 36 }}>{((d.value / total) * 100).toFixed(1)}%</span></div>))}
+        </div>
+      ) : (
+        /* PC：凡例を内容幅の4列グリッド（色・口座名＋更新日・金額（万円）・構成比）に詰めて並べる。金額・構成比は右揃えで桁を揃える。
+           省略された名前・正確な金額はホバーで確認できる */
+        <div className="min-w-0 min-h-0 overflow-y-auto text-[10px]" style={{ display: "grid", gridTemplateColumns: "7px minmax(0, max-content) max-content max-content", columnGap: 5, rowGap: 3, alignItems: "center", alignContent: "center", maxHeight: "100%" }}>
+          {data.map((d) => (<Fragment key={d.name}>
+            <span title={`${d.name}：¥${Math.round(d.value).toLocaleString()}`} style={{ width: 7, height: 7, borderRadius: 2, background: colorForView(view, d.name) }} />
+            <span style={{ color: C.textMuted }} className={"min-w-0 line-clamp-2 leading-tight"}>{d.name}{view === "owner" && ownerDates[d.name] && <span className="mono text-[9px] ml-1" title={`最終更新 ${fmtDateSlash(ownerDates[d.name])}`} style={{ color: C.textDim }}>{fmtUpdatedShort(ownerDates[d.name])}更新</span>}</span>
+            <span className="mono text-right whitespace-nowrap" style={{ color: C.textDim, fontVariantNumeric: "tabular-nums" }}>¥{Math.round(d.value / 10000).toLocaleString()}万</span>
+            <span className="mono text-right" style={{ color: C.text, fontVariantNumeric: "tabular-nums" }}>{((d.value / total) * 100).toFixed(1)}%</span>
+          </Fragment>))}
+        </div>
+      )}
     </div>
   );
 }
@@ -5544,6 +5556,18 @@ function InvestmentPerformanceModalContent({ data, d, dQqq, onOpenUpload, onRese
   );
 }
 
+// デプロイ済みの最新ビルドIDとこのページのビルドIDを比べる（next.config.ts が version.json を書き出す）。
+const BUILD_ID = process.env.NEXT_PUBLIC_BUILD_ID || "";
+async function checkForNewBuild() {
+  if (!BUILD_ID) return false;
+  try {
+    const res = await fetch(`${process.env.NEXT_PUBLIC_BASE_PATH || ""}/version.json?t=${Date.now()}`, { cache: "no-store" });
+    if (!res.ok) return false;
+    const j = await res.json();
+    return Boolean(j?.buildId) && j.buildId !== BUILD_ID;
+  } catch (e) { return false; }
+}
+
 /* ---------------- main ---------------- */
 export default function DDDashboard() {
   const [rawSeries, setRawSeries] = useState(SEED_SERIES);
@@ -5687,16 +5711,26 @@ export default function DDDashboard() {
   }, []);
 
   // 画面フォーカス復帰時、他端末での更新をチェックする。サーバーの方が新しければIndexedDBへ反映しリロードして表示に反映する。
+  // スマホのホーム画面アプリ（standalone）はバックグラウンドから復帰しても focus が来ないことがあるため visibilitychange でも確認する。
+  // あわせて新しいバージョンがデプロイされていないかも確認する（復帰した古いページのコードで取り込むと、更新日など新しい項目が保存されない）。
   useEffect(() => {
     function onFocus() {
       pullSyncAndApply().then((pulled) => {
         if (pulled) window.location.reload();
         else setLastSyncedLabel(getLastSyncedAt());
       });
+      checkForNewBuild().then((isNew) => { if (isNew) setPendingReload(true); });
     }
+    function onVisible() { if (document.visibilityState === "visible") onFocus(); }
     window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisible);
+    // 送信時のマージで他端末の更新を取り込んだら、表示に反映するため再読み込みする
+    onSyncMergedFromRemote(() => setPendingReload(true));
+    return () => { window.removeEventListener("focus", onFocus); document.removeEventListener("visibilitychange", onVisible); onSyncMergedFromRemote(null); };
   }, []);
+  // 再読み込みは、モーダル（取り込みのプレビュー・登録結果など）を閉じてから行う
+  const [pendingReload, setPendingReload] = useState(false);
+  useEffect(() => { if (pendingReload && !modal) window.location.reload(); }, [pendingReload, modal]);
 
   async function persist(series) {
     try { await storage.set("voo_price_history", JSON.stringify(series.map((p) => ({ date: p.date.toISOString().slice(0, 10), price: p.price })))); scheduleSyncPush(setSyncOk); } catch (e) { /* storage unavailable */ }
@@ -6004,8 +6038,6 @@ export default function DDDashboard() {
     uniqueDates.sort();
     return `${fmtDateSlash(uniqueDates[0])}〜${fmtDateSlash(uniqueDates[uniqueDates.length - 1])}`; // 口座ごとの日付は「口座」凡例に表示
   }, [holdings, holdingsAsOf]);
-  // 口座別の凡例に表示する口座ごとの最終更新日。保有銘柄を登録した口座（楽天CSV・スクショ取込）の日付を、投資収支Excel由来の口座の日付より優先する
-  const ownerUpdatedDates = useMemo(() => ({ ...virtualAccountDates(investmentPerformance), ...holdingsAsOf }), [investmentPerformance, holdingsAsOf]);
   const holdingsDateSuffix = holdingsDateLabel ? <span className="font-normal" style={{ color: C.textDim }}>（{holdingsDateLabel} 時点）</span> : null;
   // 投資収支Excel（実績パフォーマンス）由来のmoomoo証券・Coin Check・iDeCo・大和コネクト証券の評価額を、
   // 楽天証券のholdings配列とは独立に保持したまま、A〜E配分乖離・ポートフォリオ構成の表示用にのみ合算する。
@@ -6017,6 +6049,21 @@ export default function DDDashboard() {
   const virtualHoldings = useMemo(() => virtualHoldingsAll.filter((h) => !brokerReplacedLabels.has(h.name)), [virtualHoldingsAll, brokerReplacedLabels]);
   const virtualAggregateLabels = useMemo(() => new Set(virtualHoldingsAll.map((h) => h.name)), [virtualHoldingsAll]);
   const combinedHoldings = useMemo(() => [...holdings, ...virtualHoldings], [holdings, virtualHoldings]);
+  // 口座別の凡例に表示する口座ごとの最終更新日（YYYY-MM-DD）。
+  // ・楽天CSV・スクショ取込で登録した口座：holdings_as_of。記録が無い取込（更新日の保存に対応する前のバージョンで取り込んだ分）は、
+  //   口座サマリー（broker_summaries）の基準日・取込日時で補う。両方あれば新しい方。
+  // ・投資収支Excel由来の口座：その口座の値が入っている最後の列の日付。ただしスクショ取込で置き換えた口座には使わない（取込日ではないため）。
+  const ownerUpdatedDates = useMemo(() => {
+    const out = virtualAccountDates(investmentPerformance);
+    for (const label of brokerReplacedLabels) delete out[label];
+    const later = (a, b) => (!a ? b : !b ? a : a > b ? a : b);
+    for (const s of Object.values(brokerSummaries)) {
+      const b = brokerByKey(s.broker);
+      if (b) out[b.owner] = later(out[b.owner], s.asOf || localYMD(new Date(s.importedAt)));
+    }
+    for (const [owner, d] of Object.entries(holdingsAsOf)) out[owner] = later(out[owner], d);
+    return out;
+  }, [investmentPerformance, brokerReplacedLabels, brokerSummaries, holdingsAsOf]);
   const currentHoldingPct = useMemo(() => currentHoldingPctFromHoldings(combinedHoldings), [combinedHoldings]);
   const currentHoldingAmount = useMemo(() => currentHoldingAmountFromHoldings(combinedHoldings), [combinedHoldings]);
   const rankLabels = useMemo(() => rankCategoryLabels(combinedHoldings), [combinedHoldings]);
@@ -6253,7 +6300,7 @@ export default function DDDashboard() {
           </div>
 
           {/* 下段：ポートフォリオ構成（凡例に口座ごとの更新日を出すため広め）・A〜E配分乖離・底値判定 */}
-          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr) 330px", gap: 4, flex: 1, minHeight: 0 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 0.78fr) minmax(0, 1.22fr) 330px", gap: 4, flex: 1, minHeight: 0 }}>
             {/* bottom-left: portfolio pie */}
             <div style={{ minHeight: 0 }}>
               <Panel title={<><span className="whitespace-nowrap">ポートフォリオ構成</span>{holdingsDateLabel && <span className="block text-[10px] font-normal" style={{ color: C.textDim }}>（{holdingsDateLabel} 時点）</span>}</>} action={<div className="flex items-center gap-0.5">{PIE_VIEW_TABS.map((t) => (<button key={t.k} onClick={() => setPieView(t.k)} title={t.title} className="text-[10px] px-1 py-0.5 rounded whitespace-nowrap" style={{ color: pieView === t.k ? C.bg : C.textMuted, background: pieView === t.k ? C.teal : "transparent", fontWeight: pieView === t.k ? 700 : 400 }}>{t.l}</button>))}<button onClick={() => setModal({ type: "realHoldingsRanking" })} title="実質保有銘柄ランキング（ETF・投信を構成銘柄まで分解して合算）" className="text-[10px] px-1 py-0.5 rounded whitespace-nowrap" style={{ color: C.textMuted, background: "transparent", border: "none", cursor: "pointer" }}>Rkg</button></div>} className="h-full">

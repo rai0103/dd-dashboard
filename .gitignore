@@ -23,3 +23,6 @@ npm-debug.log*
 
 # personal financial data (never commit)
 sample-data/
+
+# build id written by next.config.ts at build time
+public/version.json
