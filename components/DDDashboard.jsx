@@ -6253,7 +6253,7 @@ export default function DDDashboard() {
           </div>
 
           {/* 下段：ポートフォリオ構成（凡例に口座ごとの更新日を出すため広め）・A〜E配分乖離・底値判定 */}
-          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.25fr) minmax(0, 1fr) 330px", gap: 4, flex: 1, minHeight: 0 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr) 330px", gap: 4, flex: 1, minHeight: 0 }}>
             {/* bottom-left: portfolio pie */}
             <div style={{ minHeight: 0 }}>
               <Panel title={<><span className="whitespace-nowrap">ポートフォリオ構成</span>{holdingsDateLabel && <span className="block text-[10px] font-normal" style={{ color: C.textDim }}>（{holdingsDateLabel} 時点）</span>}</>} action={<div className="flex items-center gap-0.5">{PIE_VIEW_TABS.map((t) => (<button key={t.k} onClick={() => setPieView(t.k)} title={t.title} className="text-[10px] px-1 py-0.5 rounded whitespace-nowrap" style={{ color: pieView === t.k ? C.bg : C.textMuted, background: pieView === t.k ? C.teal : "transparent", fontWeight: pieView === t.k ? 700 : 400 }}>{t.l}</button>))}<button onClick={() => setModal({ type: "realHoldingsRanking" })} title="実質保有銘柄ランキング（ETF・投信を構成銘柄まで分解して合算）" className="text-[10px] px-1 py-0.5 rounded whitespace-nowrap" style={{ color: C.textMuted, background: "transparent", border: "none", cursor: "pointer" }}>Rkg</button></div>} className="h-full">
