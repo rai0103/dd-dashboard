@@ -136,3 +136,87 @@ test("純資産（JPY）との照合：moomooの換算レートを逆算すれ�
   assert.ok(!isPlausibleBrokerRate(rb.impliedRate, 157.3), `impliedRate=${rb.impliedRate}`);
   assert.ok(Math.abs(rb.diffPct) > 20);
 });
+
+/* ---------------- 大和コネクト証券（株式＋投資信託の複数画面を合算） ---------------- */
+
+const daiwa = brokerByKey("daiwa")!;
+
+test("BROKERS: 大和コネクト証券を追加、iDeCo・Coincheckは選択肢のみ（準備中）", () => {
+  assert.deepEqual(BROKERS.map((b) => b.label), ["moomoo証券", "大和コネクト証券", "iDeCo", "Coincheck"]);
+  assert.equal(daiwa.available, undefined);
+  assert.equal(brokerByKey("ideco")!.available, false);
+  assert.equal(brokerByKey("coincheck")!.available, false);
+});
+
+test("Worker辞書：略称・末尾省略の銘柄名を正式名称に補完する", async () => {
+  const { resolveFundName } = await import("../worker/src/fundNames.ts");
+  assert.equal(resolveFundName("eMAXIS Slim 国内株式（TOPIX…")?.name, "eMAXIS Slim 国内株式(TOPIX)");
+  assert.equal(resolveFundName("eMAXIS Slim 米国株式（S&P50…")?.name, "eMAXIS Slim 米国株式(S&P500)");
+  assert.equal(resolveFundName("eMAXIS Slim 米国株式(S&P50...")?.name, "eMAXIS Slim 米国株式(S&P500)");
+  assert.deepEqual(resolveFundName("純金信託"), { name: "純金上場信託（現物国内保管型）", code: "1540", aliases: ["純金信託", "金の果実", "純金上場信託", "1540"] });
+  assert.equal(resolveFundName("NF日経レバ")?.code, "1570");
+  assert.equal(resolveFundName("iFree日経225インデックス")?.name, "iFree 日経225インデックス");
+  assert.equal(resolveFundName("iFreeNEXT NASDAQ100インデックス")?.name, "iFreeNEXT NASDAQ100インデックス");
+  assert.equal(resolveFundName("iFreeレバレッジ FANG+")?.name, "iFreeレバレッジ FANG+");
+  assert.equal(resolveFundName("eMAXIS Slim…"), null, "候補が複数なら補完しない");
+  assert.equal(resolveFundName("トヨタ自動車"), null, "辞書に無ければそのまま");
+});
+
+// サンプル画面相当の読み取り結果（Workerで正式名称に補完済み）
+const DAIWA: Extraction = {
+  account_total: 1178329, account_total_currency: "JPY", notes: "", cash: [],
+  section_totals: [{ section: "株式", amount: 326640 }, { section: "投資信託", amount: 851689 }],
+  holdings: [
+    { name: "純金上場信託（現物国内保管型）", name_raw: "純金信託", code: "1540", quantity: 9, market_value: 178380, current_price: null, avg_cost: null, currency: "JPY", section: "株式" },
+    { name: "NEXT FUNDS 日経平均レバレッジ・インデックス連動型上場投信", name_raw: "NF日経レバ", code: "1570", quantity: 2, market_value: 148260, current_price: null, avg_cost: null, currency: "JPY", section: "株式" },
+    { name: "eMAXIS Slim 国内株式(TOPIX)", name_raw: "eMAXIS Slim 国内株式（TOPIX…", code: "", quantity: null, market_value: 179056, current_price: null, avg_cost: null, currency: "JPY", section: "投資信託" },
+    { name: "eMAXIS Slim 米国株式(S&P500)", name_raw: "eMAXIS Slim 米国株式（S&P50…", code: "", quantity: null, market_value: 193784, current_price: null, avg_cost: null, currency: "JPY", section: "投資信託" },
+    { name: "iFree 日経225インデックス", name_raw: "iFree日経225インデックス", code: "", quantity: null, market_value: 165641, current_price: null, avg_cost: null, currency: "JPY", section: "投資信託" },
+    { name: "iFreeNEXT NASDAQ100インデックス", code: "", quantity: null, market_value: 50901, current_price: null, avg_cost: null, currency: "JPY", section: "投資信託" },
+    { name: "iFreeレバレッジ FANG+", code: "", quantity: null, market_value: 262307, current_price: null, avg_cost: null, currency: "JPY", section: "投資信託" },
+  ],
+};
+
+test("大和コネクト証券：カテゴリー・クラスの初期値、資産を見るの合計との照合、登録", async () => {
+  const { reconcileWithAccountTotal, reconciliationTarget, sectionChecks } = await import("./brokerImport.ts");
+  const rows = extractionToPreviewRows(DAIWA, daiwa);
+  const by = (name: string) => rows.find((r) => r.name === name)!;
+  const expect: [string, string, string][] = [
+    ["純金上場信託（現物国内保管型）", "ゴールド", "A"],
+    ["NEXT FUNDS 日経平均レバレッジ・インデックス連動型上場投信", "レバレッジETF（日）", "E"],
+    ["eMAXIS Slim 国内株式(TOPIX)", "日本（N225・Topix）", "E"],
+    ["eMAXIS Slim 米国株式(S&P500)", "SP500", "C"],
+    ["iFree 日経225インデックス", "日本（N225・Topix）", "E"],
+    ["iFreeNEXT NASDAQ100インデックス", "Nasdaq", "D"],
+    ["iFreeレバレッジ FANG+", "テックETF・投信（米）", "D"],
+  ];
+  for (const [name, cat, rank] of expect) assert.deepEqual([by(name).category, by(name).rank], [cat, rank], name);
+  assert.equal(by("純金上場信託（現物国内保管型）").nameRaw, "純金信託");
+  assert.equal(by("iFreeNEXT NASDAQ100インデックス").nameRaw, undefined);
+
+  const target = reconciliationTarget(DAIWA);
+  assert.equal(target.fromSections, false);
+  const rec = reconcileWithAccountTotal(rows, null, target)!;
+  assert.equal(rec.computedJpy, 1178329);
+  assert.equal(rec.diffJpy, 0);
+  assert.ok(sectionChecks(rows, DAIWA).every((c) => c.diff === 0));
+  // 「資産を見る」が無い場合は画面ごとの合計の和で照合
+  assert.equal(reconciliationTarget({ ...DAIWA, account_total: null, account_total_currency: null }).account_total, 1178329);
+
+  const { holdings, errors } = previewRowsToHoldings(rows, daiwa, null, genId); // 円建てのみなのでUSD/JPY不要
+  assert.deepEqual(errors, []);
+  assert.equal(holdings.length, 7);
+  assert.equal(holdings.reduce((s, h) => s + h.amount, 0), 1178329);
+  assert.equal(holdings[0].name, "1540 純金上場信託（現物国内保管型）");
+  assert.equal(holdings[2].name, "eMAXIS Slim 国内株式(TOPIX)");
+  assert.ok(holdings.every((h) => h.owner === "大和コネクト証券" && h.broker === "daiwa"));
+  assert.equal(holdings.find((h) => h.category === "SP500")!.currency, "ドル");
+  assert.equal(holdings.find((h) => h.category === "日本（N225・Topix）")!.currency, "円");
+
+  // 投資収支Excel由来の「大和コネクト証券」合算を置き換え、moomooの個別銘柄は残す
+  const existing = [{ id: "m1", name: "TSLA Tesla", broker: "moomoo", amount: 1 } as any, { id: "d0", name: "大和コネクト証券", amount: 1100000 } as any];
+  const after = replaceBrokerHoldings(existing, daiwa, holdings);
+  assert.equal(after.length, 8);
+  assert.ok(!after.some((h) => h.name === "大和コネクト証券"));
+  assert.deepEqual([...aggregateLabelsReplacedByBrokers(after)].sort(), ["moomoo証券", "大和コネクト証券"].sort());
+});

@@ -3,8 +3,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { OWNER_OPTIONS, migrateHoldingsOwners, migrateAsOfKeys, detectRakutenOwnerFromFileName } from "./owners.ts";
 
-test("口座主の選択肢は 楽天(saki)・楽天(shin)・moomoo の3つ", () => {
-  assert.deepEqual(OWNER_OPTIONS, ["楽天(saki)", "楽天(shin)", "moomoo"]);
+test("口座主の選択肢は 楽天(saki)・楽天(shin)・moomoo・大和コネクト証券の4つ", () => {
+  assert.deepEqual(OWNER_OPTIONS, ["楽天(saki)", "楽天(shin)", "moomoo", "大和コネクト証券"]);
 });
 
 test("保有銘柄の口座主を移行：shin/saki → 楽天(shin)/楽天(saki)、moomoo取り込み分 → moomoo", () => {

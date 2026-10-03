@@ -1,0 +1,51 @@
+<!doctype html>
+<!-- 大和コネクト証券アプリの「株式」「投資信託」「資産を見る」画面を模したテスト用サンプル（数値は依頼時の実画面の例）。
+     株式 326,640円 ＋ 外国株 0円 ＋ 投資信託 851,689円 ＝ 資産合計 1,178,329円。
+     投資信託の銘柄名は実画面と同じく画面幅で「…」に省略している。scripts/test-broker-extract.mjs daiwa が画面ごとに画像化して使う。 -->
+<html lang="ja"><head><meta charset="utf-8">
+<style>
+  body { margin: 0; background: #f4f5f7; color: #1d2330; font-family: -apple-system, "Hiragino Sans", "Yu Gothic", sans-serif; }
+  .screen { width: 390px; background: #fff; padding-bottom: 20px; margin-bottom: 30px; }
+  .bar { background: #0d3c8c; color: #fff; padding: 14px 16px; font-size: 16px; font-weight: 700; text-align: center; }
+  .tabs { display: flex; border-bottom: 1px solid #e3e6ec; font-size: 14px; }
+  .tabs span { flex: 1; text-align: center; padding: 11px 0; color: #7a8294; }
+  .tabs b { flex: 1; text-align: center; padding: 11px 0; color: #0d3c8c; border-bottom: 3px solid #0d3c8c; }
+  .sum { padding: 16px; border-bottom: 8px solid #f4f5f7; }
+  .sum .l { font-size: 12px; color: #7a8294; } .sum .v { font-size: 26px; font-weight: 700; margin-top: 4px; } .sum .v small { font-size: 14px; margin-left: 2px; }
+  .sum .pl { font-size: 12px; color: #d33a3a; margin-top: 4px; }
+  .row { display: flex; justify-content: space-between; align-items: center; padding: 13px 16px; border-bottom: 1px solid #eef0f4; }
+  .nm { font-size: 14.5px; font-weight: 600; width: 215px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sub { font-size: 11.5px; color: #7a8294; margin-top: 4px; }
+  .r { text-align: right; } .r .v { font-size: 15px; font-weight: 600; } .r .p { font-size: 11.5px; margin-top: 4px; color: #d33a3a; }
+  .r .p.dn { color: #1f8a4c; }
+  .cat { display: flex; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid #eef0f4; font-size: 15px; }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; }
+</style></head>
+<body>
+  <div class="screen" id="stocks">
+    <div class="bar">保有資産</div>
+    <div class="tabs"><b>株式</b><span>外国株</span><span>投資信託</span></div>
+    <div class="sum"><div class="l">評価額合計</div><div class="v">326,640<small>円</small></div><div class="pl">評価損益 +41,820円（+14.68%）</div></div>
+    <div class="row"><div><div class="nm">純金信託</div><div class="sub">9株</div></div><div class="r"><div class="v">178,380円</div><div class="p">+32,940円</div></div></div>
+    <div class="row"><div><div class="nm">NF日経レバ</div><div class="sub">2株</div></div><div class="r"><div class="v">148,260円</div><div class="p">+8,880円</div></div></div>
+  </div>
+
+  <div class="screen" id="funds">
+    <div class="bar">保有資産</div>
+    <div class="tabs"><span>株式</span><span>外国株</span><b>投資信託</b></div>
+    <div class="sum"><div class="l">評価額合計</div><div class="v">851,689<small>円</small></div><div class="pl">評価損益 +121,689円（+16.67%）</div></div>
+    <div class="row"><div><div class="nm">eMAXIS Slim 国内株式（TOPIX）</div></div><div class="r"><div class="v">179,056円</div><div class="p">+29,056円</div></div></div>
+    <div class="row"><div><div class="nm">eMAXIS Slim 米国株式（S&amp;P500）</div></div><div class="r"><div class="v">193,784円</div><div class="p">+33,784円</div></div></div>
+    <div class="row"><div><div class="nm">iFree日経225インデックス</div></div><div class="r"><div class="v">165,641円</div><div class="p">+25,641円</div></div></div>
+    <div class="row"><div><div class="nm">iFreeNEXT NASDAQ100インデックス</div></div><div class="r"><div class="v">50,901円</div><div class="p dn">−99円</div></div></div>
+    <div class="row"><div><div class="nm">iFreeレバレッジ FANG+</div></div><div class="r"><div class="v">262,307円</div><div class="p">+33,307円</div></div></div>
+  </div>
+
+  <div class="screen" id="assets">
+    <div class="bar">資産を見る</div>
+    <div class="sum"><div class="l">資産合計</div><div class="v">1,178,329<small>円</small></div><div class="pl">評価損益 +163,509円</div></div>
+    <div class="cat"><span><i class="dot" style="background:#0d3c8c"></i>株式</span><span>326,640円</span></div>
+    <div class="cat"><span><i class="dot" style="background:#3aa0d8"></i>外国株</span><span>0円</span></div>
+    <div class="cat"><span><i class="dot" style="background:#f0a020"></i>投資信託</span><span>851,689円</span></div>
+  </div>
+</body></html>

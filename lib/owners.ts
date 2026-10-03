@@ -6,9 +6,10 @@
 export const OWNER_RAKUTEN_SAKI = "楽天(saki)";
 export const OWNER_RAKUTEN_SHIN = "楽天(shin)";
 export const OWNER_MOOMOO = "moomoo";
+export const OWNER_DAIWA = "大和コネクト証券";
 
 // 保有銘柄一覧などで口座主を選ぶドロップダウンの選択肢
-export const OWNER_OPTIONS = [OWNER_RAKUTEN_SAKI, OWNER_RAKUTEN_SHIN, OWNER_MOOMOO];
+export const OWNER_OPTIONS = [OWNER_RAKUTEN_SAKI, OWNER_RAKUTEN_SHIN, OWNER_MOOMOO, OWNER_DAIWA];
 // 楽天証券CSVの取り込み先として選べる口座主
 export const RAKUTEN_OWNERS = [OWNER_RAKUTEN_SHIN, OWNER_RAKUTEN_SAKI];
 

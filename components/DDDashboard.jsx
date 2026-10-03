@@ -11,7 +11,7 @@ import { pullSyncAndApply, pushSyncNow, scheduleSyncPush, getLastSyncedAt } from
 import { parseInvestmentExcel, computeOwnAssetDrawdown, computeBenchmarkCAGR, simulateDcaBenchmark, simulateLumpSumBenchmark } from "@/lib/investmentPerformance";
 import { computeRealHoldingsRanking } from "@/lib/realHoldingsRanking";
 import { OWNER_RAKUTEN_SAKI, OWNER_RAKUTEN_SHIN, OWNER_MOOMOO, OWNER_OPTIONS, RAKUTEN_OWNERS, migrateHoldingsOwners, migrateAsOfKeys, detectRakutenOwnerFromFileName } from "@/lib/owners";
-import { BROKERS, brokerByKey, extractionToPreviewRows, previewRowsToHoldings, replaceBrokerHoldings, aggregateLabelsReplacedByBrokers, exposureCurrency, rowValue, reconcileWithAccountTotal, isPlausibleBrokerRate } from "@/lib/brokerImport";
+import { BROKERS, brokerByKey, extractionToPreviewRows, previewRowsToHoldings, replaceBrokerHoldings, aggregateLabelsReplacedByBrokers, exposureCurrency, rowValue, reconcileWithAccountTotal, isPlausibleBrokerRate, guessBrokerRank, reconciliationTarget, sectionChecks } from "@/lib/brokerImport";
 import { buildStatsTable, computeMddHoldProbability, depthBucketIndex, LOW_SAMPLE_N } from "@/lib/bottomScore";
 
 // Cloudflare Worker（当日のVOO/QQQ終値を返す。SP500はここでは扱わず引き続きCSV取り込み/直接入力で更新する）のエンドポイント。
@@ -3376,7 +3376,8 @@ function BrokerScreenshotImport({ holdings, virtualAggregateLabels, onRegister }
   const [usdJpy, setUsdJpy] = useState("");
   const [fxSource, setFxSource] = useState(null);
   const [marketRate, setMarketRate] = useState(null); // Twelve Dataから取得した市場レート
-  const [accountTotal, setAccountTotal] = useState(null); // スクショに表示された純資産 { account_total, account_total_currency }
+  const [accountTotal, setAccountTotal] = useState(null); // 照合に使う口座合計 { account_total, account_total_currency, fromSections }（reconciliationTarget）
+  const [sectionTotals, setSectionTotals] = useState([]); // 画面ごとの合計評価額（大和コネクト証券の「株式」「投資信託」など）
   const [doneMsg, setDoneMsg] = useState(null);
 
   // 円換算に使うUSD/JPY。Worker経由で取得し、取れなければ手入力してもらう。
@@ -3420,8 +3421,9 @@ function BrokerScreenshotImport({ holdings, virtualAggregateLabels, onRegister }
       if (!preview.length) throw new Error("画像から保有銘柄を読み取れませんでした。保有銘柄一覧が写っているか確認してください。");
       setRows(preview);
       setNotes(j.extraction.notes || "");
-      const total = { account_total: j.extraction.account_total, account_total_currency: j.extraction.account_total_currency };
+      const total = reconciliationTarget(j.extraction);
       setAccountTotal(total);
+      setSectionTotals(j.extraction.section_totals || []);
       const rec = reconcileWithAccountTotal(preview, marketRate, total);
       if (rec && isPlausibleBrokerRate(rec.impliedRate, marketRate)) {
         setUsdJpy(String(Math.round(rec.impliedRate * 10000) / 10000));
@@ -3430,8 +3432,12 @@ function BrokerScreenshotImport({ holdings, virtualAggregateLabels, onRegister }
     } catch (err) { setError(err.message); } finally { setLoading(false); }
   }
 
-  const updateRow = (key, field, value) => setRows((prev) => prev.map((r) => (r.key === key ? { ...r, [field]: value } : r)));
-  const addRow = () => setRows((prev) => [...(prev || []), { key: `manual-${Date.now()}`, include: true, name: "", code: "", quantity: null, marketValue: null, currentPrice: null, avgCost: null, valueCurrency: "USD", category: "個別（米）", rank: broker.defaultRank }]);
+  // カテゴリー別のクラス初期値を持つ証券会社（大和コネクト証券）は、カテゴリーを変えたらクラスも初期値に追従させる（クラスは後から個別に変更可）
+  const updateRow = (key, field, value) => setRows((prev) => prev.map((r) => (r.key === key ? { ...r, [field]: value, ...(field === "category" && broker.rankByCategory ? { rank: guessBrokerRank(broker, value) } : {}) } : r)));
+  const addRow = () => setRows((prev) => {
+    const category = broker.defaultCurrency === "JPY" ? "その他ETF・投信（日）" : "個別（米）";
+    return [...(prev || []), { key: `manual-${Date.now()}`, include: true, name: "", code: "", quantity: null, marketValue: null, currentPrice: null, avgCost: null, valueCurrency: broker.defaultCurrency, category, rank: guessBrokerRank(broker, category) }];
+  });
 
   function handleRegister() {
     const rate = numOrNull(usdJpy);
@@ -3456,11 +3462,14 @@ function BrokerScreenshotImport({ holdings, virtualAggregateLabels, onRegister }
         <div className="text-[11px] mb-1" style={{ color: C.textDim }}>1. 証券会社を選択</div>
         <div className="flex gap-2 flex-wrap">
           {BROKERS.map((b) => (
-            <button key={b.key} onClick={() => { setBrokerKey(b.key); setRows(null); setImages([]); }} className="text-xs px-3 py-1.5 rounded" style={{ color: brokerKey === b.key ? C.bg : C.textMuted, background: brokerKey === b.key ? C.teal : "transparent", border: `1px solid ${brokerKey === b.key ? C.teal : C.borderSoft}`, fontWeight: brokerKey === b.key ? 700 : 400, cursor: "pointer" }}>{b.label}</button>
+            <button key={b.key} onClick={() => { setBrokerKey(b.key); setRows(null); setImages([]); setError(null); setDoneMsg(null); }} className="text-xs px-3 py-1.5 rounded" style={{ color: brokerKey === b.key ? C.bg : C.textMuted, background: brokerKey === b.key ? C.teal : "transparent", border: `1px solid ${brokerKey === b.key ? C.teal : C.borderSoft}`, fontWeight: brokerKey === b.key ? 700 : 400, cursor: "pointer", opacity: b.available === false && brokerKey !== b.key ? 0.6 : 1 }}>{b.label}{b.available === false ? "（準備中）" : ""}</button>
           ))}
         </div>
       </div>
 
+      {broker.available === false ? (
+        <p className="text-xs leading-relaxed" style={{ color: C.textMuted }}>{broker.hint}</p>
+      ) : (<>
       <div>
         <div className="text-[11px] mb-1" style={{ color: C.textDim }}>2. スクリーンショットを選択・撮影（最大10枚）</div>
         <p className="text-xs mb-2 leading-relaxed" style={{ color: C.textMuted }}>{broker.hint}</p>
@@ -3490,6 +3499,7 @@ function BrokerScreenshotImport({ holdings, virtualAggregateLabels, onRegister }
           </div>
         )}
       </div>
+      </>)}
 
       {error && <div className="text-xs leading-relaxed" style={{ color: C.rust }}>{error}</div>}
       {doneMsg && <div className="text-xs leading-relaxed" style={{ color: C.teal }}>{doneMsg}</div>}
@@ -3498,25 +3508,26 @@ function BrokerScreenshotImport({ holdings, virtualAggregateLabels, onRegister }
         <div>
           <div className="text-[11px] mb-1" style={{ color: C.textDim }}>3. 読み取り結果を確認・修正（読み取り誤りがあり得るため、必ず画面と見比べてください）</div>
           {notes && <div className="text-[11px] mb-2 leading-relaxed" style={{ color: C.amber }}>読み取り時の注意：{notes}</div>}
-          <div className="flex items-end gap-2 mb-3 flex-wrap">
+          {rows.some((r) => r.valueCurrency === "USD") && <div className="flex items-end gap-2 mb-3 flex-wrap">
             <div style={{ width: 120 }}>{fieldLabel("USD/JPY（円換算に使用）")}<input value={usdJpy} onChange={(e) => setUsdJpy(e.target.value)} inputMode="decimal" className={inputCls} style={inputStyle} /></div>
             <span className="text-[10px]" style={{ color: C.textDim }}>{fxSource ? `${fxSource.startsWith("スクショ") ? fxSource : `自動取得（${fxSource}）`}・修正可` : "自動取得できませんでした。レートを入力してください"}</span>
-          </div>
+          </div>}
           {(() => {
             const rec = accountTotal ? reconcileWithAccountTotal(rows, numOrNull(usdJpy), accountTotal) : null;
-            if (!rec) return <div className="text-[10px] mb-3" style={{ color: C.textDim }}>スクショから純資産（JPY）を読み取れなかったため、合計の照合はできません。</div>;
+            if (!rec) return <div className="text-[10px] mb-3" style={{ color: C.textDim }}>スクショから{broker.totalLabel.replace(/^スクショの/, "")}（JPY）を読み取れなかったため、合計の照合はできません。</div>;
+            const totalLabel = accountTotal.fromSections ? "各画面の合計評価額の和" : broker.totalLabel;
             const abs = Math.abs(rec.diffJpy);
             const color = abs <= 100 ? C.teal : Math.abs(rec.diffPct) <= 1 ? C.amber : C.rust;
             const plausible = isPlausibleBrokerRate(rec.impliedRate, marketRate);
             return (
               <div className="rounded p-2 mb-3 text-[11px] leading-relaxed" style={{ background: C.panel2, border: `1px solid ${color}66` }}>
                 <div className="flex flex-wrap gap-x-4 gap-y-0.5 mono">
-                  <span>スクショの純資産 <b>¥{Math.round(rec.accountTotalJpy).toLocaleString()}</b></span>
-                  <span>円換算合計 <b>¥{Math.round(rec.computedJpy).toLocaleString()}</b></span>
+                  <span>{totalLabel} <b>¥{Math.round(rec.accountTotalJpy).toLocaleString()}</b></span>
+                  <span>{rows.some((r) => r.include && r.valueCurrency === "USD") ? "円換算合計" : "銘柄の合計"} <b>¥{Math.round(rec.computedJpy).toLocaleString()}</b></span>
                   <span style={{ color }}>差 {rec.diffJpy >= 0 ? "+" : "−"}¥{Math.round(abs).toLocaleString()}（{rec.diffPct >= 0 ? "+" : ""}{rec.diffPct.toFixed(3)}%）</span>
                 </div>
                 <div style={{ color: C.textDim }}>
-                  {abs <= 100 ? "純資産と一致しています（差はレートの丸め誤差の範囲）。"
+                  {abs <= 100 ? (rec.impliedRate == null ? `${totalLabel}と一致しています。` : `${totalLabel}と一致しています（差はレートの丸め誤差の範囲）。`)
                     : plausible ? `純資産から逆算したレートは ${rec.impliedRate.toFixed(4)} 円です。証券会社の換算レートと市場レートの差によるずれと考えられます。`
                     : "ずれが大きいため、評価額の読み取り誤り・画面外で読み取れていない銘柄・現金の漏れがないか確認してください。"}
                   {!plausible && rec.impliedRate ? `（逆算レート ${rec.impliedRate.toFixed(2)} 円）` : ""}
@@ -3534,12 +3545,13 @@ function BrokerScreenshotImport({ holdings, virtualAggregateLabels, onRegister }
                   <div className="flex items-center justify-between gap-2 mb-1.5">
                     <label className="flex items-center gap-1.5 text-xs" style={{ color: C.text }}>
                       <input type="checkbox" checked={r.include} onChange={(e) => updateRow(r.key, "include", e.target.checked)} /> 登録する
+                      {r.section && <span className="text-[10px] px-1.5 rounded" style={{ color: C.textMuted, border: `1px solid ${C.borderSoft}` }}>{r.section}</span>}
                     </label>
                     <span className="mono text-xs" style={{ color: C.teal }}>{yen != null ? `¥${Math.round(yen).toLocaleString()}` : "—"}</span>
                   </div>
                   <div className="grid gap-1.5" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(96px, 1fr))" }}>
                     <div>{fieldLabel("コード")}<input value={r.code} onChange={(e) => updateRow(r.key, "code", e.target.value.toUpperCase())} className={inputCls} style={inputStyle} /></div>
-                    <div style={{ gridColumn: "span 2" }}>{fieldLabel("銘柄名")}<input value={r.name} onChange={(e) => updateRow(r.key, "name", e.target.value)} className={inputCls} style={inputStyle} /></div>
+                    <div style={{ gridColumn: "span 2" }}>{fieldLabel("銘柄名")}<input value={r.name} onChange={(e) => updateRow(r.key, "name", e.target.value)} className={inputCls} style={inputStyle} />{r.nameRaw && <span className="text-[9px] block mt-0.5" style={{ color: C.textDim }}>画面表記「{r.nameRaw}」→ 正式名称に補完</span>}</div>
                     <div>{fieldLabel("数量")}<input value={fmtNum(r.quantity, 4)} onChange={(e) => updateRow(r.key, "quantity", numOrNull(e.target.value))} inputMode="decimal" className={inputCls} style={inputStyle} /></div>
                     <div>{fieldLabel(`評価額（${r.valueCurrency}）`)}<input value={fmtNum(r.marketValue)} onChange={(e) => updateRow(r.key, "marketValue", numOrNull(e.target.value))} inputMode="decimal" className={inputCls} style={inputStyle} /></div>
                     <div>{fieldLabel("現在値")}<input value={fmtNum(r.currentPrice, 4)} onChange={(e) => updateRow(r.key, "currentPrice", numOrNull(e.target.value))} inputMode="decimal" className={inputCls} style={inputStyle} /></div>
@@ -3554,9 +3566,20 @@ function BrokerScreenshotImport({ holdings, virtualAggregateLabels, onRegister }
             })}
           </div>
           <button onClick={addRow} className="text-xs mt-2 underline" style={{ color: C.textDim, background: "transparent", border: "none", cursor: "pointer" }}>＋ 行を追加</button>
+          {sectionTotals.length > 0 && (
+            <div className="mt-3 text-[11px] leading-relaxed mono" style={{ color: C.textMuted }}>
+              <div className="mb-0.5" style={{ color: C.textDim }}>画面ごとの照合（画面の合計評価額 ↔ 読み取った銘柄の合計）</div>
+              {sectionChecks(rows, { section_totals: sectionTotals }).map((c) => (
+                <div key={c.section}>
+                  {c.section}：画面 ¥{Math.round(c.screenTotal).toLocaleString()} ／ 銘柄合計 ¥{Math.round(c.rowsTotal).toLocaleString()}{" "}
+                  <span style={{ color: Math.abs(c.diff) <= 1 ? C.teal : C.rust }}>{Math.abs(c.diff) <= 1 ? "一致" : `差 ${c.diff >= 0 ? "+" : "−"}¥${Math.round(Math.abs(c.diff)).toLocaleString()}`}</span>
+                </div>
+              ))}
+            </div>
+          )}
 
           <div className="mt-4 text-[11px] leading-relaxed" style={{ color: C.textMuted }}>
-            4. 「登録」すると、{broker.label}の既存エントリ{replacedCount}件{hasVirtualAggregate ? "と、投資収支Excel由来の合算額" : ""}を置き換え、上の個別銘柄として保存します（再取り込み時も前回分はすべて削除されるため増殖しません）。評価額はUSD/JPYで円換算して保存し、為替区分は米国株関連＝ドル、日本株関連＝円として集計します。
+            4. 「登録」すると、{broker.label}の既存エントリ{replacedCount}件{hasVirtualAggregate ? "と、投資収支Excel由来の合算額" : ""}を置き換え、上の個別銘柄として保存します（再取り込み時も前回分はすべて削除されるため増殖しません）。{rows.some((r) => r.valueCurrency === "USD") ? "USD建ての評価額はUSD/JPYで円換算して保存し、" : ""}為替区分は米国株関連＝ドル、日本株関連＝円として集計します。
           </div>
           <div className="flex gap-2 mt-2">
             <button onClick={handleRegister} className="text-xs px-4 py-2 rounded" style={{ background: C.teal, color: C.bg, fontWeight: 700, border: "none", cursor: "pointer" }}>登録</button>
