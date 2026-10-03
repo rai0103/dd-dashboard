@@ -141,11 +141,11 @@ test("純資産（JPY）との照合：moomooの換算レートを逆算すれ�
 
 const daiwa = brokerByKey("daiwa")!;
 
-test("BROKERS: 大和コネクト証券・iDeCoに対応、Coincheckは選択肢のみ（準備中）", () => {
+test("BROKERS: 大和コネクト証券・iDeCo・Coincheckに対応", () => {
   assert.deepEqual(BROKERS.map((b) => b.label), ["moomoo証券", "大和コネクト証券", "iDeCo", "Coincheck"]);
   assert.equal(daiwa.available, undefined);
   assert.equal(brokerByKey("ideco")!.available, undefined);
-  assert.equal(brokerByKey("coincheck")!.available, false);
+  assert.equal(brokerByKey("coincheck")!.available, undefined);
 });
 
 test("Worker辞書：略称・末尾省略の銘柄名を正式名称に補完する", async () => {

@@ -672,7 +672,7 @@ const CATEGORY_SHORT_LABEL = {
   "テックETF・投信（米）": "テック投信（米）", "テックETF・投信（日）": "テック投信（日）",
   "高配当ETF・投信（米）": "高配当投信（米）", "高配当ETF・投信（日）": "高配当投信（日）",
   "その他ETF・投信（米）": "その他投信（米）", "その他ETF・投信（日）": "その他投信（日）",
-  "レバレッジETF（米）": "レバ（米）", "レバレッジETF（日）": "レバ（日）", "その他": "その他",
+  "レバレッジETF（米）": "レバ（米）", "レバレッジETF（日）": "レバ（日）", "暗号資産": "暗号資産", "その他": "その他",
 };
 // 保有銘柄を実際に走査し、A〜E各ランクに含まれるカテゴリー（評価額の大きい順・重複排除）から説明文を動的に生成する。
 function rankCategoryLabels(holdings) {
@@ -694,7 +694,7 @@ function rankCategoryLabels(holdings) {
 const CATEGORIES = [
   "SP500", "Nasdaq", "日本（N225・Topix）", "個別（米）", "個別（日）", "ゴールド", "現金",
   "テックETF・投信（米）", "テックETF・投信（日）", "高配当ETF・投信（米）", "高配当ETF・投信（日）",
-  "その他ETF・投信（米）", "その他ETF・投信（日）", "レバレッジETF（米）", "レバレッジETF（日）", "その他",
+  "その他ETF・投信（米）", "その他ETF・投信（日）", "レバレッジETF（米）", "レバレッジETF（日）", "暗号資産", "その他",
 ];
 const CATEGORY_COLORS = {
   "SP500": C.teal, "Nasdaq": C.blue, "日本（N225・Topix）": "#BE7A63",
@@ -702,7 +702,7 @@ const CATEGORY_COLORS = {
   "テックETF・投信（米）": C.violet, "テックETF・投信（日）": "#C77FB0",
   "高配当ETF・投信（米）": "#4FA0A6", "高配当ETF・投信（日）": "#A3A24B",
   "その他ETF・投信（米）": "#7B9BC7", "その他ETF・投信（日）": "#B98F6A",
-  "レバレッジETF（米）": C.rust, "レバレッジETF（日）": "#D98F7A", "その他": C.textDim,
+  "レバレッジETF（米）": C.rust, "レバレッジETF（日）": "#D98F7A", "暗号資産": "#E0B44C", "その他": C.textDim,
   // 投資収支Excel（実績パフォーマンス）由来の口座単位評価額。個別銘柄の内訳は持たないため、
   // 口座名そのものをカテゴリー名として扱う（rankCategoryLabelsのフォールバック表示にもそのまま使われる）。
   "moomoo証券": C.violet, "Coin Check": C.amber, "iDeCo": "#7FA37A", "大和コネクト証券": "#BE7A63",
@@ -714,7 +714,7 @@ const CATEGORY_DEFAULT_RANK = {
   "ゴールド": "B", "現金": "A", "テックETF・投信（米）": "D", "テックETF・投信（日）": "D",
   "高配当ETF・投信（米）": "A", "高配当ETF・投信（日）": "A",
   "その他ETF・投信（米）": "D", "その他ETF・投信（日）": "D",
-  "レバレッジETF（米）": "E", "レバレッジETF（日）": "E", "その他": "D",
+  "レバレッジETF（米）": "E", "レバレッジETF（日）": "E", "暗号資産": "E", "その他": "D",
 };
 
 /* ---------------- checkpoints (DD戦略とは別に、ユーザーが任意に設定する保有比率の基準。最大5件) ---------------- */
@@ -835,6 +835,23 @@ function latestAccountValue(accountSeries, label) {
   }
   return null;
 }
+function latestAccountDate(accountSeries, label) {
+  for (let i = accountSeries.length - 1; i >= 0; i--) if (accountSeries[i].accounts[label] != null) return accountSeries[i].date;
+  return null;
+}
+// 投資収支Excel由来の口座ごとの最終更新日 { 口座名: YYYY-MM-DD }
+function virtualAccountDates(investmentPerformance) {
+  const out = {};
+  if (!investmentPerformance?.accountSeries?.length) return out;
+  for (const cfg of VIRTUAL_ACCOUNT_CONFIG) { const d = latestAccountDate(investmentPerformance.accountSeries, cfg.label); if (d) out[cfg.label] = d; }
+  return out;
+}
+// 凡例に添える更新日。今年なら「M/D」、それ以外は「YYYY/M/D」
+function fmtUpdatedShort(iso) {
+  if (!iso) return "";
+  const [y, m, day] = String(iso).split("-").map(Number);
+  return y === new Date().getFullYear() ? `${m}/${day}` : `${y}/${m}/${day}`;
+}
 function buildVirtualHoldingsFromInvestmentPerformance(investmentPerformance) {
   if (!investmentPerformance?.accountSeries?.length) return [];
   return VIRTUAL_ACCOUNT_CONFIG.map((cfg) => {
@@ -895,7 +912,7 @@ function guessCategoryRank(rawName, ticker, assetType) {
 }
 // 米国株指数・米国株連動の資産は、円建て（国内上場ETF/投信）でも為替はドルの影響を受けるため「ドル」扱いにする。
 // カテゴリーが米国系（SP500/Nasdaq/個別（米）等）であるか、銘柄名に米国関連キーワードが含まれる場合に該当。
-const USD_EXPOSURE_CATEGORIES = new Set(["SP500", "Nasdaq", "個別（米）", "テックETF・投信（米）", "高配当ETF・投信（米）", "その他ETF・投信（米）", "レバレッジETF（米）"]);
+const USD_EXPOSURE_CATEGORIES = new Set(["SP500", "Nasdaq", "個別（米）", "テックETF・投信（米）", "高配当ETF・投信（米）", "その他ETF・投信（米）", "レバレッジETF（米）", "暗号資産"]);
 function isUsdExposure(rawName, ticker, category) {
   if (USD_EXPOSURE_CATEGORIES.has(category)) return true;
   const norm = toHalfWidth(`${ticker ?? ""} ${rawName ?? ""}`);
@@ -2600,7 +2617,7 @@ function StatusPanel({ d, dVoo, dQqq, speedAlertInstrument, onChangeSpeedAlertIn
 /* ---------------- portfolio pie panel ---------------- */
 // layout="row"（既定・PC）は円グラフと凡例を横並びに、layout="column"（スマホ）は円グラフを上に大きく・凡例をその下に配置し、
 // 横幅が狭い画面でも凡例と重ならずに円グラフ自体を大きく表示できるようにする。
-function PortfolioPie({ view, holdings, onOpen, layout = "row" }) {
+function PortfolioPie({ view, holdings, onOpen, layout = "row", ownerDates = {} }) {
   const field = fieldForView(view);
   const total = useMemo(() => holdingsTotal(holdings), [holdings]);
   const data = useMemo(() => {
@@ -2618,7 +2635,7 @@ function PortfolioPie({ view, holdings, onOpen, layout = "row" }) {
       </div>
       <div className={`flex-1 min-w-0 min-h-0 flex flex-col justify-center gap-1 overflow-y-auto ${isColumn ? "w-full" : ""}`}>
         {/* PC（横並び）は幅が狭いため金額を万円単位にして凡例名の表示幅を確保する。省略された名前・正確な金額はホバーで確認できる */}
-        {data.map((d) => (<div key={d.name} title={`${d.name}：¥${Math.round(d.value).toLocaleString()}`} className="flex items-center gap-1 text-[10px]"><span style={{ width: 7, height: 7, borderRadius: 2, background: colorForView(view, d.name), flexShrink: 0 }} /><span style={{ color: C.textMuted }} className={`flex-1 min-w-0 ${isColumn ? "truncate" : "line-clamp-2 leading-tight"}`}>{d.name}</span><span className="mono shrink-0 text-right whitespace-nowrap" style={{ color: C.textDim, width: isColumn ? 76 : 50 }}>{isColumn ? `¥${Math.round(d.value).toLocaleString()}` : `¥${Math.round(d.value / 10000).toLocaleString()}万`}</span><span className="mono shrink-0 text-right" style={{ color: C.text, width: 36 }}>{((d.value / total) * 100).toFixed(1)}%</span></div>))}
+        {data.map((d) => (<div key={d.name} title={`${d.name}：¥${Math.round(d.value).toLocaleString()}`} className="flex items-center gap-1 text-[10px]"><span style={{ width: 7, height: 7, borderRadius: 2, background: colorForView(view, d.name), flexShrink: 0 }} /><span style={{ color: C.textMuted }} className={`flex-1 min-w-0 ${isColumn ? "truncate" : "line-clamp-2 leading-tight"}`}>{d.name}{view === "owner" && ownerDates[d.name] && <span className="mono text-[9px] ml-1" title={`最終更新 ${fmtDateSlash(ownerDates[d.name])}`} style={{ color: C.textDim }}>{fmtUpdatedShort(ownerDates[d.name])}更新</span>}</span><span className="mono shrink-0 text-right whitespace-nowrap" style={{ color: C.textDim, width: isColumn ? 76 : 50 }}>{isColumn ? `¥${Math.round(d.value).toLocaleString()}` : `¥${Math.round(d.value / 10000).toLocaleString()}万`}</span><span className="mono shrink-0 text-right" style={{ color: C.text, width: 36 }}>{((d.value / total) * 100).toFixed(1)}%</span></div>))}
       </div>
     </div>
   );
@@ -2789,7 +2806,7 @@ function SpeedAlertModalContent({ d, instrumentLabel = "VOO" }) {
 }
 
 const BREAKDOWN_COLLAPSE_LIMIT = 10;
-function PortfolioTableContent({ view, holdings, brokerSummaries = {}, onEditHolding, onDeleteHolding }) {
+function PortfolioTableContent({ view, holdings, brokerSummaries = {}, ownerDates = {}, onEditHolding, onDeleteHolding }) {
   const [showAllBreakdown, setShowAllBreakdown] = useState(false);
   useEffect(() => { setShowAllBreakdown(false); }, [view]);
   const field = fieldForView(view);
@@ -2813,7 +2830,7 @@ function PortfolioTableContent({ view, holdings, brokerSummaries = {}, onEditHol
     <div>
       <div className="mb-6">
         <div className="text-xs mb-3" style={{ color: C.textDim }}>内訳（{viewLabel}）</div>
-        {visibleGrouped.map((g) => (<div key={g.name} className="flex items-center gap-2 mb-1.5"><span style={{ width: 10, height: 10, borderRadius: 2, background: colorForView(view, g.name), flexShrink: 0 }} /><span className="text-xs shrink-0" style={{ width: 168, color: C.textMuted, whiteSpace: "nowrap", overflow: "visible" }}>{g.name}</span><div className="flex-1 h-2 rounded-full" style={{ background: C.panel2 }}><div className="h-2 rounded-full" style={{ width: `${(g.value / total) * 100}%`, background: colorForView(view, g.name) }} /></div><span className="mono text-xs w-14 text-right shrink-0">{((g.value / total) * 100).toFixed(1)}%</span><span className="mono text-xs w-28 text-right shrink-0" style={{ color: C.textMuted }}>¥{g.value.toLocaleString()}</span></div>))}
+        {visibleGrouped.map((g) => (<div key={g.name} className="flex items-center gap-2 mb-1.5"><span style={{ width: 10, height: 10, borderRadius: 2, background: colorForView(view, g.name), flexShrink: 0 }} /><span className="text-xs shrink-0" style={{ width: 168, color: C.textMuted, whiteSpace: "nowrap", overflow: "visible" }}>{g.name}{view === "owner" && ownerDates[g.name] && <span className="mono text-[10px] ml-1.5" style={{ color: C.textDim }}>{fmtDateSlash(ownerDates[g.name])}更新</span>}</span><div className="flex-1 h-2 rounded-full" style={{ background: C.panel2 }}><div className="h-2 rounded-full" style={{ width: `${(g.value / total) * 100}%`, background: colorForView(view, g.name) }} /></div><span className="mono text-xs w-14 text-right shrink-0">{((g.value / total) * 100).toFixed(1)}%</span><span className="mono text-xs w-28 text-right shrink-0" style={{ color: C.textMuted }}>¥{g.value.toLocaleString()}</span></div>))}
         {hasMore && (
           <button onClick={() => setShowAllBreakdown((v) => !v)} className="text-[11px] mt-1 flex items-center gap-1" style={{ color: C.textMuted, background: "transparent", border: "none", cursor: "pointer" }}>
             {showAllBreakdown ? "▲ 閉じる" : `▼ もっと見る（他${grouped.length - BREAKDOWN_COLLAPSE_LIMIT}件）`}
@@ -4774,7 +4791,7 @@ function MobileChartPage({ d, onZoom }) {
 }
 // ポートフォリオ構成の表示種別ボタン（ラベルは短縮表記、正式名はtitleで補足）
 const PIE_VIEW_TABS = [{ k: "category", l: "CAT", title: "カテゴリー別" }, { k: "currency", l: "為替", title: "為替別" }, { k: "rank", l: "クラス", title: "A〜Eクラス別" }, { k: "owner", l: "口座", title: "口座別" }];
-function MobilePortfolioPage({ pieView, setPieView, holdings, onOpen, onOpenRealHoldingsRanking, dateLabel }) {
+function MobilePortfolioPage({ pieView, setPieView, holdings, onOpen, onOpenRealHoldingsRanking, dateLabel, ownerDates }) {
   return (
     <div className="p-3 flex flex-col gap-2 h-full">
       <div className="flex items-center justify-between gap-2 shrink-0">
@@ -4789,7 +4806,7 @@ function MobilePortfolioPage({ pieView, setPieView, holdings, onOpen, onOpenReal
       {/* 円グラフを上・凡例を下に積む縦積みレイアウト（layout="column"）にすることで、狭い画面幅でも凡例と重ならずに円グラフ自体を大きく表示できる。
           高さはvh固定ではなくflex-1で残り領域いっぱいに使うことで、タブ行を含めたページ全体が必ず1画面（スクロールなし）に収まる。 */}
       <div className="rounded-lg flex-1 min-h-0" style={{ background: C.panel, border: `1px solid ${C.border}` }}>
-        <PortfolioPie view={pieView} holdings={holdings} onOpen={onOpen} layout="column" />
+        <PortfolioPie view={pieView} holdings={holdings} onOpen={onOpen} layout="column" ownerDates={ownerDates} />
       </div>
     </div>
   );
@@ -5832,10 +5849,12 @@ export default function DDDashboard() {
       persistOverrides(next);
       return next;
     });
-    if (asOf) setHoldingsAsOf((prev) => { const next = { ...prev, [owner]: asOf }; persistHoldingsAsOf(next); return next; });
+    // 更新日：ファイル名から検出したCSVのデータ日付。検出できなければ取込日
+    const date = asOf || localYMD();
+    setHoldingsAsOf((prev) => { const next = { ...prev, [owner]: date }; persistHoldingsAsOf(next); return next; });
   }
   // 証券会社スクショ取込の「登録」：その証券会社の既存エントリ（前回の個別銘柄＋合算1件）をすべて削除して、新しい個別銘柄に置き換える。
-  // summary（buildBrokerSummary）があれば口座サマリーとして保存し、画面の基準日を口座主のデータ日付（「◯◯時点」表示）にする。
+  // summary（buildBrokerSummary）があれば口座サマリーとして保存する。口座主の更新日（凡例・「◯◯時点」表示）は画面の基準日、無ければ登録日。
   function handleRegisterBrokerHoldings(broker, incoming, summary) {
     setHoldings((prev) => {
       const merged = replaceBrokerHoldings(prev, broker, incoming);
@@ -5843,10 +5862,10 @@ export default function DDDashboard() {
       return merged;
     });
     setHoldingsSource("imported");
-    if (summary) {
-      setBrokerSummaries((prev) => { const next = { ...prev, [broker.key]: summary }; persistBrokerSummaries(next); return next; });
-      if (summary.asOf) setHoldingsAsOf((prev) => { const next = { ...prev, [broker.owner]: summary.asOf }; persistHoldingsAsOf(next); return next; });
-    }
+    if (summary) setBrokerSummaries((prev) => { const next = { ...prev, [broker.key]: summary }; persistBrokerSummaries(next); return next; });
+    // 口座の更新日：画面に基準日があればその日付、無ければ登録日
+    const date = summary?.asOf || localYMD();
+    setHoldingsAsOf((prev) => { const next = { ...prev, [broker.owner]: date }; persistHoldingsAsOf(next); return next; });
   }
   // 「初期化」：既存の保有資産データ・分類の記憶（overrides）を全て消去し、このCSVの内容のみで作り直す。
   function handleResetAndImportHoldings(owner, previewRows, asOf) {
@@ -5858,7 +5877,7 @@ export default function DDDashboard() {
     for (const r of previewRows) next[r.name] = { category: r.category, rank: r.rank, currency: r.currency };
     setOverrides(next);
     persistOverrides(next);
-    const nextAsOf = asOf ? { [owner]: asOf } : {};
+    const nextAsOf = { [owner]: asOf || localYMD() };
     setHoldingsAsOf(nextAsOf);
     persistHoldingsAsOf(nextAsOf);
   }
@@ -5975,15 +5994,18 @@ export default function DDDashboard() {
   const toggleCrash = (k) => setHiddenCrash((p) => ({ ...p, [k]: !p[k] }));
 
   // 保有資産データの最終更新日（口座主ごとに検出したCSVのデータ日付）を表示用の文字列にまとめる。
-  // 全員分の日付が同じなら1つだけ、異なれば口座主名付きで併記する。1件も検出できていなければnull。
+  // 全員分の日付が同じなら1つだけ、異なれば最古〜最新の期間を表示する。1件も検出できていなければnull。
   const holdingsDateLabel = useMemo(() => {
     const owners = [...new Set(holdings.map((h) => h.owner))];
     const entries = owners.map((o) => [o, holdingsAsOf[o]]).filter(([, v]) => v);
     if (!entries.length) return null;
     const uniqueDates = [...new Set(entries.map(([, v]) => v))];
     if (uniqueDates.length === 1) return fmtDateSlash(uniqueDates[0]);
-    return entries.map(([o, v]) => `${o} ${fmtDateSlash(v)}`).join(" / ");
+    uniqueDates.sort();
+    return `${fmtDateSlash(uniqueDates[0])}〜${fmtDateSlash(uniqueDates[uniqueDates.length - 1])}`; // 口座ごとの日付は「口座」凡例に表示
   }, [holdings, holdingsAsOf]);
+  // 口座別の凡例に表示する口座ごとの最終更新日。保有銘柄を登録した口座（楽天CSV・スクショ取込）の日付を、投資収支Excel由来の口座の日付より優先する
+  const ownerUpdatedDates = useMemo(() => ({ ...virtualAccountDates(investmentPerformance), ...holdingsAsOf }), [investmentPerformance, holdingsAsOf]);
   const holdingsDateSuffix = holdingsDateLabel ? <span className="font-normal" style={{ color: C.textDim }}>（{holdingsDateLabel} 時点）</span> : null;
   // 投資収支Excel（実績パフォーマンス）由来のmoomoo証券・Coin Check・iDeCo・大和コネクト証券の評価額を、
   // 楽天証券のholdings配列とは独立に保持したまま、A〜E配分乖離・ポートフォリオ構成の表示用にのみ合算する。
@@ -6034,7 +6056,7 @@ export default function DDDashboard() {
       `}</style>
 
       {modal?.type === "speedAlert" && (speedAlertInstrument === "qqq" ? dQqq : dVoo) && <FullScreenModal title={`DD加速度アラート（速度・経過日数の法則・${speedAlertInstrument.toUpperCase()}基準）`} onClose={() => setModal(null)}><SpeedAlertModalContent d={speedAlertInstrument === "qqq" ? dQqq : dVoo} instrumentLabel={speedAlertInstrument.toUpperCase()} /></FullScreenModal>}
-      {modal?.type === "portfolio" && <FullScreenModal title={<>ポートフォリオ構成表{holdingsDateSuffix}</>} onClose={() => setModal(null)}><PortfolioTableContent view={pieView} holdings={holdings} brokerSummaries={brokerSummaries} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
+      {modal?.type === "portfolio" && <FullScreenModal title={<>ポートフォリオ構成表{holdingsDateSuffix}</>} onClose={() => setModal(null)}><PortfolioTableContent view={pieView} holdings={holdings} brokerSummaries={brokerSummaries} ownerDates={ownerUpdatedDates} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
       {modal?.type === "ddTable" && <FullScreenModal title="DD毎のA〜E配分表" onClose={() => setModal(null)}><DDTableContent modelRow={d.modelRow} modelRows={d.trackRecord.dynamicModelRows} holdings={holdings} /></FullScreenModal>}
       {modal?.type === "modelDebug" && <FullScreenModal title="動的配分モデル デバッグビュー" onClose={() => setModal(null)}><ModelDebugContent d={d} dQqq={dQqq} qqqAmplification={qqqAmplification} /></FullScreenModal>}
       {modal?.type === "investmentUpload" && <FullScreenModal title="投資収支Excel アップロード" onClose={() => setModal(null)}><InvestmentUploadModalContent existing={investmentPerformance} onSave={handleSaveInvestmentPerformance} onClose={() => setModal(null)} /></FullScreenModal>}
@@ -6110,7 +6132,7 @@ export default function DDDashboard() {
               { key: "ath", label: "評価額/ATH", icon: TrendingUp, content: <MobileAthPage d={d} dVoo={dVoo} dQqq={dQqq} /> },
               { key: "speed", label: "経過日数", icon: Clock, content: <MobileSpeedPage dVoo={dVoo} dQqq={dQqq} speedAlertInstrument={speedAlertInstrument} onChangeSpeedAlertInstrument={setSpeedAlertInstrument} onOpenSpeedAlert={() => setModal({ type: "speedAlert" })} /> },
               { key: "chart", label: "チャート", icon: Activity, content: <MobileChartPage d={d} onZoom={() => setModal({ type: "mobileChartZoom" })} /> },
-              { key: "portfolio", label: "構成", icon: Layers, content: <MobilePortfolioPage pieView={pieView} setPieView={setPieView} holdings={combinedHoldings} onOpen={() => setModal({ type: "portfolio" })} onOpenRealHoldingsRanking={() => setModal({ type: "realHoldingsRanking" })} dateLabel={holdingsDateLabel} /> },
+              { key: "portfolio", label: "構成", icon: Layers, content: <MobilePortfolioPage pieView={pieView} setPieView={setPieView} holdings={combinedHoldings} ownerDates={ownerUpdatedDates} onOpen={() => setModal({ type: "portfolio" })} onOpenRealHoldingsRanking={() => setModal({ type: "realHoldingsRanking" })} dateLabel={holdingsDateLabel} /> },
               { key: "diff", label: "配分乖離", icon: ListChecks, content: <MobileDiffPage modelOverride={modelOverride} setModelOverride={setModelOverride} d={d} currentHoldingPct={currentHoldingPct} currentHoldingAmount={currentHoldingAmount} effectiveModelRow={effectiveModelRow} rankLabels={rankLabels} blocks={blocks} onOpenRank={(rank) => setModal({ type: "rank", rank })} onOpenDDTable={() => setModal({ type: "ddTable" })} dateLabel={holdingsDateLabel} /> },
               { key: "bottom", label: "底値判定", icon: Gauge, content: <MobileBottomScorePage bottom={bottom} FULL={d.FULL} onOpen={() => setModal({ type: "bottomScore" })} /> },
               { key: "analysis", label: "現状分析", icon: Info, content: <MobileAnalysisPage analysisText={analysisText} checkpointResults={checkpointResults} onOpenCheckpointSettings={() => setModal({ type: "checkpointSettings" })} /> },
@@ -6230,11 +6252,12 @@ export default function DDDashboard() {
             </div>
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "300px minmax(0, 1fr) 380px", gap: 4, flex: 1, minHeight: 0 }}>
+          {/* 下段：ポートフォリオ構成（凡例に口座ごとの更新日を出すため広め）・A〜E配分乖離・底値判定 */}
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.25fr) minmax(0, 1fr) 330px", gap: 4, flex: 1, minHeight: 0 }}>
             {/* bottom-left: portfolio pie */}
             <div style={{ minHeight: 0 }}>
               <Panel title={<><span className="whitespace-nowrap">ポートフォリオ構成</span>{holdingsDateLabel && <span className="block text-[10px] font-normal" style={{ color: C.textDim }}>（{holdingsDateLabel} 時点）</span>}</>} action={<div className="flex items-center gap-0.5">{PIE_VIEW_TABS.map((t) => (<button key={t.k} onClick={() => setPieView(t.k)} title={t.title} className="text-[10px] px-1 py-0.5 rounded whitespace-nowrap" style={{ color: pieView === t.k ? C.bg : C.textMuted, background: pieView === t.k ? C.teal : "transparent", fontWeight: pieView === t.k ? 700 : 400 }}>{t.l}</button>))}<button onClick={() => setModal({ type: "realHoldingsRanking" })} title="実質保有銘柄ランキング（ETF・投信を構成銘柄まで分解して合算）" className="text-[10px] px-1 py-0.5 rounded whitespace-nowrap" style={{ color: C.textMuted, background: "transparent", border: "none", cursor: "pointer" }}>Rkg</button></div>} className="h-full">
-                <PortfolioPie view={pieView} holdings={combinedHoldings} onOpen={() => setModal({ type: "portfolio" })} />
+                <PortfolioPie view={pieView} holdings={combinedHoldings} onOpen={() => setModal({ type: "portfolio" })} ownerDates={ownerUpdatedDates} />
               </Panel>
             </div>
 

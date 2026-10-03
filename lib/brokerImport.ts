@@ -19,6 +19,7 @@ export type BrokerConfig = {
   hint: string; // 取り込み画面に表示する撮影のコツ
   available?: boolean; // false＝選択肢として表示するだけ（読み取り未対応）
   allFunds?: boolean; // 保有商品がすべて投資信託・預金等（iDeCo）。区分の無い銘柄を個別株ではなく投信として分類する
+  fixedCategory?: string; // 現金以外の全銘柄に使うカテゴリー（Coincheckの暗号資産）。指定時は推定しない
 };
 
 // 既存のポートフォリオ分類（A：ゴールド・現金、B：高配当ETF・投信、C：SP500、D：テックETF・投信(米)・個別、
@@ -29,7 +30,7 @@ const RANK_BY_CATEGORY_STANDARD: Record<string, string> = {
   "SP500": "C",
   "Nasdaq": "D", "テックETF・投信（米）": "D", "テックETF・投信（日）": "D", "個別（米）": "D", "個別（日）": "D",
   "日本（N225・Topix）": "E", "その他ETF・投信（米）": "E", "その他ETF・投信（日）": "E",
-  "レバレッジETF（米）": "E", "レバレッジETF（日）": "E", "その他": "E",
+  "レバレッジETF（米）": "E", "レバレッジETF（日）": "E", "暗号資産": "E", "その他": "E",
 };
 
 // 対応証券会社（available: false は選択肢のみ・読み取り未対応）。新しい証券会社を追加するときはここに1件追加し、Worker（worker/src/extractHoldings.ts）の
@@ -72,9 +73,16 @@ export const BROKERS: BrokerConfig[] = [
     hint: "SMBC・DCナビの「資産状況」画面で、資産サマリー（資産評価額・評価損益・運用利回り・リスク）と商品別内訳（カテゴリー・商品名・資産評価額・取得価額・簿価損益・損益率）が写るように撮影してください。縦に長い場合はスクロールして複数枚選択できます。",
   },
   {
-    key: "coincheck", label: "Coincheck", owner: "Coin Check", account: "—", aggregateNames: ["Coin Check"],
-    defaultRank: "E", defaultCurrency: "JPY", totalLabel: "スクショの合計", available: false,
-    hint: "Coincheckのスクリーンショット取り込みは準備中です。",
+    key: "coincheck",
+    label: "Coincheck",
+    owner: "Coin Check", // 口座主（lib/owners.ts の OWNER_COINCHECK と同じ値。投資収支Excelの口座名と揃えている）
+    account: "—",
+    aggregateNames: ["Coin Check"],
+    defaultRank: "E", // 暗号資産はすべてEクラス（日本円の残高は現金＝Aクラス）
+    fixedCategory: "暗号資産",
+    defaultCurrency: "JPY",
+    totalLabel: "取引アカウントの合計評価額",
+    hint: "Coincheckアプリの取引アカウント（ウォレット）画面で、合計評価額（日本円＋暗号資産）と、通貨ごとの評価額・保有数量が写るように撮影してください。通貨が1画面に収まらない場合は、スクロールして複数枚選択できます。",
   },
 ];
 export const brokerByKey = (key: string) => BROKERS.find((b) => b.key === key) ?? null;
@@ -166,7 +174,7 @@ export function guessBrokerRank(broker: BrokerConfig, category: string): string 
 
 // ポートフォリオ構成の「為替」は、ドル円相場の影響を把握するためのもの。上場市場や表示通貨ではなく中身で決める：
 // 米国株関連（米国株・米国株指数・米国ETF）はドル、日本株関連は円。日本上場の投信・ETFでもS&P500等の米国株連動ならドル。
-const USD_CATEGORIES = new Set(["SP500", "Nasdaq", "個別（米）", "テックETF・投信（米）", "高配当ETF・投信（米）", "その他ETF・投信（米）", "レバレッジETF（米）", "ゴールド"]);
+const USD_CATEGORIES = new Set(["SP500", "Nasdaq", "個別（米）", "テックETF・投信（米）", "高配当ETF・投信（米）", "その他ETF・投信（米）", "レバレッジETF（米）", "ゴールド", "暗号資産"]); // 暗号資産は実質ドル建てで値付けされるためドル扱い
 export function exposureCurrency(category: string, valueCurrency?: "USD" | "JPY"): "ドル" | "円" {
   if (category === "現金") return valueCurrency === "USD" ? "ドル" : "円"; // 現金だけは保有通貨そのもの
   return USD_CATEGORIES.has(category) ? "ドル" : "円";
@@ -194,7 +202,7 @@ export function extractionToPreviewRows(extraction: Extraction, broker: BrokerCo
     const valueCurrency = h.currency === "JPY" ? "JPY" : "USD";
     const name = String(h.name ?? "").trim();
     const section = String(h.section ?? "").trim();
-    const category = guessBrokerCategory(code, name, valueCurrency, section, broker.allFunds);
+    const category = broker.fixedCategory ?? guessBrokerCategory(code, name, valueCurrency, section, broker.allFunds);
     return {
       key: `${i}-${code || name}`, include: true,
       name, code, nameRaw: h.name_raw && h.name_raw !== name ? h.name_raw : undefined, section: section || undefined,

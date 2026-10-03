@@ -41,6 +41,15 @@ const BROKER_HINTS: Record<string, string> = {
     "・資産配分の円グラフ・凡例の行や、拠出金額・掛金の履歴は holdings に入れないでください。",
     "section_totals は空配列、cash は空配列にしてください（元本確保型の定期預金・保険も holdings の1行として扱う）。",
   ].join("\n"),
+  coincheck: [
+    "これは暗号資産取引所Coincheckアプリの取引アカウント（ウォレット・資産）画面のスクリーンショットです。複数枚に分かれていることがあります。",
+    "・画面上部の合計評価額（総資産・取引アカウント合計＝日本円＋暗号資産の合計、円）は account_total（JPY）に入れてください。",
+    "・暗号資産ごとの行：通貨のシンボル（BTC、ETH、XRPなど）を code に、通貨名（ビットコイン、イーサリアムなど）を name に、保有数量を quantity に、円換算の評価額を market_value に入れてください。currency は JPY。",
+    "・1通貨あたりの価格（レート）が表示されていれば current_price に（円）。取得単価・損益は抽出不要（avg_cost は null）。",
+    "・日本円（JPY）の残高は holdings に入れず、cash に { currency: \"JPY\", amount } で入れてください。",
+    "・保有数量が0、または評価額が0円の通貨は holdings に入れないでください。",
+    "section は空文字、section_totals は空配列にしてください。",
+  ].join("\n"),
 };
 // 証券会社によって画面に無い項目（取得価額・損益・運用利回りなど）は、ヒントに書いていなくても null／空文字で返させる。
 const COMMON_HINT = "画面に表示されていない項目（cost_basis・unrealized_pl・unrealized_pl_pct・summary の各値・as_of など）は null（文字列は空文字）にしてください。";

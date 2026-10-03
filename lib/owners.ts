@@ -8,9 +8,10 @@ export const OWNER_RAKUTEN_SHIN = "楽天(shin)";
 export const OWNER_MOOMOO = "moomoo";
 export const OWNER_DAIWA = "大和コネクト証券";
 export const OWNER_IDECO = "iDeCo";
+export const OWNER_COINCHECK = "Coin Check"; // 投資収支Excelの口座名と同じ表記
 
 // 保有銘柄一覧などで口座主を選ぶドロップダウンの選択肢
-export const OWNER_OPTIONS = [OWNER_RAKUTEN_SAKI, OWNER_RAKUTEN_SHIN, OWNER_MOOMOO, OWNER_DAIWA, OWNER_IDECO];
+export const OWNER_OPTIONS = [OWNER_RAKUTEN_SAKI, OWNER_RAKUTEN_SHIN, OWNER_MOOMOO, OWNER_DAIWA, OWNER_IDECO, OWNER_COINCHECK];
 // 楽天証券CSVの取り込み先として選べる口座主
 export const RAKUTEN_OWNERS = [OWNER_RAKUTEN_SHIN, OWNER_RAKUTEN_SAKI];
 

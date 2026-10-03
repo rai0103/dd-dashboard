@@ -1,0 +1,31 @@
+<!doctype html>
+<!-- 暗号資産取引所Coincheckアプリの取引アカウント（資産）画面を模したテスト用サンプル。画面構成・数値は検証用の架空値（実画面のレイアウトとは異なる可能性がある）。
+     合計評価額 1,063,280円 ＝ 暗号資産 1,010,940円（BTC・ETH・XRP・SOL）＋ 日本円 52,340円。保有0の通貨（ETC）は取り込み対象外。
+     scripts/test-coincheck-extract.mjs が画像化して使う（lib/brokerImportCoincheck.test.ts の COINCHECK_SAMPLE と同じ値）。 -->
+<html lang="ja"><head><meta charset="utf-8">
+<style>
+  body { margin: 0; background: #fff; color: #1b1f2a; font-family: -apple-system, "Hiragino Sans", "Yu Gothic", sans-serif; width: 390px; }
+  .top { padding: 14px 16px 6px; display: flex; justify-content: space-between; font-size: 15px; font-weight: 700; }
+  .tabs { display: flex; gap: 20px; padding: 0 16px; font-size: 13px; color: #8a92a3; border-bottom: 1px solid #eceef2; }
+  .tabs b { color: #00b39b; border-bottom: 2px solid #00b39b; padding-bottom: 8px; }
+  .total { padding: 18px 16px 14px; }
+  .total .l { font-size: 12px; color: #6b7385; } .total .v { font-size: 30px; font-weight: 700; margin-top: 4px; } .total .v small { font-size: 15px; margin-left: 2px; }
+  .total .d { font-size: 12px; color: #e0493f; margin-top: 4px; }
+  .bar { height: 8px; margin: 0 16px 14px; border-radius: 4px; background: linear-gradient(90deg, #f7931a 0 48%, #627eea 48% 78%, #23292f 78% 89%, #9945ff 89% 95%, #c9ced8 95%); }
+  .row { display: flex; align-items: center; padding: 12px 16px; border-top: 1px solid #f0f1f4; }
+  .ic { width: 32px; height: 32px; border-radius: 50%; margin-right: 12px; color: #fff; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+  .nm { flex: 1; } .nm b { font-size: 15px; display: block; } .nm span { font-size: 11.5px; color: #8a92a3; }
+  .vr { text-align: right; } .vr b { font-size: 15px; display: block; } .vr span { font-size: 11.5px; color: #8a92a3; }
+</style></head>
+<body>
+  <div class="top"><span>ウォレット</span><span style="color:#00b39b;font-size:13px">入出金</span></div>
+  <div class="tabs"><b>取引アカウント</b><span>つみたて</span><span>貸暗号資産</span></div>
+  <div class="total"><div class="l">合計評価額（日本円＋暗号資産）</div><div class="v">1,063,280<small>円</small></div><div class="d">前日比 +12,480円（+1.19%）</div></div>
+  <div class="bar"></div>
+  <div class="row"><div class="ic" style="background:#9aa3b5">¥</div><div class="nm"><b>日本円</b><span>JPY</span></div><div class="vr"><b>52,340円</b><span>52,340 JPY</span></div></div>
+  <div class="row"><div class="ic" style="background:#f7931a">BTC</div><div class="nm"><b>ビットコイン</b><span>BTC ・ 16,255,710円</span></div><div class="vr"><b>512,380円</b><span>0.03152 BTC</span></div></div>
+  <div class="row"><div class="ic" style="background:#627eea">ETH</div><div class="nm"><b>イーサリアム</b><span>ETH ・ 378,292円</span></div><div class="vr"><b>318,560円</b><span>0.8421 ETH</span></div></div>
+  <div class="row"><div class="ic" style="background:#23292f">XRP</div><div class="nm"><b>エックスアールピー</b><span>XRP ・ 95円</span></div><div class="vr"><b>118,750円</b><span>1,250 XRP</span></div></div>
+  <div class="row"><div class="ic" style="background:#9945ff">SOL</div><div class="nm"><b>ソラナ</b><span>SOL ・ 24,500円</span></div><div class="vr"><b>61,250円</b><span>2.5 SOL</span></div></div>
+  <div class="row"><div class="ic" style="background:#3ab83a">ETC</div><div class="nm"><b>イーサリアムクラシック</b><span>ETC ・ 2,840円</span></div><div class="vr"><b>0円</b><span>0 ETC</span></div></div>
+</body></html>
