@@ -31,8 +31,16 @@ export interface InvestmentMonthlyPoint {
   excessReturn: number | null;
   bonusReserve: number | null;
 }
+// ⑥将来の計画・実績：「計 画」セクションの年ごとの総資産（計画）と、実績の総資産（時点/年末）。
+export interface InvestmentPlanPoint {
+  year: number;
+  age: number | null;
+  plan: number | null; // 総資産（年末）＝計画
+  actual: number | null; // 総資産（時点/年末）＝実績。入力済みの列まで（最初の空欄以降はnull）
+}
 export interface InvestmentPerformanceData {
   series: InvestmentSeriesPoint[];
+  planSeries?: InvestmentPlanPoint[]; // 古いバージョンで解析・保存したデータには無い（再アップロードで追加される）
   accountSeries: InvestmentAccountPoint[];
   accountRecentChange: Record<string, { monthChange: number | null; yearEndChange: number | null }>;
   monthlySeries: InvestmentMonthlyPoint[];
@@ -102,7 +110,7 @@ export async function parseInvestmentExcel(arrayBuffer: ArrayBuffer, fileName: s
   const sheet = wb.Sheets[sheetName];
   if (!sheet || !sheet["!ref"]) {
     errors.push("シートが空、またはデータが見つかりませんでした。");
-    return { series: [], accountSeries: [], accountRecentChange: {}, monthlySeries: [], errors, sourceFileName: fileName, parsedAt: new Date().toISOString() };
+    return { series: [], planSeries: [], accountSeries: [], accountRecentChange: {}, monthlySeries: [], errors, sourceFileName: fileName, parsedAt: new Date().toISOString() };
   }
   const range = XLSX.utils.decode_range(sheet["!ref"]);
   const get = (r: number, c: number) => sheet[XLSX.utils.encode_cell({ r, c })];
@@ -296,7 +304,52 @@ export async function parseInvestmentExcel(arrayBuffer: ArrayBuffer, fileName: s
     };
   }
 
-  return { series, accountSeries, accountRecentChange, monthlySeries, errors, sourceFileName: fileName, parsedAt: new Date().toISOString() };
+  const planSeries = extractPlanSeries(range, get, rowLabels, errors);
+
+  return { series, planSeries, accountSeries, accountRecentChange, monthlySeries, errors, sourceFileName: fileName, parsedAt: new Date().toISOString() };
+}
+
+// ⑥将来の計画・実績：「計 画」行（年）・「年齢」行・「総資産（年末）」行（計画）・「総資産（時点/年末）」行（実績）を読む。
+// 他の行と同じくA列のラベルで行を特定する（「計 画」の空白・全角/半角括弧の違いは無視）。年齢・総資産の行は「計 画」行より下で最初に
+// 見つかった行を使う。ラベルが見つからない場合は、作成時点のシートの行番号（88・90・107・114行目）を使い、その旨をエラーに記録する。
+const PLAN_ROWS = { year: { label: "計 画", row: 88 }, age: { label: "年齢", row: 90 }, plan: { label: "総資産（年末）", row: 107 }, actual: { label: "総資産（時点/年末）", row: 114 } };
+const planKey = (s: string) => normalizeLabel(s).normalize("NFKC").replace(/\s/g, "");
+function extractPlanSeries(range: XLSXType.Range, get: (r: number, c: number) => XLSXType.CellObject | undefined, rowLabels: Map<number, string>, errors: string[]): InvestmentPlanPoint[] {
+  const findAfter = (label: string, after: number): number | null => {
+    const key = planKey(label);
+    const rows = [...rowLabels.entries()].filter(([r, l]) => r > after && planKey(l) === key).map(([r]) => r).sort((a, b) => a - b);
+    return rows.length ? rows[0] : null;
+  };
+  const resolve = (k: keyof typeof PLAN_ROWS, after: number): number => {
+    const { label, row } = PLAN_ROWS[k];
+    const found = findAfter(label, after);
+    if (found !== null) return found;
+    errors.push(`⑥将来の計画・実績：「${label}」の行が見つからなかったため、${row}行目を使用しました。`);
+    return row - 1;
+  };
+  const yearRow = resolve("year", -1);
+  const ageRow = resolve("age", yearRow);
+  const planRow = resolve("plan", yearRow);
+  const actualRow = resolve("actual", yearRow);
+
+  // 年の列：B列以降で、「計 画」行のセルが年（1990〜2200の整数。「2030年」等の文字列も可）の列
+  const yearCols: { col: number; year: number }[] = [];
+  for (let c = 1; c <= range.e.c; c++) {
+    const cell = get(yearRow, c);
+    if (!cell || cell.v == null || cell.v === "") continue;
+    const m = String(cell.v).match(/^\s*(\d{4})/);
+    const y = typeof cell.v === "number" ? Math.round(cell.v) : m ? Number(m[1]) : NaN;
+    if (Number.isInteger(y) && y >= 1990 && y <= 2200) yearCols.push({ col: c, year: y });
+  }
+  if (!yearCols.length) { errors.push(`⑥将来の計画・実績：${yearRow + 1}行目に年が見つかりませんでした。`); return []; }
+
+  // 実績は入力済みの列まで：最初に空欄になった列以降は表示しない
+  let actualEnded = false;
+  return yearCols.map(({ col, year }) => {
+    const actual = actualEnded ? null : parseNumericCell(get(actualRow, col));
+    if (actual === null) actualEnded = true;
+    return { year, age: parseNumericCell(get(ageRow, col)), plan: parseNumericCell(get(planRow, col)), actual };
+  });
 }
 
 // ---- 分析用の純粋関数 ----

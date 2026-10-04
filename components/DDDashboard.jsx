@@ -5261,6 +5261,77 @@ function FireSummaryBarLabel({ x, y, width, height, index, data, yen }) {
 }
 // FIREトライアルチャートで折れ線（左軸）と棒グラフ（右軸）の描画帯が交差しないよう、各軸のdomainを実データより
 // 広めに取り、[bandStart, bandEnd]（0=チャート下端, 1=上端）の帯の中だけに実データが収まるよう調整する。
+// ⑥将来の計画・実績：投資収支xlsxの「計 画」セクション（年・年齢・総資産（年末）＝計画）と「総資産（時点/年末）」＝実績。
+// 金額は大きくなるため、1億円以上は「x.x億」、それ未満は「x万」で表記する。
+const fmtOkuMan = (v) => (v == null ? "—" : v === 0 ? "0" : Math.abs(v) >= 1e8 ? `${(v / 1e8).toFixed(1)}億` : `${Math.round(v / 1e4).toLocaleString()}万`);
+// 横軸：年の下に年齢を「（）」で併記する（例：2030 / (55)）
+function PlanYearTick({ x, y, payload, ageByYear }) {
+  const age = ageByYear.get(payload.value);
+  return (
+    <g transform={`translate(${x},${y})`}>
+      <text x={0} y={0} dy={10} textAnchor="middle" fontSize={9} fill={C.textDim} fontFamily="monospace">{payload.value}</text>
+      {age != null && <text x={0} y={0} dy={21} textAnchor="middle" fontSize={9} fill={C.textDim} fontFamily="monospace">({age})</text>}
+    </g>
+  );
+}
+function PlanTooltipContent({ active, payload, yen }) {
+  if (!active || !payload || !payload.length) return null;
+  const p = payload[0].payload;
+  const diff = p.plan != null && p.actual != null ? p.actual - p.plan : null;
+  return (
+    <div style={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 11, padding: 8, borderRadius: 4 }}>
+      <div className="mono" style={{ marginBottom: 4, color: C.textMuted }}>{p.year}年{p.age != null ? `（${p.age}歳）` : ""}</div>
+      <div className="flex items-center gap-1.5"><span style={{ width: 10, height: 2, background: C.amber, display: "inline-block" }} />計画: <b className="mono">{yen(p.plan)}</b></div>
+      {p.actual != null && <div className="flex items-center gap-1.5"><span style={{ width: 10, height: 2, background: C.teal, display: "inline-block" }} />実績: <b className="mono">{yen(p.actual)}</b></div>}
+      {diff != null && <div className="mono" style={{ color: C.textMuted }}>差: <b style={{ color: diff >= 0 ? C.teal : C.rust }}>{diff >= 0 ? "+" : "-"}{yen(Math.abs(diff))}</b>（達成率 {((p.actual / p.plan) * 100).toFixed(1)}%）</div>}
+    </div>
+  );
+}
+function PlanVsActualSection({ planSeries, yen }) {
+  const points = useMemo(() => (planSeries ?? []).filter((p) => p.plan != null || p.actual != null), [planSeries]);
+  const ageByYear = useMemo(() => new Map(points.map((p) => [p.year, p.age])), [points]);
+  const lastActual = useMemo(() => [...points].reverse().find((p) => p.actual != null) ?? null, [points]);
+  // 目盛り：最初の年と5の倍数の年（54年分を全部並べると重なるため）
+  const ticks = useMemo(() => points.filter((p, i) => i === 0 || p.year % 5 === 0).map((p) => p.year), [points]);
+  const first = points[0], last = points[points.length - 1];
+  const diff = lastActual?.plan != null ? lastActual.actual - lastActual.plan : null;
+  return (
+    <div>
+      <div className="text-xs font-semibold mb-2">⑥ 将来の計画・実績{first && last ? `（${first.year}〜${last.year}年）` : ""}</div>
+      {points.length ? (
+        <>
+          <div className="flex items-center gap-3 mb-1 flex-wrap text-[10px]" style={{ color: C.textMuted }}>
+            <span className="flex items-center gap-1"><span style={{ width: 10, height: 2, background: C.teal, display: "inline-block" }} />実績（総資産・時点/年末）</span>
+            <span className="flex items-center gap-1"><span style={{ width: 10, height: 0, borderTop: `2px dashed ${C.amber}`, display: "inline-block" }} />計画（総資産・年末）</span>
+          </div>
+          <div style={{ width: "100%", height: 260 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={points} margin={{ top: 8, right: 12, bottom: 4, left: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={C.borderSoft} />
+                <XAxis dataKey="year" type="number" domain={[first.year, last.year]} ticks={ticks} height={30} tick={(props) => <PlanYearTick {...props} ageByYear={ageByYear} />} />
+                <YAxis tick={{ fontSize: 9, fill: C.textDim }} tickFormatter={fmtOkuMan} width={48} />
+                <Tooltip content={(props) => <PlanTooltipContent {...props} yen={yen} />} cursor={{ stroke: C.textDim, strokeWidth: 1 }} />
+                {lastActual && <ReferenceLine x={lastActual.year} stroke={C.textDim} strokeDasharray="2 3" label={{ value: "直近実績", position: "insideTopLeft", fill: C.textDim, fontSize: 9 }} />}
+                <Line type="monotone" dataKey="plan" name="計画" stroke={C.amber} strokeWidth={1.5} strokeDasharray="4 3" dot={false} isAnimationActive={false} connectNulls />
+                {/* 実績はnull（未入力の年）で線が途切れる＝入力済みの年まで描画する */}
+                <Line type="monotone" dataKey="actual" name="実績" stroke={C.teal} strokeWidth={2} dot={false} activeDot={{ r: 4, stroke: C.panel, strokeWidth: 2 }} isAnimationActive={false} connectNulls={false} />
+                {lastActual && <ReferenceDot x={lastActual.year} y={lastActual.actual} r={4} fill={C.teal} stroke={C.panel} strokeWidth={2} />}
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+          {lastActual && (
+            <div className="mono text-xs mt-2" style={{ color: C.textMuted }}>
+              直近実績（{lastActual.year}年{lastActual.age != null ? `・${lastActual.age}歳` : ""}）: 実績 <b style={{ color: C.text }}>{yen(lastActual.actual)}</b>
+              {lastActual.plan != null && <> ／ 計画 <b style={{ color: C.text }}>{yen(lastActual.plan)}</b>（差 <b style={{ color: diff >= 0 ? C.teal : C.rust }}>{diff >= 0 ? "+" : "-"}{yen(Math.abs(diff))}</b>・達成率 {((lastActual.actual / lastActual.plan) * 100).toFixed(1)}%）</>}
+            </div>
+          )}
+          <div className="text-[10px] mt-1" style={{ color: C.textDim }}>※横軸は年（下段の括弧内は年齢）。計画は投資収支xlsxの「総資産（年末）」、実績は「総資産（時点/年末）」を入力済みの年まで表示しています。</div>
+        </>
+      ) : <div className="text-xs" style={{ color: C.textDim }}>{planSeries ? "計画・実績のデータがありません。" : "計画・実績のデータがありません。投資収支xlsxを再アップロードすると表示されます（この機能の追加前に取り込んだデータには含まれていません）。"}</div>}
+    </div>
+  );
+}
+
 function computeBandDomain(dataMin, dataMax, bandStart, bandEnd) {
   let range = dataMax - dataMin;
   if (!(range > 0)) range = Math.max(Math.abs(dataMax), Math.abs(dataMin), 1) * 0.2 || 1;
@@ -5552,6 +5623,8 @@ function InvestmentPerformanceModalContent({ data, d, dQqq, onOpenUpload, onRese
           </>
         ) : <div className="text-xs" style={{ color: C.textDim }}>2026年1月以降のFIREトライアルのデータがありません。</div>}
       </div>
+
+      <PlanVsActualSection planSeries={data.planSeries} yen={yen} />
     </div>
   );
 }
