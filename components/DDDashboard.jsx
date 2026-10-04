@@ -2629,7 +2629,7 @@ function PortfolioPie({ view, holdings, onOpen, layout = "row", ownerDates = {} 
     <div onClick={onOpen} className={`h-full flex cursor-pointer ${isColumn ? "flex-col" : "items-center"}`} style={isColumn ? { padding: "6px 8px", gap: 6 } : { padding: "4px 6px", gap: 8 }}>
       <div className="relative shrink-0" style={isColumn ? { width: "100%", height: "64%" } : { width: 130, height: "92%" }}>
         <ResponsiveContainer width="100%" height="100%">
-          <PieChart><Pie data={data} dataKey="value" nameKey="name" startAngle={90} endAngle={-270} innerRadius="55%" outerRadius="88%" paddingAngle={2} stroke={C.panel} strokeWidth={2} isAnimationActive={false}>{data.map((d, i) => (<Cell key={i} fill={colorForView(view, d.name)} />))}</Pie><Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} formatter={(v, n) => [`¥${v.toLocaleString()}`, n]} /></PieChart>
+          <PieChart><Pie data={data} dataKey="value" nameKey="name" startAngle={90} endAngle={-270} innerRadius="55%" outerRadius="88%" paddingAngle={2} stroke={C.panel} strokeWidth={2} isAnimationActive={false}>{data.map((d, i) => (<Cell key={i} fill={colorForView(view, d.name)} />))}</Pie><Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} itemStyle={{ color: C.text }} labelStyle={{ color: C.textMuted }} formatter={(v, n) => [`¥${v.toLocaleString()}`, n]} /></PieChart>
         </ResponsiveContainer>
         <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none"><span className="text-[9px]" style={{ color: C.textDim }}>合計評価額</span><span className="mono text-xs font-bold">¥{Math.round(total / 10000).toLocaleString()}万</span></div>
       </div>
@@ -5237,22 +5237,24 @@ function AccountChangeCell({ change, value, yen, cellStyle }) {
 }
 // ④口座別内訳・⑦大和コネクト証券の銘柄別：名前・評価額・前月比・前年末比の表と合計行。
 // 列：名前｜評価額｜前月比の金額｜（%）｜前年末比の金額｜（%）。各列は最長の値の幅に揃え、金額は右揃え＋等幅数字。
-// showYearEnd=false のときは前年末比の列を出さない（口座開設初年など）。
-function ChangeTable({ rows, yen, showYearEnd = true }) {
+// showYearEnd=false のときは前年末比の列を出さない（口座開設初年など）。showShare のときは評価額の右に全体に占めるシェア（%）を出す。
+function ChangeTable({ rows, yen, showYearEnd = true, showShare = false }) {
   const sumOf = (key) => { const vs = rows.map((r) => r[key]).filter((v) => v != null); return vs.length ? vs.reduce((s, v) => s + v, 0) : null; };
   const total = rows.reduce((s, r) => s + r.value, 0);
   const head = { color: C.textDim, textAlign: "right" };
   const top = { borderTop: `1px solid ${C.borderSoft}`, paddingTop: 4 };
   return (
-    <div className="text-xs" style={{ maxWidth: "100%", overflowX: "auto", display: "grid", gridTemplateColumns: `max-content max-content ${showYearEnd ? "max-content max-content max-content max-content" : "max-content max-content"}`, columnGap: 6, rowGap: 4, alignItems: "center" }}>
+    <div className="text-xs" style={{ maxWidth: "100%", overflowX: "auto", overflowY: "hidden", paddingBottom: 2, display: "grid", gridTemplateColumns: `max-content max-content ${showShare ? "max-content " : ""}${showYearEnd ? "max-content max-content max-content max-content" : "max-content max-content"}`, columnGap: 6, rowGap: 4, alignItems: "center" }}>
       <span />
       <span className="text-[10px]" style={{ ...head, paddingLeft: 10 }}>評価額</span>
+      {showShare && <span className="text-[10px]" style={{ ...head, paddingRight: 10 }}>シェア</span>}
       <span className="text-[10px]" style={{ ...head, gridColumn: "span 2", textAlign: "center", paddingLeft: 10 }}>前月比</span>
       {showYearEnd && <span className="text-[10px]" style={{ ...head, gridColumn: "span 2", textAlign: "center", paddingLeft: 10 }}>前年末比</span>}
       {rows.map((r) => (
         <Fragment key={r.key}>
           <span className="flex items-center gap-1.5 whitespace-nowrap" style={{ paddingRight: 10 }} title={r.title ?? r.label}><span style={{ width: 8, height: 8, borderRadius: 2, background: r.color, display: "inline-block", flexShrink: 0 }} /><span className="truncate" style={{ maxWidth: 260 }}>{r.label}</span></span>
           <span className="mono whitespace-nowrap" style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", paddingRight: 10 }}>{yen(r.value)}</span>
+          {showShare && <span className="mono whitespace-nowrap" style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", paddingRight: 10, color: C.textMuted }}>{total > 0 ? `${((r.value / total) * 100).toFixed(1)}%` : "—"}</span>}
           <AccountChangeCell change={r.monthChange} value={r.value} yen={yen} />
           {showYearEnd && <AccountChangeCell change={r.yearEndChange} value={r.value} yen={yen} />}
         </Fragment>
@@ -5260,6 +5262,7 @@ function ChangeTable({ rows, yen, showYearEnd = true }) {
       {/* 合計行：評価額・前月比・前年末比をそれぞれ合算（値の無い行は除く） */}
       <span className="font-semibold" style={{ ...top, paddingLeft: 14 }}>合計</span>
       <span className="mono whitespace-nowrap font-semibold" style={{ ...top, textAlign: "right", fontVariantNumeric: "tabular-nums", paddingRight: 10 }}>{yen(total)}</span>
+      {showShare && <span className="mono whitespace-nowrap" style={{ ...top, textAlign: "right", fontVariantNumeric: "tabular-nums", paddingRight: 10, color: C.textMuted }}>100.0%</span>}
       <AccountChangeCell change={sumOf("monthChange")} value={total} yen={yen} cellStyle={top} />
       {showYearEnd && <AccountChangeCell change={sumOf("yearEndChange")} value={total} yen={yen} cellStyle={top} />}
     </div>
@@ -5468,10 +5471,10 @@ function BeginnerTrialSection({ data, holdings, holdingsAsOf, brokerHoldingHisto
           <div className="flex items-center gap-4 flex-wrap">
             <div style={{ width: 140, height: 140 }}>
               <ResponsiveContainer width="100%" height="100%">
-                <PieChart><Pie data={holdingRows} dataKey="value" nameKey="label" innerRadius="55%" outerRadius="88%" paddingAngle={2} stroke={C.panel} strokeWidth={2} isAnimationActive={false}>{holdingRows.map((r) => <Cell key={r.key} fill={r.color} />)}</Pie><Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} formatter={(v, n) => [yen(v), n]} /></PieChart>
+                <PieChart><Pie data={holdingRows} dataKey="value" nameKey="label" innerRadius="55%" outerRadius="88%" paddingAngle={2} stroke={C.panel} strokeWidth={2} isAnimationActive={false}>{holdingRows.map((r) => <Cell key={r.key} fill={r.color} />)}</Pie><Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} itemStyle={{ color: C.text }} labelStyle={{ color: C.textMuted }} formatter={(v, n) => [yen(v), n]} /></PieChart>
               </ResponsiveContainer>
             </div>
-            <ChangeTable rows={holdingRows} yen={yen} showYearEnd={showYearEnd} />
+            <ChangeTable rows={holdingRows} yen={yen} showYearEnd={showYearEnd} showShare />
           </div>
           <div className="text-[10px] mt-2" style={{ color: C.textDim }}>※銘柄ごとの前月比は、前の月に取り込んだスクショとの差です（前の月の取り込みが無い場合は「—」）。前年末比は口座開設初年のため2027年から表示します。</div>
         </>
@@ -5683,7 +5686,7 @@ function InvestmentPerformanceModalContent({ data, d, dQqq, holdings = [], holdi
           <div className="flex items-center gap-4 flex-wrap">
             <div style={{ width: 140, height: 140 }}>
               <ResponsiveContainer width="100%" height="100%">
-                <PieChart><Pie data={accountPieData} dataKey="value" nameKey="name" innerRadius="55%" outerRadius="88%" paddingAngle={2} stroke={C.panel} strokeWidth={2} isAnimationActive={false}>{accountPieData.map((p, i) => <Cell key={i} fill={INVESTMENT_ACCOUNT_COLORS[p.name] ?? C.textDim} />)}</Pie><Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} formatter={(v, n) => [yen(v), n]} /></PieChart>
+                <PieChart><Pie data={accountPieData} dataKey="value" nameKey="name" innerRadius="55%" outerRadius="88%" paddingAngle={2} stroke={C.panel} strokeWidth={2} isAnimationActive={false}>{accountPieData.map((p, i) => <Cell key={i} fill={INVESTMENT_ACCOUNT_COLORS[p.name] ?? C.textDim} />)}</Pie><Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} itemStyle={{ color: C.text }} labelStyle={{ color: C.textMuted }} formatter={(v, n) => [yen(v), n]} /></PieChart>
               </ResponsiveContainer>
             </div>
             {/* 前月比・前年末比はExcelの「前月比」「前年末比」列、無ければ口座別の時系列から算出（前年末に値が無い口座は0円との差） */}
