@@ -5229,7 +5229,8 @@ function AccountChangeCell({ change, value, yen }) {
   return (
     <span className="mono whitespace-nowrap" style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", color }}>
       {change > 0 ? "+" : change < 0 ? "-" : "±"}{yen(Math.abs(change))}
-      {pct != null && <span className="text-[10px] ml-1">({pct >= 0 ? "+" : ""}{pct.toFixed(1)}%)</span>}
+      {/* 比較時点の残高が0（今年から集計した口座の前年末など）は率を出せないため「-」 */}
+      <span className="text-[10px] ml-1">{pct != null ? `(${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%)` : "(-)"}</span>
     </span>
   );
 }
@@ -5574,6 +5575,21 @@ function InvestmentPerformanceModalContent({ data, d, dQqq, onOpenUpload, onRese
                   </Fragment>
                 );
               })}
+              {/* 合計行：評価額・前月比・前年末比をそれぞれ合算（値の無い口座は除く。前年末残高0の口座は現在額がそのまま前年末比に入る） */}
+              {(() => {
+                const changes = accountPieData.map((p) => accountChanges(data, p.name));
+                const sumOf = (key) => { const vs = changes.map((c) => c[key]).filter((v) => v != null); return vs.length ? vs.reduce((s, v) => s + v, 0) : null; };
+                const total = accountPieData.reduce((s, p) => s + p.value, 0);
+                const top = { borderTop: `1px solid ${C.borderSoft}`, paddingTop: 4 };
+                return (
+                  <>
+                    <span className="font-semibold" style={{ ...top, paddingLeft: 14 }}>合計</span>
+                    <span className="mono whitespace-nowrap font-semibold" style={{ ...top, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{yen(total)}</span>
+                    <span style={top} className="flex justify-end"><AccountChangeCell change={sumOf("monthChange")} value={total} yen={yen} /></span>
+                    <span style={top} className="flex justify-end"><AccountChangeCell change={sumOf("yearEndChange")} value={total} yen={yen} /></span>
+                  </>
+                );
+              })()}
             </div>
           </div>
         ) : <div className="text-xs" style={{ color: C.textDim }}>口座別データがありません。</div>}

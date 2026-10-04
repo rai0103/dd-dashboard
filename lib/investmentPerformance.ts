@@ -470,7 +470,7 @@ export function simulateMonthlyRebasedBenchmark(
 }
 
 // ④口座別内訳の前月比・前年末比。Excelに「前月比」「前年末比」列があればその値（accountRecentChange）を使い、無ければ口座別の時系列から算出する：
-// 前月比＝最新値−その1つ前の列の値、前年末比＝最新値−前年の最後の列（例：2025-12-31）の値。値が無い列は飛ばす。
+// 前月比＝最新値−その1つ前の列の値、前年末比＝最新値−前年の最後の列（例：2025-12-31）の値（前年末に値が無ければ0円）。値が無い列は飛ばす。
 export function accountChanges(data: Pick<InvestmentPerformanceData, "accountSeries" | "accountRecentChange">, label: string): { monthChange: number | null; yearEndChange: number | null } {
   const fromExcel = data.accountRecentChange?.[label] ?? { monthChange: null, yearEndChange: null };
   const pts = (data.accountSeries ?? []).filter((p) => p.accounts[label] != null).map((p) => ({ date: p.date, v: p.accounts[label] as number }));
@@ -479,8 +479,10 @@ export function accountChanges(data: Pick<InvestmentPerformanceData, "accountSer
   if (last) {
     const prev = pts[pts.length - 2];
     if (prev) monthChange = last.v - prev.v;
+    // 前年末に値が無い口座（今年開設・今年から集計＝前年末残高0）は、前年末を0円として現在の評価額をそのまま前年末比とする。
+    // 翌年以降は前年末の列に値があるため、他の口座と同じ計算になる。
     const prevYearEnd = [...pts].reverse().find((p) => p.date < `${last.date.slice(0, 4)}-01-01`);
-    if (prevYearEnd) yearEndChange = last.v - prevYearEnd.v;
+    yearEndChange = last.v - (prevYearEnd?.v ?? 0);
   }
   return { monthChange: fromExcel.monthChange ?? monthChange, yearEndChange: fromExcel.yearEndChange ?? yearEndChange };
 }
