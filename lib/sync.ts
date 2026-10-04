@@ -12,6 +12,7 @@ export const SYNC_KEYS = [
   "portfolio_holdings",
   "holdings_as_of",
   "broker_summaries",
+  "broker_holding_history",
   "classification_overrides",
   "category_default_ranks",
   "portfolio_checkpoints",

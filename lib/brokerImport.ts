@@ -353,3 +353,38 @@ export function profitChecks(rows: PreviewRow[], summary: ExtractionSummary | nu
   const mismatchedRows = inc.filter((r) => r.costBasis != null && r.unrealizedPl != null && rowValue(r) != null && Math.abs((rowValue(r) as number) - (r.costBasis as number) - (r.unrealizedPl as number)) > 1).map((r) => r.name);
   return { rowsPl, screenPl, diff: rowsPl != null && screenPl != null ? rowsPl - screenPl : null, mismatchedRows };
 }
+
+/* ---------------- 銘柄ごとの評価額の履歴（前月比・前年末比用） ---------------- */
+// 証券会社のスクショには前月比が無いため、取り込み（登録）のたびに銘柄ごとの評価額（円）を日付付きで保存しておき、
+// 以前の取り込みと比べて前月比・前年末比を出す。保存キー broker_holding_history：{ [broker.key]: HoldingSnapshot[] }（日付順）
+export type HoldingSnapshot = { date: string; items: Record<string, number> };
+export type HoldingHistory = Record<string, HoldingSnapshot[]>;
+const MAX_SNAPSHOTS = 60;
+
+// 同じ日付の取り込みは置き換える（1日に何度取り込み直しても1件）
+export function appendHoldingSnapshot(history: HoldingHistory | null | undefined, brokerKey: string, date: string, holdings: { name: string; amount: number }[]): HoldingHistory {
+  const items: Record<string, number> = {};
+  for (const h of holdings) items[h.name] = (items[h.name] ?? 0) + h.amount;
+  const list = (history?.[brokerKey] ?? []).filter((s) => s.date !== date);
+  list.push({ date, items });
+  list.sort((a, b) => a.date.localeCompare(b.date));
+  return { ...(history ?? {}), [brokerKey]: list.slice(-MAX_SNAPSHOTS) };
+}
+
+// 現在（asOf 時点）の銘柄ごとの前月比・前年末比。
+// 前月比＝asOf の月より前の月で最後の取り込みとの差、前年末比＝前年以前で最後の取り込みとの差。
+// 比較する取り込みが無ければ null。比較時点に無かった銘柄（新しく買った銘柄）は0円との差＝現在額。
+export function holdingChanges(history: HoldingHistory | null | undefined, brokerKey: string, asOf: string, current: { name: string; amount: number }[]): Record<string, { monthChange: number | null; yearEndChange: number | null }> {
+  const list = history?.[brokerKey] ?? [];
+  const monthStart = `${asOf.slice(0, 7)}-01`, yearStart = `${asOf.slice(0, 4)}-01-01`;
+  const lastBefore = (d: string) => [...list].reverse().find((s) => s.date < d) ?? null;
+  const prevMonth = lastBefore(monthStart), prevYear = lastBefore(yearStart);
+  const out: Record<string, { monthChange: number | null; yearEndChange: number | null }> = {};
+  for (const c of current) {
+    out[c.name] = {
+      monthChange: prevMonth ? c.amount - (prevMonth.items[c.name] ?? 0) : null,
+      yearEndChange: prevYear ? c.amount - (prevYear.items[c.name] ?? 0) : null,
+    };
+  }
+  return out;
+}

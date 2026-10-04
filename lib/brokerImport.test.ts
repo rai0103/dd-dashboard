@@ -220,3 +220,19 @@ test("大和コネクト証券：カテゴリー・クラスの初期値、資�
   assert.ok(!after.some((h) => h.name === "大和コネクト証券"));
   assert.deepEqual([...aggregateLabelsReplacedByBrokers(after)].sort(), ["moomoo証券", "大和コネクト証券"].sort());
 });
+
+test("銘柄ごとの履歴：同じ日は置き換え、前月比は前の月の最後の取込、前年末比は前年の最後の取込と比較", async () => {
+  const { appendHoldingSnapshot, holdingChanges } = await import("./brokerImport.ts");
+  let h = appendHoldingSnapshot(null, "daiwa", "2026-08-31", [{ name: "A", amount: 100 }, { name: "B", amount: 50 }]);
+  h = appendHoldingSnapshot(h, "daiwa", "2026-09-15", [{ name: "A", amount: 105 }]);
+  h = appendHoldingSnapshot(h, "daiwa", "2026-09-30", [{ name: "A", amount: 110 }, { name: "B", amount: 40 }]);
+  h = appendHoldingSnapshot(h, "daiwa", "2026-09-30", [{ name: "A", amount: 120 }, { name: "B", amount: 40 }, { name: "C", amount: 30 }]); // 取り込み直し
+  assert.deepEqual(h.daiwa.map((s) => s.date), ["2026-08-31", "2026-09-15", "2026-09-30"]);
+  const cur = [{ name: "A", amount: 120 }, { name: "B", amount: 40 }, { name: "C", amount: 30 }];
+  assert.deepEqual(holdingChanges(h, "daiwa", "2026-09-30", cur), {
+    A: { monthChange: 20, yearEndChange: null }, B: { monthChange: -10, yearEndChange: null }, C: { monthChange: 30, yearEndChange: null },
+  });
+  assert.deepEqual(holdingChanges(h, "daiwa", "2026-08-31", [{ name: "A", amount: 100 }]), { A: { monthChange: null, yearEndChange: null } });
+  // 翌年：前年末比は2026年の最後の取込（9/30）と比較
+  assert.deepEqual(holdingChanges(h, "daiwa", "2027-01-31", [{ name: "A", amount: 130 }]).A, { monthChange: 10, yearEndChange: 10 });
+});

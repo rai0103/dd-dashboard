@@ -44,3 +44,24 @@ test("ラベルが見つからなければ作成時点の行番号（88/90/107/1
   assert.equal(data.planSeries![0].plan, 30000000);
   assert.ok(data.errors.some((e) => e.includes("「総資産（年末）」の行が見つからなかったため、107行目")));
 });
+
+test("⑦初心者トライアル：「大和コネクト証券」セクション内の「私（元本）」「資産評価額」だけを読む", async () => {
+  const rows: unknown[][] = Array.from({ length: 60 }, () => []);
+  rows[0] = ["", "2025-12-31", "2026-01-31", "2026-02-28"];
+  rows[10] = ["moomoo証券"]; // 別セクション（同名ラベルを持つ）
+  rows[11] = ["私（元本）", 1, 2, 3];
+  rows[12] = ["資産評価額", 9, 9, 9];
+  rows[47] = ["大和コネクト証券"]; // セクション見出し（日付列にデータなし）
+  rows[48] = ["私（元本）", null, 400000, 450000];
+  rows[49] = ["資産評価額", null, 405000, 462000];
+  rows[52] = ["Coin Check"];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), "Sheet1");
+  const data = await parseInvestmentExcel(XLSX.write(wb, { type: "array", bookType: "xlsx" }) as ArrayBuffer, "x.xlsx");
+  assert.deepEqual(data.beginnerTrial, [
+    { date: "2025-12-31", principal: null, value: null },
+    { date: "2026-01-31", principal: 400000, value: 405000 },
+    { date: "2026-02-28", principal: 450000, value: 462000 },
+  ]);
+  assert.ok(!data.errors.some((e) => e.startsWith("⑦")), data.errors.join("\n"));
+});

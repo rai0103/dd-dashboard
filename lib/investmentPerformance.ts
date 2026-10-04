@@ -38,9 +38,16 @@ export interface InvestmentPlanPoint {
   plan: number | null; // 総資産（年末）＝計画
   actual: number | null; // 総資産（時点/年末）＝実績。入力済みの列まで（最初の空欄以降はnull）
 }
+// ⑦初心者トライアル：「大和コネクト証券」セクションの「私（元本）」「資産評価額」の月次推移。
+export interface BeginnerTrialPoint {
+  date: string;
+  principal: number | null;
+  value: number | null;
+}
 export interface InvestmentPerformanceData {
   series: InvestmentSeriesPoint[];
   planSeries?: InvestmentPlanPoint[]; // 古いバージョンで解析・保存したデータには無い（再アップロードで追加される）
+  beginnerTrial?: BeginnerTrialPoint[]; // ⑦初心者トライアル（大和コネクト証券の元本・資産評価額）。同上
   accountSeries: InvestmentAccountPoint[];
   accountRecentChange: Record<string, { monthChange: number | null; yearEndChange: number | null }>;
   monthlySeries: InvestmentMonthlyPoint[];
@@ -110,7 +117,7 @@ export async function parseInvestmentExcel(arrayBuffer: ArrayBuffer, fileName: s
   const sheet = wb.Sheets[sheetName];
   if (!sheet || !sheet["!ref"]) {
     errors.push("シートが空、またはデータが見つかりませんでした。");
-    return { series: [], planSeries: [], accountSeries: [], accountRecentChange: {}, monthlySeries: [], errors, sourceFileName: fileName, parsedAt: new Date().toISOString() };
+    return { series: [], planSeries: [], beginnerTrial: [], accountSeries: [], accountRecentChange: {}, monthlySeries: [], errors, sourceFileName: fileName, parsedAt: new Date().toISOString() };
   }
   const range = XLSX.utils.decode_range(sheet["!ref"]);
   const get = (r: number, c: number) => sheet[XLSX.utils.encode_cell({ r, c })];
@@ -306,7 +313,21 @@ export async function parseInvestmentExcel(arrayBuffer: ArrayBuffer, fileName: s
 
   const planSeries = extractPlanSeries(range, get, rowLabels, errors);
 
-  return { series, planSeries, accountSeries, accountRecentChange, monthlySeries, errors, sourceFileName: fileName, parsedAt: new Date().toISOString() };
+  // ⑦初心者トライアル：「大和コネクト証券」セクション内の「私（元本）」「資産評価額」の行（他セクションの同名行と混同しないようセクション内に限定）
+  const beginnerTrial: BeginnerTrialPoint[] = (() => {
+    const label = "大和コネクト証券";
+    const header = sectionHeaderRows.find((h) => normalizeLabel(h.label) === label);
+    if (!header) { errors.push(`⑦初心者トライアル：「${label}」セクションが見つかりませんでした。`); return []; }
+    const end = sectionHeaderRows.find((h) => h.row > header.row)?.row ?? range.e.r + 1;
+    const principalRow = findLabeledRowInRange("私（元本）", header.row + 1, end);
+    const valueRow = findLabeledRowInRange(ASSET_VALUE_ROW_LABEL, header.row + 1, end);
+    if (principalRow === null) errors.push(`⑦初心者トライアル：「${label}」セクション内に「私（元本）」の行が見つかりませんでした。`);
+    if (valueRow === null) errors.push(`⑦初心者トライアル：「${label}」セクション内に「資産評価額」の行が見つかりませんでした。`);
+    const pv = extractRowSeries(principalRow, parseNumericCell), vv = extractRowSeries(valueRow, parseNumericCell);
+    return dateCols.map(({ date }, i) => ({ date: ymd(date), principal: pv[i], value: vv[i] }));
+  })();
+
+  return { series, planSeries, beginnerTrial, accountSeries, accountRecentChange, monthlySeries, errors, sourceFileName: fileName, parsedAt: new Date().toISOString() };
 }
 
 // ⑥将来の計画・実績：「計 画」行（年）・「年齢」行・「総資産（年末）」行（計画）・「総資産（時点/年末）」行（実績）を読む。

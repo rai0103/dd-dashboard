@@ -6,7 +6,7 @@
 export type SyncData = Record<string, string>;
 
 // 項目（オブジェクトのキー）単位で3-wayマージするキー
-const MAP_KEYS = new Set(["holdings_as_of", "broker_summaries", "classification_overrides", "category_default_ranks", "fixed_positions"]);
+const MAP_KEYS = new Set(["holdings_as_of", "broker_summaries", "broker_holding_history", "classification_overrides", "category_default_ranks", "fixed_positions"]);
 // 日付ごとの配列を日付単位でマージするキー
 const DATE_SERIES_KEYS = new Set(["voo_price_history", "spy_voo_price_history"]);
 
