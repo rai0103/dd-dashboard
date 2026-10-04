@@ -8,7 +8,7 @@ import {
 import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Download, RefreshCw, Database, Trash2, Zap, Copy, FileText, Activity, Layers, ListChecks, Smartphone, Monitor, Wallet, Gauge } from "lucide-react";
 import { storage } from "@/lib/storage";
 import { pullSyncAndApply, pushSyncNow, scheduleSyncPush, getLastSyncedAt, onSyncMergedFromRemote } from "@/lib/sync";
-import { parseInvestmentExcel, computeOwnAssetDrawdown, computeBenchmarkCAGR, simulateDcaBenchmark, simulateLumpSumBenchmark } from "@/lib/investmentPerformance";
+import { parseInvestmentExcel, computeOwnAssetDrawdown, computeBenchmarkCAGR, simulateDcaBenchmark, simulateMonthlyRebasedBenchmark, accountChanges } from "@/lib/investmentPerformance";
 import { computeRealHoldingsRanking } from "@/lib/realHoldingsRanking";
 import { OWNER_RAKUTEN_SAKI, OWNER_RAKUTEN_SHIN, OWNER_MOOMOO, OWNER_OPTIONS, RAKUTEN_OWNERS, migrateHoldingsOwners, migrateAsOfKeys, detectRakutenOwnerFromFileName } from "@/lib/owners";
 import { BROKERS, brokerByKey, extractionToPreviewRows, previewRowsToHoldings, replaceBrokerHoldings, aggregateLabelsReplacedByBrokers, exposureCurrency, rowValue, reconcileWithAccountTotal, isPlausibleBrokerRate, guessBrokerRank, reconciliationTarget, sectionChecks, buildBrokerSummary, profitChecks } from "@/lib/brokerImport";
@@ -5220,6 +5220,19 @@ function InvestmentUploadModalContent({ existing, onSave, onClose }) {
 const INVESTMENT_ACCOUNT_COLORS = { "楽天証券（私＋妻）": C.teal, "moomoo証券": C.blue, "大和コネクト証券": C.violet, "Coin Check": C.amber, "iDeCo": "#7FA37A" };
 // 「日付」列か「H2計／年計」等の集計列かを、値がYYYY-MM-DD形式かどうかで判定する。
 function isFireDateCol(v) { return typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v); }
+// ④口座別内訳の前月比・前年末比：増減額と増減率（比較時点の評価額＝現在額−増減額に対する%）。増加は緑系、減少は赤系。
+function AccountChangeCell({ change, value, yen }) {
+  if (change == null) return <span className="mono" style={{ color: C.textDim, textAlign: "right" }}>—</span>;
+  const base = value - change;
+  const pct = base > 0 ? (change / base) * 100 : null;
+  const color = change > 0 ? C.teal : change < 0 ? C.rust : C.textMuted;
+  return (
+    <span className="mono whitespace-nowrap" style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", color }}>
+      {change > 0 ? "+" : change < 0 ? "-" : "±"}{yen(Math.abs(change))}
+      {pct != null && <span className="text-[10px] ml-1">({pct >= 0 ? "+" : ""}{pct.toFixed(1)}%)</span>}
+    </span>
+  );
+}
 // ⑤FIREトライアル用ツールチップ：月次列ではその月の総資産・当月パフォーマンス・取り崩し・超過収益をまとめて
 // 表示する（超過収益はグラフ上に系列として描画しないため、Rechartsの既定payloadではなく元データから直接参照
 // する）。半期計・年計の集計列（isSummaryCol）では、内訳を持たないため超過収益合計のみを表示する。
@@ -5239,20 +5252,25 @@ function FireTrialTooltipContent({ active, payload, label, yen }) {
     <div style={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 11, padding: 8, borderRadius: 4 }}>
       <div className="mono" style={{ marginBottom: 4, color: C.textMuted }}>{isFireDateCol(label) ? fmtDateSlash(label) : label}</div>
       <div>総資産: <b>{yen(p.totalAssets)}</b></div>
+      {p.spFullInvest != null && <div>SP500フルインベストメント: <b>{yen(p.spFullInvest)}</b>{p.totalAssets != null && <span style={{ color: p.totalAssets - p.spFullInvest >= 0 ? C.teal : C.rust }}>（実績{p.totalAssets - p.spFullInvest >= 0 ? "+" : "-"}{yen(Math.abs(p.totalAssets - p.spFullInvest))}）</span>}</div>}
+      {p.spBase != null && <div style={{ color: C.textDim }}>└ 前月の起点（総資産−取り崩し）: {yen(p.spBase)}</div>}
       <div>当月パフォーマンス: <b>{yen(p.monthPerformance)}</b></div>
       <div>取り崩し: <b>{yen(p.withdrawal)}</b></div>
       <div>超過収益: <b>{yen(p.excessReturn)}</b></div>
     </div>
   );
 }
-// H2計・年計の棒の上（プラス）／下（マイナス）に金額ラベルを直接添える。値がnull（月次列）の場合は何も描画しない。
+// H2計・年計の金額ラベル。棒と重ならないよう0の線の反対側に置く：プラス（上向きの棒）は棒の下、マイナス（下向きの棒）は棒の上。
+// 値がnull（月次列）の場合は何も描画しない。
 // stackId共有下ではRechartsのlabel描画に渡るvalueがスタック全体の累積値になってしまうため、propsのvalueは
 // 使わず、indexで元データ配列（data.summaryExcessReturn）を直接参照する（月次列ではnullなので確実にスキップできる）。
 function FireSummaryBarLabel({ x, y, width, height, index, data, yen }) {
   const value = data?.[index]?.summaryExcessReturn;
   if (value == null) return null;
   const isPos = value >= 0;
-  const labelY = isPos ? y - 6 : y + height + 12;
+  // Rechartsの棒は y が上端・y+height が下端。プラスの棒は下端が0の線、マイナスの棒は上端が0の線
+  const top = Math.min(y, y + height), bottom = Math.max(y, y + height);
+  const labelY = isPos ? bottom + 12 : top - 6;
   return (
     <text x={x + width / 2} y={labelY} textAnchor="middle" fontSize={10} fontFamily="monospace" fill={isPos ? C.teal : C.rust} fontWeight={700}>
       {isPos ? "+" : "-"}{yen(Math.abs(value))}
@@ -5365,42 +5383,21 @@ function InvestmentPerformanceModalContent({ data, d, dQqq, onOpenUpload, onRese
   const fireMonthly = useMemo(() => monthlySeriesAll.filter((p) =>
     p.date >= "2026-01-01" && (p.prevMonthTotal != null || p.monthPerformance != null || p.withdrawal != null || p.excessReturn != null)
   ), [monthlySeriesAll]);
-  // SP500フルインベストメント比較：表示開始月の前月末の総資産（＝表示開始月の「総資産（前月末/月初）」の値）を
-  // 初期投資元本として、その時点で全額SP500へ投資したとみなした場合の各月末評価額を計算する。
-  const fireSpFullInvestSim = useMemo(() => {
-    if (!fireMonthly.length) return null;
-    const initialPrincipal = fireMonthly[0].prevMonthTotal;
-    if (initialPrincipal == null) return null;
-    return simulateLumpSumBenchmark(d.FULL, parseDateOnly(fireMonthly[0].date), initialPrincipal, fireMonthly.map((p) => p.date));
-  }, [fireMonthly, d.FULL]);
+  // SP500フルインベストメント比較（実績と同じ取り崩し条件）：各月の起点＝「総資産（前月末/月初）」−「取り崩し」（6・12月はボーナス込み）
+  // をその月にSP500で運用した場合の月末評価額。月末評価額は同じ時点の実績＝翌月の列の「総資産（前月末/月初）」と並べて比較する。
+  const fireSpFullInvestSim = useMemo(() => (fireMonthly.length ? simulateMonthlyRebasedBenchmark(d.FULL, fireMonthly) : null), [fireMonthly, d.FULL]);
   const fireChartData = useMemo(() => {
-    const spMap = new Map((fireSpFullInvestSim ?? []).map((p) => [p.date, p.simulatedValue]));
+    const spMap = new Map((fireSpFullInvestSim ?? []).map((p) => [p.date, p]));
     return fireMonthly.map((p) => {
       const perf = p.monthPerformance;
-      const wAbs = p.withdrawal != null ? Math.abs(p.withdrawal) : null;
-      // 当月パフォーマンスと取り崩し（絶対値）が同符号（＝ともに0以上）の場合のみ重なりが生じる。取り崩しは常に
-      // 絶対値（0以上）で描画するため、実質的にはパフォーマンスが0以上かどうかで判定される。重なり区間は
-      // 「絶対値が小さい方まで」とし、はみ出た方だけを「パフォーマンスのみ」「取り崩しのみ」として積み上げる。
-      let performanceOnly = perf, withdrawalOnly = wAbs, overlapAmount = null;
-      if (perf != null && wAbs != null) {
-        if (perf >= 0) {
-          overlapAmount = Math.min(perf, wAbs);
-          performanceOnly = perf - overlapAmount;
-          withdrawalOnly = wAbs - overlapAmount;
-        } else {
-          overlapAmount = 0; // 符号が異なるため重ならない（パフォーマンスは下方向、取り崩しは上方向に別々に描画）
-        }
-      }
       return {
         date: p.date, totalAssets: p.prevMonthTotal, monthPerformance: perf,
-        // withdrawalはツールチップ表示用にExcelどおりの符号（マイナス）を保持し、グラフの棒描画にはwithdrawalAbs（絶対値）を使う。
-        withdrawal: p.withdrawal, withdrawalAbs: wAbs,
-        performanceOnly, withdrawalOnly, overlapAmount,
-        excessReturn: p.excessReturn, spFullInvest: spMap.get(p.date) ?? null,
+        withdrawal: p.withdrawal, // ツールチップ表示用（Excelどおりの符号）。グラフには描画しない
+        excessReturn: p.excessReturn, spFullInvest: spMap.get(p.date)?.simulatedValue ?? null, spBase: spMap.get(p.date)?.base ?? null,
       };
     });
   }, [fireMonthly, fireSpFullInvestSim]);
-  // 左軸（総資産の折れ線）はチャート上部の帯、右軸（当月パフォーマンス・取り崩しの棒）は下部の帯にだけ実データが
+  // 左軸（総資産の折れ線）はチャート上部の帯、右軸（当月パフォーマンス・半期計・年計の棒）は下部の帯にだけ実データが
   // 収まるよう、それぞれのdomainを実データ範囲より広く取る。これにより折れ線と棒グラフの描画帯が交差しなくなる。
   const fireLeftDomain = useMemo(() => {
     const vals = fireChartData.flatMap((p) => [p.totalAssets, p.spFullInvest]).filter((v) => v != null);
@@ -5435,8 +5432,7 @@ function InvestmentPerformanceModalContent({ data, d, dQqq, onOpenUpload, onRese
     if (!fireLatestSummary) return fireChartData;
     const summaryRow = (label, value) => ({
       date: label, isSummaryCol: true, totalAssets: null, spFullInvest: null,
-      monthPerformance: null, withdrawal: null, withdrawalAbs: null,
-      performanceOnly: null, withdrawalOnly: null, overlapAmount: null,
+      monthPerformance: null, withdrawal: null, spBase: null,
       excessReturn: null, summaryExcessReturn: value,
     });
     return [...fireChartData, summaryRow(fireLatestSummary.halfShortLabel, fireLatestSummary.halfTotal), summaryRow("年計", fireLatestSummary.yearTotal)];
@@ -5444,10 +5440,9 @@ function InvestmentPerformanceModalContent({ data, d, dQqq, onOpenUpload, onRese
   const fireRightDomain = useMemo(() => {
     let posMax = 0, negMin = 0;
     for (const p of fireChartData) {
-      const perf = p.monthPerformance, wAbs = p.withdrawalAbs;
-      if (perf != null && perf < 0) negMin = Math.min(negMin, perf);
-      const posExtent = perf != null && wAbs != null ? (perf >= 0 ? Math.max(perf, wAbs) : wAbs) : (wAbs ?? perf ?? 0);
-      if (posExtent != null) posMax = Math.max(posMax, posExtent);
+      const perf = p.monthPerformance;
+      if (perf == null) continue;
+      if (perf < 0) negMin = Math.min(negMin, perf); else posMax = Math.max(posMax, perf);
     }
     if (fireLatestSummary) {
       for (const v of [fireLatestSummary.halfTotal, fireLatestSummary.yearTotal]) {
@@ -5455,7 +5450,7 @@ function InvestmentPerformanceModalContent({ data, d, dQqq, onOpenUpload, onRese
         if (v >= 0) posMax = Math.max(posMax, v); else negMin = Math.min(negMin, v);
       }
     }
-    return computeBandDomain(negMin, posMax, 0.02, 0.42);
+    return computeBandDomain(negMin, posMax, 0.08, 0.42);
   }, [fireChartData, fireLatestSummary]);
 
   if (!data || !series.length) {
@@ -5561,14 +5556,24 @@ function InvestmentPerformanceModalContent({ data, d, dQqq, onOpenUpload, onRese
                 <PieChart><Pie data={accountPieData} dataKey="value" nameKey="name" innerRadius="55%" outerRadius="88%" paddingAngle={2} stroke={C.panel} strokeWidth={2} isAnimationActive={false}>{accountPieData.map((p, i) => <Cell key={i} fill={INVESTMENT_ACCOUNT_COLORS[p.name] ?? C.textDim} />)}</Pie><Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} formatter={(v, n) => [yen(v), n]} /></PieChart>
               </ResponsiveContainer>
             </div>
-            {/* ラベル列は最長ラベルの幅、金額列は最長金額の幅に揃える2列グリッド。金額は右揃え＋等幅数字で桁位置を上下で揃える。 */}
-            <div className="text-xs" style={{ display: "grid", gridTemplateColumns: "max-content max-content", columnGap: 20, rowGap: 4, alignItems: "center" }}>
-              {accountPieData.map((p) => (
-                <Fragment key={p.name}>
-                  <span className="flex items-center gap-1.5 whitespace-nowrap"><span style={{ width: 8, height: 8, borderRadius: 2, background: INVESTMENT_ACCOUNT_COLORS[p.name] ?? C.textDim, display: "inline-block", flexShrink: 0 }} />{p.name}</span>
-                  <span className="mono whitespace-nowrap" style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{yen(p.value)}</span>
-                </Fragment>
-              ))}
+            {/* 口座名・評価額・前月比・前年末比の4列グリッド。各列は最長の値の幅に揃え、金額は右揃え＋等幅数字で桁位置を上下で揃える。
+                前月比・前年末比はExcelの「前月比」「前年末比」列、無ければ口座別の時系列から算出（増加は緑系、減少は赤系）。 */}
+            <div className="text-xs" style={{ display: "grid", gridTemplateColumns: "max-content max-content max-content max-content", columnGap: 16, rowGap: 4, alignItems: "center" }}>
+              <span />
+              <span className="text-[10px]" style={{ color: C.textDim, textAlign: "right" }}>評価額</span>
+              <span className="text-[10px]" style={{ color: C.textDim, textAlign: "right" }}>前月比</span>
+              <span className="text-[10px]" style={{ color: C.textDim, textAlign: "right" }}>前年末比</span>
+              {accountPieData.map((p) => {
+                const ch = accountChanges(data, p.name);
+                return (
+                  <Fragment key={p.name}>
+                    <span className="flex items-center gap-1.5 whitespace-nowrap"><span style={{ width: 8, height: 8, borderRadius: 2, background: INVESTMENT_ACCOUNT_COLORS[p.name] ?? C.textDim, display: "inline-block", flexShrink: 0 }} />{p.name}</span>
+                    <span className="mono whitespace-nowrap" style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{yen(p.value)}</span>
+                    <AccountChangeCell change={ch.monthChange} value={p.value} yen={yen} />
+                    <AccountChangeCell change={ch.yearEndChange} value={p.value} yen={yen} />
+                  </Fragment>
+                );
+              })}
             </div>
           </div>
         ) : <div className="text-xs" style={{ color: C.textDim }}>口座別データがありません。</div>}
@@ -5582,8 +5587,6 @@ function InvestmentPerformanceModalContent({ data, d, dQqq, onOpenUpload, onRese
               <span className="flex items-center gap-1"><span style={{ width: 10, height: 2, background: C.teal, display: "inline-block" }} />FIREトライアル総資産（実績・左軸）</span>
               <span className="flex items-center gap-1"><span style={{ width: 10, height: 2, background: C.amber, display: "inline-block" }} />SP500フルインベストメント（比較・左軸）</span>
               <span className="flex items-center gap-1"><span style={{ width: 8, height: 8, background: C.teal, display: "inline-block" }} />当月パフォーマンス（右軸）</span>
-              <span className="flex items-center gap-1"><span style={{ width: 8, height: 8, background: C.rust, display: "inline-block" }} />取り崩し（絶対値・右軸）</span>
-              <span className="flex items-center gap-1"><span style={{ width: 8, height: 8, background: C.rustLight, display: "inline-block" }} />重なり区間</span>
               <span className="flex items-center gap-1"><span style={{ width: 8, height: 8, background: C.tealDeep, display: "inline-block" }} />半期計・年計（超過収益）</span>
             </div>
             <div style={{ width: "100%", height: 260 }}>
@@ -5598,11 +5601,8 @@ function InvestmentPerformanceModalContent({ data, d, dQqq, onOpenUpload, onRese
                   <YAxis yAxisId="right" orientation="right" domain={fireRightDomain} tick={{ fontSize: 9, fill: C.textDim }} tickFormatter={(v) => `${Math.round(v / 10000)}万`} />
                   <Tooltip content={(props) => <FireTrialTooltipContent {...props} yen={yen} />} />
                   <ReferenceLine yAxisId="right" y={0} stroke="#ffffff" strokeWidth={1} />
-                  {/* 当月パフォーマンスと取り崩しが重なる区間の色が意図しない混色にならないよう、半透明の重ね描画ではなく
-                      「パフォーマンスのみ」「重なり」「取り崩しのみ」の3値に分解したstacked Barとして描画する。 */}
-                  <Bar yAxisId="right" dataKey="overlapAmount" name="重なり区間" stackId="fire" fill={C.rustLight} isAnimationActive={false} />
-                  <Bar yAxisId="right" dataKey="performanceOnly" name="当月パフォーマンス" stackId="fire" fill={C.teal} isAnimationActive={false} />
-                  <Bar yAxisId="right" dataKey="withdrawalOnly" name="取り崩し（絶対値）" stackId="fire" fill={C.rust} isAnimationActive={false} />
+                  {/* 棒は当月パフォーマンスのみ（取り崩しは棒では表示せず、ツールチップに金額を出す） */}
+                  <Bar yAxisId="right" dataKey="monthPerformance" name="当月パフォーマンス" stackId="fire" fill={C.teal} isAnimationActive={false} />
                   {/* 半期計・年計：月次列ではnullのため何も描画されず、この2列にのみ超過収益合計の棒が立つ。同じstackIdに
                       乗せることで、月次の3分割棒と同じ幅・同じゼロラインから伸びる棒として描画される。プラス/マイナスで
                       色（teal系/rust系の深い色＝月次の色とは明度を変えて「集計値」と分かるようにする）を切り替え、
@@ -5617,7 +5617,8 @@ function InvestmentPerformanceModalContent({ data, d, dQqq, onOpenUpload, onRese
             </div>
             <div className="text-[10px] mt-2 space-y-0.5" style={{ color: C.textDim }}>
               <div>※FIREトライアルの総資産とは楽天証券口座のみを対象としています。</div>
-              <div>※取り崩しは毎月40万円です。</div>
+              <div>※取り崩しは毎月40万円です（グラフには表示せず、ツールチップに金額を表示しています）。</div>
+              <div>※SP500フルインベストメントは、各月の起点を「総資産（前月末/月初）−取り崩し（6・12月はボーナス込み）」とし、その月にSP500へ全額投資した場合の月末評価額です。同じ時点の実績（翌月の「総資産（前月末/月初）」）と並べて表示しています（最新月は比較する実績がまだ無いため表示しません）。</div>
               <div>※ボーナスは6月と12月に、超過収益（月次パフォーマンス－取り崩し40万円）の直近6カ月合計の10％を計上しています。</div>
             </div>
           </>

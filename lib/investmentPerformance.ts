@@ -439,3 +439,48 @@ export function simulateLumpSumBenchmark(
     return { date: dateStr, simulatedValue: price !== null ? Math.round(units * price) : null };
   });
 }
+
+// ⑤FIREトライアルのSP500フルインベストメント比較（実績と同じ取り崩し条件）。
+// 各月の起点＝「総資産（前月末/月初）」−「取り崩し（当月生活費/月初資金移動）」の絶対値（6・12月はボーナスが取り崩しに含まれるため
+// 同じ計算で自動的にボーナス控除後になる）。この起点額を月初（前月末）にSP500へ全額投資したとみなし、その月の月末評価額を求める。
+// 月末評価額は「翌月の列」の総資産（前月末/月初）＝同じ時点の実績と比べるため、翌月の列の日付で返す（最新月は比べる実績が無いため返さない）。
+// monthly は月末日付（YYYY-MM-DD）の列順。
+export interface MonthlyRebasedPoint {
+  date: string; // 表示する列（翌月の列）の日付
+  simulatedValue: number | null; // SP500で運用した場合の月末評価額
+  base: number; // 起点額（総資産（前月末/月初）−取り崩し）
+  month: string; // 運用した月の列の日付
+}
+export function simulateMonthlyRebasedBenchmark(
+  FULL: { date: Date; price: number }[],
+  monthly: { date: string; prevMonthTotal: number | null; withdrawal: number | null }[],
+): MonthlyRebasedPoint[] {
+  if (!FULL.length) return [];
+  const out: MonthlyRebasedPoint[] = [];
+  for (let i = 0; i + 1 < monthly.length; i++) {
+    const m = monthly[i];
+    if (m.prevMonthTotal == null) continue;
+    const base = m.prevMonthTotal - Math.abs(m.withdrawal ?? 0);
+    const end = parseIsoDate(m.date);
+    const start = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), 0)); // 前月末
+    const p0 = nearestPriceOnOrBefore(FULL, start), p1 = nearestPriceOnOrBefore(FULL, end);
+    out.push({ date: monthly[i + 1].date, month: m.date, base, simulatedValue: p0 && p1 ? Math.round((base * p1) / p0) : null });
+  }
+  return out;
+}
+
+// ④口座別内訳の前月比・前年末比。Excelに「前月比」「前年末比」列があればその値（accountRecentChange）を使い、無ければ口座別の時系列から算出する：
+// 前月比＝最新値−その1つ前の列の値、前年末比＝最新値−前年の最後の列（例：2025-12-31）の値。値が無い列は飛ばす。
+export function accountChanges(data: Pick<InvestmentPerformanceData, "accountSeries" | "accountRecentChange">, label: string): { monthChange: number | null; yearEndChange: number | null } {
+  const fromExcel = data.accountRecentChange?.[label] ?? { monthChange: null, yearEndChange: null };
+  const pts = (data.accountSeries ?? []).filter((p) => p.accounts[label] != null).map((p) => ({ date: p.date, v: p.accounts[label] as number }));
+  const last = pts[pts.length - 1];
+  let monthChange: number | null = null, yearEndChange: number | null = null;
+  if (last) {
+    const prev = pts[pts.length - 2];
+    if (prev) monthChange = last.v - prev.v;
+    const prevYearEnd = [...pts].reverse().find((p) => p.date < `${last.date.slice(0, 4)}-01-01`);
+    if (prevYearEnd) yearEndChange = last.v - prevYearEnd.v;
+  }
+  return { monthChange: fromExcel.monthChange ?? monthChange, yearEndChange: fromExcel.yearEndChange ?? yearEndChange };
+}
