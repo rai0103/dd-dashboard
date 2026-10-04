@@ -8,7 +8,7 @@ import {
 import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Download, RefreshCw, Database, Trash2, Zap, Copy, FileText, Activity, Layers, ListChecks, Smartphone, Monitor, Wallet, Gauge } from "lucide-react";
 import { storage } from "@/lib/storage";
 import { pullSyncAndApply, pushSyncNow, scheduleSyncPush, getLastSyncedAt, onSyncMergedFromRemote } from "@/lib/sync";
-import { parseInvestmentExcel, computeOwnAssetDrawdown, computeBenchmarkCAGR, simulateDcaBenchmark, simulateMonthlyRebasedBenchmark, accountChanges } from "@/lib/investmentPerformance";
+import { parseInvestmentExcel, computeOwnAssetDrawdown, computeBenchmarkCAGR, simulateDcaBenchmark, simulateMonthlyRebasedBenchmark, accountChanges, resolveBeginnerTrial, trialAxis } from "@/lib/investmentPerformance";
 import { computeRealHoldingsRanking } from "@/lib/realHoldingsRanking";
 import { OWNER_RAKUTEN_SAKI, OWNER_RAKUTEN_SHIN, OWNER_MOOMOO, OWNER_OPTIONS, RAKUTEN_OWNERS, migrateHoldingsOwners, migrateAsOfKeys, detectRakutenOwnerFromFileName } from "@/lib/owners";
 import { BROKERS, brokerByKey, extractionToPreviewRows, previewRowsToHoldings, replaceBrokerHoldings, aggregateLabelsReplacedByBrokers, exposureCurrency, rowValue, reconcileWithAccountTotal, isPlausibleBrokerRate, guessBrokerRank, reconciliationTarget, sectionChecks, buildBrokerSummary, profitChecks, appendHoldingSnapshot, holdingChanges } from "@/lib/brokerImport";
@@ -5387,24 +5387,34 @@ const BEGINNER_TRIAL = { start: "2026-01-01", goal: 10_000_000, brokerKey: "daiw
 // 銘柄の色：名前順で固定（評価額の順位が変わっても色が入れ替わらないように）
 const HOLDING_PALETTE = [C.teal, C.blue, C.violet, C.amber, "#7FA37A", "#BE7A63", "#C77FB0", "#4FA0A6", "#A3A24B", C.rust];
 const fmtYm = (iso) => { const [y, m] = String(iso).split("-").map(Number); return `${y}/${m}`; };
-function BeginnerTrialSection({ data, holdings, holdingsAsOf, brokerHoldingHistory, yen }) {
-  // 推移：Excelの「大和コネクト証券」セクションの元本・資産評価額。古いデータ（⑦追加前に取り込んだもの）は評価額だけ口座別内訳から補う
-  const points = useMemo(() => {
+function BeginnerTrialSection({ data, holdings, holdingsAsOf, brokerHoldingHistory, brokerSummaries, yen }) {
+  // 現在の保有銘柄（大和コネクト証券のスクショ取込）
+  const daiwaHoldings = useMemo(() => holdings.filter((h) => h.broker === BEGINNER_TRIAL.brokerKey && h.amount > 0), [holdings]);
+  const shotSummary = brokerSummaries[BEGINNER_TRIAL.brokerKey] ?? null;
+  const asOf = shotSummary?.asOf || holdingsAsOf[BEGINNER_TRIAL.owner] || (shotSummary ? localYMD(new Date(shotSummary.importedAt)) : localYMD());
+  // スクショ側の値：評価額＝保有銘柄の合計（円グラフと同じ）、元本＝評価額−評価損益（画面に評価損益が無ければ取得金額、どちらも無ければnull）
+  const shot = useMemo(() => {
+    if (!daiwaHoldings.length) return null;
+    const value = daiwaHoldings.reduce((s, h) => s + h.amount, 0);
+    const principal = shotSummary?.unrealizedPl != null ? value - shotSummary.unrealizedPl : (shotSummary?.costBasis ?? null);
+    return { asOf, importedAt: shotSummary?.importedAt ?? "", value, principal };
+  }, [daiwaHoldings, shotSummary, asOf]);
+  // 推移：Excelの「大和コネクト証券」セクションの元本・資産評価額（古いデータは評価額だけ口座別内訳から補う）に、
+  // スクショの方が新しい時点ならその値を当月分として反映（lib/investmentPerformance の resolveBeginnerTrial）
+  const resolved = useMemo(() => {
     const src = data.beginnerTrial?.length
       ? data.beginnerTrial
       : (data.accountSeries ?? []).map((p) => ({ date: p.date, principal: null, value: p.accounts[BEGINNER_TRIAL.accountLabel] ?? null }));
-    return src.filter((p) => p.date >= BEGINNER_TRIAL.start && (p.principal != null || p.value != null));
-  }, [data]);
-  const latest = [...points].reverse().find((p) => p.value != null) ?? null;
-  const latestPrincipal = [...points].reverse().find((p) => p.principal != null)?.principal ?? null;
-  const rate = latest ? (latest.value / BEGINNER_TRIAL.goal) * 100 : null;
-  // 縦軸：0〜目標（1,000万円）を250万円刻み。評価額が目標を超えたら目盛りを延ばす
-  const yTop = Math.ceil(Math.max(BEGINNER_TRIAL.goal, ...points.flatMap((p) => [p.value ?? 0, p.principal ?? 0])) / 2_500_000) * 2_500_000;
-  const yTicks = Array.from({ length: yTop / 2_500_000 + 1 }, (_, i) => i * 2_500_000);
-
-  // 現在の保有銘柄（スクショ取込）と、取り込み履歴からの前月比・前年末比。前年末比は口座開設初年（2026年）は出さず2027年から
-  const daiwaHoldings = useMemo(() => holdings.filter((h) => h.broker === BEGINNER_TRIAL.brokerKey && h.amount > 0), [holdings]);
-  const asOf = holdingsAsOf[BEGINNER_TRIAL.owner] || localYMD();
+    const excel = src.filter((p) => p.date >= BEGINNER_TRIAL.start && (p.principal != null || p.value != null));
+    return resolveBeginnerTrial(excel, data.parsedAt ?? null, shot);
+  }, [data, shot]);
+  const points = resolved.points;
+  const latest = resolved.latest;
+  const latestPrincipal = latest?.principal ?? [...points].reverse().find((p) => p.principal != null)?.principal ?? null;
+  const rate = latest?.value != null ? (latest.value / BEGINNER_TRIAL.goal) * 100 : null;
+  // 縦軸：元本・評価額の実データに合わせて自動。目標1,000万円は近づいたときだけ表示
+  const axis = useMemo(() => trialAxis(points.flatMap((p) => [p.value, p.principal]).filter((v) => v != null), BEGINNER_TRIAL.goal), [points]);
+  const sourceLabel = latest ? `${fmtDateSlash(latest.date)} 時点・${latest.source === "screenshot" ? "スクショ取込" : "投資収支xlsx"}` : "";
   const showYearEnd = Number(asOf.slice(0, 4)) >= 2027;
   const holdingRows = useMemo(() => {
     const changes = holdingChanges(brokerHoldingHistory, BEGINNER_TRIAL.brokerKey, asOf, daiwaHoldings);
@@ -5418,6 +5428,7 @@ function BeginnerTrialSection({ data, holdings, holdingsAsOf, brokerHoldingHisto
       <div className="text-[10px] mb-2" style={{ color: C.textDim }}>初期投資40万円・毎月5万円の積立（6月・12月はボーナスで各+20万円）／目標：評価額1,000万円</div>
       {points.length ? (
         <>
+          <div className="text-[10px] mb-1" style={{ color: C.textDim }}>最新値：{sourceLabel}{resolved.principalCarriedFrom ? `（元本は${fmtDateSlash(resolved.principalCarriedFrom)}時点の投資収支xlsxの値）` : ""}</div>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mono text-xs mb-2">
             <div className="rounded px-2 py-1.5" style={{ background: C.panel2 }}>評価額<div className="text-sm font-bold">{yen(latest?.value)}</div></div>
             <div className="rounded px-2 py-1.5" style={{ background: C.panel2 }}>元本<div className="text-sm font-bold">{yen(latestPrincipal)}</div></div>
@@ -5431,26 +5442,27 @@ function BeginnerTrialSection({ data, holdings, holdingsAsOf, brokerHoldingHisto
           <div className="flex items-center gap-3 mb-1 flex-wrap text-[10px]" style={{ color: C.textMuted }}>
             <span className="flex items-center gap-1"><span style={{ width: 10, height: 2, background: C.teal, display: "inline-block" }} />評価額</span>
             <span className="flex items-center gap-1"><span style={{ width: 10, height: 0, borderTop: `2px dashed ${C.amber}`, display: "inline-block" }} />元本</span>
-            <span className="flex items-center gap-1"><span style={{ width: 10, height: 0, borderTop: `1px dotted ${C.textMuted}`, display: "inline-block" }} />目標 1,000万円</span>
+            {axis.showGoal && <span className="flex items-center gap-1"><span style={{ width: 10, height: 0, borderTop: `1px dotted ${C.textMuted}`, display: "inline-block" }} />目標 1,000万円</span>}
           </div>
           <div style={{ width: "100%", height: 240 }}>
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={points} margin={{ top: 8, right: 12, bottom: 4, left: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={C.borderSoft} />
                 <XAxis dataKey="date" tick={{ fontSize: 9, fill: C.textDim }} tickFormatter={fmtYm} />
-                <YAxis domain={[0, yTop * 1.04]} ticks={yTicks} tick={{ fontSize: 9, fill: C.textDim }} tickFormatter={fmtOkuMan} width={48} />
+                <YAxis domain={axis.domain} ticks={axis.ticks} tick={{ fontSize: 9, fill: C.textDim }} tickFormatter={fmtOkuMan} width={48} />
                 <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 11 }} labelFormatter={(v) => fmtDateSlash(v)} formatter={(v, n) => [yen(v), n]} />
-                <ReferenceLine y={BEGINNER_TRIAL.goal} stroke={C.textMuted} strokeDasharray="2 3" label={{ value: `目標 1,000万円（達成率 ${rate != null ? rate.toFixed(1) : "—"}%）`, position: "insideTopLeft", fill: C.textMuted, fontSize: 10 }} />
+                {axis.showGoal && <ReferenceLine y={BEGINNER_TRIAL.goal} stroke={C.textMuted} strokeDasharray="2 3" label={{ value: `目標 1,000万円（達成率 ${rate != null ? rate.toFixed(1) : "—"}%）`, position: "insideTopLeft", fill: C.textMuted, fontSize: 10 }} />}
                 <Line type="monotone" dataKey="principal" name="元本" stroke={C.amber} strokeWidth={1.5} strokeDasharray="4 3" dot={false} isAnimationActive={false} connectNulls />
                 <Line type="monotone" dataKey="value" name="評価額" stroke={C.teal} strokeWidth={2} dot={false} activeDot={{ r: 4, stroke: C.panel, strokeWidth: 2 }} isAnimationActive={false} connectNulls />
               </LineChart>
             </ResponsiveContainer>
           </div>
+          <div className="text-[10px] mt-1" style={{ color: C.textDim }}>※縦軸は元本・評価額の範囲に合わせて自動で調整します。目標1,000万円のラインは評価額が近づくと表示されます。投資収支xlsxより新しい時点の大和コネクト証券のスクショを登録すると、その値を最新値（当月分）として表示します。</div>
           {!data.beginnerTrial && <div className="text-[10px] mt-1" style={{ color: C.amber }}>※元本の推移は、投資収支xlsxを再アップロードすると表示されます（この機能の追加前に取り込んだデータには含まれていません）。</div>}
         </>
       ) : <div className="text-xs" style={{ color: C.textDim }}>2026年1月以降の大和コネクト証券のデータがありません。</div>}
 
-      <div className="text-xs mt-4 mb-2" style={{ color: C.textMuted }}>大和コネクト証券の保有銘柄（{fmtDateSlash(asOf)} 時点）</div>
+      <div className="text-xs mt-4 mb-2" style={{ color: C.textMuted }}>大和コネクト証券の保有銘柄（{fmtDateSlash(asOf)} 時点・スクショ取込）</div>
       {holdingRows.length ? (
         <>
           <div className="flex items-center gap-4 flex-wrap">
@@ -5476,7 +5488,7 @@ function computeBandDomain(dataMin, dataMax, bandStart, bandEnd) {
   const domainMax = domainMin + span;
   return [domainMin, domainMax];
 }
-function InvestmentPerformanceModalContent({ data, d, dQqq, holdings = [], holdingsAsOf = {}, brokerHoldingHistory = {}, onOpenUpload, onReset }) {
+function InvestmentPerformanceModalContent({ data, d, dQqq, holdings = [], holdingsAsOf = {}, brokerHoldingHistory = {}, brokerSummaries = {}, onOpenUpload, onReset }) {
   const yen = (v) => (v == null ? "—" : `¥${Math.round(v).toLocaleString()}`);
   const series = data?.series ?? [];
   const latestTotalAssets = lastValidPoint(series, "totalAssets");
@@ -5728,7 +5740,7 @@ function InvestmentPerformanceModalContent({ data, d, dQqq, holdings = [], holdi
 
       <PlanVsActualSection planSeries={data.planSeries} yen={yen} />
 
-      <BeginnerTrialSection data={data} holdings={holdings} holdingsAsOf={holdingsAsOf} brokerHoldingHistory={brokerHoldingHistory} yen={yen} />
+      <BeginnerTrialSection data={data} holdings={holdings} holdingsAsOf={holdingsAsOf} brokerHoldingHistory={brokerHoldingHistory} brokerSummaries={brokerSummaries} yen={yen} />
     </div>
   );
 }
@@ -6294,7 +6306,7 @@ export default function DDDashboard() {
       {modal?.type === "ddTable" && <FullScreenModal title="DD毎のA〜E配分表" onClose={() => setModal(null)}><DDTableContent modelRow={d.modelRow} modelRows={d.trackRecord.dynamicModelRows} holdings={holdings} /></FullScreenModal>}
       {modal?.type === "modelDebug" && <FullScreenModal title="動的配分モデル デバッグビュー" onClose={() => setModal(null)}><ModelDebugContent d={d} dQqq={dQqq} qqqAmplification={qqqAmplification} /></FullScreenModal>}
       {modal?.type === "investmentUpload" && <FullScreenModal title="投資収支Excel アップロード" onClose={() => setModal(null)}><InvestmentUploadModalContent existing={investmentPerformance} onSave={handleSaveInvestmentPerformance} onClose={() => setModal(null)} /></FullScreenModal>}
-      {modal?.type === "investmentPerformance" && <FullScreenModal title="実績パフォーマンス" onClose={() => setModal(null)}><InvestmentPerformanceModalContent data={investmentPerformance} d={d} dQqq={dQqq} holdings={holdings} holdingsAsOf={holdingsAsOf} brokerHoldingHistory={brokerHoldingHistory} onOpenUpload={() => setModal({ type: "investmentUpload" })} onReset={() => { if (window.confirm("投資収支データを削除しますか？")) { handleResetInvestmentPerformance(); setModal(null); } }} /></FullScreenModal>}
+      {modal?.type === "investmentPerformance" && <FullScreenModal title="実績パフォーマンス" onClose={() => setModal(null)}><InvestmentPerformanceModalContent data={investmentPerformance} d={d} dQqq={dQqq} holdings={holdings} holdingsAsOf={holdingsAsOf} brokerHoldingHistory={brokerHoldingHistory} brokerSummaries={brokerSummaries} onOpenUpload={() => setModal({ type: "investmentUpload" })} onReset={() => { if (window.confirm("投資収支データを削除しますか？")) { handleResetInvestmentPerformance(); setModal(null); } }} /></FullScreenModal>}
       {modal?.type === "rank" && <FullScreenModal title={`${modal.rank}ランクの保有銘柄`} onClose={() => setModal(null)}><RankHoldingsContent rank={modal.rank} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
       {modal?.type === "crash" && <FullScreenModal title={`${crashDisplayName(modal.crash)}（${modal.crash.start} 〜）と現状の比較`} onClose={() => setModal(null)}><CrashModalContent crash={modal.crash} daysSinceATH={d.daysSinceATH} currentDD={d.currentDD} currentEpisodeCurve={d.currentEpisodeCurve} allCrashes={historicalCrashes} onJump={(c) => setModal({ type: "crash", crash: c })} /></FullScreenModal>}
       {modal?.type === "ddChart" && <FullScreenModal title={chartSourceTitle(chartSource)} onClose={() => setModal(null)}><DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} bothChartData={bothChartData} chartSource={chartSource} setChartSource={setChartSource} /></FullScreenModal>}

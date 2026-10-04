@@ -67,6 +67,8 @@ for (const [name, [value, qty, category, rank]] of Object.entries(EXPECTED)) {
 }
 if (rows.length !== 7) ng("行数", rows.length);
 if (j.extraction.account_total !== ASSET_TOTAL) ng("資産を見るの合計", j.extraction.account_total);
+console.log("評価損益（summary）:", j.extraction.summary?.unrealized_pl);
+if (j.extraction.summary?.unrealized_pl !== 163509) ng("評価損益の合計（資産を見る）", j.extraction.summary);
 const rec = lib.reconcileWithAccountTotal(rows, null, lib.reconciliationTarget(j.extraction));
 console.log(`資産を見る ¥${rec?.accountTotalJpy?.toLocaleString()} / 銘柄の合計 ¥${rec?.computedJpy?.toLocaleString()} / 差 ¥${rec?.diffJpy}`);
 for (const c of lib.sectionChecks(rows, j.extraction)) console.log(`  ${c.section}: 画面 ¥${c.screenTotal.toLocaleString()} / 銘柄 ¥${c.rowsTotal.toLocaleString()} / 差 ¥${c.diff}`);
@@ -76,5 +78,5 @@ if (errors.length) ng("登録エラー", errors);
 const saved = holdings.reduce((s, h) => s + h.amount, 0);
 console.log(`登録する保有資産 ${holdings.length}件・合計 ¥${saved.toLocaleString()}`);
 if (saved !== ASSET_TOTAL) ng("登録合計", saved);
-console.log(failed ? `FAILED (${failed})` : "OK: 7銘柄・正式名称・分類の初期値・資産を見るの合計（1,178,329円）がすべて一致");
+console.log(failed ? `FAILED (${failed})` : "OK: 7銘柄・正式名称・分類の初期値・資産を見るの合計（1,178,329円）・評価損益（163,509円）がすべて一致");
 process.exit(failed ? 1 : 0);

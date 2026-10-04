@@ -507,3 +507,56 @@ export function accountChanges(data: Pick<InvestmentPerformanceData, "accountSer
   }
   return { monthChange: fromExcel.monthChange ?? monthChange, yearEndChange: fromExcel.yearEndChange ?? yearEndChange };
 }
+
+// ⑦初心者トライアル：Excel（投資収支xlsx）とスクショ取込（大和コネクト証券の保有銘柄）のどちらを最新値として使うか。
+// 比べるのは「データの時点」：Excelは評価額が入っている最後の列の日付、スクショは取込の基準日（画面の日付、無ければ登録日）。
+// 時点が新しい方を優先し、同じ日付なら更新（アップロード・登録）日時が新しい方。
+// こうすることで、Excelを月初に更新した後に同じ月のスクショを登録すればスクショが優先され、翌月Excelに新しい月末の列が
+// 追加されれば自動的にExcelが優先に戻る（Excelを同じ内容で再アップロードしただけでは、より新しい時点のスクショを上書きしない）。
+// スクショを採用する場合は、その月の点を置き換え（無ければ追加）して、サマリーと折れ線グラフの両方に反映する。
+export interface TrialScreenshot {
+  asOf: string; // YYYY-MM-DD
+  importedAt: string; // ISO日時
+  value: number; // 保有銘柄の評価額合計
+  principal: number | null; // 評価額−評価損益（画面に評価損益が無ければnull）
+}
+export interface ResolvedTrial {
+  points: BeginnerTrialPoint[];
+  latest: { date: string; value: number | null; principal: number | null; source: "excel" | "screenshot" } | null;
+  principalCarriedFrom: string | null; // スクショに元本が無く、Excelの元本を引き継いだ場合はその日付
+}
+export function resolveBeginnerTrial(excelPoints: BeginnerTrialPoint[], excelUpdatedAt: string | null, shot: TrialScreenshot | null): ResolvedTrial {
+  const points = excelPoints.map((p) => ({ ...p }));
+  const excelLatest = [...points].reverse().find((p) => p.value != null) ?? null;
+  const shotWins = !!shot && (!excelLatest || shot.asOf > excelLatest.date || (shot.asOf === excelLatest.date && shot.importedAt > (excelUpdatedAt ?? "")));
+  if (!shot || !shotWins) {
+    return { points, latest: excelLatest ? { date: excelLatest.date, value: excelLatest.value, principal: excelLatest.principal, source: "excel" } : null, principalCarriedFrom: null };
+  }
+  const lastPrincipal = [...points].reverse().find((p) => p.principal != null && p.date <= shot.asOf) ?? null;
+  const principal = shot.principal ?? lastPrincipal?.principal ?? null;
+  const carried = shot.principal == null && lastPrincipal ? lastPrincipal.date : null;
+  const point = { date: shot.asOf, value: shot.value, principal };
+  const sameMonth = points.findIndex((p) => p.date.slice(0, 7) === shot.asOf.slice(0, 7));
+  if (sameMonth >= 0) points[sameMonth] = point;
+  else { points.push(point); points.sort((a, b) => a.date.localeCompare(b.date)); }
+  return { points, latest: { date: shot.asOf, value: shot.value, principal, source: "screenshot" }, principalCarriedFrom: carried };
+}
+
+// ⑦のグラフの縦軸：元本・評価額の実データの範囲に合わせた切りのよい目盛り。目標（1,000万円）は、データの上端から
+// 表示範囲の1.25倍以内に近づいたときだけ軸に含めてラインを出す（離れている間は出さない）。
+export function trialAxis(values: number[], goal: number): { domain: [number, number]; ticks: number[]; showGoal: boolean } {
+  const vs = values.filter((v) => Number.isFinite(v));
+  if (!vs.length) return { domain: [0, goal], ticks: [0, goal], showGoal: true };
+  let lo = Math.min(...vs), hi = Math.max(...vs);
+  const pad = Math.max((hi - lo) * 0.1, hi * 0.05, 1);
+  lo = Math.max(0, lo - pad); hi = hi + pad;
+  const showGoal = goal <= hi * 1.25;
+  if (showGoal) hi = Math.max(hi, goal * 1.03);
+  const raw = (hi - lo) / 4;
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw) ?? 10 * mag;
+  const start = Math.floor(lo / step) * step, end = Math.ceil(hi / step) * step;
+  const ticks: number[] = [];
+  for (let t = start; t <= end + step / 2; t += step) ticks.push(Math.round(t));
+  return { domain: [start, end], ticks, showGoal };
+}
