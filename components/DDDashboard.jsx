@@ -1735,13 +1735,15 @@ function comparisonYDomain(data) {
   const step = min > -10 ? 1 : min > -30 ? 5 : 10;
   return [Math.floor((min * 1.1) / step) * step - step, 1];
 }
-function buildComparisonData(currentEpisodeCurve, crashes) {
-  const maxDay = crashes.length ? Math.max(...crashes.map((c) => c.recoveryDay)) : Math.max(0, currentEpisodeCurve.length - 1);
+// qqqEpisodeCurve：Nasdaq（QQQ）自身の直近ATHを起点（day=0）とした現在局面のDD%推移（QQQ未取り込み時はnull）。
+function buildComparisonData(currentEpisodeCurve, crashes, qqqEpisodeCurve = null) {
+  const maxDay = crashes.length ? Math.max(...crashes.map((c) => c.recoveryDay)) : Math.max(0, currentEpisodeCurve.length - 1, (qqqEpisodeCurve?.length ?? 0) - 1);
   const rows = [];
   for (let d = 0; d <= maxDay; d++) {
     const row = { day: d };
     for (const c of crashes) row[c.id] = d < c.curve.length ? c.curve[d].dd : 0;
     row.current = d < currentEpisodeCurve.length ? currentEpisodeCurve[d].dd : undefined;
+    if (qqqEpisodeCurve) row.qqq = d < qqqEpisodeCurve.length ? qqqEpisodeCurve[d].dd : undefined;
     rows.push(row);
   }
   const step = Math.max(1, Math.ceil(rows.length / 320));
@@ -2223,7 +2225,8 @@ function DDChartModalContent({ chartData, rangeDays, d, hidden, toggle, period, 
               <YAxis domain={comparisonYDomain(comparisonData)} tick={{ fill: C.textDim, fontSize }} axisLine={false} tickLine={false} width={44} />
               <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} />
               {selectedCrash && !hiddenCrash[selectedCrash.id] && <Line type="monotone" dataKey={selectedCrash.id} stroke={C.rust} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls={false} name={crashDisplayName(selectedCrash)} />}
-              {!hiddenCrash.current && <Line type="monotone" dataKey="current" stroke={C.teal} strokeWidth={2.6} dot={false} isAnimationActive={false} connectNulls={false} name="現在" />}
+              {!hiddenCrash.current && <Line type="monotone" dataKey="current" stroke={C.teal} strokeWidth={2.6} dot={false} isAnimationActive={false} connectNulls={false} name="SP500（現在）" />}
+              {dQqq && !hiddenCrash.qqq && <Line type="monotone" dataKey="qqq" stroke={C.violet} strokeWidth={2.2} dot={false} isAnimationActive={false} connectNulls={false} name="Nasdaq（QQQ・現在）" />}
             </LineChart>
           </ResponsiveContainer>
         </div>
@@ -3106,11 +3109,13 @@ function RankHoldingsContent({ rank, holdings, onEditHolding, onDeleteHolding })
 // ResponsiveContainerの直接の子として渡す（widthValueがResponsiveContainerから自動注入される）。
 // メインの暴落＝赤、追加1＝白（細）、追加2＝グレー（細）、現在＝グリーン（通常表示のATH/評価額ラインと同色）。点線は使用しない。
 const COMPARE_COLORS = [C.white, C.gray];
-function CrashDetailChart({ crash, compareCrashes = [], daysSinceATH, currentDD, currentEpisodeCurve, annotationPoints, ddTicks, maxDay, width, height }) {
+// qqq：Nasdaq（QQQ）の現在局面（{ curve, daysSinceATH, currentDD }）。QQQ自身の直近ATHを起点（day=0）とし、非表示・未取り込み時はnull。
+function CrashDetailChart({ crash, compareCrashes = [], daysSinceATH, currentDD, currentEpisodeCurve, qqq = null, annotationPoints, ddTicks, maxDay, width, height }) {
   // ニュースの吹き出し表示中は標準Tooltip（経過日数のポップアップ）と重なるため非表示にする。
   const [newsHover, setNewsHover] = useState(false);
   const nameFor = (id) => {
-    if (id === "current") return "現在";
+    if (id === "current") return "SP500（現在）";
+    if (id === "qqq") return "Nasdaq（QQQ・現在）";
     if (id === crash.id) return crashDisplayName(crash);
     const found = compareCrashes.find((c) => c.id === id);
     return found ? crashDisplayName(found) : id;
@@ -3129,18 +3134,23 @@ function CrashDetailChart({ crash, compareCrashes = [], daysSinceATH, currentDD,
       {compareCrashes.map((c, i) => (
         <Line key={c.id} data={c.curve} dataKey="dd" type="monotone" stroke={COMPARE_COLORS[i] ?? C.gray} strokeWidth={0.8} dot={false} isAnimationActive={false} name={c.id} />
       ))}
+      {qqq && <Line data={qqq.curve} dataKey="dd" type="monotone" stroke={C.violet} strokeWidth={2.2} dot={false} isAnimationActive={false} connectNulls={false} name="qqq" />}
       <Line data={currentEpisodeCurve} dataKey="dd" type="monotone" stroke={C.teal} strokeWidth={2.6} dot={false} isAnimationActive={false} connectNulls={false} name="current" />
       <ReferenceDot x={crash.troughDay} y={crash.maxDD} r={4} fill={C.rust} stroke={C.bg} strokeWidth={2} />
       {compareCrashes.map((c, i) => (
         <ReferenceDot key={c.id} x={c.troughDay} y={c.maxDD} r={3.5} fill={COMPARE_COLORS[i] ?? C.gray} stroke={C.bg} strokeWidth={1.5} />
       ))}
+      {qqq && <ReferenceDot x={qqq.daysSinceATH} y={qqq.currentDD} r={4} fill={C.violet} stroke={C.bg} strokeWidth={2} />}
       <ReferenceDot x={daysSinceATH} y={currentDD} r={4.5} fill={C.teal} stroke={C.bg} strokeWidth={2} />
       {annotationPoints.length > 0 && <Customized component={<CrashEventMarkers points={annotationPoints} chartWidth={width} onHoverChange={setNewsHover} />} />}
     </LineChart>
   );
 }
-function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve, allCrashes, onJump }) {
+function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve, qqqCurrent = null, allCrashes, onJump }) {
   const [showDetail, setShowDetail] = useState(false);
+  // Nasdaq（QQQ）の現在局面：既定で表示し、追加1/追加2と同じプルダウンで「選択しない」にすると非表示にする。
+  const [qqqSelection, setQqqSelection] = useState("qqq");
+  const qqq = qqqCurrent && qqqSelection === "qqq" ? qqqCurrent : null;
   // 追加比較①②：メインの下落（crash・上部プルダウンで切替）とは別に、もう2つまで下落局面を選んで同時に重ね描きできるようにする。
   const [compareId1, setCompareId1] = useState("");
   const [compareId2, setCompareId2] = useState("");
@@ -3149,8 +3159,8 @@ function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve
   const compare1 = useMemo(() => (compareId1 && compareId1 !== crash.id ? allCrashes?.find((c) => c.id === compareId1) ?? null : null), [allCrashes, compareId1, crash.id]);
   const compare2 = useMemo(() => (compareId2 && compareId2 !== crash.id && compareId2 !== compareId1 ? allCrashes?.find((c) => c.id === compareId2) ?? null : null), [allCrashes, compareId2, crash.id, compareId1]);
   const compareCrashes = [compare1, compare2].filter(Boolean);
-  const maxDay = Math.max(crash.recoveryDay, daysSinceATH, ...compareCrashes.map((c) => c.recoveryDay));
-  const ddTicks = ddAxisTicksForMaxDrawdown(Math.min(crash.maxDD, ...compareCrashes.map((c) => c.maxDD)));
+  const maxDay = Math.max(crash.recoveryDay, daysSinceATH, ...compareCrashes.map((c) => c.recoveryDay), qqq ? qqq.daysSinceATH : 0);
+  const ddTicks = ddAxisTicksForMaxDrawdown(Math.min(crash.maxDD, ...compareCrashes.map((c) => c.maxDD), qqq ? Math.min(...qqq.curve.map((p) => p.dd)) : 0));
   const annotationPoints = useMemo(() => resolveCrashAnnotations(crash), [crash]);
   // メインの下落を切り替えたら詳細解説を閉じ、切替先と重複する比較選択はクリアする。
   useEffect(() => {
@@ -3220,18 +3230,34 @@ function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve
           </div>
           <div className="flex items-center gap-2 text-[11px]" style={{ color: C.textDim }}>
             <span style={{ width: 7, height: 7, borderRadius: 2, background: C.teal, flexShrink: 0 }} />
-            <span>現在（ATH更新から{daysSinceATH}日目・DD{currentDD.toFixed(1)}%）</span>
+            <span>SP500 現在（ATH更新から{daysSinceATH}日目・DD{currentDD.toFixed(1)}%）</span>
           </div>
+          {qqqCurrent && (
+            <div className="flex items-center gap-2 flex-wrap text-[11px]" style={{ color: C.textDim }}>
+              <span style={{ width: 7, height: 7, borderRadius: 2, background: C.violet, flexShrink: 0 }} />
+              <span style={{ minWidth: 60 }}>Nasdaq</span>
+              <select
+                value={qqqSelection}
+                onChange={(e) => setQqqSelection(e.target.value)}
+                className="rounded"
+                style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text, padding: "3px 6px", cursor: "pointer" }}
+              >
+                <option value="">選択しない</option>
+                <option value="qqq">Nasdaq（QQQ）現在の局面</option>
+              </select>
+              {qqq && <span className="mono" style={{ color: C.textMuted }}>QQQのATH更新から{qqq.daysSinceATH}日目・DD{qqq.currentDD.toFixed(1)}%</span>}
+            </div>
+          )}
         </div>
       )}
       <div style={{ height: 460 }} className="mb-2">
         <ResponsiveContainer width="100%" height="100%">
-          <CrashDetailChart crash={crash} compareCrashes={compareCrashes} daysSinceATH={daysSinceATH} currentDD={currentDD} currentEpisodeCurve={currentEpisodeCurve} annotationPoints={annotationPoints} ddTicks={ddTicks} maxDay={maxDay} />
+          <CrashDetailChart crash={crash} compareCrashes={compareCrashes} daysSinceATH={daysSinceATH} currentDD={currentDD} currentEpisodeCurve={currentEpisodeCurve} qqq={qqq} annotationPoints={annotationPoints} ddTicks={ddTicks} maxDay={maxDay} />
         </ResponsiveContainer>
       </div>
       {annotationPoints.length > 0 && <div className="text-[10px] mb-2" style={{ color: C.textDim }}>● にカーソルを合わせると当時の出来事を表示します。</div>}
       <div className="rounded px-4 py-2 mb-2 text-sm leading-relaxed" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }}>
-        <div>現在はATH更新から{daysSinceATH}日目でDD{currentDD.toFixed(1)}%。</div>
+        <div>現在はATH更新から{daysSinceATH}日目でDD{currentDD.toFixed(1)}%。{qqq && `Nasdaq（QQQ）はQQQのATH更新から${qqq.daysSinceATH}日目でDD${qqq.currentDD.toFixed(1)}%。`}</div>
         {[crash, ...compareCrashes].map((c) => {
           const { ddAtSameDay, isDeeper } = comparisonRow(c);
           return (
@@ -6225,7 +6251,7 @@ export default function DDDashboard() {
   const handleSelectCrash = (id) => { setCrashAutoFollow(false); setSelectedCrashId(id); };
   // データ未読込等でidが見つからない場合は先頭にフォールバック。
   const selectedCrash = useMemo(() => crashPool.find((c) => c.id === selectedCrashId) ?? historicalCrashes[0] ?? null, [crashPool, historicalCrashes, selectedCrashId]);
-  const comparisonData = useMemo(() => buildComparisonData(d.currentEpisodeCurve, selectedCrash ? [selectedCrash] : []), [d.currentEpisodeCurve, selectedCrash]);
+  const comparisonData = useMemo(() => buildComparisonData(d.currentEpisodeCurve, selectedCrash ? [selectedCrash] : [], dQqq?.currentEpisodeCurve ?? null), [d.currentEpisodeCurve, selectedCrash, dQqq]);
   const toggle = (k) => setHidden((p) => ({ ...p, [k]: !p[k] }));
   const toggleCrash = (k) => setHiddenCrash((p) => ({ ...p, [k]: !p[k] }));
 
@@ -6277,7 +6303,12 @@ export default function DDDashboard() {
     return { AB, Cb, DE };
   }, [currentHoldingPct, effectiveModelRow]);
 
-  const crashLegendItems = selectedCrash ? [{ key: selectedCrash.id, label: crashDisplayName(selectedCrash), color: C.rust }, { key: "current", label: "現在", color: C.teal }] : [];
+  // 暴落比較の凡例：類似暴落・SP500（現在）・Nasdaq（QQQ・現在）。既定はすべて表示で、凡例クリックで個別に表示/非表示を切り替える。
+  const crashLegendItems = selectedCrash ? [
+    { key: selectedCrash.id, label: crashDisplayName(selectedCrash), color: C.rust },
+    { key: "current", label: "SP500（現在）", color: C.teal },
+    ...(dQqq ? [{ key: "qqq", label: "Nasdaq（QQQ・現在）", color: C.violet }] : []),
+  ] : [];
   const analysisText = useMemo(() => buildAnalysisText(d, currentHoldingPct, holdingsTotal(combinedHoldings), dQqq, qqqAmplification), [d, currentHoldingPct, combinedHoldings, dQqq, qqqAmplification]);
   const checkpointResults = useMemo(() => {
     const total = holdingsTotal(holdings);
@@ -6311,7 +6342,7 @@ export default function DDDashboard() {
       {modal?.type === "investmentUpload" && <FullScreenModal title="投資収支Excel アップロード" onClose={() => setModal(null)}><InvestmentUploadModalContent existing={investmentPerformance} onSave={handleSaveInvestmentPerformance} onClose={() => setModal(null)} /></FullScreenModal>}
       {modal?.type === "investmentPerformance" && <FullScreenModal title="実績パフォーマンス" onClose={() => setModal(null)}><InvestmentPerformanceModalContent data={investmentPerformance} d={d} dQqq={dQqq} holdings={holdings} holdingsAsOf={holdingsAsOf} brokerHoldingHistory={brokerHoldingHistory} brokerSummaries={brokerSummaries} onOpenUpload={() => setModal({ type: "investmentUpload" })} onReset={() => { if (window.confirm("投資収支データを削除しますか？")) { handleResetInvestmentPerformance(); setModal(null); } }} /></FullScreenModal>}
       {modal?.type === "rank" && <FullScreenModal title={`${modal.rank}ランクの保有銘柄`} onClose={() => setModal(null)}><RankHoldingsContent rank={modal.rank} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
-      {modal?.type === "crash" && <FullScreenModal title={`${crashDisplayName(modal.crash)}（${modal.crash.start} 〜）と現状の比較`} onClose={() => setModal(null)}><CrashModalContent crash={modal.crash} daysSinceATH={d.daysSinceATH} currentDD={d.currentDD} currentEpisodeCurve={d.currentEpisodeCurve} allCrashes={historicalCrashes} onJump={(c) => setModal({ type: "crash", crash: c })} /></FullScreenModal>}
+      {modal?.type === "crash" && <FullScreenModal title={`${crashDisplayName(modal.crash)}（${modal.crash.start} 〜）と現状の比較`} onClose={() => setModal(null)}><CrashModalContent crash={modal.crash} daysSinceATH={d.daysSinceATH} currentDD={d.currentDD} currentEpisodeCurve={d.currentEpisodeCurve} qqqCurrent={dQqq ? { curve: dQqq.currentEpisodeCurve, daysSinceATH: dQqq.daysSinceATH, currentDD: dQqq.currentDD } : null} allCrashes={historicalCrashes} onJump={(c) => setModal({ type: "crash", crash: c })} /></FullScreenModal>}
       {modal?.type === "ddChart" && <FullScreenModal title={chartSourceTitle(chartSource)} onClose={() => setModal(null)}><DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} bothChartData={bothChartData} chartSource={chartSource} setChartSource={setChartSource} /></FullScreenModal>}
       {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} vooQqqSeries={vooQqqSeries} onAppendVooQqq={handleAppendVooQqq} onImportVooQqq={handleImportVooQqq} onResetVooQqqField={handleResetVooQqqField} virtualAggregateLabels={virtualAggregateLabels} onRegisterBrokerHoldings={handleRegisterBrokerHoldings} brokerSummaries={brokerSummaries} />}
       {modal?.type === "checkpointSettings" && <FullScreenModal title="チェックポイント設定" onClose={() => setModal(null)}><CheckpointSettingsContent checkpoints={checkpoints} onCheckpointChange={handleCheckpointChange} holdings={holdings} /></FullScreenModal>}
@@ -6465,7 +6496,8 @@ export default function DDDashboard() {
                           <YAxis domain={comparisonYDomain(comparisonData)} tick={{ fill: C.textDim, fontSize: 10 }} axisLine={false} tickLine={false} width={44} />
                           <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} />
                           {selectedCrash && !hiddenCrash[selectedCrash.id] && <Line type="monotone" dataKey={selectedCrash.id} stroke={C.rust} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls={false} name={crashDisplayName(selectedCrash)} />}
-                          {!hiddenCrash.current && <Line type="monotone" dataKey="current" stroke={C.teal} strokeWidth={2.6} dot={false} isAnimationActive={false} connectNulls={false} name="現在" />}
+                          {!hiddenCrash.current && <Line type="monotone" dataKey="current" stroke={C.teal} strokeWidth={2.6} dot={false} isAnimationActive={false} connectNulls={false} name="SP500（現在）" />}
+                          {dQqq && !hiddenCrash.qqq && <Line type="monotone" dataKey="qqq" stroke={C.violet} strokeWidth={2.2} dot={false} isAnimationActive={false} connectNulls={false} name="Nasdaq（QQQ・現在）" />}
                         </LineChart>
                       </ResponsiveContainer>
                     </div>
