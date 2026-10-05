@@ -2178,16 +2178,24 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBru
   );
 }
 // 評価額/DDチャートのタイトル文言（選択中のchartSourceに応じて切り替える）。
+// 対象（VOO/QQQ/GOLD）はヘッダーの切替ボタンで分かるため、タイトルは共通の「評価額/DD」とする。
 function chartSourceTitle(chartSource) {
-  if (chartSource === "qqq") return "QQQ 評価額（左軸） / DD%（右軸）";
   if (chartSource === "both") return "SP500（VOO）+ QQQ 評価額比較";
-  if (chartSource === "gold") return "GOLD（XAUUSD）価格（左軸） / DD%（右軸）";
-  return "評価額（左軸） / DD%（右軸）";
+  return "評価額/DD";
 }
-// SP500（VOO）とQQQのどちらの評価額/DDチャートを表示するかを切り替えるセレクタ。
+// 評価額/DDチャートの期間選択（ドロップダウン）。
+function PeriodSelect({ value, onChange, size = "sm" }) {
+  return (
+    <select value={value} onChange={(e) => onChange(e.target.value)} onClick={(e) => e.stopPropagation()} title="表示期間" className="mono rounded"
+      style={{ fontSize: size === "sm" ? 10 : 11, padding: size === "sm" ? "1px 4px" : "2px 6px", background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text, cursor: "pointer" }}>
+      {PERIODS.map((p) => (<option key={p.key} value={p.key}>{p.label}</option>))}
+    </select>
+  );
+}
+// VOO（SP500本系列）・QQQ・GOLDのどの評価額/DDチャートを表示するかを切り替えるセレクタ。
 // qqqAvailableがfalseの間はQQQ・両方のオプションを、goldAvailableがfalseの間はGOLDのオプションを無効化する（未取り込み時）。
 function ChartSourceToggle({ value, onChange, qqqAvailable, goldAvailable = false, size = "sm" }) {
-  const options = [{ key: "sp500", label: "SP500（VOO）" }, { key: "qqq", label: "QQQ" }, { key: "both", label: "両方" }, { key: "gold", label: "GOLD" }];
+  const options = [{ key: "sp500", label: "VOO" }, { key: "qqq", label: "QQQ" }, { key: "gold", label: "GOLD" }];
   const pad = size === "sm" ? "1.5px 6px" : "2px 8px";
   const fontSize = size === "sm" ? 10 : 11;
   return (
@@ -2274,16 +2282,16 @@ function DDChartModalContent({ chartData, rangeDays, d, hidden, toggle, period, 
     <div className="h-full flex flex-col">
       <div className="flex items-center gap-2 mb-1.5 flex-wrap">
         {hasCrashCompare && (
-          <div className="flex gap-0.5 mr-1">{[{ k: "normal", l: "通常表示" }, { k: "crash", l: "暴落比較" }].map((t) => (<button key={t.k} onClick={() => setChartTab(t.k)} className="text-[11px] px-2 py-1 rounded" style={{ color: chartTab === t.k ? C.bg : C.textMuted, background: chartTab === t.k ? C.amber : "transparent", fontWeight: chartTab === t.k ? 700 : 400 }}>{t.l}</button>))}</div>
+          <div className="flex gap-0.5 mr-1">{[{ k: "normal", l: "通常" }, { k: "crash", l: "暴落" }].map((t) => (<button key={t.k} onClick={() => setChartTab(t.k)} className="text-[11px] px-2 py-1 rounded" style={{ color: chartTab === t.k ? C.bg : C.textMuted, background: chartTab === t.k ? C.amber : "transparent", fontWeight: chartTab === t.k ? 700 : 400 }}>{t.l}</button>))}</div>
         )}
         {chartTab === "normal" || !hasCrashCompare ? (
           <>
             {isBothSource ? (
               <ClickLegend items={[{ key: "sp500Line", label: "SP500（VOO）", color: C.teal }, { key: "qqqLine", label: "QQQ", color: C.violet }]} hidden={hidden} onToggle={toggle} />
             ) : (
-              <ClickLegend items={[{ key: "price", label: "評価額 / ATH", color: C.teal }, { key: "dd", label: "DD%", color: C.rust }]} hidden={hidden} onToggle={toggle} />
+              <ClickLegend items={[{ key: "price", label: "評価額", color: C.teal }, { key: "dd", label: "DD%", color: C.rust }]} hidden={hidden} onToggle={toggle} />
             )}
-            <div className="flex gap-0.5">{PERIODS.map((p) => (<button key={p.key} onClick={() => setPeriod(p.key)} className="text-[11px] px-2 py-1 rounded" style={{ color: period === p.key ? C.bg : C.textMuted, background: period === p.key ? C.teal : "transparent", fontWeight: period === p.key ? 700 : 400 }}>{p.label}</button>))}</div>
+            <PeriodSelect value={period} onChange={setPeriod} size="md" />
             <ChartSourceToggle value={chartSource} onChange={setChartSource} qqqAvailable={!!dQqq} goldAvailable={!!goldView} />
           </>
         ) : (
@@ -2353,12 +2361,13 @@ function DepthGauge({ dd }) {
 }
 
 /* ---------------- atoms ---------------- */
-function Panel({ title, action, children, className = "", style, hideHeader = false }) {
+// compactHeader：ヘッダーの上下余白を詰めてチャート領域を広く取る（評価額/DDチャート用）
+function Panel({ title, action, children, className = "", style, hideHeader = false, compactHeader = false }) {
   return (
     <div className={`rounded-lg flex flex-col ${className}`} style={{ background: C.panel, border: `1px solid ${C.border}`, ...style }}>
       {!hideHeader && (
-        <div className="flex items-center justify-between px-4 py-2" style={{ borderBottom: `1px solid ${C.borderSoft}` }}>
-          <span className="text-xs font-medium tracking-wide" style={{ color: C.textMuted }}>{title}</span>
+        <div className={`flex items-center justify-between ${compactHeader ? "px-3 py-0.5 gap-2" : "px-4 py-2"}`} style={{ borderBottom: `1px solid ${C.borderSoft}` }}>
+          <span className={`text-xs font-medium tracking-wide${compactHeader ? " whitespace-nowrap" : ""}`} style={{ color: C.textMuted }}>{title}</span>
           {action}
         </div>
       )}
@@ -6012,7 +6021,7 @@ export default function DDDashboard() {
   const [pieView, setPieView] = useState("rank");
   const [modelOverride, setModelOverride] = useState(null); // null = 自動（現在の評価額に応じて選択）
   const [chartTab, setChartTab] = useState("normal");
-  const [chartSource, setChartSource] = useState("sp500"); // "sp500" | "qqq" | "both" | "gold"（評価額/DDチャートのソース切替）
+  const [chartSource, setChartSource] = useState("sp500"); // "sp500"（VOO）| "qqq" | "gold"（評価額/DDチャートのソース切替。旧「両方」(both)は廃止）
   const [selectedCrashId, setSelectedCrashId] = useState(null); // 「過去の暴落との比較」の選択。null中は自動選択（現在のDD推移に最も類似したイベント）に従う
   const [crashAutoFollow, setCrashAutoFollow] = useState(true); // trueの間は経過日数が進むたび自動で最類似イベントに追従。ユーザーが手動選択したらfalseにして固定する
   const [modal, setModal] = useState(null);
@@ -6675,19 +6684,20 @@ export default function DDDashboard() {
             <div style={{ minHeight: 0 }}>
               <Panel
                 title={(chartTab === "normal" || chartSource !== "sp500") ? chartSourceTitle(chartSource) : "過去の暴落との比較（経過日数ベース）"}
+                compactHeader
                 action={
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2">
                     {chartSource === "sp500" && (
-                      <div className="flex gap-0.5 mr-2">{[{ k: "normal", l: "通常表示" }, { k: "crash", l: "暴落比較" }].map((t) => (<button key={t.k} onClick={() => setChartTab(t.k)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: chartTab === t.k ? C.bg : C.textMuted, background: chartTab === t.k ? C.amber : "transparent", fontWeight: chartTab === t.k ? 700 : 400 }}>{t.l}</button>))}</div>
+                      <div className="flex gap-0.5 mr-1">{[{ k: "normal", l: "通常" }, { k: "crash", l: "暴落" }].map((t) => (<button key={t.k} onClick={() => setChartTab(t.k)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: chartTab === t.k ? C.bg : C.textMuted, background: chartTab === t.k ? C.amber : "transparent", fontWeight: chartTab === t.k ? 700 : 400 }}>{t.l}</button>))}</div>
                     )}
                     {(chartTab === "normal" || chartSource !== "sp500") ? (
                       <>
                         {chartSource === "both" ? (
                           <ClickLegend items={[{ key: "sp500Line", label: "SP500（VOO）", color: C.teal }, { key: "qqqLine", label: "QQQ", color: C.violet }]} hidden={hidden} onToggle={toggle} />
                         ) : (
-                          <ClickLegend items={[{ key: "price", label: "評価額 / ATH", color: C.teal }, { key: "dd", label: "DD%", color: C.rust }]} hidden={hidden} onToggle={toggle} />
+                          <ClickLegend items={[{ key: "price", label: "評価額", color: C.teal }, { key: "dd", label: "DD%", color: C.rust }]} hidden={hidden} onToggle={toggle} />
                         )}
-                        <div className="flex gap-0.5">{PERIODS.map((p) => (<button key={p.key} onClick={() => setPeriod(p.key)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: period === p.key ? C.bg : C.textMuted, background: period === p.key ? C.teal : "transparent", fontWeight: period === p.key ? 700 : 400 }}>{p.label}</button>))}</div>
+                        <PeriodSelect value={period} onChange={setPeriod} />
                         <ChartSourceToggle value={chartSource} onChange={setChartSource} qqqAvailable={!!dQqq} goldAvailable={!!goldView} />
                       </>
                     ) : (<ClickLegend items={crashLegendItems} hidden={hiddenCrash} onToggle={toggleCrash} />)}
