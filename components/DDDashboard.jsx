@@ -3274,7 +3274,10 @@ const COMPARE_COLORS = [C.white, C.gray];
 // qqq：選択した過去局面と同じ期間のNasdaq（QQQ）のDD%推移（buildQqqCrashCurveの戻り値＋crash）。非表示・データ範囲外の場合はnull。
 // gold：選択した過去局面と同じ期間のゴールドの騰落率（buildGoldCrashCurveの戻り値＋crash）。非表示・データ範囲外の場合はnull。
 // GOLDは補助的な参考情報として半透明の線で描き、価格（$）をDD%軸のさらに右の専用軸で読ませる。
-function CrashDetailChart({ crash, compareCrashes = [], daysSinceATH, currentDD, currentEpisodeCurve, qqq = null, gold = null, annotationPoints, ddTicks, maxDay, width, height }) {
+// hiddenLines：凡例の色見本クリックで非表示にした系列（main＝メインの暴落、current＝SP500現在。追加1/2・QQQ・GOLDは呼び出し側で除いて渡す）。
+// compareCrashesの各要素はlineColor（追加1＝白／追加2＝グレー）を持つ。
+function CrashDetailChart({ crash, compareCrashes = [], daysSinceATH, currentDD, currentEpisodeCurve, qqq = null, gold = null, hiddenLines = {}, annotationPoints, ddTicks, maxDay, width, height }) {
+  const showMain = !hiddenLines.main, showCurrent = !hiddenLines.current;
   // ニュースの吹き出し表示中は標準Tooltip（経過日数のポップアップ）と重なるため非表示にする。
   const [newsHover, setNewsHover] = useState(false);
   const nameFor = (id) => {
@@ -3294,27 +3297,39 @@ function CrashDetailChart({ crash, compareCrashes = [], daysSinceATH, currentDD,
       <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} formatter={(v, n) => [n === "gold" ? `$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 })}` : `${v}%`, nameFor(n)]} wrapperStyle={newsHover ? { visibility: "hidden" } : undefined} />
       <ReferenceLine y={-3} stroke={C.amber} strokeDasharray="4 3" strokeWidth={1.3} label={{ value: "-3%", position: "left", fill: C.amber, fontSize: 9 }} />
       <ReferenceLine y={-5} stroke={C.amber} strokeDasharray="4 3" strokeWidth={1.3} label={{ value: "-5%", position: "left", fill: C.amber, fontSize: 9 }} />
-      <ReferenceLine x={crash.troughDay} stroke={C.borderSoft} strokeDasharray="2 3" label={{ value: "底値", fill: C.textDim, fontSize: 9, position: "insideTopLeft" }} />
-      <ReferenceLine x={daysSinceATH} stroke={C.teal} strokeDasharray="2 3" label={{ value: "現在", fill: C.teal, fontSize: 9, position: "insideTopRight" }} />
-      <Line data={crash.curve} dataKey="dd" type="monotone" stroke={C.rust} strokeWidth={1.8} dot={false} isAnimationActive={false} name={crash.id} />
+      {showMain && <ReferenceLine x={crash.troughDay} stroke={C.borderSoft} strokeDasharray="2 3" label={{ value: "底値", fill: C.textDim, fontSize: 9, position: "insideTopLeft" }} />}
+      {showCurrent && <ReferenceLine x={daysSinceATH} stroke={C.teal} strokeDasharray="2 3" label={{ value: "現在", fill: C.teal, fontSize: 9, position: "insideTopRight" }} />}
+      {showMain && <Line data={crash.curve} dataKey="dd" type="monotone" stroke={C.rust} strokeWidth={1.8} dot={false} isAnimationActive={false} name={crash.id} />}
       {compareCrashes.map((c, i) => (
-        <Line key={c.id} data={c.curve} dataKey="dd" type="monotone" stroke={COMPARE_COLORS[i] ?? C.gray} strokeWidth={0.8} dot={false} isAnimationActive={false} name={c.id} />
+        <Line key={c.id} data={c.curve} dataKey="dd" type="monotone" stroke={c.lineColor ?? COMPARE_COLORS[i] ?? C.gray} strokeWidth={0.8} dot={false} isAnimationActive={false} name={c.id} />
       ))}
       {gold && <Line yAxisId="gold" data={gold.curve} dataKey="price" type="monotone" stroke={C.gold} strokeOpacity={GOLD_LINE_OPACITY} strokeWidth={1.6} dot={false} isAnimationActive={false} connectNulls={false} name="gold" />}
       {qqq && <Line data={qqq.curve} dataKey="dd" type="monotone" stroke={C.violet} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls={false} name="qqq" />}
-      <Line data={currentEpisodeCurve} dataKey="dd" type="monotone" stroke={C.teal} strokeWidth={2.6} dot={false} isAnimationActive={false} connectNulls={false} name="current" />
-      <ReferenceDot x={crash.troughDay} y={crash.maxDD} r={4} fill={C.rust} stroke={C.bg} strokeWidth={2} />
+      {showCurrent && <Line data={currentEpisodeCurve} dataKey="dd" type="monotone" stroke={C.teal} strokeWidth={2.6} dot={false} isAnimationActive={false} connectNulls={false} name="current" />}
+      {showMain && <ReferenceDot x={crash.troughDay} y={crash.maxDD} r={4} fill={C.rust} stroke={C.bg} strokeWidth={2} />}
       {compareCrashes.map((c, i) => (
-        <ReferenceDot key={c.id} x={c.troughDay} y={c.maxDD} r={3.5} fill={COMPARE_COLORS[i] ?? C.gray} stroke={C.bg} strokeWidth={1.5} />
+        <ReferenceDot key={c.id} x={c.troughDay} y={c.maxDD} r={3.5} fill={c.lineColor ?? COMPARE_COLORS[i] ?? C.gray} stroke={C.bg} strokeWidth={1.5} />
       ))}
       {qqq && <ReferenceDot x={qqq.troughDay} y={qqq.maxDD} r={3.5} fill={C.violet} stroke={C.bg} strokeWidth={1.5} />}
-      <ReferenceDot x={daysSinceATH} y={currentDD} r={4.5} fill={C.teal} stroke={C.bg} strokeWidth={2} />
-      {annotationPoints.length > 0 && <Customized component={<CrashEventMarkers points={annotationPoints} chartWidth={width} onHoverChange={setNewsHover} />} />}
+      {showCurrent && <ReferenceDot x={daysSinceATH} y={currentDD} r={4.5} fill={C.teal} stroke={C.bg} strokeWidth={2} />}
+      {showMain && annotationPoints.length > 0 && <Customized component={<CrashEventMarkers points={annotationPoints} chartWidth={width} onHoverChange={setNewsHover} />} />}
     </LineChart>
+  );
+}
+// 暴落の拡大画面の凡例の色見本。クリックでその系列の表示/非表示を切り替える（非表示中は枠線だけの□）。
+// disabled：プルダウンで「選択しない」になっていて切り替える線が無いとき。
+function LineSwatch({ color, hidden, onToggle, disabled = false }) {
+  return (
+    <button type="button" onClick={onToggle} disabled={disabled} title={disabled ? undefined : hidden ? "クリックで表示" : "クリックで非表示"} aria-pressed={!hidden}
+      style={{ width: 11, height: 11, borderRadius: 2, flexShrink: 0, padding: 0, background: hidden || disabled ? "transparent" : color, border: `1.5px solid ${color}`, opacity: disabled ? 0.35 : 1, cursor: disabled ? "default" : "pointer" }} />
   );
 }
 function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve, qqqFull = null, goldFull = null, allCrashes, onJump }) {
   const [showDetail, setShowDetail] = useState(false);
+  // 凡例の色見本クリックで非表示にした系列（main・compare1・compare2・current・qqq・gold）。プルダウンの選択は保ったまま線だけ隠す。
+  const [hiddenLines, setHiddenLines] = useState({});
+  const toggleLine = (key) => setHiddenLines((prev) => ({ ...prev, [key]: !prev[key] }));
+  const rowStyle = (key) => (hiddenLines[key] ? { opacity: 0.5 } : undefined);
   // Nasdaq（QQQ）：選択した過去局面（SP500のATH日〜回復日）と同じ期間のQQQのDD%推移を重ねる。
   // 既定はメインの暴落と同じ期間で、追加1/追加2と同じプルダウンで別の局面の期間や「選択しない」（非表示）を選べる。
   const [qqqCrashId, setQqqCrashId] = useState(crash.id);
@@ -3340,6 +3355,8 @@ function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve
   const compare1 = useMemo(() => (compareId1 && compareId1 !== crash.id ? allCrashes?.find((c) => c.id === compareId1) ?? null : null), [allCrashes, compareId1, crash.id]);
   const compare2 = useMemo(() => (compareId2 && compareId2 !== crash.id && compareId2 !== compareId1 ? allCrashes?.find((c) => c.id === compareId2) ?? null : null), [allCrashes, compareId2, crash.id, compareId1]);
   const compareCrashes = [compare1, compare2].filter(Boolean);
+  // チャートに描く追加1/2（色見本で非表示にしたものを除く）。追加1＝白・追加2＝グレーの色は、片方だけ選択中でも変わらないよう明示する。
+  const visibleCompares = [compare1 && !hiddenLines.compare1 && { ...compare1, lineColor: C.white }, compare2 && !hiddenLines.compare2 && { ...compare2, lineColor: C.gray }].filter(Boolean);
   const maxDay = Math.max(crash.recoveryDay, daysSinceATH, ...compareCrashes.map((c) => c.recoveryDay), qqq ? qqq.crash.recoveryDay : 0, gold ? gold.crash.recoveryDay : 0);
   const ddTicks = ddAxisTicksForMaxDrawdown(Math.min(crash.maxDD, ...compareCrashes.map((c) => c.maxDD), qqq ? qqq.maxDD : 0)); // GOLDは専用の右軸のため含めない
   const annotationPoints = useMemo(() => resolveCrashAnnotations(crash), [crash]);
@@ -3369,8 +3386,8 @@ function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve
       {allCrashes && allCrashes.length > 1 && (
         <div className="flex flex-col gap-1 mb-2">
           <div className="flex items-center gap-2 flex-wrap text-[11px]" style={{ color: C.textDim }}>
-            <span style={{ width: 7, height: 7, borderRadius: 2, background: C.rust, flexShrink: 0 }} />
-            <span style={{ minWidth: 60 }}>メインの暴落</span>
+            <LineSwatch color={C.rust} hidden={!!hiddenLines.main} onToggle={() => toggleLine("main")} />
+            <span style={{ minWidth: 60, ...rowStyle("main") }}>メインの暴落</span>
             <select
               value={crash.id}
               onChange={(e) => { const next = allCrashes.find((c) => c.id === e.target.value); if (next) onJump(next); }}
@@ -3382,8 +3399,8 @@ function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve
             <span className="mono" style={{ color: C.textMuted }}>{summaryLine(crash)}</span>
           </div>
           <div className="flex items-center gap-2 flex-wrap text-[11px]" style={{ color: C.textDim }}>
-            <span style={{ width: 7, height: 7, borderRadius: 2, background: C.white, flexShrink: 0 }} />
-            <span style={{ minWidth: 60 }}>追加1</span>
+            <LineSwatch color={C.white} hidden={!!hiddenLines.compare1} onToggle={() => toggleLine("compare1")} disabled={!compare1} />
+            <span style={{ minWidth: 60, ...rowStyle("compare1") }}>追加1</span>
             <select
               value={compareId1}
               onChange={(e) => setCompareId1(e.target.value)}
@@ -3397,8 +3414,8 @@ function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve
             {compare1 && <span className="mono" style={{ color: C.textMuted }}>{summaryLine(compare1)}</span>}
           </div>
           <div className="flex items-center gap-2 flex-wrap text-[11px]" style={{ color: C.textDim }}>
-            <span style={{ width: 7, height: 7, borderRadius: 2, background: C.gray, flexShrink: 0 }} />
-            <span style={{ minWidth: 60 }}>追加2</span>
+            <LineSwatch color={C.gray} hidden={!!hiddenLines.compare2} onToggle={() => toggleLine("compare2")} disabled={!compare2} />
+            <span style={{ minWidth: 60, ...rowStyle("compare2") }}>追加2</span>
             <select
               value={compareId2}
               onChange={(e) => setCompareId2(e.target.value)}
@@ -3412,13 +3429,13 @@ function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve
             {compare2 && <span className="mono" style={{ color: C.textMuted }}>{summaryLine(compare2)}</span>}
           </div>
           <div className="flex items-center gap-2 text-[11px]" style={{ color: C.textDim }}>
-            <span style={{ width: 7, height: 7, borderRadius: 2, background: C.teal, flexShrink: 0 }} />
-            <span>SP500 現在（ATH更新から{daysSinceATH}日目・DD{currentDD.toFixed(1)}%）</span>
+            <LineSwatch color={C.teal} hidden={!!hiddenLines.current} onToggle={() => toggleLine("current")} />
+            <span style={rowStyle("current")}>SP500 現在（ATH更新から{daysSinceATH}日目・DD{currentDD.toFixed(1)}%）</span>
           </div>
           {qqqFull?.length > 0 && (
             <div className="flex items-center gap-2 flex-wrap text-[11px]" style={{ color: C.textDim }}>
-              <span style={{ width: 7, height: 7, borderRadius: 2, background: C.violet, flexShrink: 0 }} />
-              <span style={{ minWidth: 60 }}>Nasdaq</span>
+              <LineSwatch color={C.violet} hidden={!!hiddenLines.qqq} onToggle={() => toggleLine("qqq")} disabled={!qqq} />
+              <span style={{ minWidth: 60, ...rowStyle("qqq") }}>Nasdaq</span>
               <select
                 value={qqq ? qqqCrashId : ""}
                 onChange={(e) => setQqqCrashId(e.target.value)}
@@ -3435,8 +3452,8 @@ function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve
           )}
           {goldFull?.length > 0 && (
             <div className="flex items-center gap-2 flex-wrap text-[11px]" style={{ color: C.textDim }}>
-              <span style={{ width: 7, height: 7, borderRadius: 2, background: C.gold, flexShrink: 0 }} />
-              <span style={{ minWidth: 60 }}>GOLD</span>
+              <LineSwatch color={C.gold} hidden={!!hiddenLines.gold} onToggle={() => toggleLine("gold")} disabled={!gold} />
+              <span style={{ minWidth: 60, ...rowStyle("gold") }}>GOLD</span>
               <select
                 value={gold ? goldCrashId : ""}
                 onChange={(e) => setGoldCrashId(e.target.value)}
@@ -3455,7 +3472,7 @@ function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve
       )}
       <div style={{ height: 460 }} className="mb-2">
         <ResponsiveContainer width="100%" height="100%">
-          <CrashDetailChart crash={crash} compareCrashes={compareCrashes} daysSinceATH={daysSinceATH} currentDD={currentDD} currentEpisodeCurve={currentEpisodeCurve} qqq={qqq} gold={gold} annotationPoints={annotationPoints} ddTicks={ddTicks} maxDay={maxDay} />
+          <CrashDetailChart crash={crash} compareCrashes={visibleCompares} daysSinceATH={daysSinceATH} currentDD={currentDD} currentEpisodeCurve={currentEpisodeCurve} qqq={hiddenLines.qqq ? null : qqq} gold={hiddenLines.gold ? null : gold} hiddenLines={hiddenLines} annotationPoints={annotationPoints} ddTicks={ddTicks} maxDay={maxDay} />
         </ResponsiveContainer>
       </div>
       {annotationPoints.length > 0 && <div className="text-[10px] mb-2" style={{ color: C.textDim }}>● にカーソルを合わせると当時の出来事を表示します。</div>}
