@@ -1735,9 +1735,27 @@ function comparisonYDomain(data) {
   const step = min > -10 ? 1 : min > -30 ? 5 : 10;
   return [Math.floor((min * 1.1) / step) * step - step, 1];
 }
-// qqqEpisodeCurve：Nasdaq（QQQ）自身の直近ATHを起点（day=0）とした現在局面のDD%推移（QQQ未取り込み時はnull）。
-function buildComparisonData(currentEpisodeCurve, crashes, qqqEpisodeCurve = null) {
-  const maxDay = crashes.length ? Math.max(...crashes.map((c) => c.recoveryDay)) : Math.max(0, currentEpisodeCurve.length - 1, (qqqEpisodeCurve?.length ?? 0) - 1);
+// SP500の過去局面（crash：SP500のATH日〜ATH回復日）と同じ日付区間における、Nasdaq（QQQ）のDD%推移を求める。
+// 局面ごとに比較できるよう、DDの基準はQQQ自身の過去最高値ではなく「SP500のATH日（day=0）以降のQQQの高値」とする（day=0で0%）。
+// SP500の営業日（crash.curveの各日付）に揃え、QQQ側に終値が無い日は直前の終値を引き継ぐ。
+// QQQの日次終値が局面の開始日をカバーしていない（QQQデータ開始より前の局面）場合はnull。
+function buildQqqCrashCurve(crash, qqqFull) {
+  if (!crash?.curve?.length || !qqqFull?.length || qqqFull[0].date > crash.curve[0].date) return null;
+  let j = 0, price = null, high = 0, minDD = 0;
+  const curve = crash.curve.map((pt) => {
+    while (j < qqqFull.length && qqqFull[j].date <= pt.date) { price = qqqFull[j].price; j++; }
+    high = Math.max(high, price);
+    const dd = Number((((price / high) - 1) * 100).toFixed(2));
+    minDD = Math.min(minDD, dd);
+    return { day: pt.day, dd, date: pt.date };
+  });
+  const troughDay = curve.find((pt) => pt.dd === minDD).day;
+  return { curve, maxDD: Number(minDD.toFixed(1)), troughDay };
+}
+// qqqCrashCurve：表示中の過去局面と同じ期間のNasdaq（QQQ）のDD%推移（buildQqqCrashCurveの戻り値。データ範囲外・未取り込み時はnull）。
+function buildComparisonData(currentEpisodeCurve, crashes, qqqCrashCurve = null) {
+  const maxDay = crashes.length ? Math.max(...crashes.map((c) => c.recoveryDay)) : Math.max(0, currentEpisodeCurve.length - 1);
+  const qqqEpisodeCurve = qqqCrashCurve?.curve ?? null;
   const rows = [];
   for (let d = 0; d <= maxDay; d++) {
     const row = { day: d };
@@ -2226,7 +2244,7 @@ function DDChartModalContent({ chartData, rangeDays, d, hidden, toggle, period, 
               <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} />
               {selectedCrash && !hiddenCrash[selectedCrash.id] && <Line type="monotone" dataKey={selectedCrash.id} stroke={C.rust} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls={false} name={crashDisplayName(selectedCrash)} />}
               {!hiddenCrash.current && <Line type="monotone" dataKey="current" stroke={C.teal} strokeWidth={2.6} dot={false} isAnimationActive={false} connectNulls={false} name="SP500（現在）" />}
-              {dQqq && !hiddenCrash.qqq && <Line type="monotone" dataKey="qqq" stroke={C.violet} strokeWidth={2.2} dot={false} isAnimationActive={false} connectNulls={false} name="Nasdaq（QQQ・現在）" />}
+              {comparisonData[0]?.qqq !== undefined && !hiddenCrash.qqq && <Line type="monotone" dataKey="qqq" stroke={C.violet} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls={false} name="Nasdaq（QQQ・同期間）" />}
             </LineChart>
           </ResponsiveContainer>
         </div>
@@ -3109,13 +3127,13 @@ function RankHoldingsContent({ rank, holdings, onEditHolding, onDeleteHolding })
 // ResponsiveContainerの直接の子として渡す（widthValueがResponsiveContainerから自動注入される）。
 // メインの暴落＝赤、追加1＝白（細）、追加2＝グレー（細）、現在＝グリーン（通常表示のATH/評価額ラインと同色）。点線は使用しない。
 const COMPARE_COLORS = [C.white, C.gray];
-// qqq：Nasdaq（QQQ）の現在局面（{ curve, daysSinceATH, currentDD }）。QQQ自身の直近ATHを起点（day=0）とし、非表示・未取り込み時はnull。
+// qqq：選択した過去局面と同じ期間のNasdaq（QQQ）のDD%推移（buildQqqCrashCurveの戻り値＋crash）。非表示・データ範囲外の場合はnull。
 function CrashDetailChart({ crash, compareCrashes = [], daysSinceATH, currentDD, currentEpisodeCurve, qqq = null, annotationPoints, ddTicks, maxDay, width, height }) {
   // ニュースの吹き出し表示中は標準Tooltip（経過日数のポップアップ）と重なるため非表示にする。
   const [newsHover, setNewsHover] = useState(false);
   const nameFor = (id) => {
     if (id === "current") return "SP500（現在）";
-    if (id === "qqq") return "Nasdaq（QQQ・現在）";
+    if (id === "qqq") return `Nasdaq（QQQ・${crashDisplayName(qqq.crash)}）`;
     if (id === crash.id) return crashDisplayName(crash);
     const found = compareCrashes.find((c) => c.id === id);
     return found ? crashDisplayName(found) : id;
@@ -3134,23 +3152,29 @@ function CrashDetailChart({ crash, compareCrashes = [], daysSinceATH, currentDD,
       {compareCrashes.map((c, i) => (
         <Line key={c.id} data={c.curve} dataKey="dd" type="monotone" stroke={COMPARE_COLORS[i] ?? C.gray} strokeWidth={0.8} dot={false} isAnimationActive={false} name={c.id} />
       ))}
-      {qqq && <Line data={qqq.curve} dataKey="dd" type="monotone" stroke={C.violet} strokeWidth={2.2} dot={false} isAnimationActive={false} connectNulls={false} name="qqq" />}
+      {qqq && <Line data={qqq.curve} dataKey="dd" type="monotone" stroke={C.violet} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls={false} name="qqq" />}
       <Line data={currentEpisodeCurve} dataKey="dd" type="monotone" stroke={C.teal} strokeWidth={2.6} dot={false} isAnimationActive={false} connectNulls={false} name="current" />
       <ReferenceDot x={crash.troughDay} y={crash.maxDD} r={4} fill={C.rust} stroke={C.bg} strokeWidth={2} />
       {compareCrashes.map((c, i) => (
         <ReferenceDot key={c.id} x={c.troughDay} y={c.maxDD} r={3.5} fill={COMPARE_COLORS[i] ?? C.gray} stroke={C.bg} strokeWidth={1.5} />
       ))}
-      {qqq && <ReferenceDot x={qqq.daysSinceATH} y={qqq.currentDD} r={4} fill={C.violet} stroke={C.bg} strokeWidth={2} />}
+      {qqq && <ReferenceDot x={qqq.troughDay} y={qqq.maxDD} r={3.5} fill={C.violet} stroke={C.bg} strokeWidth={1.5} />}
       <ReferenceDot x={daysSinceATH} y={currentDD} r={4.5} fill={C.teal} stroke={C.bg} strokeWidth={2} />
       {annotationPoints.length > 0 && <Customized component={<CrashEventMarkers points={annotationPoints} chartWidth={width} onHoverChange={setNewsHover} />} />}
     </LineChart>
   );
 }
-function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve, qqqCurrent = null, allCrashes, onJump }) {
+function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve, qqqFull = null, allCrashes, onJump }) {
   const [showDetail, setShowDetail] = useState(false);
-  // Nasdaq（QQQ）の現在局面：既定で表示し、追加1/追加2と同じプルダウンで「選択しない」にすると非表示にする。
-  const [qqqSelection, setQqqSelection] = useState("qqq");
-  const qqq = qqqCurrent && qqqSelection === "qqq" ? qqqCurrent : null;
+  // Nasdaq（QQQ）：選択した過去局面（SP500のATH日〜回復日）と同じ期間のQQQのDD%推移を重ねる。
+  // 既定はメインの暴落と同じ期間で、追加1/追加2と同じプルダウンで別の局面の期間や「選択しない」（非表示）を選べる。
+  const [qqqCrashId, setQqqCrashId] = useState(crash.id);
+  const qqqOptions = useMemo(() => (qqqFull?.length && allCrashes ? allCrashes.filter((c) => buildQqqCrashCurve(c, qqqFull)) : []), [allCrashes, qqqFull]);
+  const qqq = useMemo(() => {
+    const target = qqqOptions.find((c) => c.id === qqqCrashId);
+    const res = target ? buildQqqCrashCurve(target, qqqFull) : null;
+    return res ? { ...res, crash: target } : null;
+  }, [qqqOptions, qqqCrashId, qqqFull]);
   // 追加比較①②：メインの下落（crash・上部プルダウンで切替）とは別に、もう2つまで下落局面を選んで同時に重ね描きできるようにする。
   const [compareId1, setCompareId1] = useState("");
   const [compareId2, setCompareId2] = useState("");
@@ -3159,14 +3183,15 @@ function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve
   const compare1 = useMemo(() => (compareId1 && compareId1 !== crash.id ? allCrashes?.find((c) => c.id === compareId1) ?? null : null), [allCrashes, compareId1, crash.id]);
   const compare2 = useMemo(() => (compareId2 && compareId2 !== crash.id && compareId2 !== compareId1 ? allCrashes?.find((c) => c.id === compareId2) ?? null : null), [allCrashes, compareId2, crash.id, compareId1]);
   const compareCrashes = [compare1, compare2].filter(Boolean);
-  const maxDay = Math.max(crash.recoveryDay, daysSinceATH, ...compareCrashes.map((c) => c.recoveryDay), qqq ? qqq.daysSinceATH : 0);
-  const ddTicks = ddAxisTicksForMaxDrawdown(Math.min(crash.maxDD, ...compareCrashes.map((c) => c.maxDD), qqq ? Math.min(...qqq.curve.map((p) => p.dd)) : 0));
+  const maxDay = Math.max(crash.recoveryDay, daysSinceATH, ...compareCrashes.map((c) => c.recoveryDay), qqq ? qqq.crash.recoveryDay : 0);
+  const ddTicks = ddAxisTicksForMaxDrawdown(Math.min(crash.maxDD, ...compareCrashes.map((c) => c.maxDD), qqq ? qqq.maxDD : 0));
   const annotationPoints = useMemo(() => resolveCrashAnnotations(crash), [crash]);
   // メインの下落を切り替えたら詳細解説を閉じ、切替先と重複する比較選択はクリアする。
   useEffect(() => {
     setShowDetail(false);
     setCompareId1((id) => (id === crash.id ? "" : id));
     setCompareId2((id) => (id === crash.id ? "" : id));
+    setQqqCrashId(crash.id);
   }, [crash.id]);
   useEffect(() => { if (compareId2 && compareId2 === compareId1) setCompareId2(""); }, [compareId1, compareId2]);
   const compare1Options = allCrashes ? allCrashes.filter((c) => c.id !== crash.id && c.id !== compareId2) : [];
@@ -3232,20 +3257,22 @@ function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve
             <span style={{ width: 7, height: 7, borderRadius: 2, background: C.teal, flexShrink: 0 }} />
             <span>SP500 現在（ATH更新から{daysSinceATH}日目・DD{currentDD.toFixed(1)}%）</span>
           </div>
-          {qqqCurrent && (
+          {qqqFull?.length > 0 && (
             <div className="flex items-center gap-2 flex-wrap text-[11px]" style={{ color: C.textDim }}>
               <span style={{ width: 7, height: 7, borderRadius: 2, background: C.violet, flexShrink: 0 }} />
               <span style={{ minWidth: 60 }}>Nasdaq</span>
               <select
-                value={qqqSelection}
-                onChange={(e) => setQqqSelection(e.target.value)}
+                value={qqq ? qqqCrashId : ""}
+                onChange={(e) => setQqqCrashId(e.target.value)}
                 className="rounded"
                 style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text, padding: "3px 6px", cursor: "pointer" }}
               >
                 <option value="">選択しない</option>
-                <option value="qqq">Nasdaq（QQQ）現在の局面</option>
+                {qqqOptions.map((c) => (<option key={c.id} value={c.id}>{crashButtonLabel(c)}</option>))}
               </select>
-              {qqq && <span className="mono" style={{ color: C.textMuted }}>QQQのATH更新から{qqq.daysSinceATH}日目・DD{qqq.currentDD.toFixed(1)}%</span>}
+              {qqq
+                ? <span className="mono" style={{ color: C.textMuted }}>同期間のQQQ：最大DD{qqq.maxDD}%（{fmtDuration(qqq.troughDay)}で底値）</span>
+                : qqqCrashId && <span style={{ color: C.textMuted }}>この局面はQQQのデータ範囲外です</span>}
             </div>
           )}
         </div>
@@ -3257,7 +3284,7 @@ function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve
       </div>
       {annotationPoints.length > 0 && <div className="text-[10px] mb-2" style={{ color: C.textDim }}>● にカーソルを合わせると当時の出来事を表示します。</div>}
       <div className="rounded px-4 py-2 mb-2 text-sm leading-relaxed" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }}>
-        <div>現在はATH更新から{daysSinceATH}日目でDD{currentDD.toFixed(1)}%。{qqq && `Nasdaq（QQQ）はQQQのATH更新から${qqq.daysSinceATH}日目でDD${qqq.currentDD.toFixed(1)}%。`}</div>
+        <div>現在はATH更新から{daysSinceATH}日目でDD{currentDD.toFixed(1)}%。</div>
         {[crash, ...compareCrashes].map((c) => {
           const { ddAtSameDay, isDeeper } = comparisonRow(c);
           return (
@@ -3266,6 +3293,7 @@ function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve
             </div>
           );
         })}
+        {qqq && <div>同じ期間のNasdaq（QQQ）は、同じ経過日数時点でDD{qqq.curve[Math.min(daysSinceATH, qqq.curve.length - 1)].dd}%（期間中の最大DD{qqq.maxDD}%）でした。</div>}
       </div>
       {crash.isKnown ? (
         <div>
@@ -6251,7 +6279,9 @@ export default function DDDashboard() {
   const handleSelectCrash = (id) => { setCrashAutoFollow(false); setSelectedCrashId(id); };
   // データ未読込等でidが見つからない場合は先頭にフォールバック。
   const selectedCrash = useMemo(() => crashPool.find((c) => c.id === selectedCrashId) ?? historicalCrashes[0] ?? null, [crashPool, historicalCrashes, selectedCrashId]);
-  const comparisonData = useMemo(() => buildComparisonData(d.currentEpisodeCurve, selectedCrash ? [selectedCrash] : [], dQqq?.currentEpisodeCurve ?? null), [d.currentEpisodeCurve, selectedCrash, dQqq]);
+  // 選択中の過去局面（SP500）と同じ期間のNasdaq（QQQ）のDD%推移。QQQデータ開始前の局面ではnull。
+  const selectedQqqCrashCurve = useMemo(() => buildQqqCrashCurve(selectedCrash, dQqq?.FULL), [selectedCrash, dQqq]);
+  const comparisonData = useMemo(() => buildComparisonData(d.currentEpisodeCurve, selectedCrash ? [selectedCrash] : [], selectedQqqCrashCurve), [d.currentEpisodeCurve, selectedCrash, selectedQqqCrashCurve]);
   const toggle = (k) => setHidden((p) => ({ ...p, [k]: !p[k] }));
   const toggleCrash = (k) => setHiddenCrash((p) => ({ ...p, [k]: !p[k] }));
 
@@ -6303,11 +6333,11 @@ export default function DDDashboard() {
     return { AB, Cb, DE };
   }, [currentHoldingPct, effectiveModelRow]);
 
-  // 暴落比較の凡例：類似暴落・SP500（現在）・Nasdaq（QQQ・現在）。既定はすべて表示で、凡例クリックで個別に表示/非表示を切り替える。
+  // 暴落比較の凡例：類似暴落（SP500）・SP500（現在）・同じ期間のNasdaq（QQQ）。既定はすべて表示で、凡例クリックで個別に表示/非表示を切り替える。
   const crashLegendItems = selectedCrash ? [
     { key: selectedCrash.id, label: crashDisplayName(selectedCrash), color: C.rust },
     { key: "current", label: "SP500（現在）", color: C.teal },
-    ...(dQqq ? [{ key: "qqq", label: "Nasdaq（QQQ・現在）", color: C.violet }] : []),
+    ...(selectedQqqCrashCurve ? [{ key: "qqq", label: "Nasdaq（QQQ・同期間）", color: C.violet }] : []),
   ] : [];
   const analysisText = useMemo(() => buildAnalysisText(d, currentHoldingPct, holdingsTotal(combinedHoldings), dQqq, qqqAmplification), [d, currentHoldingPct, combinedHoldings, dQqq, qqqAmplification]);
   const checkpointResults = useMemo(() => {
@@ -6342,7 +6372,7 @@ export default function DDDashboard() {
       {modal?.type === "investmentUpload" && <FullScreenModal title="投資収支Excel アップロード" onClose={() => setModal(null)}><InvestmentUploadModalContent existing={investmentPerformance} onSave={handleSaveInvestmentPerformance} onClose={() => setModal(null)} /></FullScreenModal>}
       {modal?.type === "investmentPerformance" && <FullScreenModal title="実績パフォーマンス" onClose={() => setModal(null)}><InvestmentPerformanceModalContent data={investmentPerformance} d={d} dQqq={dQqq} holdings={holdings} holdingsAsOf={holdingsAsOf} brokerHoldingHistory={brokerHoldingHistory} brokerSummaries={brokerSummaries} onOpenUpload={() => setModal({ type: "investmentUpload" })} onReset={() => { if (window.confirm("投資収支データを削除しますか？")) { handleResetInvestmentPerformance(); setModal(null); } }} /></FullScreenModal>}
       {modal?.type === "rank" && <FullScreenModal title={`${modal.rank}ランクの保有銘柄`} onClose={() => setModal(null)}><RankHoldingsContent rank={modal.rank} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
-      {modal?.type === "crash" && <FullScreenModal title={`${crashDisplayName(modal.crash)}（${modal.crash.start} 〜）と現状の比較`} onClose={() => setModal(null)}><CrashModalContent crash={modal.crash} daysSinceATH={d.daysSinceATH} currentDD={d.currentDD} currentEpisodeCurve={d.currentEpisodeCurve} qqqCurrent={dQqq ? { curve: dQqq.currentEpisodeCurve, daysSinceATH: dQqq.daysSinceATH, currentDD: dQqq.currentDD } : null} allCrashes={historicalCrashes} onJump={(c) => setModal({ type: "crash", crash: c })} /></FullScreenModal>}
+      {modal?.type === "crash" && <FullScreenModal title={`${crashDisplayName(modal.crash)}（${modal.crash.start} 〜）と現状の比較`} onClose={() => setModal(null)}><CrashModalContent crash={modal.crash} daysSinceATH={d.daysSinceATH} currentDD={d.currentDD} currentEpisodeCurve={d.currentEpisodeCurve} qqqFull={dQqq?.FULL ?? null} allCrashes={historicalCrashes} onJump={(c) => setModal({ type: "crash", crash: c })} /></FullScreenModal>}
       {modal?.type === "ddChart" && <FullScreenModal title={chartSourceTitle(chartSource)} onClose={() => setModal(null)}><DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} bothChartData={bothChartData} chartSource={chartSource} setChartSource={setChartSource} /></FullScreenModal>}
       {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} vooQqqSeries={vooQqqSeries} onAppendVooQqq={handleAppendVooQqq} onImportVooQqq={handleImportVooQqq} onResetVooQqqField={handleResetVooQqqField} virtualAggregateLabels={virtualAggregateLabels} onRegisterBrokerHoldings={handleRegisterBrokerHoldings} brokerSummaries={brokerSummaries} />}
       {modal?.type === "checkpointSettings" && <FullScreenModal title="チェックポイント設定" onClose={() => setModal(null)}><CheckpointSettingsContent checkpoints={checkpoints} onCheckpointChange={handleCheckpointChange} holdings={holdings} /></FullScreenModal>}
@@ -6487,6 +6517,7 @@ export default function DDDashboard() {
                           拡大して詳細比較
                         </button>
                       )}
+                      {selectedCrash && dQqq && !selectedQqqCrashCurve && <span className="text-[10px]" style={{ color: C.textDim }}>※この局面はQQQのデータ範囲外のため、Nasdaqは表示されません</span>}
                     </div>
                     <div className="flex-1 min-h-0">
                       <ResponsiveContainer width="100%" height="100%">
@@ -6497,7 +6528,7 @@ export default function DDDashboard() {
                           <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} />
                           {selectedCrash && !hiddenCrash[selectedCrash.id] && <Line type="monotone" dataKey={selectedCrash.id} stroke={C.rust} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls={false} name={crashDisplayName(selectedCrash)} />}
                           {!hiddenCrash.current && <Line type="monotone" dataKey="current" stroke={C.teal} strokeWidth={2.6} dot={false} isAnimationActive={false} connectNulls={false} name="SP500（現在）" />}
-                          {dQqq && !hiddenCrash.qqq && <Line type="monotone" dataKey="qqq" stroke={C.violet} strokeWidth={2.2} dot={false} isAnimationActive={false} connectNulls={false} name="Nasdaq（QQQ・現在）" />}
+                          {comparisonData[0]?.qqq !== undefined && !hiddenCrash.qqq && <Line type="monotone" dataKey="qqq" stroke={C.violet} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls={false} name="Nasdaq（QQQ・同期間）" />}
                         </LineChart>
                       </ResponsiveContainer>
                     </div>
