@@ -1649,43 +1649,77 @@ const MINOR_EPISODE_META = {
 };
 const ROUTINE_PULLBACK_TEXT = "特に目立った材料はなく、通常のレンジ内の調整";
 const CRASH_DETECT_MIN_DD = -10; // この閾値以上の下落局面をすべて自動検出する（既知イベントに該当しないものは「その他」に分類）
+// この日付以降にATHを付けて始まったDD-3%以上の下落局面は、深さに関わらずすべて暴落比較のプルダウンに並べる
+// （2025年2月の関税ショック以降。以後に発生する局面も価格データの更新だけで自動的に検出・命名・追加される）。
+const AUTO_EPISODE_LIST_FROM = "2025-02-01";
+const ONGOING_CRASH_COLOR = C.amber;
+// KNOWN_CRASH_META・MINOR_EPISODE_METAに登録の無い局面（AUTO_EPISODE_LIST_FROM以降）の名称を、下落の深さと底値までの速さから自動生成する。
+function autoEpisodeName(maxDD, troughDay, isOngoing) {
+  const depth = maxDD <= -20 ? "弱気相場" : maxDD <= -10 ? "調整局面" : maxDD <= -5 ? "押し目" : "小幅な押し目";
+  const speed = troughDay <= 10 ? "急落型の" : troughDay >= 40 ? "長期化した" : "";
+  return `${isOngoing ? "" : speed}${depth}`; // 進行中は底値が未確定のため速さの形容は付けない
+}
+// 価格データから下落局面の主要イベント（ATH・DD節目の到達・底値・ATH回復／直近の状況）を年表形式（{ date, text }）で自動生成する。
+function autoEpisodeAnnotations(FULL, e) {
+  const out = [{ date: isoFromDate(e.athDate), text: `S&P500が最高値 $${e.athPrice.toFixed(2)} を記録（この局面の起点）` }];
+  const endIdx = e.isOngoing ? FULL.length - 1 : e.recoveryIdx;
+  for (const level of [-3, -5, -10, -20, -30]) {
+    if (e.troughDD > level) break;
+    const idx = FULL.findIndex((pt, i) => i > e.athIdx && i <= endIdx && pt.dd <= level);
+    if (idx !== -1) out.push({ date: isoFromDate(FULL[idx].date), text: `DD${level}%に到達（ATHから${idx - e.athIdx}営業日・$${FULL[idx].price.toFixed(2)}）` });
+  }
+  out.push({ date: isoFromDate(e.troughDate), text: `${e.isOngoing ? "現時点の底値" : "底値"} $${e.troughPrice.toFixed(2)}（DD${e.troughDD.toFixed(2)}%・ATHから${e.troughIdx - e.athIdx}営業日）` });
+  if (e.isOngoing) {
+    const last = FULL[FULL.length - 1];
+    if (last.i !== e.troughIdx) out.push({ date: isoFromDate(last.date), text: `最新値 $${last.price.toFixed(2)}（DD${last.dd.toFixed(2)}%・底値から+${(((last.price / e.troughPrice) - 1) * 100).toFixed(1)}%）。ATH未回復で進行中` });
+  } else {
+    out.push({ date: isoFromDate(e.recoveryDate), text: `最高値を回復（底値から${e.recoveryIdx - e.troughIdx}営業日・$${e.recoveryPrice.toFixed(2)}）` });
+  }
+  return out;
+}
 const OTHER_CRASH_COLORS = ["#7C8DB0", "#C9A06A", "#4FA0A6", "#A3A24B", "#B98F6A", "#7B9BC7", C.textDim];
 // FULL（読み込まれているSP500の全期間データ）からATH比-10%以上の下落局面をすべて自動抽出し、既知イベントを紐付ける。
-function buildHistoricalCrashes(FULL, minDD = CRASH_DETECT_MIN_DD) {
+// includeOngoing=trueのときは、現在進行中（ATH未回復）の局面もisOngoing付きで含める（終点は最新日、recoveryDayは最新日までの経過日数）。
+function buildHistoricalCrashes(FULL, minDD = CRASH_DETECT_MIN_DD, { includeOngoing = false } = {}) {
   if (!FULL || FULL.length < 2) return [];
-  const episodes = findDDEpisodes(FULL, minDD).filter((e) => !e.isOngoing); // 現在進行中の局面（＝「現在」として別枠表示）は除外
+  const episodes = findDDEpisodes(FULL, minDD).filter((e) => includeOngoing || !e.isOngoing); // 既定では現在進行中の局面（＝「現在」として別枠表示）は除外
   return episodes.map((e, idx) => {
     // 既知の暴落名は-10%以上の局面にだけ付ける（同じ期間内の浅い押し目に暴落名が付かないように）
     const known = e.troughDD <= CRASH_DETECT_MIN_DD ? KNOWN_CRASH_META.find((k) => e.athDate >= parseDateOnly(k.from) && e.athDate <= parseDateOnly(k.to)) : null;
-    const start = isoFromDate(e.athDate), low = isoFromDate(e.troughDate), athRecoveryDate = isoFromDate(e.recoveryDate);
-    const troughDay = e.troughIdx - e.athIdx, recoveryDay = e.recoveryIdx - e.athIdx;
-    const curve = FULL.slice(e.athIdx, e.recoveryIdx + 1).map((p, i) => ({ day: i, dd: p.dd, date: p.date }));
+    const endIdx = e.isOngoing ? FULL.length - 1 : e.recoveryIdx;
+    const start = isoFromDate(e.athDate), low = isoFromDate(e.troughDate), athRecoveryDate = e.isOngoing ? null : isoFromDate(e.recoveryDate);
+    const troughDay = e.troughIdx - e.athIdx, recoveryDay = endIdx - e.athIdx;
+    const curve = FULL.slice(e.athIdx, endIdx + 1).map((p, i) => ({ day: i, dd: p.dd, date: p.date }));
     const maxDD = Number(e.troughDD.toFixed(1));
     // KNOWN_CRASH_METAに該当しない局面は、ATH日（DD開始日）をキーにMINOR_EPISODE_METAの名称・トピックスを引く。
-    // 登録が無い（＝目立った材料の無い通常の調整）局面は名称なし（null）とし、その旨のトピックスを1件付ける。
+    // 登録が無い局面のうち、AUTO_EPISODE_LIST_FROM以降のものは名称・主要イベントを価格データから自動生成する。
+    // それより前の登録の無い局面（＝目立った材料の無い通常の調整）は名称なし（null）とし、その旨のトピックスを1件付ける。
     const minor = known ? null : MINOR_EPISODE_META[start] ?? null;
     const meta = known ?? minor;
+    const isAuto = !meta && start >= AUTO_EPISODE_LIST_FROM;
+    const autoCause = `価格データから自動検出したDD${maxDD}%の下落局面です（ATHから${troughDay}営業日で${e.isOngoing ? "現時点の" : ""}底値、${e.isOngoing ? "ATH未回復で進行中" : `底値から${recoveryDay - troughDay}営業日でATH回復`}）。下落要因のニュースは未登録です。`;
     return {
-      id: known ? known.key : `auto-${start}`,
-      name: meta ? meta.name : null,
-      start, low, athRecoveryDate, athRecovery: `${e.recoveryDate.getUTCFullYear()}年${e.recoveryDate.getUTCMonth() + 1}月頃`,
+      id: known ? known.key : `${e.isOngoing ? "ongoing" : "auto"}-${start}`,
+      name: meta ? meta.name : isAuto ? autoEpisodeName(maxDD, troughDay, e.isOngoing) : null,
+      start, low, athRecoveryDate, athRecovery: e.isOngoing ? "未回復" : `${e.recoveryDate.getUTCFullYear()}年${e.recoveryDate.getUTCMonth() + 1}月頃`,
       maxDD, troughDay, recoveryDay,
-      color: known?.color ?? OTHER_CRASH_COLORS[idx % OTHER_CRASH_COLORS.length],
-      cause: meta?.cause ?? (meta ? meta.name : ROUTINE_PULLBACK_TEXT),
+      color: e.isOngoing ? ONGOING_CRASH_COLOR : known?.color ?? OTHER_CRASH_COLORS[idx % OTHER_CRASH_COLORS.length],
+      cause: meta?.cause ?? (meta ? meta.name : isAuto ? autoCause : ROUTINE_PULLBACK_TEXT),
       resolution: known?.resolution ?? "—",
       lesson: known?.lesson ?? "—",
-      annotations: meta?.annotations ?? [{ date: low, text: ROUTINE_PULLBACK_TEXT }],
+      annotations: meta?.annotations ?? (isAuto ? autoEpisodeAnnotations(FULL, e) : [{ date: low, text: ROUTINE_PULLBACK_TEXT }]),
       curve,
       isKnown: !!known,
+      isOngoing: e.isOngoing,
       featured: !!known?.featured,
     };
   }).sort((a, b) => a.start.localeCompare(b.start));
 }
 // 既知/自動検出を問わず、ボタン・プルダウンで使う表示ラベル。「年月 イベント名（下落率）」（例：「2000年3月 ドットコムバブル崩壊（-49%）」）、
 // イベント名の無い通常の調整は「年月（下落率）」（例：「1995年12月（-3.7%）」）に統一する。
-function crashButtonLabel(c) { return `${yearMonthLabel(c.start)}${c.name ? ` ${c.name}` : ""}（${c.maxDD}%）`; }
+function crashButtonLabel(c) { return `${yearMonthLabel(c.start)}${c.name ? ` ${c.name}` : ""}（${c.maxDD}%${c.isOngoing ? "・進行中" : ""}）`; }
 // 凡例・見出しなど名称単体を出す箇所用。名称の無い局面は年月＋下落率のラベルで代用する。
-function crashDisplayName(c) { return c.name ?? crashButtonLabel(c); }
+function crashDisplayName(c) { return c.name ? `${c.name}${c.isOngoing ? "（進行中）" : ""}` : crashButtonLabel(c); }
 function pearsonCorrelation(xs, ys) {
   const n = xs.length;
   const mx = xs.reduce((s, v) => s + v, 0) / n, my = ys.reduce((s, v) => s + v, 0) / n;
@@ -1713,7 +1747,7 @@ function rankCrashesBySimilarity(currentEpisodeCurve, daysSinceATH, crashes, exc
   const currentMdd = Math.min(...currentSeg);
   const currentBucket = depthBucketIndex(currentMdd);
   const scored = crashes
-    .filter((c) => !excludeIds.includes(c.id) && c.curve.length > daysSinceATH)
+    .filter((c) => !c.isOngoing && !excludeIds.includes(c.id) && c.curve.length > daysSinceATH) // 進行中の局面は「現在」そのものなので類似候補にしない
     .map((c) => {
       const seg = c.curve.slice(0, daysSinceATH + 1).map((p) => p.dd);
       const mddSoFar = Math.min(...seg);
@@ -3205,7 +3239,7 @@ function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve
     const ddAtSameDay = c.curve[idx].dd;
     return { c, ddAtSameDay, isDeeper: currentDD < ddAtSameDay };
   };
-  const summaryLine = (c) => `${fmtDateSlash(c.start)}（ATH）→ ${fmtDateSlash(c.low)}（底値 DD${c.maxDD}%・${fmtDuration(c.troughDay)}）→ ${fmtDateSlash(c.athRecoveryDate)}（回復・${fmtDuration(c.recoveryDay - c.troughDay)}）`;
+  const summaryLine = (c) => `${fmtDateSlash(c.start)}（ATH）→ ${fmtDateSlash(c.low)}（${c.isOngoing ? "現時点の底値" : "底値"} DD${c.maxDD}%・${fmtDuration(c.troughDay)}）→ ${c.isOngoing ? "進行中（ATH未回復）" : `${fmtDateSlash(c.athRecoveryDate)}（回復・${fmtDuration(c.recoveryDay - c.troughDay)}）`}`;
   return (
     <div>
       {allCrashes && allCrashes.length > 1 && (
@@ -3286,6 +3320,8 @@ function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve
       <div className="rounded px-4 py-2 mb-2 text-sm leading-relaxed" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }}>
         <div>現在はATH更新から{daysSinceATH}日目でDD{currentDD.toFixed(1)}%。</div>
         {[crash, ...compareCrashes].map((c) => {
+          // 進行中の局面は現在のSP500そのもの（同じ系列）なので、ペース比較ではなく現時点の底値を示す。
+          if (c.isOngoing) return <div key={c.id}>{crashDisplayName(c)}は現在のSP500の局面です（{fmtDateSlash(c.start)}のATHから、{fmtDateSlash(c.low)}に現時点の底値DD{c.maxDD}%）。</div>;
           const { ddAtSameDay, isDeeper } = comparisonRow(c);
           return (
             <div key={c.id}>
@@ -6263,14 +6299,15 @@ export default function DDDashboard() {
     return Array.from(map.values()).sort((a, b) => a.date - b.date);
   }, [chartData, qqqChartData]);
   // 類似度判定の候補：SP500の全期間データ（d.FULL）からATH比-3%以上の下落局面をすべて検出する。
-  const crashPool = useMemo(() => buildHistoricalCrashes(d.FULL, SIMILARITY_MIN_DD), [d.FULL]);
+  // 進行中（ATH未回復）の局面も含めて検出する。類似度判定（rankCrashesBySimilarity）では進行中を除外する。
+  const crashPool = useMemo(() => buildHistoricalCrashes(d.FULL, SIMILARITY_MIN_DD, { includeOngoing: true }), [d.FULL]);
   // 現在のDD%推移（経過日数分）に最も類似した過去の局面を判定する。経過日数が進むたび（d.currentEpisodeCurve/d.daysSinceATHの更新時）に再計算される。
   const rankedSimilarCrashes = useMemo(() => rankCrashesBySimilarity(d.currentEpisodeCurve, d.daysSinceATH, crashPool), [d.currentEpisodeCurve, d.daysSinceATH, crashPool]);
   const autoSimilarCrashId = rankedSimilarCrashes[0]?.crash.id ?? null;
-  // プルダウンに並べる一覧：-10%以上の暴落すべて＋現状に類似した上位の局面（浅い押し目を含む）。
+  // プルダウンに並べる一覧：-10%以上の暴落すべて＋AUTO_EPISODE_LIST_FROM以降の-3%以上の局面すべて（進行中を含む）＋現状に類似した上位の局面（浅い押し目を含む）。
   const historicalCrashes = useMemo(() => {
     const similarIds = new Set(rankedSimilarCrashes.slice(0, SIMILAR_IN_DROPDOWN).map((r) => r.crash.id));
-    return crashPool.filter((c) => c.maxDD <= CRASH_DETECT_MIN_DD || similarIds.has(c.id));
+    return crashPool.filter((c) => c.maxDD <= CRASH_DETECT_MIN_DD || c.start >= AUTO_EPISODE_LIST_FROM || similarIds.has(c.id));
   }, [crashPool, rankedSimilarCrashes]);
   // ユーザーが手動選択（crashAutoFollow=false）していない間は、最類似イベントに自動追従する。手動選択後は次にページを開き直すまで固定。
   useEffect(() => {
