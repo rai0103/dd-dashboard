@@ -2160,7 +2160,8 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBru
   const markerFontSize = Math.max(8, fontSize - 1);
   const maxDrawdownInView = Math.min(0, ...chartData.map((p) => p.dd)); // 表示期間内の最大DD%（最も深い下落）
   const ddTicks = ddAxisTicksForMaxDrawdown(maxDrawdownInView);
-  const markerPoints = hidden.price ? [] : buildEpisodeMarkers({ chartData, d, periodStats, fontSize: markerFontSize });
+  const episodeMarkers = hidden.price ? [] : buildEpisodeMarkers({ chartData, d, periodStats, fontSize: markerFontSize });
+  const markerPoints = hidden.markers ? episodeMarkers.filter((m) => m.isCurrent) : episodeMarkers; // 「DD印」オフ時は現在値の■だけ残す
   const markerByTime = new Map(markerPoints.map((m) => [m.date.getTime(), m]));
   return (
     <ComposedChart
@@ -2183,7 +2184,7 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBru
       {showSpyListing && chartData[0].date < SPY_LISTING_DATE && chartData[chartData.length - 1].date > SPY_LISTING_DATE && (<ReferenceLine yAxisId="price" x={SPY_LISTING_DATE} stroke={C.violet} strokeDasharray="3 3" label={{ value: "S&P500上場", fill: C.violet, fontSize: Math.max(9, fontSize - 1), position: "top" }} />)}
       <Area yAxisId="dd" type="linear" dataKey="dd" stroke={C.rust} fill="url(#ddFill)" strokeWidth={1.3} dot={false} isAnimationActive={false} fillOpacity={hidden.dd ? 0 : 1} strokeOpacity={hidden.dd ? 0 : 1} />
       <Area yAxisId="price" type="linear" dataKey="price" stroke={C.teal} fill="url(#priceFill)" strokeWidth={1.8} dot={false} isAnimationActive={false} fillOpacity={hidden.price ? 0 : 1} strokeOpacity={hidden.price ? 0 : 1} />
-      <Line yAxisId="price" type="linear" dataKey="ath" stroke={C.textDim} strokeDasharray="3 4" strokeWidth={1} dot={false} isAnimationActive={false} strokeOpacity={hidden.price ? 0 : 1} />
+      <Line yAxisId="price" type="linear" dataKey="ath" stroke={C.textDim} strokeDasharray="3 4" strokeWidth={1} dot={false} isAnimationActive={false} strokeOpacity={hidden.price || hidden.markers ? 0 : 1} />
       {markerPoints.length > 0 && <Customized component={<ChartMarkers points={markerPoints} activeDate={activeDate} />} />}
       {withBrush && <Brush dataKey="date" height={26} stroke={C.teal} fill={C.panel2} tickFormatter={(dt) => fmtAxisDate(new Date(dt), rangeDays)} travellerWidth={8} />}
     </ComposedChart>
@@ -2203,6 +2204,17 @@ function chartSourceMode(chartSources) { return chartSources.length === 1 ? char
 function toggleChartSourceList(prev, key) {
   if (prev.includes(key)) return prev.length > 1 ? prev.filter((k) => k !== key) : prev;
   return CHART_SOURCE_ORDER.filter((k) => k === key || prev.includes(k));
+}
+// 評価額/DDチャートの「DD印」ボタン：DD開始（緑●）・大底（赤●）・DD回復（青●）の点と、DD開始〜DD回復の谷をつなぐATH点線の表示/非表示を切り替える。
+// 状態はチャートの凡例と同じhidden（キー"markers"）で持つ。点灯＝表示中。
+function DDMarkerToggle({ hidden, toggle, size = "sm" }) {
+  const on = !hidden.markers;
+  return (
+    <button onClick={(e) => { e.stopPropagation(); toggle("markers"); }} title={on ? "DD開始・大底・DD回復の点とATH点線を隠す" : "DD開始・大底・DD回復の点とATH点線を表示する"} className="rounded flex items-center gap-1"
+      style={{ fontSize: size === "sm" ? 10 : 11, padding: size === "sm" ? "1.5px 6px" : "2px 8px", color: on ? C.text : C.textDim, background: "transparent", border: `1px solid ${on ? C.borderSoft : "transparent"}`, cursor: "pointer", textDecoration: on ? "none" : "line-through" }}>
+      <span style={{ display: "inline-flex", gap: 2 }}>{[C.teal, C.rust, C.blue].map((c) => (<span key={c} style={{ width: 6, height: 6, borderRadius: "50%", background: c, opacity: on ? 1 : 0.35 }} />))}</span>DD印
+    </button>
+  );
 }
 // 評価額/DDチャートの期間選択（ドロップダウン）。
 function PeriodSelect({ value, onChange, size = "sm" }) {
@@ -2284,7 +2296,7 @@ function MultiPriceChartBody({ keys, views, hidden, fontSize = 10, width, height
   const markerPoints = [];
   for (const k of active) {
     const sr = MULTI_SERIES[k], v = views[k];
-    if (!hidden[sr.hiddenKey] && v.chartData?.length) markerPoints.push(...buildEpisodeMarkers({ chartData: v.chartData, d: v.d, periodStats: v.periodStats, fontSize: markerFontSize, series: sr }));
+    if (!hidden[sr.hiddenKey] && v.chartData?.length) markerPoints.push(...buildEpisodeMarkers({ chartData: v.chartData, d: v.d, periodStats: v.periodStats, fontSize: markerFontSize, series: sr }).filter((m) => !hidden.markers || m.isCurrent));
   }
   // 同じ日付に複数銘柄のマーカーが来る場合があるため、日付ごとに配列で保持してツールチップに全件（銘柄名付き）を並べる。
   const markersByTime = new Map();
@@ -2300,7 +2312,7 @@ function MultiPriceChartBody({ keys, views, hidden, fontSize = 10, width, height
       <Tooltip content={(props) => <MultiTooltipContent {...props} markersByTime={markersByTime} hidden={hidden} keys={active} />} />
       {active.map((k) => { const sr = MULTI_SERIES[k]; return <Line key={k} yAxisId={sr.yAxisId} type="linear" dataKey={sr.priceKey} stroke={sr.color} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls hide={!!hidden[sr.hiddenKey]} name={sr.name} />; })}
       {/* 単体表示と同様のATH補助線（DD開始～回復の間は水平になり、ドローダウン区間が分かる）。各銘柄の系列色の点線で描く */}
-      {active.map((k) => { const sr = MULTI_SERIES[k]; return <Line key={`${k}-ath`} yAxisId={sr.yAxisId} type="linear" dataKey={sr.athKey} stroke={sr.color} strokeDasharray="3 4" strokeWidth={1} strokeOpacity={0.7} dot={false} activeDot={false} isAnimationActive={false} connectNulls hide={!!hidden[sr.hiddenKey]} name={`${sr.name} ATH`} />; })}
+      {active.map((k) => { const sr = MULTI_SERIES[k]; return <Line key={`${k}-ath`} yAxisId={sr.yAxisId} type="linear" dataKey={sr.athKey} stroke={sr.color} strokeDasharray="3 4" strokeWidth={1} strokeOpacity={0.7} dot={false} activeDot={false} isAnimationActive={false} connectNulls hide={!!hidden[sr.hiddenKey] || !!hidden.markers} name={`${sr.name} ATH`} />; })}
       {markerPoints.length > 0 && <Customized component={<ChartMarkers points={markerPoints} />} />}
     </ComposedChart>
   );
@@ -2336,6 +2348,7 @@ function DDChartModalContent({ chartData, rangeDays, d, hidden, toggle, period, 
             ) : (
               <ClickLegend items={[{ key: "price", label: "評価額", color: C.teal }, { key: "dd", label: "DD%", color: C.rust }]} hidden={hidden} onToggle={toggle} />
             )}
+            <DDMarkerToggle hidden={hidden} toggle={toggle} size="md" />
             <PeriodSelect value={period} onChange={setPeriod} size="md" />
             <ChartSourceToggle value={chartSources} onToggle={onToggleChartSource} qqqAvailable={!!dQqq} goldAvailable={!!goldView} />
           </>
@@ -6737,6 +6750,7 @@ export default function DDDashboard() {
                         ) : (
                           <ClickLegend items={[{ key: "price", label: "評価額", color: C.teal }, { key: "dd", label: "DD%", color: C.rust }]} hidden={hidden} onToggle={toggle} />
                         )}
+                        <DDMarkerToggle hidden={hidden} toggle={toggle} />
                         <PeriodSelect value={period} onChange={setPeriod} />
                         <ChartSourceToggle value={chartSources} onToggle={toggleChartSource} qqqAvailable={!!dQqq} goldAvailable={!!goldView} />
                       </>
