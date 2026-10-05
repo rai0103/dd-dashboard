@@ -201,15 +201,20 @@ function freqLabelFromP(p, ddFreqPerYear) {
   const years = 1 / perYear;
   return `${years < 10 ? years.toFixed(1) : Math.round(years)}年に1度`;
 }
-// 「現状分析」パネルの自動生成テキスト（毎日データ更新の都度、最新の状況から再計算される）。
-// 現在のDD局面を3フェーズに分類し、フェーズごとに異なる過去実績統計を差し込んだ文章を組み立てる：
+// 「現状分析」パネルの自動生成内容（毎日データ更新の都度、最新の状況から再計算される）。
+// 本文は結論・データの要点だけの箇条書き（items）とし、各項目には根拠データのある画面への遷移先（link：setModalに渡す値）を付ける。
+// 「サンプルが少ない」「参考値」などの留保・前提は本文に混ぜず、notes（ⓘのポップアップに表示する前提条件）へ分ける。
+// 現在のDD局面を3フェーズに分類し、フェーズごとに異なる過去実績統計を差し込む：
 //   フェーズ1：ATH更新後、まだDD-3%未到達（ボックス圏）→ BOX_STATS
 //   フェーズ2：DD-3%到達済み、まだDD-5%未到達        → ATH_TO_DD3_STATS + speed35Backtest
 //   フェーズ3：DD-5%到達済み                        → speed35Backtest（DD加速度アラートの詳細に委ねる要約のみ）
 // フェーズとは別に、現在のエピソード（直近ATHから現在まで）で一度でもDD-3%圏に到達していれば、
-// フェーズに関わらず「DD-3%圏への突入回数」の補助情報（DD3_ENTRY_STATS）を末尾に付加する。
+// フェーズに関わらず「DD-3%圏への突入回数」の補助情報（DD3_ENTRY_STATS）を加える。
 const ANALYSIS_DISCLAIMER = "※統計は過去傾向であり将来を保証するものではありません";
-function lowSampleNote(stat) { return stat.lowSample ? `※このパターンは過去${stat.n}件と少数のため参考値としてご覧ください。` : ""; }
+function lowSampleNote(stat, what) { return stat.lowSample ? `${what}は過去${stat.n}件と少数のため、参考値としてご覧ください。` : null; }
+// 現状分析の各項目の遷移先（setModalに渡す値）と、リンクに表示するラベル。
+const ANALYSIS_LINK_SPEED = { modal: { type: "speedAlert" }, label: "DD加速度アラート" };
+const ANALYSIS_LINK_MODEL = { modal: { type: "modelDebug" }, label: "動的配分モデル" };
 function crashRate(bucket, threshold) { const row = bucket.crashRates.find((c) => c.threshold === threshold); return row && row.rate !== null ? `${row.rate}%` : "算出不可"; }
 
 // ②③④ DDマイルストーン到達時のCクラス買い増しペースに対するモディファイア（ポリシー定数）。
@@ -271,16 +276,15 @@ function computeDynamicAllocationAdvisory(d, dQqq, qqqAmplification, currentHold
     qqqRatio: qqqRatio !== null ? Number(qqqRatio.toFixed(2)) : null, qqqMedian: qqqAmplification?.medianRatio ?? null, qqqMod, qqqAlert,
   };
 }
-// ⑥ 現状分析パネルに追加する、抑制係数の内訳を含む短い助言文（該当なしならnull）。
-function buildDynamicAllocationSentence(advisory) {
-  if (!advisory) return "";
-  const speedPart = advisory.speedLabel ? `速度区分「${advisory.speedLabel}」` : "速度区分未確定";
-  const entryPart = `突入回数${advisory.entries}回`;
+// ⑥ 現状分析に追加する、抑制係数の内訳を含む買い増し額の項目（該当なしならnull）。
+function buildDynamicAllocationItem(advisory) {
+  if (!advisory) return null;
+  const speedPart = advisory.speedLabel ? `速度「${advisory.speedLabel}」` : "速度区分未確定";
   const qqqPart = advisory.qqqRatio !== null ? `QQQ増幅率${advisory.qqqRatio}倍${advisory.qqqAlert ? "（警戒水準）" : ""}` : "QQQ増幅率算出不可";
-  const suppressPart = advisory.suppressionRate > 0 ? `本来の計画配分から${advisory.suppressionRate}%抑制し、` : "";
-  return `現在の${speedPart}・${entryPart}・${qqqPart}を踏まえ、${suppressPart}Cクラスへの${advisory.milestoneLabel}到達時点での買い増し額を¥${advisory.adjustedAmount.toLocaleString()}としています（抑制分は現金として温存し、より深い下落局面での買い増しに繰り越します）。`;
+  const suppressPart = advisory.suppressionRate > 0 ? `計画から${advisory.suppressionRate}%抑制・` : "";
+  return { text: `${advisory.milestoneLabel}到達時のCクラス買い増し額：¥${advisory.adjustedAmount.toLocaleString()}（${suppressPart}${speedPart}・突入${advisory.entries}回・${qqqPart}）`, link: ANALYSIS_LINK_MODEL };
 }
-function buildRebalanceSentence(d, currentHoldingPct, totalValue) {
+function buildRebalanceItem(d, currentHoldingPct, totalValue) {
   let maxCat = "A", maxDiff = 0;
   for (const cat of CATS) {
     const diff = Number((currentHoldingPct[cat] - d.modelRow[cat]).toFixed(1));
@@ -288,55 +292,58 @@ function buildRebalanceSentence(d, currentHoldingPct, totalValue) {
   }
   const maxDiffAmount = Math.round((totalValue * maxDiff) / 100);
   const direction = maxDiff >= 0 ? "過多" : "不足";
-  const verdict = Math.abs(maxDiff) >= 4 ? "リバランスを推奨します" : "現状のバランスは良好です";
-  return `${d.modelRow.label}の推奨ポートフォリオと比較して、${maxCat}クラスが${Math.abs(maxDiff).toFixed(1)}%（${maxDiffAmount >= 0 ? "+" : "-"}¥${Math.abs(maxDiffAmount).toLocaleString()}）${direction}しており、${verdict}。`;
+  const verdict = Math.abs(maxDiff) >= 4 ? "リバランス推奨" : "バランス良好";
+  return { text: `配分：${d.modelRow.label}の推奨比で${maxCat}クラスが${Math.abs(maxDiff).toFixed(1)}%（${maxDiffAmount >= 0 ? "+" : "-"}¥${Math.abs(maxDiffAmount).toLocaleString()}）${direction} → ${verdict}`, link: { modal: { type: "rank", rank: maxCat }, label: `${maxCat}クラスの明細` } };
 }
 // フェーズ1：ATH更新後・DD-3%未到達（ボックス圏、または当日ATH更新）。
-function buildPhase1AnalysisText(d, rebalanceSentence, dd3EntrySentence, dynamicAllocationSentence) {
-  const athStr = fmtYMD(d.athDate);
-  const ddStr = `${d.currentDD.toFixed(1)}%`;
+function buildPhase1Analysis(d, items, notes) {
   const statusLabel = d.daysSinceATH === 0 ? "ATH更新中" : "ボックス圏";
+  items.push({ text: `${statusLabel}：ATH（${fmtYMD(d.athDate)}）から${d.daysSinceATH}日・DD${d.currentDD.toFixed(1)}%`, link: ANALYSIS_LINK_SPEED });
   const stat = findBoxStat(d.daysSinceATH);
-  const boxSentence = stat
-    ? `過去実績（同様に${boxStatRangeLabel(stat)}ATH未更新が続いたケース n=${stat.n}件）では、最終的にATH更新${stat.athRate.toFixed(1)}%／DD-3%到達${stat.dd3Rate.toFixed(1)}%となっています。${lowSampleNote(stat)}`
-    : "";
-  return `ATHが${athStr}で、現在は前回のATHから${d.daysSinceATH}日で${statusLabel}（${ddStr}）にあります。${boxSentence}${dd3EntrySentence}${dynamicAllocationSentence}${rebalanceSentence}${ANALYSIS_DISCLAIMER}`;
+  if (stat) {
+    items.push({ text: `ATH未更新が${boxStatRangeLabel(stat)}続いた過去ケース（n=${stat.n}）：最終的にATH更新${stat.athRate.toFixed(1)}%／DD-3%到達${stat.dd3Rate.toFixed(1)}%`, link: ANALYSIS_LINK_SPEED });
+    notes.push(lowSampleNote(stat, `ATH未更新が${boxStatRangeLabel(stat)}続いたケース`));
+  }
 }
 // フェーズ2：DD-3%到達済み・DD-5%未到達。
-function buildPhase2AnalysisText(d, rebalanceSentence, dd3EntrySentence, dynamicAllocationSentence) {
-  const athStr = fmtYMD(d.athDate);
+function buildPhase2Analysis(d, items, notes) {
   const dd3Str = d.speedAlert.d3Date ? fmtYMD(d.speedAlert.d3Date) : "—";
   const daysAthToDd3 = d.ddStartIdx !== -1 ? d.ddStartIdx - d.episode.athIdx : null;
+  items.push({ text: `DD-3%到達：${dd3Str}（ATHの${fmtYMD(d.athDate)}から${daysAthToDd3 !== null ? daysAthToDd3 : "—"}日）・現在DD${d.currentDD.toFixed(1)}%`, link: ANALYSIS_LINK_SPEED });
   const athStat = findAthToDd3Stat(daysAthToDd3);
-  const athToDd3Sentence = athStat
-    ? `過去に同程度の期間（${athToDd3RangeLabel(athStat)}、n=${athStat.n}件）をかけてDD-3%に至ったケースでは、最終的にDD-5%まで到達した割合が${athStat.reach5Rate.toFixed(1)}%、到達した場合の平均所要日数は${athStat.speedMeanDays.toFixed(1)}日でした。また、この局面全体の最終的な最大下落幅は平均${athStat.finalDDMean.toFixed(1)}%（中央値${athStat.finalDDMedian.toFixed(1)}%）、大暴落（DD-15%以上）に至った割合は${athStat.crash15Rate.toFixed(1)}%です。${lowSampleNote(athStat)}`
-    : "";
+  if (athStat) {
+    items.push({ text: `同程度の期間（${athToDd3RangeLabel(athStat)}、n=${athStat.n}）：DD-5%到達${athStat.reach5Rate.toFixed(1)}%（平均${athStat.speedMeanDays.toFixed(1)}日）・最終DD平均${athStat.finalDDMean.toFixed(1)}%／中央値${athStat.finalDDMedian.toFixed(1)}%・大暴落（DD-15%以上）${athStat.crash15Rate.toFixed(1)}%`, link: ANALYSIS_LINK_SPEED });
+    notes.push(lowSampleNote(athStat, `${athToDd3RangeLabel(athStat)}したケース`));
+  }
   const daysSinceDD3 = d.daysSinceDDStart;
   const bucket = daysSinceDD3 !== null ? speed35Bucket(daysSinceDD3, d.trackRecord.speed35Backtest) : null;
-  const speedSentence = bucket
-    ? `現在はDD-3%到達から${daysSinceDD3}日が経過しており、これは速度区分「${bucket.label}」に該当します。過去の同区分（n=${bucket.n}）では、最終DD-15%以上${crashRate(bucket, -15)}／DD-20%以上${crashRate(bucket, -20)}／DD-30%以上${crashRate(bucket, -30)}となっています。`
-    : "";
-  return `${dd3Str}にDD-3%へ到達しました（ATHの${athStr}から${daysAthToDd3 !== null ? daysAthToDd3 : "—"}日）。${athToDd3Sentence}${speedSentence}${dd3EntrySentence}${dynamicAllocationSentence}${rebalanceSentence}${ANALYSIS_DISCLAIMER}`;
+  if (bucket) items.push({ text: `速度区分「${bucket.label}」（DD-3%到達から${daysSinceDD3}日、n=${bucket.n}）：最終DD-15%以上${crashRate(bucket, -15)}／-20%以上${crashRate(bucket, -20)}／-30%以上${crashRate(bucket, -30)}`, link: ANALYSIS_LINK_SPEED });
 }
 // フェーズ3：DD-5%到達済み。詳細はDD加速度アラートに委ね、ここでは要約のみ表示する。
-function buildPhase3AnalysisText(d, rebalanceSentence, dd3EntrySentence, dynamicAllocationSentence) {
+function buildPhase3Analysis(d, items) {
   const dd5Str = d.speedAlert.d5Date ? fmtYMD(d.speedAlert.d5Date) : "—";
+  items.push({ text: `DD-5%到達済み：${dd5Str}・現在DD${d.currentDD.toFixed(1)}%`, link: ANALYSIS_LINK_SPEED });
   const idx3 = d.episode.crossIdx[-3], idx5 = d.episode.crossIdx[-5];
   const speed35 = (idx3 !== -1 && idx5 !== -1) ? idx5 - idx3 : null;
   const bucket = speed35 !== null ? speed35Bucket(speed35, d.trackRecord.speed35Backtest) : null;
-  const summary = bucket
-    ? `速度区分「${bucket.label}」に該当し、過去実績（n=${bucket.n}）では最終DD-15%以上${crashRate(bucket, -15)}／DD-20%以上${crashRate(bucket, -20)}／DD-30%以上${crashRate(bucket, -30)}／DD-40%以上${crashRate(bucket, -40)}／DD-50%以上${crashRate(bucket, -50)}です。詳細はDD加速度アラートをご覧ください。`
-    : "詳細はDD加速度アラートをご覧ください。";
-  return `DD-5%へ到達済みです（${dd5Str}）。${summary}${dd3EntrySentence}${dynamicAllocationSentence}${rebalanceSentence}${ANALYSIS_DISCLAIMER}`;
+  if (bucket) items.push({ text: `速度区分「${bucket.label}」（n=${bucket.n}）：最終DD-15%以上${crashRate(bucket, -15)}／-20%以上${crashRate(bucket, -20)}／-30%以上${crashRate(bucket, -30)}／-40%以上${crashRate(bucket, -40)}／-50%以上${crashRate(bucket, -50)}`, link: ANALYSIS_LINK_SPEED });
 }
-function buildAnalysisText(d, currentHoldingPct, totalValue, dQqq, qqqAmplification) {
-  const rebalanceSentence = buildRebalanceSentence(d, currentHoldingPct, totalValue);
-  const dd3EntrySentence = buildDd3EntrySentence(d);
+// 戻り値：{ items: [{ text, link: { modal, label } }], notes: [string] }
+function buildAnalysis(d, currentHoldingPct, totalValue, dQqq, qqqAmplification) {
+  const items = [], notes = [];
+  if (d.currentDD <= -5) buildPhase3Analysis(d, items, notes);
+  else if (d.currentDD <= -3) buildPhase2Analysis(d, items, notes);
+  else buildPhase1Analysis(d, items, notes);
+  buildDd3EntryAnalysis(d, items, notes);
   const advisory = computeDynamicAllocationAdvisory(d, dQqq, qqqAmplification, currentHoldingPct, totalValue);
-  const dynamicAllocationSentence = buildDynamicAllocationSentence(advisory);
-  if (d.currentDD <= -5) return buildPhase3AnalysisText(d, rebalanceSentence, dd3EntrySentence, dynamicAllocationSentence);
-  if (d.currentDD <= -3) return buildPhase2AnalysisText(d, rebalanceSentence, dd3EntrySentence, dynamicAllocationSentence);
-  return buildPhase1AnalysisText(d, rebalanceSentence, dd3EntrySentence, dynamicAllocationSentence);
+  const allocationItem = buildDynamicAllocationItem(advisory);
+  if (allocationItem) {
+    items.push(allocationItem);
+    notes.push("買い増し額の抑制分は現金として温存し、より深い下落局面での買い増しに繰り越す前提です。");
+  }
+  items.push(buildRebalanceItem(d, currentHoldingPct, totalValue));
+  notes.push("過去実績はSP500の日次終値から都度算出した統計です。統計は過去傾向であり、将来を保証するものではありません。");
+  return { items, notes: notes.filter(Boolean) };
 }
 
 // trackRecordOverride を渡すと、この系列自身の実績ではなく渡された統計（節目間の進行確率・最終到達確率・速度別確率など）を使う。
@@ -2503,26 +2510,22 @@ function countDd3Entries(ddSeries) {
   }
   return entries;
 }
-// 現在のエピソードで一度でもDD-3%圏に到達していれば、フェーズ判定とは独立に突入回数の統計を短い補足文として返す
-// （未到達なら空文字）。DD-3%を回復済み・新ATH未達の状態では「複数回出入りする方が多数派」という注記を必ず添える。
-function buildDd3EntrySentence(d) {
+// 現在のエピソードで一度でもDD-3%圏に到達していれば、フェーズ判定とは独立に突入回数の統計を現状分析の項目に加える
+// （未到達なら何もしない）。DD-3%を回復済み・新ATH未達の状態では「複数回出入りする方が多数派」という項目を必ず添える。
+function buildDd3EntryAnalysis(d, items, notes) {
   const entries = countDd3Entries(d.currentEpisodeCurve.map((p) => p.dd));
-  if (entries <= 0) return "";
+  if (entries <= 0) return;
   const dd3EntryStats = d.trackRecord.dd3EntryStats;
   const stat = findDd3EntryStat(entries, dd3EntryStats);
-  if (!stat) return "";
+  if (!stat) return;
   const bucketLabel = entries <= 4 ? `${entries}回` : "5回以上";
-  let text;
-  if (entries === 1) {
-    text = `今回のエピソードでは、これまでDD-3%圏に1回入っています。初回の到達のため統計的な傾向を示すにはまだ早い段階ですが、過去実績（1回のみ入ったケース n=${stat.n}件）では最終的な下落幅の中央値は${stat.finalDDMedian}%、エピソード全体の平均期間は${stat.avgDurationDays.toFixed(1)}日でした。`;
-  } else {
-    text = `今回のエピソードでは、これまでDD-3%圏に${entries}回入っています。過去実績（n=${dd3EntryStats.n}）では、DD-3%圏への複数回の出入りが発生したエピソードは全体の${dd3EntryStats.overallRate}%を占め、突入回数が多いほど最終的な下落幅が深く、エピソード全体の期間も長期化する傾向があります（突入回数と最終DDの相関${dd3EntryStats.correlations.entriesVsFinalDD}、突入回数と期間の相関${dd3EntryStats.correlations.entriesVsDuration}）。同じ${bucketLabel}のケース（n=${stat.n}）では、最終的な下落幅の中央値は${stat.finalDDMedian}%、エピソード全体の平均期間は${stat.avgDurationDays.toFixed(1)}日でした。`;
-  }
-  if (stat.lowSample) text += `※この突入回数（5回以上）は過去${stat.n}件と少数のため、参考値としてご覧ください。`;
+  items.push({ text: `DD-3%圏への突入${entries}回目（同じ${bucketLabel}のケース n=${stat.n}）：最終DD中央値${stat.finalDDMedian}%・平均期間${stat.avgDurationDays.toFixed(1)}日`, link: ANALYSIS_LINK_MODEL });
+  if (entries === 1) notes.push("DD-3%圏への突入は今回が初回のため、突入回数による傾向を判断するにはまだ早い段階です。");
+  else items.push({ text: `複数回の出入りは全体の${dd3EntryStats.overallRate}%（n=${dd3EntryStats.n}）。回数が多いほど深く・長期化する傾向（相関：最終DD ${dd3EntryStats.correlations.entriesVsFinalDD}・期間 ${dd3EntryStats.correlations.entriesVsDuration}）`, link: ANALYSIS_LINK_MODEL });
+  notes.push(lowSampleNote(stat, `突入回数${bucketLabel}のケース`));
   if (d.currentDD > -3 && dd3EntryStats.overallRate !== null) {
-    text += `なお、過去実績では一度DD-3%を回復しても、そのまま新高値まで到達せず、再度DD-3%を下回るケースの方が多数派です（全体の${dd3EntryStats.overallRate}%が複数出入りを経験）。今回の回復が「下落終了」を意味するとは限らない点にご留意ください。`;
+    items.push({ text: `DD-3%を回復しても再び下回るケースが多数派（全体の${dd3EntryStats.overallRate}%）→ 今回の回復＝下落終了とは限らない`, link: ANALYSIS_LINK_MODEL });
   }
-  return text;
 }
 // compact: ダッシュボード上部の小さいステータス欄用。false: DD加速度アラートモーダル内の詳細カード用。
 function BoxStatsPanel({ days, compact }) {
@@ -4964,12 +4967,51 @@ function MobileDiffPage({ modelOverride, setModelOverride, d, currentHoldingPct,
     </div>
   );
 }
-function MobileAnalysisPage({ analysisText, checkpointResults, onOpenCheckpointSettings }) {
+// 現状分析の箇条書き。各項目の末尾に根拠データの画面へのリンクを付け、見出し横のⓘで前提条件（notes）をポップアップ表示する。
+function AnalysisNotesButton({ notes, size = 11 }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("touchstart", close);
+    return () => { document.removeEventListener("mousedown", close); document.removeEventListener("touchstart", close); };
+  }, [open]);
+  if (!notes.length) return null;
+  return (
+    <span ref={ref} className="relative inline-flex">
+      <button onClick={() => setOpen((v) => !v)} title="現状分析の前提条件" className="inline-flex items-center" style={{ background: "transparent", border: "none", cursor: "pointer", padding: 0, color: open ? C.text : C.textDim }}><Info size={size} /></button>
+      {open && (
+        <div className="absolute z-50 rounded-md p-2.5 text-[11px] leading-relaxed" style={{ top: "calc(100% + 4px)", left: 0, width: 280, maxWidth: "80vw", background: C.panel2, border: `1px solid ${C.border}`, color: C.textMuted, boxShadow: "0 6px 20px rgba(0,0,0,0.45)" }}>
+          <div className="text-[10px] mb-1" style={{ color: C.textDim }}>前提条件</div>
+          <ul className="list-disc pl-3.5 flex flex-col gap-1">{notes.map((n, i) => (<li key={i}>{n}</li>))}</ul>
+        </div>
+      )}
+    </span>
+  );
+}
+function AnalysisHeading({ analysis, className = "text-[10px]" }) {
+  return <div className={`${className} mb-0.5 flex items-center gap-1`} style={{ color: C.textDim }}>現状分析<AnalysisNotesButton notes={analysis.notes} /></div>;
+}
+function AnalysisList({ analysis, onNavigate, className = "text-[11px] leading-tight" }) {
+  return (
+    <ul className={`${className} list-disc pl-3.5 flex flex-col gap-0.5`} style={{ color: C.text }}>
+      {analysis.items.map((item, i) => (
+        <li key={i}>
+          {item.text}
+          {item.link && <button onClick={() => onNavigate(item.link.modal)} className="ml-1 underline whitespace-nowrap" style={{ color: C.teal, background: "transparent", border: "none", cursor: "pointer", padding: 0, fontSize: "0.9em" }}>→ {item.link.label}</button>}
+        </li>
+      ))}
+    </ul>
+  );
+}
+function MobileAnalysisPage({ analysis, onNavigate, checkpointResults, onOpenCheckpointSettings }) {
   return (
     <div className="p-3 flex flex-col gap-3 h-full">
       <div className="rounded-lg p-3 shrink-0" style={{ background: C.panel, border: `1px solid ${C.border}` }}>
-        <div className="text-[11px] mb-1.5" style={{ color: C.textDim }}>現状分析</div>
-        <div className="text-[13px] leading-relaxed" style={{ color: C.text }}>{analysisText}</div>
+        <AnalysisHeading analysis={analysis} className="text-[11px] mb-1" />
+        <AnalysisList analysis={analysis} onNavigate={onNavigate} className="text-[13px] leading-relaxed" />
       </div>
       {/* チェックポイントの件数はユーザー設定次第で増減するため、この枠だけ内部スクロールにして、
           現状分析・免責事項は常に1画面内でスクロールなしに見えるようにする */}
@@ -6376,7 +6418,7 @@ export default function DDDashboard() {
     { key: "current", label: "SP500（現在）", color: C.teal },
     ...(selectedQqqCrashCurve ? [{ key: "qqq", label: "Nasdaq（QQQ・同期間）", color: C.violet }] : []),
   ] : [];
-  const analysisText = useMemo(() => buildAnalysisText(d, currentHoldingPct, holdingsTotal(combinedHoldings), dQqq, qqqAmplification), [d, currentHoldingPct, combinedHoldings, dQqq, qqqAmplification]);
+  const analysis = useMemo(() => buildAnalysis(d, currentHoldingPct, holdingsTotal(combinedHoldings), dQqq, qqqAmplification), [d, currentHoldingPct, combinedHoldings, dQqq, qqqAmplification]);
   const checkpointResults = useMemo(() => {
     const total = holdingsTotal(holdings);
     return checkpoints.map((cp) => evaluateCheckpoint(cp, holdings, total)).filter(Boolean);
@@ -6482,7 +6524,7 @@ export default function DDDashboard() {
               { key: "portfolio", label: "構成", icon: Layers, content: <MobilePortfolioPage pieView={pieView} setPieView={setPieView} holdings={combinedHoldings} ownerDates={ownerUpdatedDates} onOpen={() => setModal({ type: "portfolio" })} onOpenRealHoldingsRanking={() => setModal({ type: "realHoldingsRanking" })} dateLabel={holdingsDateLabel} /> },
               { key: "diff", label: "配分乖離", icon: ListChecks, content: <MobileDiffPage modelOverride={modelOverride} setModelOverride={setModelOverride} d={d} currentHoldingPct={currentHoldingPct} currentHoldingAmount={currentHoldingAmount} effectiveModelRow={effectiveModelRow} rankLabels={rankLabels} blocks={blocks} onOpenRank={(rank) => setModal({ type: "rank", rank })} onOpenDDTable={() => setModal({ type: "ddTable" })} dateLabel={holdingsDateLabel} /> },
               { key: "bottom", label: "底値判定", icon: Gauge, content: <MobileBottomScorePage bottom={bottom} FULL={d.FULL} onOpen={() => setModal({ type: "bottomScore" })} /> },
-              { key: "analysis", label: "現状分析", icon: Info, content: <MobileAnalysisPage analysisText={analysisText} checkpointResults={checkpointResults} onOpenCheckpointSettings={() => setModal({ type: "checkpointSettings" })} /> },
+              { key: "analysis", label: "現状分析", icon: Info, content: <MobileAnalysisPage analysis={analysis} onNavigate={setModal} checkpointResults={checkpointResults} onOpenCheckpointSettings={() => setModal({ type: "checkpointSettings" })} /> },
             ]}
           />
         </div>
@@ -6579,8 +6621,8 @@ export default function DDDashboard() {
               <Panel title="現状分析（AI）" className="h-full" hideHeader>
                 <div className="p-2.5 flex flex-col gap-1.5 overflow-y-auto h-full">
                   <div>
-                    <div className="text-[10px] mb-0.5" style={{ color: C.textDim }}>現状分析</div>
-                    <div className="text-[11px] leading-tight" style={{ color: C.text }}>{analysisText}</div>
+                    <AnalysisHeading analysis={analysis} />
+                    <AnalysisList analysis={analysis} onNavigate={setModal} />
                   </div>
                   <div>
                     <div className="flex items-center justify-between mb-0.5">
