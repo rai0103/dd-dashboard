@@ -12,11 +12,14 @@ import { parseInvestmentExcel, computeOwnAssetDrawdown, computeBenchmarkCAGR, si
 import { computeRealHoldingsRanking } from "@/lib/realHoldingsRanking";
 import { OWNER_RAKUTEN_SAKI, OWNER_RAKUTEN_SHIN, OWNER_MOOMOO, OWNER_OPTIONS, RAKUTEN_OWNERS, migrateHoldingsOwners, migrateAsOfKeys, detectRakutenOwnerFromFileName } from "@/lib/owners";
 import { BROKERS, brokerByKey, extractionToPreviewRows, previewRowsToHoldings, replaceBrokerHoldings, aggregateLabelsReplacedByBrokers, exposureCurrency, rowValue, reconcileWithAccountTotal, isPlausibleBrokerRate, guessBrokerRank, reconciliationTarget, sectionChecks, buildBrokerSummary, profitChecks, appendHoldingSnapshot, holdingChanges } from "@/lib/brokerImport";
+import { importUserPrices, applyApiGold, resetPriceField, goldHistoryFetchStart } from "@/lib/priceSeries";
 import { buildStatsTable, computeMddHoldProbability, depthBucketIndex, LOW_SAMPLE_N } from "@/lib/bottomScore";
 
 // Cloudflare Worker（当日のVOO/QQQ終値を返す。SP500はここでは扱わず引き続きCSV取り込み/直接入力で更新する）のエンドポイント。
 // デプロイ先のURLに置き換えてください。
 const STOCK_PRICES_API_URL = "https://stock-prices.shinichiogasawara0103.workers.dev/api/stock-prices";
+// ゴールド（XAU/USD）の日次終値の履歴（同じWorker経由でTwelve Data time_seriesを取得。?start_date=YYYY-MM-DD で差分取得）。
+const GOLD_HISTORY_API_URL = "https://stock-prices.shinichiogasawara0103.workers.dev/api/gold-history";
 
 /* ---------------- design tokens ---------------- */
 const C = {
@@ -3534,6 +3537,7 @@ function InstrumentPanel({ instrument, vooQqqSeries, fileName, fileMsg, onFileCh
     <div>
       <p className="text-sm mb-1 leading-relaxed" style={{ color: C.textMuted }}>Stooqからダウンロードした {meta.stooqSymbol} の日次CSV（{meta.columns}・日付昇順）を選択するか、1日分だけ直接入力してください。</p>
       <p className="text-xs mb-4" style={{ color: C.textDim }}>取得元: https://stooq.com/q/d/l/?s={meta.stooqQuery}&i=d</p>
+      {instrument === "gold" && <p className="text-xs mb-4 leading-relaxed" style={{ color: C.textDim }}>GOLDは起動時にTwelve Data（XAU/USD）からも自動取得します（未登録なら2008年以降の全期間、以後は最新値と抜けた日のみ）。CSV取り込み・直接入力した日の値はAPIで上書きされません（CSV/直接入力を優先）。2008年より前の局面と比較するにはCSVを取り込んでください。</p>}
       <label className="inline-flex items-center gap-2 text-xs px-3 py-2 rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.textMuted, cursor: "pointer" }}>
         <Upload size={13} /> {label} CSVを選択
         <input type="file" accept=".csv,text/csv,text/comma-separated-values,application/csv,application/vnd.ms-excel,text/plain,application/octet-stream" onChange={onFileChange} style={{ display: "none" }} />
@@ -3553,7 +3557,7 @@ function InstrumentPanel({ instrument, vooQqqSeries, fileName, fileMsg, onFileCh
       <div className="mt-8 pt-4 flex items-center justify-between" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
         <div className="flex items-center gap-2 text-xs" style={{ color: C.textDim }}>
           <Database size={13} />
-          <span>現在の{label}データ: {entries.length.toLocaleString()}件{entries.length > 0 && `・最終日 ${entries[entries.length - 1].date.toLocaleDateString("ja-JP")}`}</span>
+          <span>現在の{label}データ: {entries.length.toLocaleString()}件{instrument === "gold" && entries.length > 0 && `（うちAPI自動取得 ${entries.filter((p) => p.goldSrc === "api").length.toLocaleString()}件）`}{entries.length > 0 && `・最終日 ${entries[entries.length - 1].date.toLocaleDateString("ja-JP")}`}</span>
         </div>
         <button onClick={onResetField} className="text-xs px-2 py-1 rounded" style={{ color: C.textMuted, background: "transparent", border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>{label}データを初期化</button>
       </div>
@@ -3840,7 +3844,7 @@ function BrokerScreenshotImport({ holdings, virtualAggregateLabels, onRegister, 
   );
 }
 
-function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, source, holdings, onUpdateHoldings, onResetAndImportHoldings, onResetHoldings, holdingsSource, overrides, categoryDefaultRanks, onCategoryDefaultRankChange, vooQqqSeries, onAppendVooQqq, onImportVooQqq, onResetVooQqqField, virtualAggregateLabels, onRegisterBrokerHoldings, brokerSummaries }) {
+function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, source, holdings, onUpdateHoldings, onResetAndImportHoldings, onResetHoldings, holdingsSource, overrides, categoryDefaultRanks, onCategoryDefaultRankChange, vooQqqSeries, onAppendVooQqq, onImportVooQqq, onApplyApiGold, onResetVooQqqField, virtualAggregateLabels, onRegisterBrokerHoldings, brokerSummaries }) {
   const [dataset, setDataset] = useState("voo"); // "voo" | "holdings" | "broker"
   const [instrument, setInstrument] = useState("sp500"); // "sp500" | "voo" | "qqq" | "gold"（voo/qqq/goldのCSV/手動入力/削除の対象切り替え）
   const [tab, setTab] = useState("csv");
@@ -3923,7 +3927,9 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
       if (!data || !data.date || typeof data.voo !== "number" || typeof data.qqq !== "number") throw new Error("invalid response");
       const date = parseDateOnly(data.date);
       onAppendVooQqq({ date, voo: data.voo, qqq: data.qqq });
-      setUpdateMsg(`更新完了：${date.toLocaleDateString("ja-JP")} のVOO/QQQ終値を記録しました（S&P500はStooq取り込み/直接入力で更新してください）`);
+      const hasGold = data.goldDate && typeof data.gold === "number";
+      if (hasGold) onApplyApiGold([{ date: parseDateOnly(data.goldDate), price: data.gold }]); // CSV/直接入力で登録済みの日は上書きしない
+      setUpdateMsg(`更新完了：${date.toLocaleDateString("ja-JP")} のVOO/QQQ終値${hasGold ? "・GOLDの最新値" : ""}を記録しました（S&P500はStooq取り込み/直接入力で更新してください）`);
     } catch (e) {
       setUpdateError(true);
       setUpdateMsg("データ取得失敗。稼働時間外の可能性があります");
@@ -4067,7 +4073,7 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
               <Download size={13} /> データ出力
             </button>
           </div>
-          <div className="text-[10px] mb-2" style={{ color: C.textDim }}>※「データ更新」はVOO/QQQのみ自動取得します（記録用途）。S&P500はダッシュボードのDD計算に使う本系列のため、引き続き下記のCSV取り込み・直接入力で更新してください。</div>
+          <div className="text-[10px] mb-2" style={{ color: C.textDim }}>※「データ更新」はVOO/QQQ・GOLDの最新値を自動取得します（GOLDはCSV/直接入力で登録済みの日は上書きしません）。S&P500はダッシュボードのDD計算に使う本系列のため、引き続き下記のCSV取り込み・直接入力で更新してください。</div>
           {updateMsg && <div className="text-xs mb-4" style={{ color: updateError ? C.rust : C.teal }}>{updateMsg}</div>}
 
           <div className="flex gap-2 mb-5">
@@ -6054,13 +6060,15 @@ export default function DDDashboard() {
           if (parsed.length) { setRawSeries(parsed); setDataSource("imported"); }
         }
       } catch (e) { /* no saved data yet — keep bundled seed */ }
+      let storedVooQqq = [];
       try {
         // IndexedDBキー名は歴史的経緯で"spy_voo_price_history"のまま（実体はVOO/QQQ/GOLD（XAUUSD）の終値）。
         // 旧レコードのspyフィールドは読み捨てる（SPYは廃止・QQQに置き換え）。
         const resVooQqq = await storage.get("spy_voo_price_history");
         if (resVooQqq && resVooQqq.value) {
-          const parsedVooQqq = JSON.parse(resVooQqq.value).map((p) => ({ date: parseDateOnly(p.date), voo: p.voo, qqq: p.qqq, gold: p.gold }));
+          const parsedVooQqq = JSON.parse(resVooQqq.value).map((p) => ({ date: parseDateOnly(p.date), voo: p.voo, qqq: p.qqq, gold: p.gold, goldSrc: p.goldSrc }));
           if (parsedVooQqq.length) setVooQqqSeries(parsedVooQqq);
+          storedVooQqq = parsedVooQqq;
         }
       } catch (e) { /* no saved voo/qqq data yet */ }
       // VOO/QQQの終値はIndexedDBが端末ごとに独立しているため、手動更新に頼ると端末間で表示が食い違う。
@@ -6072,8 +6080,22 @@ export default function DDDashboard() {
           if (live && live.date && typeof live.voo === "number" && typeof live.qqq === "number") {
             handleAppendVooQqq({ date: parseDateOnly(live.date), voo: live.voo, qqq: live.qqq });
           }
+          // ゴールド（XAU/USD）の最新値も同じ応答に含まれる（取得できなかった場合は省略される）
+          if (live && live.goldDate && typeof live.gold === "number") handleApplyApiGold([{ date: parseDateOnly(live.goldDate), price: live.gold }]);
         }
       } catch (e) { /* 自動取得失敗（稼働時間外など）— 保存済みデータのまま表示を続行 */ }
+      // ゴールドの過去分：未登録なら全期間（2008年〜）、最終日から日が空いていればその間だけAPIから取得する（毎回は取得しない）。
+      // CSV/直接入力で登録済みの日は上書きしない（handleApplyApiGold）。
+      try {
+        const need = goldHistoryFetchStart(storedVooQqq, new Date());
+        if (need) {
+          const resGold = await fetch(`${GOLD_HISTORY_API_URL}${need.startDate ? `?start_date=${need.startDate}` : ""}`);
+          if (resGold.ok) {
+            const j = await resGold.json();
+            if (Array.isArray(j.values) && j.values.length) handleApplyApiGold(j.values.map((v) => ({ date: parseDateOnly(v.date), price: v.close })));
+          }
+        }
+      } catch (e) { /* 取得失敗時は保存済みデータのまま（次回起動時に再試行） */ }
       try {
         const res2 = await storage.get("portfolio_holdings");
         if (res2 && res2.value) {
@@ -6159,7 +6181,7 @@ export default function DDDashboard() {
     try { await storage.set("voo_price_history", JSON.stringify(series.map((p) => ({ date: p.date.toISOString().slice(0, 10), price: p.price })))); scheduleSyncPush(setSyncOk); } catch (e) { /* storage unavailable */ }
   }
   async function persistVooQqq(series) {
-    try { await storage.set("spy_voo_price_history", JSON.stringify(series.map((p) => ({ date: p.date.toISOString().slice(0, 10), voo: p.voo, qqq: p.qqq, gold: p.gold })))); scheduleSyncPush(setSyncOk); } catch (e) { /* storage unavailable */ }
+    try { await storage.set("spy_voo_price_history", JSON.stringify(series.map((p) => ({ date: p.date.toISOString().slice(0, 10), voo: p.voo, qqq: p.qqq, gold: p.gold, goldSrc: p.goldSrc })))); scheduleSyncPush(setSyncOk); } catch (e) { /* storage unavailable */ }
   }
   function handleAppendVooQqq(entry) {
     setVooQqqSeries((prev) => {
@@ -6172,23 +6194,26 @@ export default function DDDashboard() {
     });
   }
   // CSV一括取り込み：kindは"qqq"|"voo"|"gold"。同じ日付の既存レコードには該当フィールドのみ上書きで合成する。
+  // goldはユーザー登録値（CSV/直接入力）として扱い、API自動取得値より優先する（lib/priceSeries.ts）。
   function handleImportVooQqq(kind, parsedRows) {
     setVooQqqSeries((prev) => {
-      const map = new Map(prev.map((p) => [p.date.toISOString().slice(0, 10), p]));
-      for (const row of parsedRows) {
-        const key = row.date.toISOString().slice(0, 10);
-        const existing = map.get(key) || { date: row.date };
-        map.set(key, { ...existing, [kind]: row.price });
-      }
-      const merged = Array.from(map.values()).sort((a, b) => a.date - b.date);
+      const merged = importUserPrices(prev, kind, parsedRows);
       persistVooQqq(merged);
       return merged;
+    });
+  }
+  // Twelve Data APIで自動取得したゴールド終値（[{ date, price }]）を反映する。CSV/直接入力で登録済みの日は上書きしない。
+  function handleApplyApiGold(rows) {
+    setVooQqqSeries((prev) => {
+      const { series, changed } = applyApiGold(prev, rows);
+      if (changed) persistVooQqq(series);
+      return series;
     });
   }
   // kind（"qqq"|"voo"|"gold"）のデータのみ削除する。全フィールドが消えた日付のレコードは配列から除去する。
   function handleResetVooQqqField(kind) {
     setVooQqqSeries((prev) => {
-      const next = prev.map((p) => { const c = { ...p }; delete c[kind]; return c; }).filter((p) => p.voo != null || p.qqq != null || p.gold != null);
+      const next = resetPriceField(prev, kind);
       persistVooQqq(next);
       return next;
     });
@@ -6552,7 +6577,7 @@ export default function DDDashboard() {
       {modal?.type === "rank" && <FullScreenModal title={`${modal.rank}ランクの保有銘柄`} onClose={() => setModal(null)}><RankHoldingsContent rank={modal.rank} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
       {modal?.type === "crash" && <FullScreenModal title={`${crashDisplayName(modal.crash)}（${modal.crash.start} 〜）と現状の比較`} onClose={() => setModal(null)}><CrashModalContent crash={modal.crash} daysSinceATH={d.daysSinceATH} currentDD={d.currentDD} currentEpisodeCurve={d.currentEpisodeCurve} qqqFull={dQqq?.FULL ?? null} goldFull={goldSeries} allCrashes={historicalCrashes} onJump={(c) => setModal({ type: "crash", crash: c })} /></FullScreenModal>}
       {modal?.type === "ddChart" && <FullScreenModal title={chartSourceTitle(chartSource)} onClose={() => setModal(null)}><DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} bothChartData={bothChartData} chartSource={chartSource} setChartSource={setChartSource} /></FullScreenModal>}
-      {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} vooQqqSeries={vooQqqSeries} onAppendVooQqq={handleAppendVooQqq} onImportVooQqq={handleImportVooQqq} onResetVooQqqField={handleResetVooQqqField} virtualAggregateLabels={virtualAggregateLabels} onRegisterBrokerHoldings={handleRegisterBrokerHoldings} brokerSummaries={brokerSummaries} />}
+      {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} vooQqqSeries={vooQqqSeries} onAppendVooQqq={handleAppendVooQqq} onImportVooQqq={handleImportVooQqq} onApplyApiGold={handleApplyApiGold} onResetVooQqqField={handleResetVooQqqField} virtualAggregateLabels={virtualAggregateLabels} onRegisterBrokerHoldings={handleRegisterBrokerHoldings} brokerSummaries={brokerSummaries} />}
       {modal?.type === "checkpointSettings" && <FullScreenModal title="チェックポイント設定" onClose={() => setModal(null)}><CheckpointSettingsContent checkpoints={checkpoints} onCheckpointChange={handleCheckpointChange} holdings={holdings} /></FullScreenModal>}
       {modal?.type === "bottomScore" && <FullScreenModal title={bottom.hold.applicable ? `底値判定：${bottomLabel(d.FULL, bottom.hold.state)} が底値として確定する確率（SP500実績から都度算出）` : "底値判定（SP500実績から都度算出）"} onClose={() => setModal(null)}><BottomScoreModalContent bottom={bottom} FULL={d.FULL} /></FullScreenModal>}
       {modal?.type === "realHoldingsRanking" && <FullScreenModal title="実質保有銘柄ランキング" onClose={() => setModal(null)}><RealHoldingsRankingContent holdings={combinedHoldings} /></FullScreenModal>}

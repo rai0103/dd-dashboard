@@ -3,7 +3,9 @@
 // （Stooqはサーバーサイドfetchに対するBot対策のJS認証チャレンジを導入したため利用不可）
 // S&P500指数そのもの（SPXシンボル）はTwelve Data無料プランでは利用不可（403）のため取得しない。
 // S&P500はダッシュボード側で既存のStooq CSV取り込み・直接入力を使い続ける運用とする。
-// 応答: { date: "YYYY-MM-DD", voo: number, qqq: number }
+// 応答: { date: "YYYY-MM-DD", voo: number, qqq: number, gold?: number, goldDate?: "YYYY-MM-DD" }
+//   gold はゴールド（XAU/USD、Twelve Data無料プランで取得可）の最新値。取得できなかった場合は省略し、VOO/QQQだけ返す。
+//   Twelve Dataの日足には土日の日付（金曜値の据え置き）が混じることがあるため、goldDateが土日の場合も省略する。
 // 失敗時: 502 + { error: "データ取得失敗。稼働時間外の可能性があります" }
 //
 // 事前準備: Twelve Data (https://twelvedata.com/) でAPIキーを取得し、
@@ -20,7 +22,11 @@ export interface Env {
   DD_SYNC_KV: KVNamespace;
 }
 
-const SYMBOLS = { voo: "VOO", qqq: "QQQ" } as const;
+const SYMBOLS = { voo: "VOO", qqq: "QQQ", gold: "XAU/USD" } as const;
+// GET /api/gold-history の1回あたりの最大取得件数（Twelve Data time_seriesの上限。日次で約20年分、1回=1クレジット）
+const GOLD_HISTORY_MAX_POINTS = 5000;
+// 土日（ゴールド市場の休場日）の日付か。Twelve Dataの日足に混じる金曜値の据え置きレコードを除くために使う。
+function isWeekendDate(ymd: string): boolean { const w = new Date(ymd + "T00:00:00Z").getUTCDay(); return w === 0 || w === 6; }
 
 const SYNC_KV_KEY = "dd-dashboard-data";
 
@@ -112,6 +118,33 @@ export default {
       }
     }
 
+    // GET /api/gold-history?start_date=YYYY-MM-DD
+    // ゴールド（XAU/USD）の日次終値の履歴（Twelve Data time_series、日付昇順）。start_date省略時は直近最大5000日分（2008年〜）。
+    // 土日の日付（金曜値の据え置き）は除き、同じ日付が重複した場合は後に来た値（最新）を採用する。
+    // ダッシュボードは保存済みデータに抜けがあるときだけ呼ぶ（毎回は呼ばない）ため、レート制限への影響は小さい。
+    // 応答: { values: [{ date: "YYYY-MM-DD", close: number }] }
+    if (url.pathname === "/api/gold-history") {
+      const startDate = url.searchParams.get("start_date");
+      if (startDate && !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) return jsonResponse({ error: "start_date は YYYY-MM-DD で指定してください" }, 400);
+      try {
+        const params = new URLSearchParams({ symbol: SYMBOLS.gold, interval: "1day", outputsize: String(GOLD_HISTORY_MAX_POINTS), order: "ASC", apikey: env.TWELVE_DATA_API_KEY });
+        if (startDate) params.set("start_date", startDate);
+        const res = await fetch(`https://api.twelvedata.com/time_series?${params}`);
+        if (!res.ok) throw new Error(`twelvedata responded ${res.status}`);
+        const data = (await res.json()) as { status?: string; message?: string; values?: { datetime: string; close: string }[] };
+        if (data.status !== "ok" || !Array.isArray(data.values)) throw new Error(data.message ?? "no values");
+        const byDate = new Map<string, number>();
+        for (const v of data.values) {
+          const date = v.datetime.slice(0, 10), close = parseFloat(v.close);
+          if (/^\d{4}-\d{2}-\d{2}$/.test(date) && !Number.isNaN(close) && !isWeekendDate(date)) byDate.set(date, close);
+        }
+        const values = [...byDate].map(([date, close]) => ({ date, close })).sort((a, b) => a.date.localeCompare(b.date));
+        return jsonResponse({ values });
+      } catch {
+        return jsonResponse({ error: "ゴールドの価格履歴の取得に失敗しました" }, 502);
+      }
+    }
+
     if (url.pathname !== "/api/stock-prices") return jsonResponse({ error: "not found" }, 404);
 
     try {
@@ -132,7 +165,7 @@ export default {
       const get = (key: keyof typeof SYMBOLS) => {
         const q = bySymbol[SYMBOLS[key]];
         const close = q?.close != null ? parseFloat(q.close) : NaN;
-        return { close, date: q?.datetime };
+        return { close, date: q?.datetime?.slice(0, 10) };
       };
 
       const voo = get("voo");
@@ -141,7 +174,10 @@ export default {
         throw new Error("incomplete quote data");
       }
 
-      return jsonResponse({ date: voo.date, voo: voo.close, qqq: qqq.close });
+      // ゴールドは取得できた場合のみ付ける（失敗してもVOO/QQQの取得は成功扱いにする）
+      const gold = get("gold");
+      const goldPart = gold.date && !Number.isNaN(gold.close) && !isWeekendDate(gold.date) ? { gold: gold.close, goldDate: gold.date } : {};
+      return jsonResponse({ date: voo.date, voo: voo.close, qqq: qqq.close, ...goldPart });
     } catch (e) {
       return jsonResponse({ error: "データ取得失敗。稼働時間外の可能性があります" }, 502);
     }
