@@ -26,6 +26,7 @@ const C = {
   teal: "#45C4B0", amber: "#D9A24B", rust: "#C0654B", rustSoft: "rgba(192,101,75,0.16)",
   violet: "#8B7FC7", blue: "#5B90C7",
   gray: "#7A8499", white: "#FFFFFF",
+  gold: "#F2D35B", // ゴールド（XAUUSD）系列。SP500（teal）・Nasdaq（violet）・DD節目線（amber）と見分けやすい明るい黄色
 };
 function depthColor(v) { if (v >= -3) return C.teal; if (v >= -18) return C.amber; return C.rust; }
 function hexToRgb(hex) { const h = hex.replace("#", ""); return { r: parseInt(h.substring(0, 2), 16), g: parseInt(h.substring(2, 4), 16), b: parseInt(h.substring(4, 6), 16) }; }
@@ -120,7 +121,7 @@ function parseStooqCSV(text) {
   rows.sort((a, b) => a.date - b.date);
   return rows;
 }
-// 本アプリの「データ出力」が生成する統合形式（見出し Date,SP500,VOO,QQQ）を検出してパースする。
+// 本アプリの「データ出力」が生成する統合形式（見出し Date,SP500,VOO,QQQ,GOLD。GOLD列の無い旧形式も可）を検出してパースする。
 // 日付は"-"/"/"区切り・ゼロ埋めなし（例:2026/9/3）どちらも parseDateOnly が吸収し、昇順・降順どちらの並びでも読めるよう都度ソートし直す。
 // SP500をまとめて手入力・貼り付けでアップロードするケースにも対応できるよう、sp500/voo/qqqのいずれか1列でも
 // 見出しに見つかれば統合形式として扱う（見つからない列は空配列を返す）。日付列すら見つからなければnullを返し、
@@ -134,23 +135,26 @@ function parseCombinedTrackRecordCSV(text) {
   const sp500Idx = findCol(header, ["sp500", "s&p500"]);
   const vooIdx = findCol(header, ["voo"]);
   const qqqIdx = findCol(header, ["qqq"]);
-  if (dateIdx === -1 || (sp500Idx === -1 && vooIdx === -1 && qqqIdx === -1)) return null;
-  const sp500 = [], voo = [], qqq = [];
+  const goldIdx = findCol(header, ["gold", "xauusd"]);
+  if (dateIdx === -1 || (sp500Idx === -1 && vooIdx === -1 && qqqIdx === -1 && goldIdx === -1)) return null;
+  const sp500 = [], voo = [], qqq = [], gold = [];
   for (let i = 1; i < lines.length; i++) {
     const cols = parseCSVLine(lines[i]);
-    if (cols.length <= Math.max(dateIdx, sp500Idx, vooIdx, qqqIdx)) continue;
+    if (cols.length <= Math.max(dateIdx, sp500Idx, vooIdx, qqqIdx)) continue; // GOLD列は末尾のため、空欄で省略された行も他の列は読む
     const d = parseDateOnly(cols[dateIdx]);
     if (isNaN(d.getTime())) continue;
     const num = (idx) => { if (idx === -1) return null; const v = parseFloat(String(cols[idx]).replace(/,/g, "").trim()); return isNaN(v) ? null : v; };
-    const sp = num(sp500Idx), vo = num(vooIdx), qq = num(qqqIdx);
+    const sp = num(sp500Idx), vo = num(vooIdx), qq = num(qqqIdx), go = goldIdx < cols.length ? num(goldIdx) : null;
     if (sp !== null) sp500.push({ date: d, price: sp });
     if (vo !== null) voo.push({ date: d, price: vo });
     if (qq !== null) qqq.push({ date: d, price: qq });
+    if (go !== null) gold.push({ date: d, price: go });
   }
   sp500.sort((a, b) => a.date - b.date);
   voo.sort((a, b) => a.date - b.date);
   qqq.sort((a, b) => a.date - b.date);
-  return { sp500, voo, qqq };
+  gold.sort((a, b) => a.date - b.date);
+  return { sp500, voo, qqq, gold };
 }
 const SPY_LISTING_DATE = new Date("1993-01-22"); // S&P500の実際の設定日（この日以前はS&P500の実データが存在しない）
 
@@ -1770,21 +1774,44 @@ const SIMILARITY_MIN_DD = -3;
 // プルダウンに追加表示する類似局面の件数（-10%未満の浅い局面でも、類似上位はプルダウンから選べるようにする）
 const SIMILAR_IN_DROPDOWN = 5;
 // 暴落比較チャートの縦軸（DD%）の範囲。表示中の曲線の最も深いDDに合わせる（浅い押し目同士の比較でも形が見えるように）。
+// GOLD（騰落率）はプラス方向にも振れるため、上限も表示中の最大値に合わせて広げる（プラスが無ければ従来どおり+1%）。
 function comparisonYDomain(data) {
-  let min = 0;
-  for (const row of data) for (const [k, v] of Object.entries(row)) if (k !== "day" && typeof v === "number" && v < min) min = v;
-  const step = min > -10 ? 1 : min > -30 ? 5 : 10;
-  return [Math.floor((min * 1.1) / step) * step - step, 1];
+  let min = 0, max = 0;
+  for (const row of data) for (const [k, v] of Object.entries(row)) if (k !== "day" && typeof v === "number") { if (v < min) min = v; if (v > max) max = v; }
+  const span = Math.max(-min, max);
+  const step = span < 10 ? 1 : span < 30 ? 5 : 10;
+  return [Math.floor((min * 1.1) / step) * step - step, max > 1 ? Math.ceil((max * 1.1) / step) * step : 1];
+}
+// SP500の過去局面（crash）の各営業日（crash.curveの日付）に、別の銘柄の終値を揃える。銘柄側に終値が無い日は直前の終値を引き継ぐ。
+// 銘柄の日次終値が局面の開始日をカバーしていない（データ開始より前の局面）場合はnull。
+function alignPricesToCrash(crash, full) {
+  if (!crash?.curve?.length || !full?.length || full[0].date > crash.curve[0].date) return null;
+  let j = 0, price = null;
+  return crash.curve.map((pt) => {
+    while (j < full.length && full[j].date <= pt.date) { price = full[j].price; j++; }
+    return { day: pt.day, date: pt.date, price };
+  });
+}
+// SP500の過去局面と同じ日付区間における、ゴールド（XAUUSD）の騰落率（SP500のATH日＝day=0の終値比、%）を求める。
+// 株価下落時にゴールドが上がったか下がったかを見たいため、DD（高値比で常に0%以下）ではなくプラスにもなる騰落率で表す。
+function buildGoldCrashCurve(crash, goldFull) {
+  const aligned = alignPricesToCrash(crash, goldFull);
+  if (!aligned) return null;
+  const base = aligned[0].price;
+  const curve = aligned.map((pt) => ({ day: pt.day, dd: Number((((pt.price / base) - 1) * 100).toFixed(2)), date: pt.date })); // ddキーは他の系列とLineの描画を共通化するため（値は騰落率）
+  const values = curve.map((pt) => pt.dd);
+  const minPct = Math.min(...values), maxPct = Math.max(...values);
+  return { curve, minPct: Number(minPct.toFixed(1)), maxPct: Number(maxPct.toFixed(1)), maxDay: curve.find((pt) => pt.dd === maxPct).day, minDay: curve.find((pt) => pt.dd === minPct).day };
 }
 // SP500の過去局面（crash：SP500のATH日〜ATH回復日）と同じ日付区間における、Nasdaq（QQQ）のDD%推移を求める。
 // 局面ごとに比較できるよう、DDの基準はQQQ自身の過去最高値ではなく「SP500のATH日（day=0）以降のQQQの高値」とする（day=0で0%）。
 // SP500の営業日（crash.curveの各日付）に揃え、QQQ側に終値が無い日は直前の終値を引き継ぐ。
 // QQQの日次終値が局面の開始日をカバーしていない（QQQデータ開始より前の局面）場合はnull。
 function buildQqqCrashCurve(crash, qqqFull) {
-  if (!crash?.curve?.length || !qqqFull?.length || qqqFull[0].date > crash.curve[0].date) return null;
-  let j = 0, price = null, high = 0, minDD = 0;
-  const curve = crash.curve.map((pt) => {
-    while (j < qqqFull.length && qqqFull[j].date <= pt.date) { price = qqqFull[j].price; j++; }
+  const aligned = alignPricesToCrash(crash, qqqFull);
+  if (!aligned) return null;
+  let high = 0, minDD = 0;
+  const curve = aligned.map(({ price, ...pt }) => {
     high = Math.max(high, price);
     const dd = Number((((price / high) - 1) * 100).toFixed(2));
     minDD = Math.min(minDD, dd);
@@ -1794,7 +1821,8 @@ function buildQqqCrashCurve(crash, qqqFull) {
   return { curve, maxDD: Number(minDD.toFixed(1)), troughDay };
 }
 // qqqCrashCurve：表示中の過去局面と同じ期間のNasdaq（QQQ）のDD%推移（buildQqqCrashCurveの戻り値。データ範囲外・未取り込み時はnull）。
-function buildComparisonData(currentEpisodeCurve, crashes, qqqCrashCurve = null) {
+// goldCrashCurve：同じ期間のゴールドの騰落率（buildGoldCrashCurveの戻り値。データ範囲外・未取り込み時はnull）。
+function buildComparisonData(currentEpisodeCurve, crashes, qqqCrashCurve = null, goldCrashCurve = null) {
   const maxDay = crashes.length ? Math.max(...crashes.map((c) => c.recoveryDay)) : Math.max(0, currentEpisodeCurve.length - 1);
   const qqqEpisodeCurve = qqqCrashCurve?.curve ?? null;
   const rows = [];
@@ -1803,6 +1831,7 @@ function buildComparisonData(currentEpisodeCurve, crashes, qqqCrashCurve = null)
     for (const c of crashes) row[c.id] = d < c.curve.length ? c.curve[d].dd : 0;
     row.current = d < currentEpisodeCurve.length ? currentEpisodeCurve[d].dd : undefined;
     if (qqqEpisodeCurve) row.qqq = d < qqqEpisodeCurve.length ? qqqEpisodeCurve[d].dd : undefined;
+    if (goldCrashCurve) row.gold = d < goldCrashCurve.curve.length ? goldCrashCurve.curve[d].dd : undefined;
     rows.push(row);
   }
   const step = Math.max(1, Math.ceil(rows.length / 320));
@@ -2286,6 +2315,7 @@ function DDChartModalContent({ chartData, rangeDays, d, hidden, toggle, period, 
               {selectedCrash && !hiddenCrash[selectedCrash.id] && <Line type="monotone" dataKey={selectedCrash.id} stroke={C.rust} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls={false} name={crashDisplayName(selectedCrash)} />}
               {!hiddenCrash.current && <Line type="monotone" dataKey="current" stroke={C.teal} strokeWidth={2.6} dot={false} isAnimationActive={false} connectNulls={false} name="SP500（現在）" />}
               {comparisonData[0]?.qqq !== undefined && !hiddenCrash.qqq && <Line type="monotone" dataKey="qqq" stroke={C.violet} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls={false} name="Nasdaq（QQQ・同期間）" />}
+              {comparisonData[0]?.gold !== undefined && !hiddenCrash.gold && <Line type="monotone" dataKey="gold" stroke={C.gold} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls={false} name="GOLD（同期間・騰落率）" />}
             </LineChart>
           </ResponsiveContainer>
         </div>
@@ -3165,12 +3195,15 @@ function RankHoldingsContent({ rank, holdings, onEditHolding, onDeleteHolding })
 // メインの暴落＝赤、追加1＝白（細）、追加2＝グレー（細）、現在＝グリーン（通常表示のATH/評価額ラインと同色）。点線は使用しない。
 const COMPARE_COLORS = [C.white, C.gray];
 // qqq：選択した過去局面と同じ期間のNasdaq（QQQ）のDD%推移（buildQqqCrashCurveの戻り値＋crash）。非表示・データ範囲外の場合はnull。
-function CrashDetailChart({ crash, compareCrashes = [], daysSinceATH, currentDD, currentEpisodeCurve, qqq = null, annotationPoints, ddTicks, maxDay, width, height }) {
+// gold：選択した過去局面と同じ期間のゴールドの騰落率（buildGoldCrashCurveの戻り値＋crash）。非表示・データ範囲外の場合はnull。
+// プラス方向（ゴールドの上昇）も描けるよう、縦軸の上限（yMax）と目盛（ddTicks：プラス側の目盛を含む）は呼び出し側で算出して渡す。
+function CrashDetailChart({ crash, compareCrashes = [], daysSinceATH, currentDD, currentEpisodeCurve, qqq = null, gold = null, annotationPoints, ddTicks, yMax = 2, maxDay, width, height }) {
   // ニュースの吹き出し表示中は標準Tooltip（経過日数のポップアップ）と重なるため非表示にする。
   const [newsHover, setNewsHover] = useState(false);
   const nameFor = (id) => {
     if (id === "current") return "SP500（現在）";
     if (id === "qqq") return `Nasdaq（QQQ・${crashDisplayName(qqq.crash)}）`;
+    if (id === "gold") return `GOLD騰落率（${crashDisplayName(gold.crash)}）`;
     if (id === crash.id) return crashDisplayName(crash);
     const found = compareCrashes.find((c) => c.id === id);
     return found ? crashDisplayName(found) : id;
@@ -3179,7 +3212,8 @@ function CrashDetailChart({ crash, compareCrashes = [], daysSinceATH, currentDD,
     <LineChart width={width} height={height} margin={{ top: 34, right: 20, left: 0, bottom: 28 }}>
       <CartesianGrid stroke={C.borderSoft} vertical={false} />
       <XAxis dataKey="day" type="number" domain={[0, maxDay ?? crash.recoveryDay]} allowDuplicatedCategory={false} tick={{ fill: C.textDim, fontSize: 10 }} axisLine={{ stroke: C.border }} tickLine={false} label={{ value: "経過日数（ATH起点、左端=ATH・右端=次のATH）", position: "bottom", offset: 4, fill: C.textDim, fontSize: 10 }} />
-      <YAxis domain={[ddTicks[ddTicks.length - 1], 2]} ticks={ddTicks} tick={{ fill: C.textDim, fontSize: 10 }} axisLine={false} tickLine={false} width={48} tickFormatter={(v) => `${v}%`} label={{ value: "DD%", angle: -90, position: "insideLeft", fill: C.textDim, fontSize: 10 }} />
+      <YAxis domain={[ddTicks[ddTicks.length - 1], yMax]} ticks={ddTicks} tick={{ fill: C.textDim, fontSize: 10 }} axisLine={false} tickLine={false} width={48} tickFormatter={(v) => `${v}%`} label={{ value: gold ? "DD% / GOLD騰落率" : "DD%", angle: -90, position: "insideLeft", fill: C.textDim, fontSize: 10 }} />
+      {yMax > 2 && <ReferenceLine y={0} stroke={C.border} />}
       <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} formatter={(v, n) => [`${v}%`, nameFor(n)]} wrapperStyle={newsHover ? { visibility: "hidden" } : undefined} />
       <ReferenceLine y={-3} stroke={C.amber} strokeDasharray="4 3" strokeWidth={1.3} label={{ value: "-3%", position: "left", fill: C.amber, fontSize: 9 }} />
       <ReferenceLine y={-5} stroke={C.amber} strokeDasharray="4 3" strokeWidth={1.3} label={{ value: "-5%", position: "left", fill: C.amber, fontSize: 9 }} />
@@ -3189,6 +3223,7 @@ function CrashDetailChart({ crash, compareCrashes = [], daysSinceATH, currentDD,
       {compareCrashes.map((c, i) => (
         <Line key={c.id} data={c.curve} dataKey="dd" type="monotone" stroke={COMPARE_COLORS[i] ?? C.gray} strokeWidth={0.8} dot={false} isAnimationActive={false} name={c.id} />
       ))}
+      {gold && <Line data={gold.curve} dataKey="dd" type="monotone" stroke={C.gold} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls={false} name="gold" />}
       {qqq && <Line data={qqq.curve} dataKey="dd" type="monotone" stroke={C.violet} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls={false} name="qqq" />}
       <Line data={currentEpisodeCurve} dataKey="dd" type="monotone" stroke={C.teal} strokeWidth={2.6} dot={false} isAnimationActive={false} connectNulls={false} name="current" />
       <ReferenceDot x={crash.troughDay} y={crash.maxDD} r={4} fill={C.rust} stroke={C.bg} strokeWidth={2} />
@@ -3201,7 +3236,7 @@ function CrashDetailChart({ crash, compareCrashes = [], daysSinceATH, currentDD,
     </LineChart>
   );
 }
-function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve, qqqFull = null, allCrashes, onJump }) {
+function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve, qqqFull = null, goldFull = null, allCrashes, onJump }) {
   const [showDetail, setShowDetail] = useState(false);
   // Nasdaq（QQQ）：選択した過去局面（SP500のATH日〜回復日）と同じ期間のQQQのDD%推移を重ねる。
   // 既定はメインの暴落と同じ期間で、追加1/追加2と同じプルダウンで別の局面の期間や「選択しない」（非表示）を選べる。
@@ -3212,6 +3247,14 @@ function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve
     const res = target ? buildQqqCrashCurve(target, qqqFull) : null;
     return res ? { ...res, crash: target } : null;
   }, [qqqOptions, qqqCrashId, qqqFull]);
+  // GOLD：Nasdaqと同じ仕様で、選択した過去局面と同じ期間のゴールドの騰落率（day=0の終値比）を重ねる。
+  const [goldCrashId, setGoldCrashId] = useState(crash.id);
+  const goldOptions = useMemo(() => (goldFull?.length && allCrashes ? allCrashes.filter((c) => alignPricesToCrash(c, goldFull)) : []), [allCrashes, goldFull]);
+  const gold = useMemo(() => {
+    const target = goldOptions.find((c) => c.id === goldCrashId);
+    const res = target ? buildGoldCrashCurve(target, goldFull) : null;
+    return res ? { ...res, crash: target } : null;
+  }, [goldOptions, goldCrashId, goldFull]);
   // 追加比較①②：メインの下落（crash・上部プルダウンで切替）とは別に、もう2つまで下落局面を選んで同時に重ね描きできるようにする。
   const [compareId1, setCompareId1] = useState("");
   const [compareId2, setCompareId2] = useState("");
@@ -3220,8 +3263,13 @@ function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve
   const compare1 = useMemo(() => (compareId1 && compareId1 !== crash.id ? allCrashes?.find((c) => c.id === compareId1) ?? null : null), [allCrashes, compareId1, crash.id]);
   const compare2 = useMemo(() => (compareId2 && compareId2 !== crash.id && compareId2 !== compareId1 ? allCrashes?.find((c) => c.id === compareId2) ?? null : null), [allCrashes, compareId2, crash.id, compareId1]);
   const compareCrashes = [compare1, compare2].filter(Boolean);
-  const maxDay = Math.max(crash.recoveryDay, daysSinceATH, ...compareCrashes.map((c) => c.recoveryDay), qqq ? qqq.crash.recoveryDay : 0);
-  const ddTicks = ddAxisTicksForMaxDrawdown(Math.min(crash.maxDD, ...compareCrashes.map((c) => c.maxDD), qqq ? qqq.maxDD : 0));
+  const maxDay = Math.max(crash.recoveryDay, daysSinceATH, ...compareCrashes.map((c) => c.recoveryDay), qqq ? qqq.crash.recoveryDay : 0, gold ? gold.crash.recoveryDay : 0);
+  const negTicks = ddAxisTicksForMaxDrawdown(Math.min(crash.maxDD, ...compareCrashes.map((c) => c.maxDD), qqq ? qqq.maxDD : 0, gold ? gold.minPct : 0));
+  // GOLDが上昇した局面ではプラス側にも目盛を足し、縦軸の上限をその最大値まで広げる。
+  const posStep = !gold || gold.maxPct <= 2 ? 0 : gold.maxPct <= 10 ? 5 : gold.maxPct <= 40 ? 10 : 20;
+  const posTicks = posStep ? Array.from({ length: Math.ceil(gold.maxPct / posStep) }, (_, i) => (i + 1) * posStep).reverse() : [];
+  const ddTicks = [...posTicks, ...negTicks];
+  const yMax = posTicks.length ? posTicks[0] : 2;
   const annotationPoints = useMemo(() => resolveCrashAnnotations(crash), [crash]);
   // メインの下落を切り替えたら詳細解説を閉じ、切替先と重複する比較選択はクリアする。
   useEffect(() => {
@@ -3229,6 +3277,7 @@ function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve
     setCompareId1((id) => (id === crash.id ? "" : id));
     setCompareId2((id) => (id === crash.id ? "" : id));
     setQqqCrashId(crash.id);
+    setGoldCrashId(crash.id);
   }, [crash.id]);
   useEffect(() => { if (compareId2 && compareId2 === compareId1) setCompareId2(""); }, [compareId1, compareId2]);
   const compare1Options = allCrashes ? allCrashes.filter((c) => c.id !== crash.id && c.id !== compareId2) : [];
@@ -3312,11 +3361,29 @@ function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve
                 : qqqCrashId && <span style={{ color: C.textMuted }}>この局面はQQQのデータ範囲外です</span>}
             </div>
           )}
+          {goldFull?.length > 0 && (
+            <div className="flex items-center gap-2 flex-wrap text-[11px]" style={{ color: C.textDim }}>
+              <span style={{ width: 7, height: 7, borderRadius: 2, background: C.gold, flexShrink: 0 }} />
+              <span style={{ minWidth: 60 }}>GOLD</span>
+              <select
+                value={gold ? goldCrashId : ""}
+                onChange={(e) => setGoldCrashId(e.target.value)}
+                className="rounded"
+                style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text, padding: "3px 6px", cursor: "pointer" }}
+              >
+                <option value="">選択しない</option>
+                {goldOptions.map((c) => (<option key={c.id} value={c.id}>{crashButtonLabel(c)}</option>))}
+              </select>
+              {gold
+                ? <span className="mono" style={{ color: C.textMuted }}>同期間のGOLD騰落率：最高{gold.maxPct > 0 ? "+" : ""}{gold.maxPct}%・最低{gold.minPct > 0 ? "+" : ""}{gold.minPct}%・終点{gold.curve[gold.curve.length - 1].dd > 0 ? "+" : ""}{gold.curve[gold.curve.length - 1].dd.toFixed(1)}%</span>
+                : goldCrashId && <span style={{ color: C.textMuted }}>この局面はGOLDのデータ範囲外です</span>}
+            </div>
+          )}
         </div>
       )}
       <div style={{ height: 460 }} className="mb-2">
         <ResponsiveContainer width="100%" height="100%">
-          <CrashDetailChart crash={crash} compareCrashes={compareCrashes} daysSinceATH={daysSinceATH} currentDD={currentDD} currentEpisodeCurve={currentEpisodeCurve} qqq={qqq} annotationPoints={annotationPoints} ddTicks={ddTicks} maxDay={maxDay} />
+          <CrashDetailChart crash={crash} compareCrashes={compareCrashes} daysSinceATH={daysSinceATH} currentDD={currentDD} currentEpisodeCurve={currentEpisodeCurve} qqq={qqq} gold={gold} annotationPoints={annotationPoints} ddTicks={ddTicks} yMax={yMax} maxDay={maxDay} />
         </ResponsiveContainer>
       </div>
       {annotationPoints.length > 0 && <div className="text-[10px] mb-2" style={{ color: C.textDim }}>● にカーソルを合わせると当時の出来事を表示します。</div>}
@@ -3332,6 +3399,7 @@ function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve
             </div>
           );
         })}
+        {gold && (() => { const v = gold.curve[Math.min(daysSinceATH, gold.curve.length - 1)].dd; return <div>同じ期間のGOLDは、同じ経過日数時点で<span style={{ color: v >= 0 ? C.teal : C.rust, fontWeight: 700 }}>{v > 0 ? "+" : ""}{v}%</span>（期間中の最高{gold.maxPct > 0 ? "+" : ""}{gold.maxPct}%・最低{gold.minPct > 0 ? "+" : ""}{gold.minPct}%）でした。</div>; })()}
         {qqq && <div>同じ期間のNasdaq（QQQ）は、同じ経過日数時点でDD{qqq.curve[Math.min(daysSinceATH, qqq.curve.length - 1)].dd}%（期間中の最大DD{qqq.maxDD}%）でした。</div>}
       </div>
       {crash.isKnown ? (
@@ -3451,15 +3519,21 @@ function CheckpointSettingsContent({ checkpoints, onCheckpointChange, holdings }
 }
 
 /* ---------------- data input modal ---------------- */
-// VOO/QQQ単体のデータ管理パネル（CSV一括取り込み・1日分の手動入力・現在のデータ表示・削除）。
+// VOO/QQQ/GOLD単体のデータ管理パネル（CSV一括取り込み・1日分の手動入力・現在のデータ表示・削除）。
+const INSTRUMENT_META = {
+  voo: { label: "VOO", stooqSymbol: "VOO.US", stooqQuery: "voo.us", columns: "Date,Open,High,Low,Close,Volume" },
+  qqq: { label: "QQQ", stooqSymbol: "QQQ.US", stooqQuery: "qqq.us", columns: "Date,Open,High,Low,Close,Volume" },
+  gold: { label: "GOLD", stooqSymbol: "XAUUSD（金スポット・ドル建て）", stooqQuery: "xauusd", columns: "Date,Open,High,Low,Close" },
+};
 function InstrumentPanel({ instrument, vooQqqSeries, fileName, fileMsg, onFileChange, manualDate, setManualDate, manualPrice, setManualPrice, onAddManual, onResetField }) {
-  const label = instrument === "voo" ? "VOO" : "QQQ";
+  const meta = INSTRUMENT_META[instrument];
+  const label = meta.label;
   const entries = vooQqqSeries.filter((p) => p[instrument] != null);
   const prevPrice = entries.length ? entries[entries.length - 1][instrument] : null;
   return (
     <div>
-      <p className="text-sm mb-1 leading-relaxed" style={{ color: C.textMuted }}>Stooqからダウンロードした {label}.US の日次CSV（Date,Open,High,Low,Close,Volume・日付昇順）を選択するか、1日分だけ直接入力してください。</p>
-      <p className="text-xs mb-4" style={{ color: C.textDim }}>取得元: https://stooq.com/q/d/l/?s={label.toLowerCase()}.us&i=d</p>
+      <p className="text-sm mb-1 leading-relaxed" style={{ color: C.textMuted }}>Stooqからダウンロードした {meta.stooqSymbol} の日次CSV（{meta.columns}・日付昇順）を選択するか、1日分だけ直接入力してください。</p>
+      <p className="text-xs mb-4" style={{ color: C.textDim }}>取得元: https://stooq.com/q/d/l/?s={meta.stooqQuery}&i=d</p>
       <label className="inline-flex items-center gap-2 text-xs px-3 py-2 rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.textMuted, cursor: "pointer" }}>
         <Upload size={13} /> {label} CSVを選択
         <input type="file" accept=".csv,text/csv,text/comma-separated-values,application/csv,application/vnd.ms-excel,text/plain,application/octet-stream" onChange={onFileChange} style={{ display: "none" }} />
@@ -3768,7 +3842,7 @@ function BrokerScreenshotImport({ holdings, virtualAggregateLabels, onRegister, 
 
 function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, source, holdings, onUpdateHoldings, onResetAndImportHoldings, onResetHoldings, holdingsSource, overrides, categoryDefaultRanks, onCategoryDefaultRankChange, vooQqqSeries, onAppendVooQqq, onImportVooQqq, onResetVooQqqField, virtualAggregateLabels, onRegisterBrokerHoldings, brokerSummaries }) {
   const [dataset, setDataset] = useState("voo"); // "voo" | "holdings" | "broker"
-  const [instrument, setInstrument] = useState("sp500"); // "sp500" | "voo" | "qqq"（voo/qqqのCSV/手動入力/削除の対象切り替え）
+  const [instrument, setInstrument] = useState("sp500"); // "sp500" | "voo" | "qqq" | "gold"（voo/qqq/goldのCSV/手動入力/削除の対象切り替え）
   const [tab, setTab] = useState("csv");
   const [instrManualDate, setInstrManualDate] = useState(localYMD());
   const [instrManualPrice, setInstrManualPrice] = useState("");
@@ -3793,6 +3867,8 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
   const [qqqImportMsg, setQqqImportMsg] = useState(null);
   const [vooImportFileName, setVooImportFileName] = useState(null);
   const [vooImportMsg, setVooImportMsg] = useState(null);
+  const [goldImportFileName, setGoldImportFileName] = useState(null);
+  const [goldImportMsg, setGoldImportMsg] = useState(null);
 
   // 「方式B：直接入力」の終値欄のデフォルト表示（プレースホルダー）＝選択中の指数の前日（直近取り込み済み）の評価額。
   const sp500PrevPrice = rawSeries.length ? rawSeries[rawSeries.length - 1].price : null;
@@ -3822,6 +3898,20 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
     reader.readAsText(file);
   };
 
+  // ゴールド（XAUUSD）：Stooqの日次CSV（Date,Open,High,Low,Close[,Volume]）のClose列を取り込む。
+  const handleGoldImportFile = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setGoldImportFileName(file.name);
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const parsed = parseStooqCSV(String(ev.target.result));
+      if (parsed.length) { onImportVooQqq("gold", parsed); setGoldImportMsg(`${parsed.length}件のGOLD（XAUUSD）終値を取り込みました（${parsed[0].date.toLocaleDateString("ja-JP")} 〜 ${parsed[parsed.length - 1].date.toLocaleDateString("ja-JP")}）`); }
+      else setGoldImportMsg("CSVを解析できませんでした。Date,Open,High,Low,Close 形式か確認してください。");
+    };
+    reader.readAsText(file);
+  };
+
   const handleUpdatePrices = async () => {
     setUpdateLoading(true);
     setUpdateMsg(null);
@@ -3843,7 +3933,7 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
   };
 
   const handleExportCSV = () => {
-    const header = "Date,SP500,VOO,QQQ";
+    const header = "Date,SP500,VOO,QQQ,GOLD";
     const vooQqqByDate = new Map(vooQqqSeries.map((p) => [p.date.toISOString().slice(0, 10), p]));
     const allDates = new Set([...rawSeries.map((p) => p.date.toISOString().slice(0, 10)), ...vooQqqByDate.keys()]);
     const sp500ByDate = new Map(rawSeries.map((p) => [p.date.toISOString().slice(0, 10), p]));
@@ -3855,6 +3945,7 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
         sp500 && sp500.price != null ? sp500.price : "",
         vooQqq && vooQqq.voo != null ? vooQqq.voo : "",
         vooQqq && vooQqq.qqq != null ? vooQqq.qqq : "",
+        vooQqq && vooQqq.gold != null ? vooQqq.gold : "",
       ].join(",");
     });
     const csv = [header, ...rows].join("\n");
@@ -3882,15 +3973,17 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
       // 見つかればSP500・VOO・QQQをそれぞれの既存の取り込み経路（onReplace/onImportVooQqq）にそのまま渡すため、
       // ロジックはPC・スマホどちらでこのモーダルを開いても完全に同一になる。
       const combined = parseCombinedTrackRecordCSV(text);
-      if (combined && (combined.sp500.length || combined.voo.length || combined.qqq.length)) {
+      if (combined && (combined.sp500.length || combined.voo.length || combined.qqq.length || combined.gold.length)) {
         if (combined.sp500.length) onReplace(combined.sp500);
         if (combined.voo.length) onImportVooQqq("voo", combined.voo);
         if (combined.qqq.length) onImportVooQqq("qqq", combined.qqq);
+        if (combined.gold.length) onImportVooQqq("gold", combined.gold);
         const parts = [];
         if (combined.sp500.length) parts.push(`SP500 ${combined.sp500.length}件`);
         if (combined.voo.length) parts.push(`VOO ${combined.voo.length}件`);
         if (combined.qqq.length) parts.push(`QQQ ${combined.qqq.length}件`);
-        setFileMsg(`統合形式（Date,SP500,VOO,QQQ）として読み込みました：${parts.join("・")}`);
+        if (combined.gold.length) parts.push(`GOLD ${combined.gold.length}件`);
+        setFileMsg(`統合形式（Date,SP500,VOO,QQQ,GOLD）として読み込みました：${parts.join("・")}`);
         return;
       }
       const parsed = parseStooqCSV(text);
@@ -3960,7 +4053,7 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
 
   return (
     <FullScreenModal title="データの入力" onClose={handleModalClose}>
-      <div className="flex gap-2 mb-3 flex-wrap">{tabBtn(dataset, setDataset, "voo", "SP500/VOO/QQQ価格データ")}{tabBtn(dataset, setDataset, "holdings", "保有資産データ（ポートフォリオ）")}{tabBtn(dataset, setDataset, "broker", "証券会社スクショ取込")}</div>
+      <div className="flex gap-2 mb-3 flex-wrap">{tabBtn(dataset, setDataset, "voo", "SP500/VOO/QQQ/GOLD価格データ")}{tabBtn(dataset, setDataset, "holdings", "保有資産データ（ポートフォリオ）")}{tabBtn(dataset, setDataset, "broker", "証券会社スクショ取込")}</div>
 
       {dataset === "broker" ? (
         <BrokerScreenshotImport holdings={holdings} virtualAggregateLabels={virtualAggregateLabels} onRegister={onRegisterBrokerHoldings} brokerSummaries={brokerSummaries || {}} />
@@ -3981,6 +4074,7 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
             {tabBtn(instrument, setInstrument, "sp500", "SP500（本系列・DD計算に使用）")}
             {tabBtn(instrument, setInstrument, "voo", "VOO")}
             {tabBtn(instrument, setInstrument, "qqq", "QQQ")}
+            {tabBtn(instrument, setInstrument, "gold", "GOLD（XAUUSD）")}
           </div>
 
           {instrument === "sp500" ? (
@@ -4021,9 +4115,9 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
             <InstrumentPanel
               instrument={instrument}
               vooQqqSeries={vooQqqSeries}
-              fileName={instrument === "voo" ? vooImportFileName : qqqImportFileName}
-              fileMsg={instrument === "voo" ? vooImportMsg : qqqImportMsg}
-              onFileChange={instrument === "voo" ? handleVooImportFile : handleQqqImportFile}
+              fileName={instrument === "voo" ? vooImportFileName : instrument === "gold" ? goldImportFileName : qqqImportFileName}
+              fileMsg={instrument === "voo" ? vooImportMsg : instrument === "gold" ? goldImportMsg : qqqImportMsg}
+              onFileChange={instrument === "voo" ? handleVooImportFile : instrument === "gold" ? handleGoldImportFile : handleQqqImportFile}
               manualDate={instrManualDate}
               setManualDate={setInstrManualDate}
               manualPrice={instrManualPrice}
@@ -5961,11 +6055,11 @@ export default function DDDashboard() {
         }
       } catch (e) { /* no saved data yet — keep bundled seed */ }
       try {
-        // IndexedDBキー名は歴史的経緯で"spy_voo_price_history"のまま（実体はVOO/QQQの終値）。
+        // IndexedDBキー名は歴史的経緯で"spy_voo_price_history"のまま（実体はVOO/QQQ/GOLD（XAUUSD）の終値）。
         // 旧レコードのspyフィールドは読み捨てる（SPYは廃止・QQQに置き換え）。
         const resVooQqq = await storage.get("spy_voo_price_history");
         if (resVooQqq && resVooQqq.value) {
-          const parsedVooQqq = JSON.parse(resVooQqq.value).map((p) => ({ date: parseDateOnly(p.date), voo: p.voo, qqq: p.qqq }));
+          const parsedVooQqq = JSON.parse(resVooQqq.value).map((p) => ({ date: parseDateOnly(p.date), voo: p.voo, qqq: p.qqq, gold: p.gold }));
           if (parsedVooQqq.length) setVooQqqSeries(parsedVooQqq);
         }
       } catch (e) { /* no saved voo/qqq data yet */ }
@@ -6065,18 +6159,19 @@ export default function DDDashboard() {
     try { await storage.set("voo_price_history", JSON.stringify(series.map((p) => ({ date: p.date.toISOString().slice(0, 10), price: p.price })))); scheduleSyncPush(setSyncOk); } catch (e) { /* storage unavailable */ }
   }
   async function persistVooQqq(series) {
-    try { await storage.set("spy_voo_price_history", JSON.stringify(series.map((p) => ({ date: p.date.toISOString().slice(0, 10), voo: p.voo, qqq: p.qqq })))); scheduleSyncPush(setSyncOk); } catch (e) { /* storage unavailable */ }
+    try { await storage.set("spy_voo_price_history", JSON.stringify(series.map((p) => ({ date: p.date.toISOString().slice(0, 10), voo: p.voo, qqq: p.qqq, gold: p.gold })))); scheduleSyncPush(setSyncOk); } catch (e) { /* storage unavailable */ }
   }
   function handleAppendVooQqq(entry) {
     setVooQqqSeries((prev) => {
       const map = new Map(prev.map((p) => [p.date.toISOString().slice(0, 10), p]));
-      map.set(entry.date.toISOString().slice(0, 10), entry);
+      const key = entry.date.toISOString().slice(0, 10);
+      map.set(key, { ...map.get(key), ...entry }); // 同じ日付の他フィールド（CSV取り込み済みのGOLD等）は残す
       const merged = Array.from(map.values()).sort((a, b) => a.date - b.date);
       persistVooQqq(merged);
       return merged;
     });
   }
-  // CSV一括取り込み：kindは"qqq"|"voo"。同じ日付の既存レコードには該当フィールドのみ上書きで合成する。
+  // CSV一括取り込み：kindは"qqq"|"voo"|"gold"。同じ日付の既存レコードには該当フィールドのみ上書きで合成する。
   function handleImportVooQqq(kind, parsedRows) {
     setVooQqqSeries((prev) => {
       const map = new Map(prev.map((p) => [p.date.toISOString().slice(0, 10), p]));
@@ -6090,10 +6185,10 @@ export default function DDDashboard() {
       return merged;
     });
   }
-  // kind（"qqq"|"voo"）のデータのみ削除する。両方消えた日付のレコードは配列から除去する。
+  // kind（"qqq"|"voo"|"gold"）のデータのみ削除する。全フィールドが消えた日付のレコードは配列から除去する。
   function handleResetVooQqqField(kind) {
     setVooQqqSeries((prev) => {
-      const next = prev.map((p) => { const c = { ...p }; delete c[kind]; return c; }).filter((p) => p.voo != null || p.qqq != null);
+      const next = prev.map((p) => { const c = { ...p }; delete c[kind]; return c; }).filter((p) => p.voo != null || p.qqq != null || p.gold != null);
       persistVooQqq(next);
       return next;
     });
@@ -6304,6 +6399,7 @@ export default function DDDashboard() {
   const d = useMemo(() => computeAll(rawSeries), [rawSeries]);
   const vooCalcSeries = useMemo(() => seriesFromVooQqq(vooQqqSeries, "voo"), [vooQqqSeries]);
   const qqqCalcSeries = useMemo(() => seriesFromVooQqq(vooQqqSeries, "qqq"), [vooQqqSeries]);
+  const goldSeries = useMemo(() => seriesFromVooQqq(vooQqqSeries, "gold"), [vooQqqSeries]); // ゴールド（XAUUSD）終値。暴落比較の重ね描き用（未取り込みなら空配列）
   // VOO/QQQ自身の実績は期間が短いため、進行確率・速度別確率などのトラックレコード統計は最も長い実績があるSP500（d.trackRecord）を使う。
   // 現在のDD%・経過日数・速度計測（DD3→5%等）はVOO/QQQ自身の評価額の動きをそのまま使う（DD加速度アラートはVOO/QQQのユーザー選択に応じて切り替える仕様）。
   const dVoo = useMemo(() => (vooCalcSeries.length ? computeAll(vooCalcSeries, d.trackRecord) : null), [vooCalcSeries, d.trackRecord]);
@@ -6360,7 +6456,9 @@ export default function DDDashboard() {
   const selectedCrash = useMemo(() => crashPool.find((c) => c.id === selectedCrashId) ?? historicalCrashes[0] ?? null, [crashPool, historicalCrashes, selectedCrashId]);
   // 選択中の過去局面（SP500）と同じ期間のNasdaq（QQQ）のDD%推移。QQQデータ開始前の局面ではnull。
   const selectedQqqCrashCurve = useMemo(() => buildQqqCrashCurve(selectedCrash, dQqq?.FULL), [selectedCrash, dQqq]);
-  const comparisonData = useMemo(() => buildComparisonData(d.currentEpisodeCurve, selectedCrash ? [selectedCrash] : [], selectedQqqCrashCurve), [d.currentEpisodeCurve, selectedCrash, selectedQqqCrashCurve]);
+  // 同じ期間のゴールド（XAUUSD）の騰落率。ゴールド未取り込み・データ開始前の局面ではnull。
+  const selectedGoldCrashCurve = useMemo(() => buildGoldCrashCurve(selectedCrash, goldSeries), [selectedCrash, goldSeries]);
+  const comparisonData = useMemo(() => buildComparisonData(d.currentEpisodeCurve, selectedCrash ? [selectedCrash] : [], selectedQqqCrashCurve, selectedGoldCrashCurve), [d.currentEpisodeCurve, selectedCrash, selectedQqqCrashCurve, selectedGoldCrashCurve]);
   const toggle = (k) => setHidden((p) => ({ ...p, [k]: !p[k] }));
   const toggleCrash = (k) => setHiddenCrash((p) => ({ ...p, [k]: !p[k] }));
 
@@ -6412,11 +6510,12 @@ export default function DDDashboard() {
     return { AB, Cb, DE };
   }, [currentHoldingPct, effectiveModelRow]);
 
-  // 暴落比較の凡例：類似暴落（SP500）・SP500（現在）・同じ期間のNasdaq（QQQ）。既定はすべて表示で、凡例クリックで個別に表示/非表示を切り替える。
+  // 暴落比較の凡例：類似暴落（SP500）・SP500（現在）・同じ期間のNasdaq（QQQ）・同じ期間のGOLD（騰落率）。既定はすべて表示で、凡例クリックで個別に表示/非表示を切り替える。
   const crashLegendItems = selectedCrash ? [
     { key: selectedCrash.id, label: crashDisplayName(selectedCrash), color: C.rust },
     { key: "current", label: "SP500（現在）", color: C.teal },
     ...(selectedQqqCrashCurve ? [{ key: "qqq", label: "Nasdaq（QQQ・同期間）", color: C.violet }] : []),
+    ...(selectedGoldCrashCurve ? [{ key: "gold", label: "GOLD（同期間・騰落率）", color: C.gold }] : []),
   ] : [];
   const analysis = useMemo(() => buildAnalysis(d, currentHoldingPct, holdingsTotal(combinedHoldings), dQqq, qqqAmplification), [d, currentHoldingPct, combinedHoldings, dQqq, qqqAmplification]);
   const checkpointResults = useMemo(() => {
@@ -6451,7 +6550,7 @@ export default function DDDashboard() {
       {modal?.type === "investmentUpload" && <FullScreenModal title="投資収支Excel アップロード" onClose={() => setModal(null)}><InvestmentUploadModalContent existing={investmentPerformance} onSave={handleSaveInvestmentPerformance} onClose={() => setModal(null)} /></FullScreenModal>}
       {modal?.type === "investmentPerformance" && <FullScreenModal title="実績パフォーマンス" onClose={() => setModal(null)}><InvestmentPerformanceModalContent data={investmentPerformance} d={d} dQqq={dQqq} holdings={holdings} holdingsAsOf={holdingsAsOf} brokerHoldingHistory={brokerHoldingHistory} brokerSummaries={brokerSummaries} onOpenUpload={() => setModal({ type: "investmentUpload" })} onReset={() => { if (window.confirm("投資収支データを削除しますか？")) { handleResetInvestmentPerformance(); setModal(null); } }} /></FullScreenModal>}
       {modal?.type === "rank" && <FullScreenModal title={`${modal.rank}ランクの保有銘柄`} onClose={() => setModal(null)}><RankHoldingsContent rank={modal.rank} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
-      {modal?.type === "crash" && <FullScreenModal title={`${crashDisplayName(modal.crash)}（${modal.crash.start} 〜）と現状の比較`} onClose={() => setModal(null)}><CrashModalContent crash={modal.crash} daysSinceATH={d.daysSinceATH} currentDD={d.currentDD} currentEpisodeCurve={d.currentEpisodeCurve} qqqFull={dQqq?.FULL ?? null} allCrashes={historicalCrashes} onJump={(c) => setModal({ type: "crash", crash: c })} /></FullScreenModal>}
+      {modal?.type === "crash" && <FullScreenModal title={`${crashDisplayName(modal.crash)}（${modal.crash.start} 〜）と現状の比較`} onClose={() => setModal(null)}><CrashModalContent crash={modal.crash} daysSinceATH={d.daysSinceATH} currentDD={d.currentDD} currentEpisodeCurve={d.currentEpisodeCurve} qqqFull={dQqq?.FULL ?? null} goldFull={goldSeries} allCrashes={historicalCrashes} onJump={(c) => setModal({ type: "crash", crash: c })} /></FullScreenModal>}
       {modal?.type === "ddChart" && <FullScreenModal title={chartSourceTitle(chartSource)} onClose={() => setModal(null)}><DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} bothChartData={bothChartData} chartSource={chartSource} setChartSource={setChartSource} /></FullScreenModal>}
       {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} vooQqqSeries={vooQqqSeries} onAppendVooQqq={handleAppendVooQqq} onImportVooQqq={handleImportVooQqq} onResetVooQqqField={handleResetVooQqqField} virtualAggregateLabels={virtualAggregateLabels} onRegisterBrokerHoldings={handleRegisterBrokerHoldings} brokerSummaries={brokerSummaries} />}
       {modal?.type === "checkpointSettings" && <FullScreenModal title="チェックポイント設定" onClose={() => setModal(null)}><CheckpointSettingsContent checkpoints={checkpoints} onCheckpointChange={handleCheckpointChange} holdings={holdings} /></FullScreenModal>}
@@ -6596,7 +6695,7 @@ export default function DDDashboard() {
                           拡大して詳細比較
                         </button>
                       )}
-                      {selectedCrash && dQqq && !selectedQqqCrashCurve && <span className="text-[10px]" style={{ color: C.textDim }}>※この局面はQQQのデータ範囲外のため、Nasdaqは表示されません</span>}
+                      {selectedCrash && ((dQqq && !selectedQqqCrashCurve) || (goldSeries.length > 0 && !selectedGoldCrashCurve)) && <span className="text-[10px]" style={{ color: C.textDim }}>※この局面は{[dQqq && !selectedQqqCrashCurve && "QQQ", goldSeries.length > 0 && !selectedGoldCrashCurve && "GOLD"].filter(Boolean).join("・")}のデータ範囲外のため表示されません</span>}
                     </div>
                     <div className="flex-1 min-h-0">
                       <ResponsiveContainer width="100%" height="100%">
@@ -6608,6 +6707,7 @@ export default function DDDashboard() {
                           {selectedCrash && !hiddenCrash[selectedCrash.id] && <Line type="monotone" dataKey={selectedCrash.id} stroke={C.rust} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls={false} name={crashDisplayName(selectedCrash)} />}
                           {!hiddenCrash.current && <Line type="monotone" dataKey="current" stroke={C.teal} strokeWidth={2.6} dot={false} isAnimationActive={false} connectNulls={false} name="SP500（現在）" />}
                           {comparisonData[0]?.qqq !== undefined && !hiddenCrash.qqq && <Line type="monotone" dataKey="qqq" stroke={C.violet} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls={false} name="Nasdaq（QQQ・同期間）" />}
+                          {comparisonData[0]?.gold !== undefined && !hiddenCrash.gold && <Line type="monotone" dataKey="gold" stroke={C.gold} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls={false} name="GOLD（同期間・騰落率）" />}
                         </LineChart>
                       </ResponsiveContainer>
                     </div>
