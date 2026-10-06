@@ -11,6 +11,7 @@ import { pullSyncAndApply, pushSyncNow, scheduleSyncPush, getLastSyncedAt, onSyn
 import { parseInvestmentExcel, computeOwnAssetDrawdown, computeBenchmarkCAGR, simulateDcaBenchmark, simulateMonthlyRebasedBenchmark, accountChanges, resolveBeginnerTrial, trialAxis } from "@/lib/investmentPerformance";
 import { computeRealHoldingsRanking } from "@/lib/realHoldingsRanking";
 import { formatPct } from "@/lib/totalMetrics";
+import { computeAccelSensor } from "@/lib/accelSensor";
 import { decodeCp932, parseTradeCsv, mergeTrades, computeRealizedEvents, aggregateRanking, splitRanking, periodOptions, emptyTradeHistory, TRADE_KIND_LABEL } from "@/lib/tradeHistory";
 import { OWNER_RAKUTEN_SAKI, OWNER_RAKUTEN_SHIN, OWNER_MOOMOO, OWNER_OPTIONS, RAKUTEN_OWNERS, migrateHoldingsOwners, migrateAsOfKeys, detectRakutenOwnerFromFileName } from "@/lib/owners";
 import { BROKERS, brokerByKey, extractionToPreviewRows, previewRowsToHoldings, replaceBrokerHoldings, aggregateLabelsReplacedByBrokers, exposureCurrency, rowValue, reconcileWithAccountTotal, isPlausibleBrokerRate, guessBrokerRank, reconciliationTarget, sectionChecks, buildBrokerSummary, profitChecks, appendHoldingSnapshot, holdingChanges } from "@/lib/brokerImport";
@@ -2777,7 +2778,7 @@ function StatusPanel({ d, dVoo, dQqq, speedAlertInstrument, onChangeSpeedAlertIn
             <div className="mono text-sm font-bold" style={{ color: speedAlertAccent(dSpeedAlert.speedAlert) }}>{dSpeedAlert.speedAlert.warnLabel}</div>
             <div className="text-xs" style={{ color: C.textMuted }}>{dSpeedAlert.speedAlert.speed38Category ?? "3→8%速度：計測不可"}</div>
           </>)}
-          {dSpeedAlert && <div className="text-[9px] mt-0.5 underline" style={{ color: C.textDim }}>クリックで詳細・バックテストを表示</div>}
+          {dSpeedAlert && <div className="text-[9px] mt-0.5 underline" style={{ color: C.textDim }}>クリックで詳細・バックテスト・加速度センサー（VOO/QQQ）を表示</div>}
         </button>
       </div>
     </Panel>
@@ -2880,8 +2881,82 @@ function TrackRecordContent({ currentT, trackRecord }) {
   );
 }
 
+/* ---------------- 加速度センサー（VOO・QQQ。lib/accelSensor.ts） ---------------- */
+// 既存のDD加速度アラート（SP500の統計を流用）とは別の機能。各シリーズ自身の履歴から、半値戻しで区切った調整エピソードを抽出し、
+// DD−3%→−5%の到達営業日数（acc）別に「最終的にどこまで深くなったか」の割合を毎回再計算して表示する（データ更新で自動的に再計算）。
+const ACCEL_DISCLAIMER = "過去の標本に基づく参考値であり、予測ではありません。高速に到達した場合の深い下落の確率は、標本数が少なく、不確実性が大きい。";
+const ACCEL_STATUS = { normal: { label: "平常", color: C.teal }, over3: { label: "DD−3%超過中", color: C.amber }, reached5: { label: "DD−5%到達済み", color: C.rust } };
+const accelPct = (v, d = 1) => (v == null || !Number.isFinite(v) ? "—" : `${(v * 100).toFixed(d)}%`);
+function AccelSensorCard({ label, series }) {
+  const r = useMemo(() => (series?.length ? computeAccelSensor(series) : null), [series]); // シリーズ（最終日付）が変われば再計算
+  if (!r || r.series.length < 2) return <div className="rounded-lg p-3 text-xs" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.textDim }}>{label}：データ未取り込み</div>;
+  const { state, stats, config } = r;
+  const st = ACCEL_STATUS[state.status];
+  const fmtD = (iso) => (iso ? fmtDateSlash(iso) : "—");
+  const rows = [stats.overall, ...stats.buckets];
+  const isCurrentRow = (g) => state.bucket && g.label === state.bucket.label;
+  return (
+    <div className="rounded-lg p-3 min-w-0" style={{ background: C.panel2, border: `1px solid ${state.status === "normal" ? C.borderSoft : st.color + "88"}` }}>
+      <div className="flex items-center justify-between mb-1.5">
+        <span className="text-xs font-bold">{label}</span>
+        <span className="text-[10px] font-bold rounded px-1.5" style={{ color: C.bg, background: st.color }}>{st.label}</span>
+      </div>
+      <div className="mono text-xs leading-relaxed" style={{ color: C.textMuted }}>
+        <div>現在のDD：<b style={{ color: state.status === "normal" ? C.text : st.color }}>{accelPct(state.currentDD)}</b> <span className="text-[10px]" style={{ color: C.textDim }}>（基準高値 ${state.peak?.toFixed(2)}・{fmtD(state.peakDate)}）</span></div>
+        {state.status !== "normal" && (<>
+          <div>−3%到達日：{fmtD(state.startDate)}・経過 {state.elapsedDays}営業日{state.maxDD != null && <>・最大DD {accelPct(state.maxDD)}</>}</div>
+          {state.status === "reached5" && <div>−5%到達日：{fmtD(state.judgeDate)}・acc <b>{state.acc}営業日</b></div>}
+          {state.status === "over3" && <div style={{ color: C.amber }}>あと <b>{accelPct(state.remainingToJudge)}</b> で判定（DD−{Math.round(config.judgeDD * 100)}%到達時）</div>}
+          <div>判定バケット：<b style={{ color: st.color }}>{state.bucket ? state.bucket.label : "未確定（−5%到達時に決定）"}</b>{state.bucket && !state.bucketFixed && <span className="text-[10px]" style={{ color: C.textDim }}>（−5%に到達した場合）</span>}</div>
+        </>)}
+      </div>
+      <table className="mono text-[10px] w-full mt-2" style={{ borderCollapse: "collapse" }}>
+        <thead>
+          <tr style={{ color: C.textDim, borderBottom: `1px solid ${C.borderSoft}` }}>
+            <th className="text-left font-normal py-0.5">acc</th><th className="text-right font-normal py-0.5">n</th>
+            {config.thresholds.map((t) => <th key={t} className="text-right font-normal py-0.5">≥{Math.round(t * 100)}%</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((g) => (
+            <tr key={g.label} style={{ borderBottom: `1px solid ${C.borderSoft}`, background: isCurrentRow(g) ? st.color + "22" : "transparent" }}>
+              <td className="py-1 pr-1 whitespace-nowrap" style={{ color: isCurrentRow(g) ? st.color : C.textMuted, fontWeight: isCurrentRow(g) ? 700 : 400 }}>{g.label}</td>
+              <td className="py-1 text-right" style={{ color: g.lowSample ? C.amber : C.textMuted }}>{g.n}{g.lowSample && "⚠"}</td>
+              {g.rates.map((x) => (
+                <td key={x.threshold} className="py-1 text-right" title={x.ci ? `95%信頼区間 ${accelPct(x.ci[0])}〜${accelPct(x.ci[1])}（${x.hits}/${g.n}件）` : undefined}>
+                  <div style={{ color: C.text }}>{accelPct(x.p, 0)}</div>
+                  <div className="text-[8px]" style={{ color: C.textDim }}>{x.ci ? `${Math.round(x.ci[0] * 100)}–${Math.round(x.ci[1] * 100)}` : ""}</div>
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {rows.some((g) => g.lowSample) && <div className="text-[10px] mt-1" style={{ color: C.amber }}>⚠ 標本数が{config.minSample}件未満：確率の不確実性が大きい（下段は95%信頼区間）</div>}
+      <div className="text-[10px] mt-1.5" style={{ color: C.textDim }}>
+        標本：{fmtD(stats.periodStart)}〜{fmtD(stats.periodEnd)}・エピソード{stats.episodeCount}件（DD−{Math.round(config.startDD * 100)}%以上・終了済み）・−{Math.round(config.judgeDD * 100)}%到達{stats.judgedCount}件・acc中央値{stats.accMedian ?? "—"}／最大{stats.accMax ?? "—"}営業日
+      </div>
+    </div>
+  );
+}
+function AccelSensorSection({ vooSeries, qqqSeries, compact = false }) {
+  return (
+    <div>
+      <div className="text-xs font-semibold mb-1">加速度センサー（VOO・QQQ）</div>
+      <div className="text-[10px] mb-2 leading-relaxed" style={{ color: C.textDim }}>
+        各銘柄自身の終値の履歴から、DD−3%で始まり「高値更新」または「最大DDの半値戻し」で終わる調整局面を抽出し、−3%→−5%の到達営業日数（acc、同日到達は0）ごとに、最終的な最大DDが各水準以上になった割合を集計しています。データ更新のたびに再計算します。
+      </div>
+      <div className="grid gap-3" style={{ gridTemplateColumns: compact ? "1fr" : "repeat(auto-fit, minmax(300px, 1fr))" }}>
+        <AccelSensorCard label="VOO" series={vooSeries} />
+        <AccelSensorCard label="QQQ" series={qqqSeries} />
+      </div>
+      <div className="text-[10px] mt-2 rounded px-2 py-1.5" style={{ color: C.amber, background: "rgba(217,162,75,0.10)", border: `1px solid ${C.amber}33` }}>※{ACCEL_DISCLAIMER}</div>
+    </div>
+  );
+}
+
 /* ---------------- DD加速度アラート 詳細モーダル ---------------- */
-function SpeedAlertModalContent({ d, instrumentLabel = "VOO" }) {
+function SpeedAlertModalContent({ d, instrumentLabel = "VOO", vooSeries = null, qqqSeries = null }) {
   const sa = d.speedAlert;
   const deepProbRows = sa.level === "confirmed5" ? [
     { label: "DD8%まで", p: sa.deepProb["-8"] }, { label: "DD10%まで", p: sa.deepProb["-10"] },
@@ -2889,7 +2964,9 @@ function SpeedAlertModalContent({ d, instrumentLabel = "VOO" }) {
   ] : [];
   return (
     <div className="flex flex-col gap-5">
-      <div>
+      <AccelSensorSection vooSeries={vooSeries} qqqSeries={qqqSeries} />
+      <div className="pt-4" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+        <div className="text-xs font-semibold mb-2">DD加速度アラート（{instrumentLabel}）</div>
         <div className="text-xs mb-2" style={{ color: C.textDim }}>現在の状況（{instrumentLabel}の評価額を参照）</div>
         <div className="flex items-center gap-4 mb-1.5">
           <span className="mono text-lg font-bold" style={{ color: depthColor(sa.currentDD) }}>DD {sa.currentDD.toFixed(1)}%</span>
@@ -5031,19 +5108,20 @@ function MobileAthPage({ d, dVoo, dQqq }) {
     </div>
   );
 }
-function MobileSpeedPage({ dVoo, dQqq, speedAlertInstrument, onChangeSpeedAlertInstrument, onOpenSpeedAlert }) {
+// 加速度センサー（VOO・QQQ）を下に追加したため、ページ全体を縦スクロールにし、上の2枚のカードは高さを確保する。
+function MobileSpeedPage({ dVoo, dQqq, speedAlertInstrument, onChangeSpeedAlertInstrument, onOpenSpeedAlert, vooSeries = null, qqqSeries = null }) {
   const dSpeedAlert = speedAlertInstrument === "qqq" ? dQqq : dVoo;
   const speedAlertLabel = speedAlertInstrument.toUpperCase();
   return (
-    <div className="p-3 flex flex-col gap-2.5 h-full">
-      <div className="rounded-lg p-3 flex-1 flex flex-col justify-center min-h-0" style={{ background: C.panel, border: `1px solid ${C.border}` }}>
+    <div className="p-3 flex flex-col gap-2.5 h-full overflow-y-auto">
+      <div className="rounded-lg p-3 flex flex-col justify-center shrink-0 min-h-[200px]" style={{ background: C.panel, border: `1px solid ${C.border}` }}>
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-1.5"><Clock size={13} style={{ color: C.textDim }} /><span className="text-xs" style={{ color: C.textDim }}>経過日数（{speedAlertLabel}基準）</span></div>
           <SpeedAlertInstrumentToggle value={speedAlertInstrument} onChange={onChangeSpeedAlertInstrument} />
         </div>
         <ATHProgressBlock dInstrument={dSpeedAlert} />
       </div>
-      <button onClick={dSpeedAlert ? onOpenSpeedAlert : undefined} disabled={!dSpeedAlert} className="rounded-lg p-3 text-left w-full flex-1 flex flex-col justify-center min-h-0" style={{ background: C.panel, border: `1px solid ${C.border}`, opacity: dSpeedAlert ? 1 : 0.5, cursor: dSpeedAlert ? "pointer" : "default" }}>
+      <button onClick={dSpeedAlert ? onOpenSpeedAlert : undefined} disabled={!dSpeedAlert} className="rounded-lg p-3 text-left w-full flex flex-col justify-center shrink-0" style={{ background: C.panel, border: `1px solid ${C.border}`, opacity: dSpeedAlert ? 1 : 0.5, cursor: dSpeedAlert ? "pointer" : "default" }}>
         <div className="flex items-center gap-1.5 mb-2"><Zap size={13} style={{ color: dSpeedAlert ? speedAlertAccent(dSpeedAlert.speedAlert) : C.textDim }} /><span className="text-xs" style={{ color: C.textDim }}>DD加速度アラート（{speedAlertLabel}基準）</span>{dSpeedAlert && <ChevronRight size={13} style={{ color: C.textDim, marginLeft: "auto" }} />}</div>
         {!dSpeedAlert && <div className="text-xs" style={{ color: C.textDim }}>{speedAlertLabel}データ未取り込み</div>}
         {dSpeedAlert && dSpeedAlert.speedAlert.level === "normal" && (<>
@@ -5064,6 +5142,9 @@ function MobileSpeedPage({ dVoo, dQqq, speedAlertInstrument, onChangeSpeedAlertI
         </>)}
         {dSpeedAlert && <div className="text-[10px] mt-1.5 underline" style={{ color: C.textDim }}>タップで詳細・バックテストを表示</div>}
       </button>
+      <div className="rounded-lg p-3 shrink-0" style={{ background: C.panel, border: `1px solid ${C.border}` }}>
+        <AccelSensorSection vooSeries={vooSeries} qqqSeries={qqqSeries} compact />
+      </div>
     </div>
   );
 }
@@ -6938,7 +7019,7 @@ export default function DDDashboard() {
         @media (orientation: landscape) { .force-landscape-inner { width: 100vw; height: 100vh; transform: translate(-50%, -50%); } }
       `}</style>
 
-      {modal?.type === "speedAlert" && (speedAlertInstrument === "qqq" ? dQqq : dVoo) && <FullScreenModal title={`DD加速度アラート（速度・経過日数の法則・${speedAlertInstrument.toUpperCase()}基準）`} onClose={() => setModal(null)}><SpeedAlertModalContent d={speedAlertInstrument === "qqq" ? dQqq : dVoo} instrumentLabel={speedAlertInstrument.toUpperCase()} /></FullScreenModal>}
+      {modal?.type === "speedAlert" && (speedAlertInstrument === "qqq" ? dQqq : dVoo) && <FullScreenModal title={`DD加速度アラート（速度・経過日数の法則・${speedAlertInstrument.toUpperCase()}基準）`} onClose={() => setModal(null)}><SpeedAlertModalContent d={speedAlertInstrument === "qqq" ? dQqq : dVoo} instrumentLabel={speedAlertInstrument.toUpperCase()} vooSeries={vooCalcSeries} qqqSeries={qqqCalcSeries} /></FullScreenModal>}
       {modal?.type === "portfolio" && <FullScreenModal title={<>ポートフォリオ構成表{holdingsDateSuffix}</>} onClose={() => setModal(null)}><PortfolioTableContent view={pieView} holdings={holdings} brokerSummaries={brokerSummaries} ownerDates={ownerUpdatedDates} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
       {modal?.type === "ddTable" && <FullScreenModal title="DD毎のA〜E配分表" onClose={() => setModal(null)}><DDTableContent modelRow={d.modelRow} modelRows={d.trackRecord.dynamicModelRows} holdings={holdings} /></FullScreenModal>}
       {modal?.type === "modelDebug" && <FullScreenModal title="動的配分モデル デバッグビュー" onClose={() => setModal(null)}><ModelDebugContent d={d} dQqq={dQqq} qqqAmplification={qqqAmplification} /></FullScreenModal>}
@@ -7013,7 +7094,7 @@ export default function DDDashboard() {
             onChange={setMobilePage}
             pages={[
               { key: "ath", label: "評価額/ATH", icon: TrendingUp, content: <MobileAthPage d={d} dVoo={dVoo} dQqq={dQqq} /> },
-              { key: "speed", label: "経過日数", icon: Clock, content: <MobileSpeedPage dVoo={dVoo} dQqq={dQqq} speedAlertInstrument={speedAlertInstrument} onChangeSpeedAlertInstrument={setSpeedAlertInstrument} onOpenSpeedAlert={() => setModal({ type: "speedAlert" })} /> },
+              { key: "speed", label: "経過日数", icon: Clock, content: <MobileSpeedPage dVoo={dVoo} dQqq={dQqq} vooSeries={vooCalcSeries} qqqSeries={qqqCalcSeries} speedAlertInstrument={speedAlertInstrument} onChangeSpeedAlertInstrument={setSpeedAlertInstrument} onOpenSpeedAlert={() => setModal({ type: "speedAlert" })} /> },
               { key: "chart", label: "チャート", icon: Activity, content: <MobileChartPage d={d} onZoom={() => setModal({ type: "mobileChartZoom" })} /> },
               { key: "portfolio", label: "構成", icon: Layers, content: <MobilePortfolioPage pieView={pieView} setPieView={setPieView} holdings={combinedHoldings} ownerDates={ownerUpdatedDates} onOpen={() => setModal({ type: "portfolio" })} onOpenRealHoldingsRanking={() => setModal({ type: "realHoldingsRanking" })} dateLabel={holdingsDateLabel} /> },
               { key: "diff", label: "配分乖離", icon: ListChecks, content: <MobileDiffPage modelOverride={modelOverride} setModelOverride={setModelOverride} d={d} currentHoldingPct={currentHoldingPct} currentHoldingAmount={currentHoldingAmount} effectiveModelRow={effectiveModelRow} rankLabels={rankLabels} blocks={blocks} onOpenRank={(rank) => setModal({ type: "rank", rank })} onOpenDDTable={() => setModal({ type: "ddTable" })} dateLabel={holdingsDateLabel} /> },
