@@ -10,6 +10,7 @@ import { storage } from "@/lib/storage";
 import { pullSyncAndApply, pushSyncNow, scheduleSyncPush, getLastSyncedAt, onSyncMergedFromRemote } from "@/lib/sync";
 import { parseInvestmentExcel, computeOwnAssetDrawdown, computeBenchmarkCAGR, simulateDcaBenchmark, simulateMonthlyRebasedBenchmark, accountChanges, resolveBeginnerTrial, trialAxis } from "@/lib/investmentPerformance";
 import { computeRealHoldingsRanking } from "@/lib/realHoldingsRanking";
+import { formatPct } from "@/lib/totalMetrics";
 import { OWNER_RAKUTEN_SAKI, OWNER_RAKUTEN_SHIN, OWNER_MOOMOO, OWNER_OPTIONS, RAKUTEN_OWNERS, migrateHoldingsOwners, migrateAsOfKeys, detectRakutenOwnerFromFileName } from "@/lib/owners";
 import { BROKERS, brokerByKey, extractionToPreviewRows, previewRowsToHoldings, replaceBrokerHoldings, aggregateLabelsReplacedByBrokers, exposureCurrency, rowValue, reconcileWithAccountTotal, isPlausibleBrokerRate, guessBrokerRank, reconciliationTarget, sectionChecks, buildBrokerSummary, profitChecks, appendHoldingSnapshot, holdingChanges } from "@/lib/brokerImport";
 import { importUserPrices, applyApiGold, resetPriceField, goldHistoryFetchStart } from "@/lib/priceSeries";
@@ -5493,8 +5494,6 @@ function InvestmentUploadModalContent({ existing, onSave, onClose }) {
   const yen = (v) => (v == null ? "—" : `¥${Math.round(v).toLocaleString()}`);
   const latestTotal = preview ? lastValidPoint(preview.series, "totalAssets") : null;
   const latestPrincipal = preview ? lastValidPoint(preview.series, "principal") : null;
-  const latestTotalReturn = preview ? lastValidPoint(preview.series, "totalReturn") : null;
-  const latestTotalYield = preview ? lastValidPoint(preview.series, "totalYield") : null;
   const existingLatestDate = existing?.series?.length ? existing.series[existing.series.length - 1].date : null;
   const isOlder = latestTotal && existingLatestDate && latestTotal.date < existingLatestDate;
 
@@ -5526,8 +5525,16 @@ function InvestmentUploadModalContent({ existing, onSave, onClose }) {
             <div>最新データ日: <b>{latestTotal ? fmtDateSlash(latestTotal.date) : "—"}</b></div>
             <div>総資産: <b>{yen(latestTotal?.totalAssets)}</b></div>
             <div>元本: <b>{yen(latestPrincipal?.principal)}</b></div>
-            <div>トータルリターン: <b>{yen(latestTotalReturn?.totalReturn)}</b></div>
-            <div>トータル利回り（年）: <b>{latestTotalYield?.totalYield != null ? `${latestTotalYield.totalYield}%` : "—"}</b></div>
+            {preview.totalMetrics ? (
+              <>
+                <div>年率リターン（TWR）: <b>{formatPct(preview.totalMetrics.summary.annualTwr, 2)}</b></div>
+                <div>年率リターン（XIRR）: <b>{formatPct(preview.totalMetrics.summary.annualXirr, 2)}</b></div>
+                <div>累積リターン（TWR）: <b>{formatPct(preview.totalMetrics.summary.cumulativeTwr, 1, true)}</b></div>
+                <div>トータル損益: <b>{yen(preview.totalMetrics.summary.totalPnl)}</b></div>
+              </>
+            ) : (
+              <div className="col-span-2 rounded px-2 py-1" style={{ color: C.amber, background: "rgba(217,162,75,0.12)" }}>{LEGACY_METRICS_NOTE}</div>
+            )}
           </div>
           <button onClick={() => { onSave(preview); onClose(); }} className="mt-4 text-xs px-3 py-1.5 rounded" style={{ background: C.teal, color: C.bg, fontWeight: 700, border: "none", cursor: "pointer" }}>この内容で保存する</button>
         </div>
@@ -5809,6 +5816,100 @@ function computeBandDomain(dataMin, dataMax, bandStart, bandEnd) {
   const domainMax = domainMin + span;
   return [domainMin, domainMax];
 }
+// 投資収支Excelのパフォーマンス指標（「TOTAL指標」シートが正本。lib/totalMetrics.ts）。
+const TWR_HELP = "TWR＝入金・出金のタイミングと金額の影響を取り除いた、運用そのものの成績。指数やファンドとの比較に使う";
+const XIRR_HELP = "XIRR＝入金額・日付を考慮した、実際に投じたお金の年率リターン。資金が大きい時期の成績が効く";
+const LEGACY_METRICS_NOTE = "旧形式のため、追加投資の影響を除去した指標（TWR/XIRR）は算出されません";
+// 指標名の横のⓘ。クリック（タップ）でヘルプ文を吹き出し表示する（スマホでも読めるようホバーではなくクリック）。
+function HelpTip({ text }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("touchstart", close);
+    return () => { document.removeEventListener("mousedown", close); document.removeEventListener("touchstart", close); };
+  }, [open]);
+  return (
+    <span ref={ref} className="relative inline-flex align-middle">
+      <button type="button" onClick={() => setOpen((v) => !v)} title={text} className="inline-flex" style={{ background: "transparent", border: "none", cursor: "pointer", padding: 0, color: open ? C.text : C.textDim }}><Info size={11} /></button>
+      {open && <span className="absolute z-50 rounded-md p-2 text-[11px] leading-relaxed" style={{ top: "calc(100% + 4px)", left: 0, width: 260, maxWidth: "70vw", background: C.panel2, border: `1px solid ${C.border}`, color: C.textMuted, boxShadow: "0 6px 20px rgba(0,0,0,0.45)", whiteSpace: "normal", fontFamily: "inherit" }}>{text}</span>}
+    </span>
+  );
+}
+const tmYen = (v) => (v == null || !Number.isFinite(v) ? "—" : `¥${Math.round(v).toLocaleString()}`);
+const pctColor = (v) => (v == null || !Number.isFinite(v) ? C.textMuted : v >= 0 ? C.teal : C.rust);
+// ① サマリー（TOTAL指標シートあり）：主指標TWR・副指標XIRRを並べ、累積TWR・総資産・元本・トータル損益、参考指標を添える。
+function TotalMetricsCards({ tm }) {
+  const s = tm.summary;
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="text-[10px]" style={{ color: C.textDim }}>基準日 {s.latestDate ? fmtDateSlash(s.latestDate) : "—"}・運用期間 {s.periodYears != null && Number.isFinite(s.periodYears) ? `${s.periodYears.toFixed(2)}年` : "—"}（TOTAL指標シート）</div>
+      <div className="grid grid-cols-2 gap-2 mono">
+        <div className="rounded px-3 py-2" style={{ background: C.panel2, border: `1px solid ${C.teal}55` }}>
+          <div className="text-[11px] flex items-center gap-1" style={{ color: C.textMuted }}>年率リターン（TWR）<span className="text-[9px] px-1 rounded" style={{ color: C.bg, background: C.teal }}>主指標</span><HelpTip text={TWR_HELP} /></div>
+          <div className="text-xl font-bold" style={{ color: pctColor(s.annualTwr) }}>{formatPct(s.annualTwr, 2)}</div>
+          <div className="text-[10px]" style={{ color: C.textDim }}>運用成績そのもの</div>
+        </div>
+        <div className="rounded px-3 py-2" style={{ background: C.panel2 }}>
+          <div className="text-[11px] flex items-center gap-1" style={{ color: C.textMuted }}>年率リターン（XIRR）<span className="text-[9px] px-1 rounded" style={{ color: C.textMuted, border: `1px solid ${C.borderSoft}` }}>副指標</span><HelpTip text={XIRR_HELP} /></div>
+          <div className="text-xl font-bold" style={{ color: pctColor(s.annualXirr) }}>{formatPct(s.annualXirr, 2)}</div>
+          <div className="text-[10px]" style={{ color: C.textDim }}>お金の実際の増え方</div>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mono text-xs">
+        <div className="rounded px-2 py-1.5" style={{ background: C.panel2 }}><span className="flex items-center gap-1">累積リターン（TWR）<HelpTip text={TWR_HELP} /></span><div className="text-sm font-bold" style={{ color: pctColor(s.cumulativeTwr) }}>{formatPct(s.cumulativeTwr, 1, true)}</div></div>
+        <div className="rounded px-2 py-1.5" style={{ background: C.panel2 }}>総資産<div className="text-sm font-bold">{tmYen(s.totalAssets)}</div></div>
+        <div className="rounded px-2 py-1.5" style={{ background: C.panel2 }}>元本（累計純入金）<div className="text-sm font-bold">{tmYen(s.principal)}</div></div>
+        <div className="rounded px-2 py-1.5" style={{ background: C.panel2 }}>トータル損益<div className="text-sm font-bold" style={{ color: pctColor(s.totalPnl) }}>{tmYen(s.totalPnl)}</div></div>
+      </div>
+      <div className="text-[10px] leading-relaxed" style={{ color: C.textDim }}>
+        参考：年率リターン（修正ディーツ）{formatPct(s.annualModifiedDietz, 2)}
+        ／単純損益率 {formatPct(s.simpleReturn, 1, true)}（損益÷元本。入金のタイミングを考慮しないため、成績の比較には非推奨）
+      </div>
+    </div>
+  );
+}
+// 暦年別リターン（TWR）の表。
+function CalendarYearTable({ years }) {
+  if (!years?.length) return <div className="text-xs" style={{ color: C.textDim }}>暦年別リターンのデータがありません。</div>;
+  return (
+    <table className="mono text-xs w-full" style={{ borderCollapse: "collapse", maxWidth: 420 }}>
+      <thead><tr style={{ color: C.textDim, borderBottom: `1px solid ${C.borderSoft}` }}><th className="text-left font-normal py-1">年</th><th className="text-right font-normal py-1">年間リターン（TWR）</th><th className="text-right font-normal py-1">年間損益</th></tr></thead>
+      <tbody>
+        {years.map((y) => (
+          <tr key={y.year} style={{ borderBottom: `1px solid ${C.borderSoft}` }}>
+            <td className="py-1">{y.year}{y.note && /YTD/i.test(y.note) && <span className="ml-1 text-[9px]" style={{ color: C.textDim }}>YTD</span>}</td>
+            <td className="py-1 text-right font-bold" style={{ color: pctColor(y.twr) }}>{formatPct(y.twr, 1, true)}</td>
+            <td className="py-1 text-right" style={{ color: pctColor(y.pnl) }}>{tmYen(y.pnl)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+// 総資産・元本（累計純入金）の推移（左軸）と、TWR指数（開始=1.0、右軸）。TWR指数は入金の影響を除いた運用成績の基準線。
+function TotalMetricsChart({ series }) {
+  const data = series.filter((p) => p.totalAssets != null || p.principal != null);
+  if (!data.length) return <div className="text-xs" style={{ color: C.textDim }}>時系列のデータがありません。</div>;
+  return (
+    <div style={{ width: "100%", height: 240 }}>
+      <ResponsiveContainer width="100%" height="100%">
+        <ComposedChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke={C.borderSoft} />
+          <XAxis dataKey="date" tick={{ fontSize: 9, fill: C.textDim }} tickFormatter={(v) => fmtDateSlash(v)} minTickGap={40} />
+          <YAxis yAxisId="yen" tick={{ fontSize: 9, fill: C.textDim }} tickFormatter={(v) => `${Math.round(v / 10000).toLocaleString()}万`} width={56} />
+          <YAxis yAxisId="twr" orientation="right" tick={{ fontSize: 9, fill: C.violet }} tickFormatter={(v) => v.toFixed(1)} width={36} />
+          <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 11 }} labelFormatter={(v) => fmtDateSlash(v)} formatter={(v, n) => [n === "TWR指数" ? Number(v).toFixed(4) : tmYen(v), n]} />
+          <Line yAxisId="yen" type="monotone" dataKey="totalAssets" name="総資産" stroke={C.teal} strokeWidth={2} dot={false} isAnimationActive={false} connectNulls />
+          <Line yAxisId="yen" type="stepAfter" dataKey="principal" name="元本（累計純入金）" stroke={C.amber} strokeWidth={1.5} dot={false} isAnimationActive={false} connectNulls />
+          <Line yAxisId="twr" type="monotone" dataKey="twrIndex" name="TWR指数" stroke={C.violet} strokeWidth={1.3} strokeDasharray="4 3" dot={false} isAnimationActive={false} connectNulls />
+        </ComposedChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
 function InvestmentPerformanceModalContent({ data, d, dQqq, holdings = [], holdingsAsOf = {}, brokerHoldingHistory = {}, brokerSummaries = {}, onOpenUpload, onReset }) {
   const yen = (v) => (v == null ? "—" : `¥${Math.round(v).toLocaleString()}`);
   const series = data?.series ?? [];
@@ -5939,14 +6040,34 @@ function InvestmentPerformanceModalContent({ data, d, dQqq, holdings = [], holdi
 
       <div>
         <div className="text-xs font-semibold mb-2">① サマリー</div>
-        <div className="grid grid-cols-3 gap-2 mono text-xs">
-          <div className="rounded px-2 py-1.5" style={{ background: C.panel2 }}>総資産<div className="text-sm font-bold">{yen(latestTotalAssets?.totalAssets)}</div></div>
-          <div className="rounded px-2 py-1.5" style={{ background: C.panel2 }}>元本<div className="text-sm font-bold">{yen(latestPrincipal?.principal)}</div></div>
-          <div className="rounded px-2 py-1.5" style={{ background: C.panel2 }}>実現リターン<div className="text-sm font-bold">{yen(latestRealizedReturn?.realizedReturn)}</div></div>
-          <div className="rounded px-2 py-1.5" style={{ background: C.panel2 }}>実現利回り（年）<div className="text-sm font-bold">{latestRealizedYield?.realizedYield != null ? `${latestRealizedYield.realizedYield}%` : "—"}</div></div>
-          <div className="rounded px-2 py-1.5" style={{ background: C.panel2 }}>トータルリターン<div className="text-sm font-bold">{yen(latestTotalReturn?.totalReturn)}</div></div>
-          <div className="rounded px-2 py-1.5" style={{ background: C.panel2 }}>トータル利回り（年）<div className="text-sm font-bold">{latestTotalYield?.totalYield != null ? `${latestTotalYield.totalYield}%` : "—"}</div></div>
-        </div>
+        {data.totalMetrics ? (
+          <div className="flex flex-col gap-4">
+            <TotalMetricsCards tm={data.totalMetrics} />
+            <div>
+              <div className="text-[11px] mb-1.5" style={{ color: C.textMuted }}>総資産・元本（累計純入金）の推移 <span className="text-[10px]" style={{ color: C.textDim }}>／ 点線＝TWR指数（開始=1.0・右軸）</span></div>
+              <TotalMetricsChart series={data.totalMetrics.series} />
+            </div>
+            <div>
+              <div className="text-[11px] mb-1.5 flex items-center gap-1" style={{ color: C.textMuted }}>暦年別リターン（TWR）<HelpTip text={TWR_HELP} /></div>
+              <CalendarYearTable years={data.totalMetrics.calendarYears} />
+            </div>
+          </div>
+        ) : (
+          <>
+            {/* 旧形式（TOTAL指標シートなし）：従来どおりSheet1の値を表示し、TWR/XIRRが無い旨を注意する */}
+            <div className="rounded px-3 py-2 mb-2 text-xs" style={{ color: C.amber, background: "rgba(217,162,75,0.12)", border: `1px solid ${C.amber}44` }}>
+              {LEGACY_METRICS_NOTE}{data.totalMetrics === undefined && "（このデータは指標の読み込み対応前に保存されたものです。再アップロードするとTWR/XIRRが表示されます）"}
+            </div>
+            <div className="grid grid-cols-3 gap-2 mono text-xs">
+              <div className="rounded px-2 py-1.5" style={{ background: C.panel2 }}>総資産<div className="text-sm font-bold">{yen(latestTotalAssets?.totalAssets)}</div></div>
+              <div className="rounded px-2 py-1.5" style={{ background: C.panel2 }}>元本<div className="text-sm font-bold">{yen(latestPrincipal?.principal)}</div></div>
+              <div className="rounded px-2 py-1.5" style={{ background: C.panel2 }}>実現リターン<div className="text-sm font-bold">{yen(latestRealizedReturn?.realizedReturn)}</div></div>
+              <div className="rounded px-2 py-1.5" style={{ background: C.panel2 }}>実現利回り（年）<div className="text-sm font-bold">{latestRealizedYield?.realizedYield != null ? `${latestRealizedYield.realizedYield}%` : "—"}</div></div>
+              <div className="rounded px-2 py-1.5" style={{ background: C.panel2 }}>トータルリターン<div className="text-sm font-bold">{yen(latestTotalReturn?.totalReturn)}</div></div>
+              <div className="rounded px-2 py-1.5" style={{ background: C.panel2 }}>トータル利回り（年）<div className="text-sm font-bold">{latestTotalYield?.totalYield != null ? `${latestTotalYield.totalYield}%` : "—"}</div></div>
+            </div>
+          </>
+        )}
       </div>
 
       <div>
@@ -5988,7 +6109,9 @@ function InvestmentPerformanceModalContent({ data, d, dQqq, holdings = [], holdi
           </>
         ) : <div className="text-xs" style={{ color: C.textDim }}>グラフ表示に必要なデータ（元本・SP500価格）がありません。</div>}
         <div className="mono text-xs mt-2" style={{ color: C.textMuted }}>
-          自己トータル利回り（年）: <b>{latestTotalYield?.totalYield != null ? `${latestTotalYield.totalYield}%` : "算出不可"}</b>
+          {data.totalMetrics
+            ? <>自己 年率リターン（TWR）<HelpTip text={TWR_HELP} />: <b>{formatPct(data.totalMetrics.summary.annualTwr, 2)}</b></>
+            : <>自己トータル利回り（年）: <b>{latestTotalYield?.totalYield != null ? `${latestTotalYield.totalYield}%` : "算出不可"}</b></>}
           ／ SP500 CAGR: <b>{spCAGR != null ? `${spCAGR}%` : "算出不可"}</b>
           ／ QQQ CAGR: <b>{qqqCAGR != null ? `${qqqCAGR}%` : "算出不可（QQQ未取り込み）"}</b>
         </div>

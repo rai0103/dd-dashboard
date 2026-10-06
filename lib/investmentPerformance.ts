@@ -8,6 +8,7 @@
 // xlsx（SheetJS）は月1回のアップロード時にしか使わない重いライブラリのため、静的importでは取り込まず、
 // parseInvestmentExcel内で動的importする（通常のダッシュボード表示時のバンドルサイズに含めないため）。
 import type * as XLSXType from "xlsx";
+import { parseTotalMetricsSheet, TOTAL_METRICS_SHEET, type TotalMetrics } from "./totalMetrics.ts";
 
 export interface InvestmentSeriesPoint {
   date: string; // YYYY-MM-DD
@@ -51,6 +52,9 @@ export interface InvestmentPerformanceData {
   accountSeries: InvestmentAccountPoint[];
   accountRecentChange: Record<string, { monthChange: number | null; yearEndChange: number | null }>;
   monthlySeries: InvestmentMonthlyPoint[];
+  // パフォーマンス指標の正本（「TOTAL指標」シート）。null＝旧形式のxlsx（シートが無い）、undefined＝この項目の追加前に解析・保存したデータ（再アップロードで追加される）。
+  // Sheet1の53〜59行（TOTAL欄）の利回り・リターン（series.realizedYield/totalYield等）はパフォーマンス指標としては使わない。
+  totalMetrics?: TotalMetrics | null;
   errors: string[];
   sourceFileName: string;
   parsedAt: string;
@@ -117,7 +121,7 @@ export async function parseInvestmentExcel(arrayBuffer: ArrayBuffer, fileName: s
   const sheet = wb.Sheets[sheetName];
   if (!sheet || !sheet["!ref"]) {
     errors.push("シートが空、またはデータが見つかりませんでした。");
-    return { series: [], planSeries: [], beginnerTrial: [], accountSeries: [], accountRecentChange: {}, monthlySeries: [], errors, sourceFileName: fileName, parsedAt: new Date().toISOString() };
+    return { series: [], planSeries: [], beginnerTrial: [], accountSeries: [], accountRecentChange: {}, monthlySeries: [], totalMetrics: null, errors, sourceFileName: fileName, parsedAt: new Date().toISOString() };
   }
   const range = XLSX.utils.decode_range(sheet["!ref"]);
   const get = (r: number, c: number) => sheet[XLSX.utils.encode_cell({ r, c })];
@@ -327,7 +331,19 @@ export async function parseInvestmentExcel(arrayBuffer: ArrayBuffer, fileName: s
     return dateCols.map(({ date }, i) => ({ date: ymd(date), principal: pv[i], value: vv[i] }));
   })();
 
-  return { series, planSeries, beginnerTrial, accountSeries, accountRecentChange, monthlySeries, errors, sourceFileName: fileName, parsedAt: new Date().toISOString() };
+  // パフォーマンス指標：「TOTAL指標」シートがあればその値を採用する（値はキャッシュ値を読む）。無ければ旧形式としてnull。
+  let totalMetrics: TotalMetrics | null = null;
+  const totalSheet = wb.Sheets[TOTAL_METRICS_SHEET];
+  if (totalSheet && totalSheet["!ref"]) {
+    const rows = XLSX.utils.sheet_to_json(totalSheet, { header: 1, raw: true, defval: null, blankrows: true }) as unknown[][];
+    const parsed = parseTotalMetricsSheet(rows);
+    totalMetrics = parsed.metrics;
+    errors.push(...parsed.errors);
+  } else if (wb.SheetNames.includes(TOTAL_METRICS_SHEET)) {
+    errors.push(`シート「${TOTAL_METRICS_SHEET}」が空のため、パフォーマンス指標（TWR/XIRR）を読み込めませんでした。`);
+  }
+
+  return { series, planSeries, beginnerTrial, accountSeries, accountRecentChange, monthlySeries, totalMetrics, errors, sourceFileName: fileName, parsedAt: new Date().toISOString() };
 }
 
 // ⑥将来の計画・実績：「計 画」行（年）・「年齢」行・「総資産（年末）」行（計画）・「総資産（時点/年末）」行（実績）を読む。
