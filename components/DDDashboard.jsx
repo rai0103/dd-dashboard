@@ -2769,7 +2769,7 @@ function StatusPanel({ d, dVoo, dQqq, onOpenSpeedAlert }) {
     <Panel title="現在のステータス" hideHeader className="h-full">
       {/* 列幅：評価額/ATH・最高値比は内容の幅ちょうど（auto）に詰め、残りをVOO/QQQ2段＋平常期間の指標を出す「経過日数」（広め）と
           DD加速度アラートで分け合う（画面幅が狭くても前2列の数値が重ならないようにする） */}
-      <div className="grid h-full" style={{ gridTemplateColumns: "auto auto minmax(0, 1.3fr) minmax(0, 1fr)" }}>
+      <div className="grid h-full" style={{ gridTemplateColumns: "auto auto minmax(0, 1.7fr) minmax(0, 1fr)" }}>
         <div className="px-3 py-2 flex flex-col justify-center min-w-0" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
           <div className="text-[10px] mb-1" style={{ color: C.textDim }}>評価額 / ATH</div>
           {tickers.map(({ label, data }) => {
@@ -2798,14 +2798,12 @@ function StatusPanel({ d, dVoo, dQqq, onOpenSpeedAlert }) {
               <span className="font-bold text-xs" style={{ color: C.textMuted, display: "inline-block", width: 42 }}>{label}</span>
               {data ? (<>
                 <span className="font-bold text-xs" style={{ display: "inline-block", width: 50, textAlign: "right", color: data.currentDD >= 0 ? C.teal : C.rust }}>{data.currentDD.toFixed(1)}%</span>
-                {data.nextMilestone === -3 && (<>
-                  <span className="text-xs" style={{ display: "inline-block", width: 70, marginLeft: 8, color: C.textMuted }}>DD-3%評価額</span>
-                  <span className="font-bold text-xs" style={{ display: "inline-block", width: 80, textAlign: "right", color: C.text }}>（${(data.currentATH * 0.97).toFixed(2)}）</span>
-                  <span className="font-bold text-xs" style={{ marginLeft: 4, color: C.text }}>まで{data.distanceToNextMilestone.toFixed(1)}%</span>
+                {/* 次の節目：「DD-3%（$評価額） 残り%」の短い表記（横幅を経過日数パネルに回すため「評価額」「まで」は省く） */}
+                {data.nextMilestone !== null && (<>
+                  <span className="text-xs" style={{ marginLeft: 8, color: C.textMuted }}>DD{data.nextMilestone}%</span>
+                  <span className="font-bold text-xs" style={{ color: C.text }}>（${(data.nextMilestone === -3 ? data.currentATH * 0.97 : data.nextMilestonePrice).toFixed(2)}）</span>
+                  <span className="font-bold text-xs" style={{ marginLeft: 2, color: C.text }}>{data.distanceToNextMilestone.toFixed(1)}%</span>
                 </>)}
-                {data.nextMilestone !== null && data.nextMilestone !== -3 && (
-                  <span className="font-bold text-xs" style={{ marginLeft: 8, color: C.text }}>DD{data.nextMilestone}%まで {data.distanceToNextMilestone.toFixed(1)}%<span style={{ color: C.textMuted }}>（${data.nextMilestonePrice.toFixed(2)}）</span></span>
-                )}
               </>) : (<span className="text-xs" style={{ color: C.textDim }}>—</span>)}
             </div>
           ))}
