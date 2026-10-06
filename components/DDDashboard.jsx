@@ -2703,37 +2703,95 @@ function ATHProgressBlock({ dInstrument }) {
   );
 }
 
+// 平常期間：前回のDD解消日（直近のDD−3%以上の下落局面が、ATHを回復して解消した日）を起点に、経過日数（営業日）・起点からの上昇幅・
+// 起点からのATH更新回数を測る。DD−3%に到達した時点でリセットし（reset: true）、その局面が解消（ATH回復）したら新しい起点から計測を再開する。
+function computeCalmStretch(dObj) {
+  if (!dObj) return null;
+  const { FULL, last, episodes } = dObj;
+  if (episodes.some((e) => e.isOngoing)) return { reset: true, d3Date: dObj.speedAlert?.d3Date ?? null }; // 直近ATH以降にDD−3%到達済み・未解消
+  const lastDone = [...episodes].reverse().find((e) => !e.isOngoing && e.recoveryIdx != null);
+  if (!lastDone) return null; // 過去にDD−3%の局面が無い
+  const r = lastDone.recoveryIdx;
+  let athCount = 0;
+  for (let k = r + 1; k <= last.i; k++) if (FULL[k].price > FULL[k - 1].ath) athCount++;
+  return { reset: false, startDate: FULL[r].date, days: last.i - r, gainPct: ((last.price / FULL[r].price) - 1) * 100, athCount };
+}
+// 上部パネル「経過日数」の1銘柄分（VOO/QQQを上下2段で常時表示する）。DD開始からの日数に加え、平常期間の指標を出す。
+function ElapsedDaysRow({ label, dInstrument }) {
+  if (!dInstrument) return <div className="text-xs" style={{ color: C.textDim }}><b style={{ color: C.textMuted }}>{label}</b>　データ未取り込み</div>;
+  const { daysSinceATH, athDate, currentPrice, currentDD, isDrawdown } = dInstrument;
+  const calm = computeCalmStretch(dInstrument);
+  return (
+    <div className="mono min-w-0">
+      <div className="flex items-baseline gap-2 text-xs whitespace-nowrap">
+        <b style={{ color: C.textMuted, width: 26, display: "inline-block" }}>{label}</b>
+        {daysSinceATH === 0
+          ? <><span className="font-bold" style={{ color: C.teal }}>最高値更新</span><span className="text-[10px]" style={{ color: C.textDim }}>{fmtYMD(athDate)} ${currentPrice.toFixed(2)}</span></>
+          : <><span style={{ color: C.textMuted }}>DD開始から</span><span className="font-semibold">{daysSinceATH}日</span><span className="text-[10px]" style={{ color: C.textDim }}>ATH {fmtYMD(athDate)}{isDrawdown ? `・DD${currentDD.toFixed(1)}%` : ""}</span></>}
+      </div>
+      <div className="text-[10px] whitespace-nowrap truncate" style={{ color: C.textDim, paddingLeft: 32 }}>
+        {!calm ? "前回DD解消：記録なし"
+          : calm.reset ? <span style={{ color: C.amber }}>DD−3%到達中{calm.d3Date ? `（${fmtYMD(calm.d3Date)}〜）` : ""}：解消後に計測再開</span>
+          : <>前回DD解消 {fmtYMD(calm.startDate)}〜 <b style={{ color: C.text }}>{calm.days}日</b>・<b style={{ color: calm.gainPct >= 0 ? C.teal : C.rust }}>{calm.gainPct >= 0 ? "+" : ""}{calm.gainPct.toFixed(1)}%</b>・ATH更新<b style={{ color: C.text }}>{calm.athCount}回</b></>}
+      </div>
+    </div>
+  );
+}
+// 上部パネル「DD加速度アラート」の1銘柄分（VOO/QQQを上下2段で常時表示。クリックでその銘柄の詳細ページを開く）。
+function SpeedAlertRow({ label, dInstrument, onOpen }) {
+  const sa = dInstrument?.speedAlert;
+  const accent = sa ? speedAlertAccent(sa) : C.textDim;
+  return (
+    <button onClick={sa ? onOpen : undefined} disabled={!sa} className="text-left w-full min-w-0" style={{ background: "transparent", border: "none", padding: 0, cursor: sa ? "pointer" : "default" }}>
+      <div className="flex items-baseline gap-2 text-xs whitespace-nowrap">
+        <b className="mono" style={{ color: C.textMuted, width: 30, display: "inline-block" }}>{label}</b>
+        {!sa && <span style={{ color: C.textDim }}>データ未取り込み</span>}
+        {sa?.level === "normal" && <span style={{ color: C.textMuted }}>待機中（DD{sa.currentDD.toFixed(1)}%）</span>}
+        {sa?.level === "pending5" && <span style={{ color: C.textMuted }}>DD3%到達後{sa.daysSinceDD3}営業日・DD5%未達</span>}
+        {(sa?.level === "confirmed5" || sa?.level === "deep8") && <span className="font-bold" style={{ color: accent }}>{sa.warnLabel}</span>}
+        {sa && <ChevronRight size={11} style={{ color: C.textDim, alignSelf: "center" }} />}
+      </div>
+      <div className="text-[10px] whitespace-nowrap truncate mono" style={{ color: sa?.level === "pending5" ? C.amber : C.textDim, paddingLeft: 38 }}>
+        {sa?.level === "normal" && "DD3%到達で速度を自動計測"}
+        {sa?.level === "pending5" && (sa.hint ?? "速度計測中")}
+        {sa?.level === "confirmed5" && `3→5%の速度：${sa.speed35}営業日`}
+        {sa?.level === "deep8" && (sa.speed38Category ?? "3→8%速度：計測不可")}
+      </div>
+    </button>
+  );
+}
+
 /* ---------------- status panel ---------------- */
-function StatusPanel({ d, dVoo, dQqq, speedAlertInstrument, onChangeSpeedAlertInstrument, onOpenSpeedAlert }) {
+// 経過日数・DD加速度アラートはVOO/QQQを上下2段で常時表示する（切替トグルは使わない）。onOpenSpeedAlert(instrument)でその銘柄の詳細ページを開く。
+function StatusPanel({ d, dVoo, dQqq, onOpenSpeedAlert }) {
   const tickers = [{ label: "SP500", data: d }, { label: "VOO", data: dVoo }, { label: "QQQ", data: dQqq }];
-  const dSpeedAlert = speedAlertInstrument === "qqq" ? dQqq : dVoo;
-  const speedAlertLabel = speedAlertInstrument.toUpperCase();
   return (
     <Panel title="現在のステータス" hideHeader className="h-full">
-      <div className="flex h-full">
-        <div className="flex-1 px-4 py-2 flex flex-col justify-center" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
+      {/* 列幅：評価額/ATH・最高値比は内容の幅ちょうど（auto）に詰め、残りをVOO/QQQ2段＋平常期間の指標を出す「経過日数」（広め）と
+          DD加速度アラートで分け合う（画面幅が狭くても前2列の数値が重ならないようにする） */}
+      <div className="grid h-full" style={{ gridTemplateColumns: "auto auto minmax(0, 1.3fr) minmax(0, 1fr)" }}>
+        <div className="px-3 py-2 flex flex-col justify-center min-w-0" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
           <div className="text-[10px] mb-1" style={{ color: C.textDim }}>評価額 / ATH</div>
           {tickers.map(({ label, data }) => {
             const chg = dayChangePct(data);
             const updated = isUpdatedToday(data); // 当日分が入っているか（未更新の行は文字をグレーアウトして示す）
             const atAth = data ? data.currentDD >= 0 : false; // 最新値がATH（ATH更新中）
             return (
-              <div key={label} className="text-xs mono whitespace-nowrap flex items-baseline" style={{ height: 20 }}>
-                <span className="font-bold" style={{ color: C.textMuted, display: "inline-block", width: 42 }}>{label}</span>
+              <div key={label} className="text-xs mono whitespace-nowrap flex items-center rounded" style={{ height: 21, padding: "0 4px", marginLeft: -5, border: `1px solid ${atAth ? C.rust : "transparent"}`, background: atAth ? "rgba(192,101,75,0.08)" : "transparent" }}>
+                <span className="font-bold" style={{ color: atAth ? C.text : C.textMuted, display: "inline-block", width: 42 }}>{label}</span>
                 {data ? (<>
                   <span style={{ display: "inline-block", width: 68, textAlign: "right", color: updated ? C.text : C.textDim }}>${data.currentPrice.toFixed(2)}</span>
                   {chg !== null && (<span style={{ display: "inline-block", width: 54, textAlign: "right", marginLeft: 4, color: updated ? (chg >= 0 ? C.teal : C.rust) : C.textDim }}>（{chg >= 0 ? "+" : ""}{chg.toFixed(1)}%）</span>)}
                   <span style={{ color: C.textDim, marginLeft: 8 }}>ATH</span>
-                  {/* ATH更新中は金額・日付をtealで強調し「ATH更新」バッジを付ける（当日未更新ならやや薄く） */}
+                  {/* ATH更新中は行全体を赤枠で囲み、ATHの金額・日付をtealで強調する（当日未更新ならやや薄く） */}
                   <span style={{ display: "inline-block", width: 68, textAlign: "right", marginLeft: 4, color: atAth ? C.teal : C.textDim, fontWeight: atAth ? 700 : 400, opacity: atAth && !updated ? 0.6 : 1 }}>${data.currentATH.toFixed(2)}</span>
                   <span className="text-[10px]" style={{ marginLeft: 4, color: atAth ? C.teal : C.textDim, fontWeight: atAth ? 700 : 400, opacity: atAth && !updated ? 0.6 : 1 }}>（{fmtYMD(data.athDate)}）</span>
-                  {atAth && <span className="text-[9px] font-bold rounded px-1" style={{ marginLeft: 4, color: C.bg, background: C.teal, opacity: updated ? 1 : 0.6, letterSpacing: "0.02em" }}>▲ATH更新</span>}
                 </>) : (<span style={{ color: C.textDim }}>データ未取り込み</span>)}
               </div>
             );
           })}
         </div>
-        <div className="flex-1 px-4 py-2 flex flex-col justify-center" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
+        <div className="px-3 py-2 flex flex-col justify-center min-w-0 overflow-hidden" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
           <div className="flex items-center gap-1.5 mb-1"><TrendingDown size={11} style={{ color: C.rust }} /><span className="text-[10px] font-bold" style={{ color: C.rust }}>最高値比</span></div>
           {tickers.map(({ label, data }) => (
             <div key={label} className="mono whitespace-nowrap flex items-baseline" style={{ height: 20 }}>
@@ -2752,34 +2810,22 @@ function StatusPanel({ d, dVoo, dQqq, speedAlertInstrument, onChangeSpeedAlertIn
             </div>
           ))}
         </div>
-        <div className="flex-1 px-4 py-2 flex flex-col justify-center" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
-          <div className="flex items-center justify-between mb-1">
-            <div className="flex items-center gap-1.5"><Clock size={11} style={{ color: C.textDim }} /><span className="text-[10px]" style={{ color: C.textDim }}>経過日数（{speedAlertLabel}基準）</span></div>
-            <SpeedAlertInstrumentToggle value={speedAlertInstrument} onChange={onChangeSpeedAlertInstrument} />
+        <div className="px-3 py-2 flex flex-col min-w-0" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
+          <div className="flex items-center gap-1.5 mb-1"><Clock size={11} style={{ color: C.textDim }} /><span className="text-[10px]" style={{ color: C.textDim }}>経過日数</span></div>
+          <div className="flex-1 flex flex-col justify-around min-h-0">
+            <ElapsedDaysRow label="VOO" dInstrument={dVoo} />
+            <div style={{ borderTop: `1px dashed ${C.borderSoft}` }} />
+            <ElapsedDaysRow label="QQQ" dInstrument={dQqq} />
           </div>
-          <ATHProgressBlock dInstrument={dSpeedAlert} />
         </div>
-        <button onClick={dSpeedAlert ? onOpenSpeedAlert : undefined} disabled={!dSpeedAlert} className="flex-1 px-4 py-2 flex flex-col justify-center text-left" style={{ background: "transparent", border: "none", cursor: dSpeedAlert ? "pointer" : "default", opacity: dSpeedAlert ? 1 : 0.5 }}>
-          <div className="flex items-center gap-1.5 mb-1"><Zap size={11} style={{ color: dSpeedAlert ? speedAlertAccent(dSpeedAlert.speedAlert) : C.textDim }} /><span className="text-[10px]" style={{ color: C.textDim }}>DD加速度アラート（{speedAlertLabel}基準）</span>{dSpeedAlert && <ChevronRight size={11} style={{ color: C.textDim, marginLeft: "auto" }} />}</div>
-          {!dSpeedAlert && <div className="text-xs" style={{ color: C.textDim }}>{speedAlertLabel}データ未取り込み</div>}
-          {dSpeedAlert && dSpeedAlert.speedAlert.level === "normal" && (<>
-            <div className="text-xs mb-0.5" style={{ color: C.textMuted }}>待機中（現在ATH圏、DD{dSpeedAlert.speedAlert.currentDD.toFixed(1)}%）</div>
-            <div className="text-[10px]" style={{ color: C.textDim }}>次にDD3%到達したら速度を自動計測します</div>
-          </>)}
-          {dSpeedAlert && dSpeedAlert.speedAlert.level === "pending5" && (<>
-            <div className="text-xs mb-0.5" style={{ color: C.textMuted }}>DD3%到達後{dSpeedAlert.speedAlert.daysSinceDD3}営業日経過、DD5%未達</div>
-            <div className="mono text-xs" style={{ color: C.amber }}>{dSpeedAlert.speedAlert.hint ?? "速度計測中"}</div>
-          </>)}
-          {dSpeedAlert && dSpeedAlert.speedAlert.level === "confirmed5" && (<>
-            <div className="mono text-sm font-bold" style={{ color: speedAlertAccent(dSpeedAlert.speedAlert) }}>{dSpeedAlert.speedAlert.warnLabel}</div>
-            <div className="text-xs" style={{ color: C.textMuted }}>3→5%の速度：{dSpeedAlert.speedAlert.speed35}営業日</div>
-          </>)}
-          {dSpeedAlert && dSpeedAlert.speedAlert.level === "deep8" && (<>
-            <div className="mono text-sm font-bold" style={{ color: speedAlertAccent(dSpeedAlert.speedAlert) }}>{dSpeedAlert.speedAlert.warnLabel}</div>
-            <div className="text-xs" style={{ color: C.textMuted }}>{dSpeedAlert.speedAlert.speed38Category ?? "3→8%速度：計測不可"}</div>
-          </>)}
-          {dSpeedAlert && <div className="text-[9px] mt-0.5 underline" style={{ color: C.textDim }}>クリックで詳細・バックテスト・加速度センサー（VOO/QQQ）を表示</div>}
-        </button>
+        <div className="px-3 py-2 flex flex-col min-w-0">
+          <div className="flex items-center gap-1.5 mb-1 min-w-0"><Zap size={11} style={{ color: C.textDim, flexShrink: 0 }} /><span className="text-[10px] whitespace-nowrap" style={{ color: C.textDim }}>DD加速度アラート</span><span className="text-[9px] truncate" style={{ color: C.textDim }}>（クリックで詳細・加速度センサー）</span></div>
+          <div className="flex-1 flex flex-col justify-around min-h-0">
+            <SpeedAlertRow label="VOO" dInstrument={dVoo} onOpen={() => onOpenSpeedAlert("voo")} />
+            <div style={{ borderTop: `1px dashed ${C.borderSoft}` }} />
+            <SpeedAlertRow label="QQQ" dInstrument={dQqq} onOpen={() => onOpenSpeedAlert("qqq")} />
+          </div>
+        </div>
       </div>
     </Panel>
   );
@@ -5074,10 +5120,9 @@ function MobileAthPage({ d, dVoo, dQqq }) {
         const atAth = data ? data.currentDD >= 0 : false; // 最新値がATH（ATH更新中）。PCのステータス欄と同じく強調する（当日未更新ならやや薄く）
         const athDim = atAth && !updated ? 0.6 : 1;
         return (
-          <div key={label} className="rounded-lg px-3 py-2 flex-1 flex flex-col justify-center min-h-0" style={{ background: C.panel, border: `1px solid ${atAth ? C.teal + "88" : C.border}` }}>
+          <div key={label} className="rounded-lg px-3 py-2 flex-1 flex flex-col justify-center min-h-0" style={{ background: C.panel, border: `1px solid ${atAth ? C.rust : C.border}` }}>
             <div className="flex items-center justify-between mb-1">
               <span className="text-xs font-bold" style={{ color: C.textMuted }}>{label}</span>
-              {atAth && <span className="text-[10px] font-bold rounded px-1.5" style={{ color: C.bg, background: C.teal, opacity: athDim, letterSpacing: "0.02em" }}>▲ATH更新</span>}
             </div>
             {data ? (
               <>
@@ -7108,7 +7153,7 @@ export default function DDDashboard() {
         <DepthGauge dd={d.currentDD} />
 
         <div className="flex-1 flex flex-col gap-0 p-2 min-w-0">
-          <div style={{ height: 116, flexShrink: 0 }}><StatusPanel d={d} dVoo={dVoo} dQqq={dQqq} speedAlertInstrument={speedAlertInstrument} onChangeSpeedAlertInstrument={setSpeedAlertInstrument} onOpenSpeedAlert={() => setModal({ type: "speedAlert" })} /></div>
+          <div style={{ height: 124, flexShrink: 0 }}><StatusPanel d={d} dVoo={dVoo} dQqq={dQqq} onOpenSpeedAlert={(inst) => { setSpeedAlertInstrument(inst); setModal({ type: "speedAlert" }); }} /></div>
 
           <div className="flex-1 flex flex-col" style={{ gap: 0, minHeight: 0 }}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 380px", gap: 4, flex: 1, minHeight: 0 }}>
