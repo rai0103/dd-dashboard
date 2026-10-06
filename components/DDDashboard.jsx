@@ -2711,10 +2711,11 @@ function StatusPanel({ d, dVoo, dQqq, speedAlertInstrument, onChangeSpeedAlertIn
     <Panel title="現在のステータス" hideHeader className="h-full">
       <div className="flex h-full">
         <div className="flex-1 px-4 py-2 flex flex-col justify-center" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
-          <div className="text-[10px] mb-1" style={{ color: C.textDim }}>評価額 / ATH（{fmtYMD(d.athDate)}）</div>
+          <div className="text-[10px] mb-1" style={{ color: C.textDim }}>評価額 / ATH</div>
           {tickers.map(({ label, data }) => {
             const chg = dayChangePct(data);
-            const updated = isUpdatedToday(data);
+            const updated = isUpdatedToday(data); // 当日分が入っているか（未更新の行は文字をグレーアウトして示す）
+            const atAth = data ? data.currentDD >= 0 : false; // 最新値がATH（ATH更新中）
             return (
               <div key={label} className="text-xs mono whitespace-nowrap flex items-baseline" style={{ height: 20 }}>
                 <span className="font-bold" style={{ color: C.textMuted, display: "inline-block", width: 42 }}>{label}</span>
@@ -2722,8 +2723,10 @@ function StatusPanel({ d, dVoo, dQqq, speedAlertInstrument, onChangeSpeedAlertIn
                   <span style={{ display: "inline-block", width: 68, textAlign: "right", color: updated ? C.text : C.textDim }}>${data.currentPrice.toFixed(2)}</span>
                   {chg !== null && (<span style={{ display: "inline-block", width: 54, textAlign: "right", marginLeft: 4, color: updated ? (chg >= 0 ? C.teal : C.rust) : C.textDim }}>（{chg >= 0 ? "+" : ""}{chg.toFixed(1)}%）</span>)}
                   <span style={{ color: C.textDim, marginLeft: 8 }}>ATH</span>
-                  <span style={{ display: "inline-block", width: 68, textAlign: "right", color: C.textDim, marginLeft: 4 }}>${data.currentATH.toFixed(2)}</span>
-                  <span className="text-[9px]" style={{ marginLeft: 6, color: updated ? C.teal : C.textDim }}>{updated ? "●更新済" : "○未更新"}</span>
+                  {/* ATH更新中は金額・日付をtealで強調し「ATH更新」バッジを付ける（当日未更新ならやや薄く） */}
+                  <span style={{ display: "inline-block", width: 68, textAlign: "right", marginLeft: 4, color: atAth ? C.teal : C.textDim, fontWeight: atAth ? 700 : 400, opacity: atAth && !updated ? 0.6 : 1 }}>${data.currentATH.toFixed(2)}</span>
+                  <span className="text-[10px]" style={{ marginLeft: 4, color: atAth ? C.teal : C.textDim, fontWeight: atAth ? 700 : 400, opacity: atAth && !updated ? 0.6 : 1 }}>（{fmtYMD(data.athDate)}）</span>
+                  {atAth && <span className="text-[9px] font-bold rounded px-1" style={{ marginLeft: 4, color: C.bg, background: C.teal, opacity: updated ? 1 : 0.6, letterSpacing: "0.02em" }}>▲ATH更新</span>}
                 </>) : (<span style={{ color: C.textDim }}>データ未取り込み</span>)}
               </div>
             );
