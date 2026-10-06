@@ -57,3 +57,12 @@ test("価格履歴は日付単位でマージ、base無し（初回）は更新�
   assert.deepEqual(JSON.parse(m.holdings_as_of), { a: "2026-10-01", b: "2026-10-02" });
   assert.deepEqual(JSON.parse(m.lifecycle_settings), { phase: 1 });
 });
+
+test("取引履歴：両端末で別々に取り込んだ取引は取引キーで合算する（重複しない）", () => {
+  const th = (keys: string[], updatedAt: string) => JSON.stringify({ version: 1, trades: keys.map((key) => ({ key })), updatedAt });
+  const base: SyncData = { trade_history: th(["a"], "2026-10-01") };
+  const out = mergeSyncData(base, { trade_history: th(["a", "b"], "2026-10-02") }, { trade_history: th(["a", "c"], "2026-10-03") });
+  const merged = JSON.parse(out.trade_history);
+  assert.deepEqual(merged.trades.map((t: { key: string }) => t.key), ["a", "b", "c"]);
+  assert.equal(merged.updatedAt, "2026-10-03");
+});

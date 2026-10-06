@@ -11,6 +11,7 @@ import { pullSyncAndApply, pushSyncNow, scheduleSyncPush, getLastSyncedAt, onSyn
 import { parseInvestmentExcel, computeOwnAssetDrawdown, computeBenchmarkCAGR, simulateDcaBenchmark, simulateMonthlyRebasedBenchmark, accountChanges, resolveBeginnerTrial, trialAxis } from "@/lib/investmentPerformance";
 import { computeRealHoldingsRanking } from "@/lib/realHoldingsRanking";
 import { formatPct } from "@/lib/totalMetrics";
+import { decodeCp932, parseTradeCsv, mergeTrades, computeRealizedEvents, aggregateRanking, splitRanking, periodOptions, emptyTradeHistory, TRADE_KIND_LABEL } from "@/lib/tradeHistory";
 import { OWNER_RAKUTEN_SAKI, OWNER_RAKUTEN_SHIN, OWNER_MOOMOO, OWNER_OPTIONS, RAKUTEN_OWNERS, migrateHoldingsOwners, migrateAsOfKeys, detectRakutenOwnerFromFileName } from "@/lib/owners";
 import { BROKERS, brokerByKey, extractionToPreviewRows, previewRowsToHoldings, replaceBrokerHoldings, aggregateLabelsReplacedByBrokers, exposureCurrency, rowValue, reconcileWithAccountTotal, isPlausibleBrokerRate, guessBrokerRank, reconciliationTarget, sectionChecks, buildBrokerSummary, profitChecks, appendHoldingSnapshot, holdingChanges } from "@/lib/brokerImport";
 import { importUserPrices, applyApiGold, resetPriceField, goldHistoryFetchStart } from "@/lib/priceSeries";
@@ -5921,7 +5922,132 @@ function TotalMetricsChart({ series }) {
     </>
   );
 }
-function InvestmentPerformanceModalContent({ data, d, dQqq, holdings = [], holdingsAsOf = {}, brokerHoldingHistory = {}, brokerSummaries = {}, onOpenUpload, onReset }) {
+// ⑧トレード損益ランキング：楽天証券の取引履歴CSV（日本株・米国株・投資信託）を取り込み、銘柄ごとの実現損益を上位・下位で表示する（lib/tradeHistory.ts）。
+// 取り込みは差分のみ（保存済みと同じ取引はスキップ）。損益は移動平均法、信用は返済時の決済損益、入庫・出庫は損益対象外。
+const TRADE_KIND_COLOR = { JP: C.rust, US: C.blue, INVST: C.violet };
+function TradeRankingSection({ history, onSave, onReset }) {
+  const trades = history?.trades ?? [];
+  const [importMsgs, setImportMsgs] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [periodType, setPeriodType] = useState("all");
+  const [periodValue, setPeriodValue] = useState("");
+  const [kind, setKind] = useState("all");
+  const [tradeType, setTradeType] = useState("all");
+  const events = useMemo(() => computeRealizedEvents(trades), [trades]);
+  const opts = useMemo(() => periodOptions(events), [events]);
+  const valueOptions = periodType === "year" ? opts.years : periodType === "month" ? opts.months : [];
+  const effectiveValue = valueOptions.includes(periodValue) ? periodValue : valueOptions[0] ?? "";
+  const period = periodType === "all" || !effectiveValue ? { type: "all" } : { type: periodType, value: effectiveValue };
+  const rows = useMemo(() => aggregateRanking(events, trades, { period, kind, tradeType }), [events, trades, period.type, period.value, kind, tradeType]);
+  const { top, bottom } = useMemo(() => splitRanking(rows, 10), [rows]);
+  const total = rows.reduce((sum, r) => sum + r.pnl, 0);
+  const counts = useMemo(() => { const c = { JP: 0, US: 0, INVST: 0 }; for (const t of trades) c[t.kind]++; return c; }, [trades]);
+  const dateRange = trades.length ? [trades.reduce((m, t) => (t.date < m ? t.date : m), trades[0].date), trades.reduce((m, t) => (t.date > m ? t.date : m), trades[0].date)] : null;
+
+  const handleFiles = async (e) => {
+    const files = [...(e.target.files ?? [])];
+    e.target.value = "";
+    if (!files.length) return;
+    setBusy(true);
+    let current = trades;
+    const msgs = [];
+    for (const file of files) {
+      try {
+        const res = parseTradeCsv(decodeCp932(await file.arrayBuffer()));
+        if (res.error) { msgs.push({ ok: false, text: `${file.name}：${res.error}` }); continue; }
+        const m = mergeTrades(current, res.trades);
+        current = m.trades;
+        msgs.push({ ok: true, text: `${TRADE_KIND_LABEL[res.kind]}（${file.name}）：${m.added.toLocaleString()}件の取引を新規追加しました（重複${m.skipped.toLocaleString()}件はスキップ）${res.unknownRows ? `。売買の種類を判別できない${res.unknownRows}行は集計対象外` : ""}` });
+      } catch (err) {
+        msgs.push({ ok: false, text: `${file.name}：読み込みに失敗しました（${err?.message ?? err}）` });
+      }
+    }
+    if (current !== trades) onSave({ ...(history ?? emptyTradeHistory()), trades: current, updatedAt: new Date().toISOString() });
+    setImportMsgs(msgs);
+    setBusy(false);
+  };
+
+  const yenSigned = (v) => `${v < 0 ? "-" : v > 0 ? "+" : ""}¥${Math.abs(Math.round(v)).toLocaleString()}`;
+  const sel = { background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text, padding: "2px 6px", cursor: "pointer" };
+  const RankTable = ({ title, list, color }) => (
+    <div className="min-w-0">
+      <div className="text-[11px] mb-1 font-semibold" style={{ color }}>{title}</div>
+      {list.length ? (
+        <table className="mono text-[11px] w-full" style={{ borderCollapse: "collapse" }}>
+          <thead><tr style={{ color: C.textDim, borderBottom: `1px solid ${C.borderSoft}` }}><th className="text-left font-normal py-1 w-6">#</th><th className="text-left font-normal py-1">銘柄</th><th className="text-left font-normal py-1">種別</th><th className="text-right font-normal py-1">実現損益</th><th className="text-right font-normal py-1">取引</th></tr></thead>
+          <tbody>
+            {list.map((r, i) => (
+              <tr key={`${r.kind}|${r.symbol}`} style={{ borderBottom: `1px solid ${C.borderSoft}` }}>
+                <td className="py-1" style={{ color: C.textDim }}>{i + 1}</td>
+                <td className="py-1 pr-2" style={{ maxWidth: 220 }}>
+                  <div className="truncate" title={r.kind === "INVST" ? r.name : `${r.symbol} ${r.name}`}>{r.kind !== "INVST" && <b className="mr-1">{r.symbol}</b>}{r.name}{r.unknownBasis && <span title="取得価額が分からない株（買付履歴の無い入庫分など）の売却を含みます" style={{ color: C.amber }}> ※</span>}</div>
+                </td>
+                <td className="py-1"><span className="text-[9px] px-1 rounded" style={{ color: TRADE_KIND_COLOR[r.kind], border: `1px solid ${TRADE_KIND_COLOR[r.kind]}66` }}>{TRADE_KIND_LABEL[r.kind]}</span></td>
+                <td className="py-1 text-right font-bold" style={{ color: r.pnl >= 0 ? C.teal : C.rust }}>{yenSigned(r.pnl)}</td>
+                <td className="py-1 text-right" style={{ color: C.textMuted }}>{r.tradeCount}件</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : <div className="text-[11px]" style={{ color: C.textDim }}>該当する銘柄がありません。</div>}
+    </div>
+  );
+
+  return (
+    <div>
+      <div className="text-xs font-semibold mb-2">⑧ トレード損益ランキング（楽天証券の取引履歴）</div>
+      <div className="flex items-center gap-2 flex-wrap mb-2">
+        <label className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded cursor-pointer" style={{ background: C.teal, color: C.bg, fontWeight: 700, opacity: busy ? 0.6 : 1 }}>
+          <Upload size={13} /> 取引履歴CSVを選択（日本株・米国株・投資信託、複数可）
+          <input type="file" accept=".csv,text/csv" multiple className="hidden" onChange={handleFiles} disabled={busy} />
+        </label>
+        {trades.length > 0 && (
+          <span className="text-[10px]" style={{ color: C.textDim }}>
+            保存済み：日本株{counts.JP.toLocaleString()}件・米国株{counts.US.toLocaleString()}件・投資信託{counts.INVST.toLocaleString()}件{dateRange && `（${fmtDateSlash(dateRange[0])}〜${fmtDateSlash(dateRange[1])}）`}
+            <button onClick={() => { if (window.confirm("取り込んだ取引履歴をすべて削除しますか？")) { onReset(); setImportMsgs([]); } }} className="ml-2 underline" style={{ color: C.rust, background: "transparent", border: "none", cursor: "pointer" }}>削除</button>
+          </span>
+        )}
+      </div>
+      {importMsgs.length > 0 && (
+        <div className="rounded px-3 py-2 mb-2 text-xs" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
+          {importMsgs.map((m, i) => <div key={i} style={{ color: m.ok ? C.teal : C.rust }}>・{m.text}</div>)}
+        </div>
+      )}
+      {!trades.length ? (
+        <div className="text-xs" style={{ color: C.textDim }}>楽天証券の「取引履歴」からダウンロードしたCSV（tradehistory(JP)／(US)／(INVST)）を選択してください。2回目以降は新しい取引だけが追加されます。</div>
+      ) : (
+        <>
+          <div className="flex items-center gap-2 flex-wrap mb-2 text-[11px]" style={{ color: C.textMuted }}>
+            <span>期間</span>
+            <select value={periodType} onChange={(e) => setPeriodType(e.target.value)} className="rounded mono" style={sel}><option value="all">全期間</option><option value="year">年単位</option><option value="month">月単位</option></select>
+            {periodType !== "all" && (
+              <select value={effectiveValue} onChange={(e) => setPeriodValue(e.target.value)} className="rounded mono" style={sel}>
+                {valueOptions.map((v) => <option key={v} value={v}>{periodType === "year" ? `${v}年` : `${v.slice(0, 4)}年${Number(v.slice(5))}月`}</option>)}
+              </select>
+            )}
+            <span className="ml-2">商品</span>
+            <select value={kind} onChange={(e) => setKind(e.target.value)} className="rounded" style={sel}><option value="all">全て</option><option value="JP">日本株</option><option value="US">米国株</option><option value="INVST">投資信託</option></select>
+            <span className="ml-2">取引</span>
+            <select value={tradeType} onChange={(e) => setTradeType(e.target.value)} className="rounded" style={sel}><option value="all">全て</option><option value="cash">現物</option><option value="margin">信用</option></select>
+          </div>
+          <div className="mono text-xs mb-2" style={{ color: C.textMuted }}>
+            実現損益の合計：<b style={{ color: total >= 0 ? C.teal : C.rust }}>{yenSigned(total)}</b>（{rows.length}銘柄・利益{rows.filter((r) => r.pnl > 0).length}・損失{rows.filter((r) => r.pnl < 0).length}）
+          </div>
+          <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))" }}>
+            <RankTable title="損益の良かった銘柄（上位10）" list={top} color={C.teal} />
+            <RankTable title="損益の悪かった銘柄（下位10）" list={bottom} color={C.rust} />
+          </div>
+          <div className="text-[10px] mt-2 space-y-0.5" style={{ color: C.textDim }}>
+            <div>※実現損益は銘柄ごとに移動平均法（特定口座の総平均法に準ずる方法）で算出し、売却・返済の約定日の期間に計上しています。手数料・税金等を含む受渡金額ベース、米国株は取引時の為替レートで円換算しています。</div>
+            <div>※信用取引は返済時の決済損益（金利・諸費用差引後）、投資信託の再投資は追加購入として平均取得単価に含めています。入庫・出庫（口座間の振替・株式分割/併合）は損益の対象外です。</div>
+            <div>※取引件数は期間内の買付・売却・信用新規/返済・現引の件数です。「※」は取得価額が分からない株（買付履歴の無い入庫分など）の売却を含む銘柄です。</div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+function InvestmentPerformanceModalContent({ data, d, dQqq, holdings = [], holdingsAsOf = {}, brokerHoldingHistory = {}, brokerSummaries = {}, onOpenUpload, onReset, tradeHistory = null, onSaveTradeHistory, onResetTradeHistory }) {
   const yen = (v) => (v == null ? "—" : `¥${Math.round(v).toLocaleString()}`);
   const series = data?.series ?? [];
   const latestTotalAssets = lastValidPoint(series, "totalAssets");
@@ -6021,6 +6147,7 @@ function InvestmentPerformanceModalContent({ data, d, dQqq, holdings = [], holdi
       <div className="text-sm" style={{ color: C.textMuted }}>
         まだ投資収支Excelがアップロードされていません。
         <button onClick={onOpenUpload} className="ml-2 text-xs px-3 py-1.5 rounded" style={{ background: C.teal, color: C.bg, fontWeight: 700, border: "none", cursor: "pointer" }}>Excelをアップロード</button>
+        <div className="mt-6"><TradeRankingSection history={tradeHistory} onSave={onSaveTradeHistory} onReset={onResetTradeHistory} /></div>
       </div>
     );
   }
@@ -6196,6 +6323,8 @@ function InvestmentPerformanceModalContent({ data, d, dQqq, holdings = [], holdi
       <PlanVsActualSection planSeries={data.planSeries} yen={yen} />
 
       <BeginnerTrialSection data={data} holdings={holdings} holdingsAsOf={holdingsAsOf} brokerHoldingHistory={brokerHoldingHistory} brokerSummaries={brokerSummaries} yen={yen} />
+
+      <TradeRankingSection history={tradeHistory} onSave={onSaveTradeHistory} onReset={onResetTradeHistory} />
     </div>
   );
 }
@@ -6258,6 +6387,7 @@ export default function DDDashboard() {
   const [prevSnapshot, setPrevSnapshot] = useState(null); // 詳細サマリー出力の前回スナップショット（差分表示用）
   const [vooQqqSeries, setVooQqqSeries] = useState([]); // 「データ更新」で取得したVOO/QQQ終値（S&P500のDD計算には使わない、CSV出力専用の補助データ）
   const [speedAlertInstrument, setSpeedAlertInstrument] = useState("voo"); // "経過日数"・"DD加速度アラート"の基準をVOO/QQQどちらにするか
+  const [tradeHistory, setTradeHistory] = useState(null); // 楽天証券の取引履歴CSVから取り込んだ取引（実績パフォーマンス⑧。lib/tradeHistory.ts）
   const [investmentPerformance, setInvestmentPerformance] = useState(null); // 投資収支Excelのパース結果（既存のSP500/QQQトラックレコードとは独立したデータソース）
   const [lastSyncedLabel, setLastSyncedLabel] = useState(() => getLastSyncedAt());
   const [syncError, setSyncError] = useState(false);
@@ -6374,6 +6504,10 @@ export default function DDDashboard() {
         const res9 = await storage.get("investment_performance_data");
         if (res9 && res9.value) setInvestmentPerformance(JSON.parse(res9.value));
       } catch (e) { /* no saved investment performance data yet */ }
+      try {
+        const res10 = await storage.get("trade_history");
+        if (res10 && res10.value) setTradeHistory(JSON.parse(res10.value));
+      } catch (e) { /* no saved trade history yet */ }
       setHydrated(true);
     })();
   }, []);
@@ -6446,6 +6580,14 @@ export default function DDDashboard() {
   function handleSaveInvestmentPerformance(data) {
     setInvestmentPerformance(data);
     storage.set("investment_performance_data", JSON.stringify(data)).then(() => scheduleSyncPush(setSyncOk)).catch(() => { /* storage unavailable */ });
+  }
+  function handleSaveTradeHistory(next) {
+    setTradeHistory(next);
+    storage.set("trade_history", JSON.stringify(next)).then(() => scheduleSyncPush(setSyncOk)).catch(() => { /* storage unavailable */ });
+  }
+  function handleResetTradeHistory() {
+    setTradeHistory(null);
+    storage.delete("trade_history").then(() => scheduleSyncPush(setSyncOk)).catch(() => { /* storage unavailable */ });
   }
   function handleResetInvestmentPerformance() {
     setInvestmentPerformance(null);
@@ -6796,7 +6938,7 @@ export default function DDDashboard() {
       {modal?.type === "ddTable" && <FullScreenModal title="DD毎のA〜E配分表" onClose={() => setModal(null)}><DDTableContent modelRow={d.modelRow} modelRows={d.trackRecord.dynamicModelRows} holdings={holdings} /></FullScreenModal>}
       {modal?.type === "modelDebug" && <FullScreenModal title="動的配分モデル デバッグビュー" onClose={() => setModal(null)}><ModelDebugContent d={d} dQqq={dQqq} qqqAmplification={qqqAmplification} /></FullScreenModal>}
       {modal?.type === "investmentUpload" && <FullScreenModal title="投資収支Excel アップロード" onClose={() => setModal(null)}><InvestmentUploadModalContent existing={investmentPerformance} onSave={handleSaveInvestmentPerformance} onClose={() => setModal(null)} /></FullScreenModal>}
-      {modal?.type === "investmentPerformance" && <FullScreenModal title="実績パフォーマンス" onClose={() => setModal(null)}><InvestmentPerformanceModalContent data={investmentPerformance} d={d} dQqq={dQqq} holdings={holdings} holdingsAsOf={holdingsAsOf} brokerHoldingHistory={brokerHoldingHistory} brokerSummaries={brokerSummaries} onOpenUpload={() => setModal({ type: "investmentUpload" })} onReset={() => { if (window.confirm("投資収支データを削除しますか？")) { handleResetInvestmentPerformance(); setModal(null); } }} /></FullScreenModal>}
+      {modal?.type === "investmentPerformance" && <FullScreenModal title="実績パフォーマンス" onClose={() => setModal(null)}><InvestmentPerformanceModalContent tradeHistory={tradeHistory} onSaveTradeHistory={handleSaveTradeHistory} onResetTradeHistory={handleResetTradeHistory} data={investmentPerformance} d={d} dQqq={dQqq} holdings={holdings} holdingsAsOf={holdingsAsOf} brokerHoldingHistory={brokerHoldingHistory} brokerSummaries={brokerSummaries} onOpenUpload={() => setModal({ type: "investmentUpload" })} onReset={() => { if (window.confirm("投資収支データを削除しますか？")) { handleResetInvestmentPerformance(); setModal(null); } }} /></FullScreenModal>}
       {modal?.type === "rank" && <FullScreenModal title={`${modal.rank}ランクの保有銘柄`} onClose={() => setModal(null)}><RankHoldingsContent rank={modal.rank} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
       {modal?.type === "crash" && <FullScreenModal title={`${crashDisplayName(modal.crash)}（${modal.crash.start} 〜）と現状の比較`} onClose={() => setModal(null)}><CrashModalContent crash={modal.crash} daysSinceATH={d.daysSinceATH} currentDD={d.currentDD} currentEpisodeCurve={d.currentEpisodeCurve} qqqFull={dQqq?.FULL ?? null} goldFull={goldSeries} allCrashes={historicalCrashes} onJump={(c) => setModal({ type: "crash", crash: c })} /></FullScreenModal>}
       {modal?.type === "ddChart" && <FullScreenModal title={chartSourceTitle(chartSource)} onClose={() => setModal(null)}><DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} sourceViews={sourceViews} chartSources={chartSources} onToggleChartSource={toggleChartSource} /></FullScreenModal>}

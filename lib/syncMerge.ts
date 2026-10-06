@@ -61,6 +61,15 @@ function mergeDateSeries(base: any[] | undefined, local: any[] | undefined, serv
   return dates.map((d) => merge3(b.get(d), l.get(d), s.get(d), (lv, sv) => lv ?? sv)).filter((p) => p !== undefined);
 }
 
+// 取引履歴（trade_history）：両端末で取り込んだ取引を取引キー（key）で合算する（同じキーはこの端末を優先）。
+function mergeTradeHistory(local: any, server: any): any {
+  const seen = new Set<string>();
+  const trades: any[] = [];
+  for (const t of [...(local?.trades ?? []), ...(server?.trades ?? [])]) { if (t?.key && !seen.has(t.key)) { seen.add(t.key); trades.push(t); } }
+  const updatedAt = [local?.updatedAt, server?.updatedAt].filter(Boolean).sort().at(-1) ?? null;
+  return { ...local, trades, updatedAt };
+}
+
 // base：前回この端末が同期した時点のサーバーデータ（無ければ null。初回は判定できないため、地図型はマージ・その他はこの端末優先）
 export function mergeSyncData(base: SyncData | null, local: SyncData, server: SyncData): SyncData {
   const out: SyncData = {};
@@ -76,6 +85,7 @@ export function mergeSyncData(base: SyncData | null, local: SyncData, server: Sy
     else if (MAP_KEYS.has(key) && typeof l === "object" && typeof s === "object" && !Array.isArray(l)) merged = mergeMap(key, b, l, s);
     else if (key === "portfolio_holdings" && Array.isArray(l) && Array.isArray(s)) merged = mergeHoldings(b, l, s);
     else if (DATE_SERIES_KEYS.has(key) && Array.isArray(l) && Array.isArray(s)) merged = mergeDateSeries(b, l, s);
+    else if (key === "trade_history" && typeof l === "object" && typeof s === "object") merged = mergeTradeHistory(l, s);
     else merged = l; // その他（設定・投資収支Excel等）はこの端末を優先
     if (merged !== undefined) out[key] = JSON.stringify(merged);
   }

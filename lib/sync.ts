@@ -4,6 +4,7 @@ import { mergeSyncData, type SyncData } from "@/lib/syncMerge";
 // PC⇔スマホ間で共有する必要があるキーのみを対象にする。
 // voo_price_history: 名前に反しTwelve Data自動取得の値ではなく、S&P500本系列（Stooq CSV取り込み・直接入力）。
 //   DD計算の根幹データであり手入力/取り込みのため同期対象に含める。
+// trade_history: 楽天証券の取引履歴CSVから取り込んだ取引（実績パフォーマンス⑧）。両端末で追加された場合は取引キーで合算する。
 // spy_voo_price_history: VOO/QQQ終値。ページ読み込み時に自動取得した当日値もマージされるが、
 //   Twelve Data APIが返さない過去日分の手動CSV取り込み・直接入力も同じキーに保存されるため同期対象に含める。
 export const SYNC_KEYS = [
@@ -20,6 +21,7 @@ export const SYNC_KEYS = [
   "fixed_positions",
   "summary_prev_snapshot",
   "investment_performance_data",
+  "trade_history",
 ] as const;
 
 const SYNC_API_URL = "https://stock-prices.shinichiogasawara0103.workers.dev/sync";
