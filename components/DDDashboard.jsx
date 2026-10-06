@@ -5893,7 +5893,17 @@ function CalendarYearTable({ years }) {
 function TotalMetricsChart({ series }) {
   const data = series.filter((p) => p.totalAssets != null || p.principal != null);
   if (!data.length) return <div className="text-xs" style={{ color: C.textDim }}>時系列のデータがありません。</div>;
+  // 凡例（③ベンチマーク比較と同じ線見本の形式）。TWR指数は点線・右軸。
+  const legend = [
+    { label: "総資産", color: C.teal, style: { height: 2, background: C.teal } },
+    { label: "元本（累計純入金）", color: C.amber, style: { height: 2, background: C.amber } },
+    { label: "TWR指数（開始=1.0・右軸）", color: C.violet, style: { borderTop: `2px dashed ${C.violet}` } },
+  ];
   return (
+    <>
+    <div className="flex items-center gap-3 mb-1 flex-wrap text-[10px]" style={{ color: C.textMuted }}>
+      {legend.map((l) => (<span key={l.label} className="flex items-center gap-1"><span style={{ width: 14, display: "inline-block", ...l.style }} />{l.label}</span>))}
+    </div>
     <div style={{ width: "100%", height: 240 }}>
       <ResponsiveContainer width="100%" height="100%">
         <ComposedChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
@@ -5908,6 +5918,7 @@ function TotalMetricsChart({ series }) {
         </ComposedChart>
       </ResponsiveContainer>
     </div>
+    </>
   );
 }
 function InvestmentPerformanceModalContent({ data, d, dQqq, holdings = [], holdingsAsOf = {}, brokerHoldingHistory = {}, brokerSummaries = {}, onOpenUpload, onReset }) {
@@ -6044,7 +6055,7 @@ function InvestmentPerformanceModalContent({ data, d, dQqq, holdings = [], holdi
           <div className="flex flex-col gap-4">
             <TotalMetricsCards tm={data.totalMetrics} />
             <div>
-              <div className="text-[11px] mb-1.5" style={{ color: C.textMuted }}>総資産・元本（累計純入金）の推移 <span className="text-[10px]" style={{ color: C.textDim }}>／ 点線＝TWR指数（開始=1.0・右軸）</span></div>
+              <div className="text-[11px] mb-1.5" style={{ color: C.textMuted }}>総資産・元本（累計純入金）・TWR指数の推移</div>
               <TotalMetricsChart series={data.totalMetrics.series} />
             </div>
             <div>
