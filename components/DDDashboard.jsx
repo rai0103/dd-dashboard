@@ -12,6 +12,7 @@ import { parseInvestmentExcel, computeOwnAssetDrawdown, computeBenchmarkCAGR, si
 import { computeRealHoldingsRanking } from "@/lib/realHoldingsRanking";
 import { formatPct } from "@/lib/totalMetrics";
 import { computeAccelSensor } from "@/lib/accelSensor";
+import { buildYearSeries, completeYears, selectCompareYears, YEAR_PRESETS } from "@/lib/yearCompare";
 import { decodeCp932, parseTradeCsv, mergeTrades, computeRealizedEvents, aggregateRanking, splitRanking, periodOptions, emptyTradeHistory, TRADE_KIND_LABEL } from "@/lib/tradeHistory";
 import { OWNER_RAKUTEN_SAKI, OWNER_RAKUTEN_SHIN, OWNER_MOOMOO, OWNER_OPTIONS, RAKUTEN_OWNERS, migrateHoldingsOwners, migrateAsOfKeys, detectRakutenOwnerFromFileName } from "@/lib/owners";
 import { BROKERS, brokerByKey, extractionToPreviewRows, previewRowsToHoldings, replaceBrokerHoldings, aggregateLabelsReplacedByBrokers, exposureCurrency, rowValue, reconcileWithAccountTotal, isPlausibleBrokerRate, guessBrokerRank, reconciliationTarget, sectionChecks, buildBrokerSummary, profitChecks, appendHoldingSnapshot, holdingChanges } from "@/lib/brokerImport";
@@ -2322,11 +2323,92 @@ function MultiPriceChartBody({ keys, views, hidden, fontSize = 10, width, height
 }
 const MULTI_CHART_NOTE = "1つ目に選んだ銘柄を左軸、それ以外を右軸で表示しています（評価額のみ・DD%は表示しません）。マーカーは色が種別（緑=DD開始・オレンジ=大底・青=DD回復）、形が銘柄（●VOO・▲QQQ・▼GOLD、■は現在値）で、カーソルを合わせると銘柄名付きで詳細を表示します。凡例クリックで系列の表示/非表示を切り替えられます。";
 function multiLegendItems(keys, views) { return keys.filter((k) => views[k]).map((k) => ({ key: MULTI_SERIES[k].hiddenKey, label: MULTI_SERIES[k].name, color: MULTI_SERIES[k].color })); }
+// 年比較（SP500専用。lib/yearCompare.ts）：比較年（プリセットで選択）の1〜12月の値動きを薄い白線で重ね、今年（途中経過）を強調表示する。
+// 評価額＝年初（前年最終値）=100の指数、DD＝年初来高値からの下落率。線（または下の年ボタン）にホバー／タップするとその年を強調して表示する。
+const YEAR_MONTH_TICKS = [1, 32, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335]; // 各月1日の通算日（平年）
+const doyLabel = (doy) => { const d = new Date(Date.UTC(2025, 0, doy)); return `${d.getUTCMonth() + 1}月${d.getUTCDate()}日`; };
+function YearComparePanel({ FULL, fontSize = 10 }) {
+  const [metric, setMetric] = useState("index");
+  const [preset, setPreset] = useState("recent10");
+  const [inputYear, setInputYear] = useState("");
+  const [hoverYearRaw, setHoverYear] = useState(null); // マウスが乗っている年（一時的）
+  const [pinnedYear, setPinnedYear] = useState(null); // クリック／タップで固定した年（もう一度押すと解除）
+  const hoverYear = hoverYearRaw ?? pinnedYear;
+  const togglePin = (y) => setPinnedYear((v) => (v === y ? null : y));
+  const series = useMemo(() => buildYearSeries(FULL.map((pt) => ({ date: pt.date, price: pt.price }))), [FULL]);
+  const currentYear = useMemo(() => Math.max(...series.keys()), [series]);
+  const allYears = useMemo(() => completeYears(series, currentYear), [series, currentYear]);
+  const presetDef = YEAR_PRESETS.find((x) => x.key === preset);
+  const yearNum = inputYear === "" ? null : Number(inputYear);
+  const { years, note } = useMemo(() => selectCompareYears(preset, { series, currentYear, metric, inputYear: yearNum }), [preset, series, currentYear, metric, yearNum]);
+  // 通算日（1〜366）ごとの行に、各年の値（y{年}）を入れる。営業日以外は空欄で、線はconnectNullsでつなぐ。
+  const data = useMemo(() => {
+    const rows = new Map();
+    for (const y of [...years, currentYear]) for (const pt of series.get(y) ?? []) {
+      if (!rows.has(pt.doy)) rows.set(pt.doy, { doy: pt.doy });
+      rows.get(pt.doy)[`y${y}`] = Number(pt[metric].toFixed(2));
+    }
+    return [...rows.values()].sort((a, b) => a.doy - b.doy);
+  }, [years, currentYear, series, metric]);
+  const unit = metric === "index" ? "" : "%";
+  const sel = { background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text, padding: "2px 6px", cursor: "pointer" };
+  const curLast = series.get(currentYear)?.at(-1);
+  const TooltipBody = ({ active, payload, label }) => {
+    if (!active || !payload?.length) return null;
+    // カーソル位置の日にその年の取引が無い場合は、その日以前で最も近い営業日の値を出す
+    const valueNear = (y) => { let v = null; for (const pt of series.get(y) ?? []) { if (pt.doy > label) break; v = pt[metric]; } return v == null ? null : Number(v.toFixed(2)); };
+    const showYears = [hoverYear, currentYear].filter((y, i, a) => y != null && a.indexOf(y) === i && valueNear(y) != null);
+    if (!showYears.length) return null;
+    return (
+      <div className="mono" style={{ background: C.panel, border: `1px solid ${C.border}`, padding: "6px 8px", fontSize: 11 }}>
+        <div style={{ color: C.textDim }}>{doyLabel(label)}頃</div>
+        {showYears.map((y) => <div key={y} style={{ color: y === currentYear ? C.teal : C.text }}><b>{y}年</b>{y === currentYear ? "（今年）" : ""}：{valueNear(y)}{unit}</div>)}
+      </div>
+    );
+  };
+  return (
+    <div className="h-full flex flex-col min-h-0" onClick={(e) => e.stopPropagation()}>
+      <div className="flex items-center gap-2 flex-wrap px-2 pt-1 pb-1 shrink-0 text-[11px]" style={{ color: C.textMuted }}>
+        <div className="flex gap-0.5">{[{ k: "index", l: "評価額" }, { k: "dd", l: "DD" }].map((t) => (<button key={t.k} onClick={() => setMetric(t.k)} className="px-2 py-0.5 rounded" style={{ color: metric === t.k ? C.bg : C.textMuted, background: metric === t.k ? C.teal : "transparent", fontWeight: metric === t.k ? 700 : 400, border: `1px solid ${metric === t.k ? C.teal : C.borderSoft}`, cursor: "pointer" }}>{t.l}</button>))}</div>
+        <select value={preset} onChange={(e) => setPreset(e.target.value)} className="rounded" style={sel}>{YEAR_PRESETS.map((x) => <option key={x.key} value={x.key}>{x.label}</option>)}</select>
+        {presetDef?.needsYear && <input type="number" value={inputYear} onChange={(e) => setInputYear(e.target.value)} placeholder={`${allYears[0] ?? ""}〜${allYears.at(-1) ?? ""}`} min={allYears[0]} max={allYears.at(-1)} className="mono rounded" style={{ ...sel, width: 92 }} />}
+        <span className="text-[10px]" style={{ color: C.textDim }}>{metric === "index" ? "年初=100の指数" : "年初来高値からの下落率"}・比較{years.length}年{curLast ? `・今年 ${curLast[metric].toFixed(metric === "index" ? 1 : 1)}${unit}（${fmtDateSlash(curLast.date)}）` : ""}</span>
+        {note && <span className="text-[10px]" style={{ color: C.amber }}>{note}</span>}
+      </div>
+      <div className="flex-1 min-h-0 relative">
+        {hoverYear != null && <div className="absolute mono font-bold text-sm" style={{ left: 64, top: 8, color: hoverYear === currentYear ? C.teal : C.text, zIndex: 2, pointerEvents: "none" }}>{hoverYear}年</div>}
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={data} margin={{ top: 10, right: 16, left: 0, bottom: 0 }} onMouseLeave={() => setHoverYear(null)}>
+            <CartesianGrid stroke={C.borderSoft} vertical={false} />
+            <XAxis dataKey="doy" type="number" domain={[1, 366]} ticks={YEAR_MONTH_TICKS} tickFormatter={(v) => `${new Date(Date.UTC(2025, 0, v)).getUTCMonth() + 1}月`} tick={{ fill: C.textDim, fontSize }} axisLine={{ stroke: C.border }} tickLine={false} />
+            <YAxis domain={metric === "index" ? ["auto", "auto"] : ["auto", 0]} tick={{ fill: C.textDim, fontSize }} axisLine={false} tickLine={false} width={44} tickFormatter={(v) => `${Math.round(v)}${unit}`} />
+            <ReferenceLine y={metric === "index" ? 100 : 0} stroke={C.border} />
+            <Tooltip content={<TooltipBody />} />
+            {years.map((y) => (
+              <Line key={y} type="linear" dataKey={`y${y}`} stroke={C.white} strokeOpacity={hoverYear === y ? 0.95 : 0.22} strokeWidth={hoverYear === y ? 2 : 0.9} dot={false} activeDot={false} isAnimationActive={false} connectNulls name={`${y}年`} />
+            ))}
+            <Line type="linear" dataKey={`y${currentYear}`} stroke={C.teal} strokeWidth={2.6} dot={false} isAnimationActive={false} connectNulls name={`${currentYear}年（今年）`} />
+            {/* ホバー判定用の透明な太線（細い線の上にマウスを乗せやすくする）。タップでも選択できる */}
+            {[...years, currentYear].map((y) => (
+              <Line key={`hit-${y}`} type="linear" dataKey={`y${y}`} stroke="#000" strokeOpacity={0} strokeWidth={10} dot={false} activeDot={false} isAnimationActive={false} connectNulls legendType="none"
+                onMouseEnter={() => setHoverYear(y)} onMouseLeave={() => setHoverYear(null)} onClick={() => togglePin(y)} />
+            ))}
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+      <div className="flex items-center gap-1 flex-wrap px-2 pt-1 shrink-0 text-[10px] mono" style={{ color: C.textDim }}>
+        <span className="mr-1">年：</span>
+        {years.map((y) => (<button key={y} onMouseEnter={() => setHoverYear(y)} onMouseLeave={() => setHoverYear(null)} onClick={() => togglePin(y)} title={pinnedYear === y ? "クリックで固定を解除" : "クリックで強調を固定"} className="px-1 rounded" style={{ color: hoverYear === y ? C.bg : C.textMuted, background: hoverYear === y ? C.white : "transparent", border: `1px solid ${pinnedYear === y ? C.white : C.borderSoft}`, cursor: "pointer" }}>{y}</button>))}
+        <span className="ml-1" style={{ color: C.teal }}>━ {currentYear}年（今年）</span>
+      </div>
+    </div>
+  );
+}
 // 通常表示（評価額/DD%）と暴落比較（経過日数ベース）をタブで切り替えられる拡大チャート。
 // PCの拡大表示（ddChartモーダル）とスマホの横向き拡大表示（MobileChartZoomModal）の両方から共通で使う。
 // chartSourcesでVOO/QQQ/GOLDを選択（複数選択時は評価額のみの比較チャート）。暴落比較タブはVOOのみ選択時。
-function DDChartModalContent({ chartData, rangeDays, d, hidden, toggle, period, setPeriod, periodStats, historicalCrashes, selectedCrash, onSelectCrash, comparisonData, hiddenCrash, toggleCrash, crashLegendItems, dQqq, qqqChartData, qqqRangeDays, qqqPeriodStats, goldView = null, sourceViews, chartSources, onToggleChartSource, fontSize = 12 }) {
-  const [chartTab, setChartTab] = useState("normal");
+function DDChartModalContent({ chartData, rangeDays, d, hidden, toggle, period, setPeriod, periodStats, historicalCrashes, selectedCrash, onSelectCrash, comparisonData, hiddenCrash, toggleCrash, crashLegendItems, dQqq, qqqChartData, qqqRangeDays, qqqPeriodStats, goldView = null, sourceViews, chartSources, onToggleChartSource, initialTab = null, fontSize = 12 }) {
+  const [chartTab, setChartTab] = useState(initialTab ?? "normal"); // initialTab：メイン画面で開いていたタブ（年比較から拡大した場合など）
   const chartSource = chartSourceMode(chartSources); // "sp500" | "qqq" | "gold" | "multi"（複数選択）
   const hasCrashCompare = !!(historicalCrashes && onSelectCrash) && chartSource === "sp500";
   const isQqqSource = chartSource === "qqq";
@@ -2342,7 +2424,7 @@ function DDChartModalContent({ chartData, rangeDays, d, hidden, toggle, period, 
     <div className="h-full flex flex-col">
       <div className="flex items-center gap-2 mb-1.5 flex-wrap">
         {hasCrashCompare && (
-          <div className="flex gap-0.5 mr-1">{[{ k: "normal", l: "通常" }, { k: "crash", l: "暴落" }].map((t) => (<button key={t.k} onClick={() => setChartTab(t.k)} className="text-[11px] px-2 py-1 rounded" style={{ color: chartTab === t.k ? C.bg : C.textMuted, background: chartTab === t.k ? C.amber : "transparent", fontWeight: chartTab === t.k ? 700 : 400 }}>{t.l}</button>))}</div>
+          <div className="flex gap-0.5 mr-1">{[{ k: "normal", l: "通常" }, { k: "crash", l: "暴落" }, { k: "year", l: "年比較" }].map((t) => (<button key={t.k} onClick={() => setChartTab(t.k)} className="text-[11px] px-2 py-1 rounded" style={{ color: chartTab === t.k ? C.bg : C.textMuted, background: chartTab === t.k ? C.amber : "transparent", fontWeight: chartTab === t.k ? 700 : 400 }}>{t.l}</button>))}</div>
         )}
         {chartTab === "normal" || !hasCrashCompare ? (
           <>
@@ -2355,7 +2437,7 @@ function DDChartModalContent({ chartData, rangeDays, d, hidden, toggle, period, 
             <PeriodSelect value={period} onChange={setPeriod} size="md" />
             <ChartSourceToggle value={chartSources} onToggle={onToggleChartSource} qqqAvailable={!!dQqq} goldAvailable={!!goldView} />
           </>
-        ) : (
+        ) : chartTab === "year" ? null : (
           <>
             <ClickLegend items={crashLegendItems} hidden={hiddenCrash} onToggle={toggleCrash} />
             {historicalCrashes.length > 0 && (
@@ -2382,6 +2464,8 @@ function DDChartModalContent({ chartData, rangeDays, d, hidden, toggle, period, 
           </div>
           <div className="mt-3 text-[10px]" style={{ color: C.textDim }}>{isMultiSource ? MULTI_CHART_NOTE : "下部のスクロールバーをドラッグして期間を絞り込み（ズーム）できます。グラフ上にカーソルを合わせるとツールチップが表示されます。"}</div>
         </>
+      ) : chartTab === "year" ? (
+        <div style={{ height: "min(74vh, 680px)" }}><YearComparePanel FULL={d.FULL} fontSize={fontSize} /></div>
       ) : (
         <div style={{ height: "min(70vh, 640px)" }}>
           <ResponsiveContainer width="100%" height="100%">
@@ -7070,7 +7154,7 @@ export default function DDDashboard() {
       {modal?.type === "investmentPerformance" && <FullScreenModal title="実績パフォーマンス" onClose={() => setModal(null)}><InvestmentPerformanceModalContent tradeHistory={tradeHistory} onSaveTradeHistory={handleSaveTradeHistory} onResetTradeHistory={handleResetTradeHistory} data={investmentPerformance} d={d} dQqq={dQqq} holdings={holdings} holdingsAsOf={holdingsAsOf} brokerHoldingHistory={brokerHoldingHistory} brokerSummaries={brokerSummaries} onOpenUpload={() => setModal({ type: "investmentUpload" })} onReset={() => { if (window.confirm("投資収支データを削除しますか？")) { handleResetInvestmentPerformance(); setModal(null); } }} /></FullScreenModal>}
       {modal?.type === "rank" && <FullScreenModal title={`${modal.rank}ランクの保有銘柄`} onClose={() => setModal(null)}><RankHoldingsContent rank={modal.rank} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
       {modal?.type === "crash" && <FullScreenModal title={`${crashDisplayName(modal.crash)}（${modal.crash.start} 〜）と現状の比較`} onClose={() => setModal(null)}><CrashModalContent crash={modal.crash} daysSinceATH={d.daysSinceATH} currentDD={d.currentDD} currentEpisodeCurve={d.currentEpisodeCurve} qqqFull={dQqq?.FULL ?? null} goldFull={goldSeries} allCrashes={historicalCrashes} onJump={(c) => setModal({ type: "crash", crash: c })} /></FullScreenModal>}
-      {modal?.type === "ddChart" && <FullScreenModal title={chartSourceTitle(chartSource)} onClose={() => setModal(null)}><DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} sourceViews={sourceViews} chartSources={chartSources} onToggleChartSource={toggleChartSource} /></FullScreenModal>}
+      {modal?.type === "ddChart" && <FullScreenModal title={chartSourceTitle(chartSource)} onClose={() => setModal(null)}><DDChartModalContent initialTab={chartTab} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} sourceViews={sourceViews} chartSources={chartSources} onToggleChartSource={toggleChartSource} /></FullScreenModal>}
       {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} vooQqqSeries={vooQqqSeries} onAppendVooQqq={handleAppendVooQqq} onImportVooQqq={handleImportVooQqq} onApplyApiGold={handleApplyApiGold} onResetVooQqqField={handleResetVooQqqField} virtualAggregateLabels={virtualAggregateLabels} onRegisterBrokerHoldings={handleRegisterBrokerHoldings} brokerSummaries={brokerSummaries} />}
       {modal?.type === "checkpointSettings" && <FullScreenModal title="チェックポイント設定" onClose={() => setModal(null)}><CheckpointSettingsContent checkpoints={checkpoints} onCheckpointChange={handleCheckpointChange} holdings={holdings} /></FullScreenModal>}
       {modal?.type === "bottomScore" && <FullScreenModal title={bottom.hold.applicable ? `底値判定：${bottomLabel(d.FULL, bottom.hold.state)} が底値として確定する確率（SP500実績から都度算出）` : "底値判定（SP500実績から都度算出）"} onClose={() => setModal(null)}><BottomScoreModalContent bottom={bottom} FULL={d.FULL} /></FullScreenModal>}
@@ -7158,12 +7242,12 @@ export default function DDDashboard() {
             {/* top-left: chart */}
             <div style={{ minHeight: 0 }}>
               <Panel
-                title={(chartTab === "normal" || chartSource !== "sp500") ? chartSourceTitle(chartSource) : "過去の暴落との比較（経過日数ベース）"}
+                title={(chartTab === "normal" || chartSource !== "sp500") ? chartSourceTitle(chartSource) : chartTab === "year" ? "年比較（SP500）" : "過去の暴落との比較（経過日数ベース）"}
                 compactHeader
                 action={
                   <div className="flex items-center gap-2">
                     {chartSource === "sp500" && (
-                      <div className="flex gap-0.5 mr-1">{[{ k: "normal", l: "通常" }, { k: "crash", l: "暴落" }].map((t) => (<button key={t.k} onClick={() => setChartTab(t.k)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: chartTab === t.k ? C.bg : C.textMuted, background: chartTab === t.k ? C.amber : "transparent", fontWeight: chartTab === t.k ? 700 : 400 }}>{t.l}</button>))}</div>
+                      <div className="flex gap-0.5 mr-1">{[{ k: "normal", l: "通常" }, { k: "crash", l: "暴落" }, { k: "year", l: "年比較" }].map((t) => (<button key={t.k} onClick={() => setChartTab(t.k)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: chartTab === t.k ? C.bg : C.textMuted, background: chartTab === t.k ? C.amber : "transparent", fontWeight: chartTab === t.k ? 700 : 400 }}>{t.l}</button>))}</div>
                     )}
                     {(chartTab === "normal" || chartSource !== "sp500") ? (
                       <>
@@ -7176,7 +7260,7 @@ export default function DDDashboard() {
                         <PeriodSelect value={period} onChange={setPeriod} />
                         <ChartSourceToggle value={chartSources} onToggle={toggleChartSource} qqqAvailable={!!dQqq} goldAvailable={!!goldView} />
                       </>
-                    ) : (<ClickLegend items={crashLegendItems} hidden={hiddenCrash} onToggle={toggleCrash} />)}
+                    ) : chartTab === "crash" ? (<ClickLegend items={crashLegendItems} hidden={hiddenCrash} onToggle={toggleCrash} />) : (<button onClick={() => setModal({ type: "ddChart" })} className="text-[10px] underline" style={{ color: C.textDim, background: "transparent", border: "none", cursor: "pointer" }}>拡大表示</button>)}
                   </div>
                 }
                 className="h-full"
@@ -7200,6 +7284,8 @@ export default function DDDashboard() {
                       )}
                     </div>
                   </div>
+                ) : chartTab === "year" ? (
+                  <YearComparePanel FULL={d.FULL} />
                 ) : (
                   <div className="h-full flex flex-col">
                     <div className="flex items-center gap-2 px-2 pt-1 pb-1.5 flex-wrap shrink-0">
