@@ -4993,12 +4993,14 @@ function MobileAthPage({ d, dVoo, dQqq }) {
     <div className="p-2 flex flex-col gap-2 h-full">
       {tickers.map(({ label, data }) => {
         const chg = data ? dayChangePct(data) : null;
-        const updated = data ? isUpdatedToday(data) : false;
+        const updated = data ? isUpdatedToday(data) : false; // 当日分が入っているか（未更新は文字のグレーアウトで示す）
+        const atAth = data ? data.currentDD >= 0 : false; // 最新値がATH（ATH更新中）。PCのステータス欄と同じく強調する（当日未更新ならやや薄く）
+        const athDim = atAth && !updated ? 0.6 : 1;
         return (
-          <div key={label} className="rounded-lg px-3 py-2 flex-1 flex flex-col justify-center min-h-0" style={{ background: C.panel, border: `1px solid ${C.border}` }}>
+          <div key={label} className="rounded-lg px-3 py-2 flex-1 flex flex-col justify-center min-h-0" style={{ background: C.panel, border: `1px solid ${atAth ? C.teal + "88" : C.border}` }}>
             <div className="flex items-center justify-between mb-1">
               <span className="text-xs font-bold" style={{ color: C.textMuted }}>{label}</span>
-              {data && <span className="text-[9px]" style={{ color: updated ? C.teal : C.textDim }}>{updated ? "●更新済" : "○未更新"}</span>}
+              {atAth && <span className="text-[10px] font-bold rounded px-1.5" style={{ color: C.bg, background: C.teal, opacity: athDim, letterSpacing: "0.02em" }}>▲ATH更新</span>}
             </div>
             {data ? (
               <>
@@ -5013,7 +5015,7 @@ function MobileAthPage({ d, dVoo, dQqq }) {
                   </div>
                 </div>
                 <div className="mono mt-1 pt-1" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
-                  <div className="text-[9px]" style={{ color: C.textDim }}>ATH ${data.currentATH.toFixed(2)}</div>
+                  <div className="text-[9px]" style={{ color: atAth ? C.teal : C.textDim, fontWeight: atAth ? 700 : 400, opacity: athDim }}>ATH ${data.currentATH.toFixed(2)}（{fmtYMD(data.athDate)}）</div>
                   {data.nextMilestone !== null && (
                     <>
                       <div className="text-[9px] mt-0.5" style={{ color: C.textDim }}>DD{data.nextMilestone}%まで {data.distanceToNextMilestone.toFixed(1)}%</div>
