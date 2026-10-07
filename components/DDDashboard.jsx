@@ -7515,7 +7515,7 @@ export default function DDDashboard() {
 
             {/* bottom-far-right: 底値判定スコア */}
             <div style={{ minHeight: 0 }}>
-              <Panel title={bottom.hold.applicable ? <>底値判定 <span className="mono" style={{ color: depthColor(bottom.hold.state.mdd) }}>{bottomLabel(d.FULL, bottom.hold.state)}</span></> : "底値判定（MDD確定確率）"} action={<button onClick={() => setModal({ type: "bottomScore" })} title="条件別の確率・過去事例・統計テーブルを表示" style={{ background: "transparent", border: "none", cursor: "pointer" }}><Info size={14} style={{ color: C.textDim }} /></button>} className="h-full">
+              <Panel title={bottom.hold.applicable ? <>SP500(VOO)底値判定 <span className="mono" style={{ color: depthColor(bottom.hold.state.mdd) }}>{bottomLabel(d.FULL, bottom.hold.state)}</span></> : "SP500(VOO)底値判定"} action={<button onClick={() => setModal({ type: "bottomScore" })} title="条件別の確率・過去事例・統計テーブルを表示" style={{ background: "transparent", border: "none", cursor: "pointer" }}><Info size={14} style={{ color: C.textDim }} /></button>} className="h-full">
                 <BottomScorePanelBody bottom={bottom} FULL={d.FULL} onOpen={() => setModal({ type: "bottomScore" })} />
               </Panel>
             </div>
