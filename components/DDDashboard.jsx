@@ -2987,8 +2987,8 @@ function StatusPanel({ d, dVoo, dQqq, onOpenSpeedAlert }) {
       {/* 列幅：評価額/ATH・最高値比は内容の幅ちょうど（auto）に詰め、残りをVOO/QQQ2段＋平常期間の指標を出す「経過日数」（広め）と
           DD加速度アラートで分け合う（画面幅が狭くても前2列の数値が重ならないようにする） */}
       <div className="grid h-full" style={{ gridTemplateColumns: "auto auto minmax(0, 1.7fr) minmax(0, 1fr)" }}>
-        <div className="px-3 py-2 flex flex-col min-w-0" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
-          <div className="text-[10px] mb-1" style={{ color: C.textDim }}>評価額 / ATH</div>
+        <div className="px-3 py-1 flex flex-col min-w-0" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
+          <div className="text-[10px] mb-0.5" style={{ color: C.textDim }}>評価額 / ATH</div>
           {/* VOO・QQQの2行を、経過日数・DD加速度アラートの2段表示と同じく上下に均等配置する */}
           <div className="flex-1 flex flex-col justify-around min-h-0">
           {tickers.map(({ label, data }) => {
@@ -2996,7 +2996,7 @@ function StatusPanel({ d, dVoo, dQqq, onOpenSpeedAlert }) {
             const updated = isUpdatedToday(data); // 当日分が入っているか（未更新の行は文字をグレーアウトして示す）
             const atAth = data ? data.currentDD >= 0 : false; // 最新値がATH（ATH更新中）
             return (
-              <div key={label} className="text-[13px] mono whitespace-nowrap flex items-center rounded" style={{ height: 30, padding: "0 5px", marginLeft: -6, border: `1px solid ${atAth ? C.rust : "transparent"}`, background: atAth ? "rgba(192,101,75,0.08)" : "transparent" }}>
+              <div key={label} className="text-[13px] mono whitespace-nowrap flex items-center rounded" style={{ height: 26, padding: "0 5px", marginLeft: -6, border: `1px solid ${atAth ? C.rust : "transparent"}`, background: atAth ? "rgba(192,101,75,0.08)" : "transparent" }}>
                 <span className="font-bold" style={{ color: atAth ? C.text : C.textMuted, display: "inline-block", width: 38 }}>{label}</span>
                 {data ? (<>
                   <span style={{ display: "inline-block", width: 68, textAlign: "right", color: updated ? C.text : C.textDim }}>${data.currentPrice.toFixed(2)}</span>
@@ -3011,11 +3011,11 @@ function StatusPanel({ d, dVoo, dQqq, onOpenSpeedAlert }) {
           })}
           </div>
         </div>
-        <div className="px-3 py-2 flex flex-col min-w-0 overflow-hidden" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
-          <div className="flex items-center gap-1.5 mb-1"><TrendingDown size={11} style={{ color: C.rust }} /><span className="text-[10px] font-bold" style={{ color: C.rust }}>最高値比</span></div>
+        <div className="px-3 py-1 flex flex-col min-w-0 overflow-hidden" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
+          <div className="flex items-center gap-1.5 mb-0.5"><TrendingDown size={11} style={{ color: C.rust }} /><span className="text-[10px] font-bold" style={{ color: C.rust }}>最高値比</span></div>
           <div className="flex-1 flex flex-col justify-around min-h-0">
           {tickers.map(({ label, data }) => (
-            <div key={label} className="mono whitespace-nowrap flex items-center text-[13px]" style={{ height: 30 }}>
+            <div key={label} className="mono whitespace-nowrap flex items-center text-[13px]" style={{ height: 26 }}>
               <span className="font-bold" style={{ color: C.textMuted, display: "inline-block", width: 38 }}>{label}</span>
               {data ? (<>
                 <span className="font-bold" style={{ display: "inline-block", width: 50, textAlign: "right", color: data.currentDD >= 0 ? C.teal : C.rust }}>{data.currentDD.toFixed(1)}%</span>
@@ -3030,16 +3030,16 @@ function StatusPanel({ d, dVoo, dQqq, onOpenSpeedAlert }) {
           ))}
           </div>
         </div>
-        <div className="px-3 py-2 flex flex-col min-w-0" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
-          <div className="flex items-center gap-1.5 mb-1"><Clock size={11} style={{ color: C.textDim }} /><span className="text-[10px]" style={{ color: C.textDim }}>経過日数</span></div>
+        <div className="px-3 py-1 flex flex-col min-w-0" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
+          <div className="flex items-center gap-1.5 mb-0.5"><Clock size={11} style={{ color: C.textDim }} /><span className="text-[10px]" style={{ color: C.textDim }}>経過日数</span></div>
           <div className="flex-1 flex flex-col justify-around min-h-0">
             <ElapsedDaysRow label="VOO" dInstrument={dVoo} />
             <div style={{ borderTop: `1px dashed ${C.borderSoft}` }} />
             <ElapsedDaysRow label="QQQ" dInstrument={dQqq} />
           </div>
         </div>
-        <div className="px-3 py-2 flex flex-col min-w-0">
-          <div className="flex items-center gap-1.5 mb-1 min-w-0"><Zap size={11} style={{ color: C.textDim, flexShrink: 0 }} /><span className="text-[10px] whitespace-nowrap" style={{ color: C.textDim }}>DD加速度アラート</span><span className="text-[9px] truncate" style={{ color: C.textDim }}>（クリックで詳細・加速度センサー）</span></div>
+        <div className="px-3 py-1 flex flex-col min-w-0">
+          <div className="flex items-center gap-1.5 mb-0.5 min-w-0"><Zap size={11} style={{ color: C.textDim, flexShrink: 0 }} /><span className="text-[10px] whitespace-nowrap" style={{ color: C.textDim }}>DD加速度アラート</span><span className="text-[9px] truncate" style={{ color: C.textDim }}>（クリックで詳細・加速度センサー）</span></div>
           <div className="flex-1 flex flex-col justify-around min-h-0">
             <SpeedAlertRow label="VOO" dInstrument={dVoo} onOpen={() => onOpenSpeedAlert("voo")} />
             <div style={{ borderTop: `1px dashed ${C.borderSoft}` }} />
@@ -7324,27 +7324,28 @@ export default function DDDashboard() {
           </div>
         </div>
       ) : (
-      <div className="flex items-center justify-between px-5 py-3 shrink-0 flex-wrap gap-y-1.5" style={{ borderBottom: `1px solid ${C.border}`, background: C.panel2 }}>
-        <div className="flex items-center gap-3 flex-wrap">
-          <span className="text-sm font-bold tracking-wide">DD戦略ダッシュボード　VOO(SP500)/QQQ(NQ100)　{usEasternYMD()}（us）</span>
-          <button onClick={toggleViewMode} title="スマホ表示／PC表示を切り替え" className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+      <div className="flex items-center px-4 py-1 shrink-0 flex-wrap gap-x-2 gap-y-1" style={{ borderBottom: `1px solid ${C.border}`, background: C.panel2 }}>
+        {/* タイトルの右に「スマホ表示に切替」〜「最高値更新モード」までを1行で並べ、上下の余白を詰めてチャート領域を広げる */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-sm font-bold tracking-wide mr-1">DD戦略ダッシュボード　VOO(SP500)/QQQ(NQ100)　{usEasternYMD()}（us）</span>
+          <button onClick={toggleViewMode} title="スマホ表示／PC表示を切り替え" className="flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
             <Smartphone size={12} /> スマホ表示に切替
           </button>
         </div>
-        <div className="flex items-center gap-3">
-          <button onClick={() => setModal({ type: "summary" })} title="詳細サマリー" className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button onClick={() => setModal({ type: "summary" })} title="詳細サマリー" className="flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
             <FileText size={12} /> 詳細サマリー
           </button>
-          <button onClick={() => setModal({ type: "dataInput" })} title="データ入力・出力" className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+          <button onClick={() => setModal({ type: "dataInput" })} title="データ入力・出力" className="flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
             <Database size={12} /> データ入力・出力
           </button>
-          <button onClick={() => setModal({ type: "investmentPerformance" })} title="実績パフォーマンス" className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+          <button onClick={() => setModal({ type: "investmentPerformance" })} title="実績パフォーマンス" className="flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
             <Wallet size={12} /> 実績パフォーマンス
           </button>
-          <button onClick={handleManualSync} title="今すぐ同期" className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full" style={{ color: syncError ? C.rust : C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+          <button onClick={handleManualSync} title="今すぐ同期" className="flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: syncError ? C.rust : C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
             <RefreshCw size={12} className={syncing ? "animate-spin" : undefined} /> {lastSyncedLabel ? `最終同期 ${lastSyncedLabel}` : "今すぐ同期"}
           </button>
-          <span className="flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full" style={{ color: depthColor(d.currentDD), background: `${depthColor(d.currentDD)}1a`, border: `1px solid ${depthColor(d.currentDD)}44` }}>{d.isDrawdown ? <TrendingDown size={12} /> : <TrendingUp size={12} />} {d.mode}</span>
+          <span className="flex items-center gap-1.5 text-xs font-semibold px-2.5 py-0.5 rounded-full" style={{ color: depthColor(d.currentDD), background: `${depthColor(d.currentDD)}1a`, border: `1px solid ${depthColor(d.currentDD)}44` }}>{d.isDrawdown ? <TrendingDown size={12} /> : <TrendingUp size={12} />} {d.mode}</span>
         </div>
       </div>
       )}
@@ -7372,10 +7373,11 @@ export default function DDDashboard() {
         <DepthGauge dd={d.currentDD} />
 
         <div className="flex-1 flex flex-col gap-0 p-2 min-w-0">
-          <div style={{ height: 124, flexShrink: 0 }}><StatusPanel d={d} dVoo={dVoo} dQqq={dQqq} onOpenSpeedAlert={(inst) => { setSpeedAlertInstrument(inst); setModal({ type: "speedAlert" }); }} /></div>
+          <div style={{ height: 100, flexShrink: 0 }}><StatusPanel d={d} dVoo={dVoo} dQqq={dQqq} onOpenSpeedAlert={(inst) => { setSpeedAlertInstrument(inst); setModal({ type: "speedAlert" }); }} /></div>
 
           <div className="flex-1 flex flex-col" style={{ gap: 0, minHeight: 0 }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 380px", gap: 4, flex: 1, minHeight: 0 }}>
+          {/* 上段（評価額/DDチャート・現状分析）を下段より大きく取る（2:1）。下段はA〜E配分乖離が収まる最小の高さを確保する */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 380px", gap: 4, flex: 2, minHeight: 0 }}>
             {/* top-left: chart */}
             <div style={{ minHeight: 0 }}>
               <Panel
@@ -7491,7 +7493,7 @@ export default function DDDashboard() {
           </div>
 
           {/* 下段：ポートフォリオ構成（凡例に口座ごとの更新日を出すため広め）・A〜E配分乖離・底値判定 */}
-          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 0.78fr) minmax(0, 1.22fr) 330px", gap: 4, flex: 1, minHeight: 0 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 0.78fr) minmax(0, 1.22fr) 330px", gap: 4, flex: 1, minHeight: 255 }}>
             {/* bottom-left: portfolio pie */}
             <div style={{ minHeight: 0 }}>
               <Panel title={<><span className="whitespace-nowrap">ポートフォリオ構成</span>{holdingsDateLabel && <span className="block text-[10px] font-normal" style={{ color: C.textDim }}>（{holdingsDateLabel} 時点）</span>}</>} action={<div className="flex items-center gap-0.5">{PIE_VIEW_TABS.map((t) => (<button key={t.k} onClick={() => setPieView(t.k)} title={t.title} className="text-[10px] px-1 py-0.5 rounded whitespace-nowrap" style={{ color: pieView === t.k ? C.bg : C.textMuted, background: pieView === t.k ? C.teal : "transparent", fontWeight: pieView === t.k ? 700 : 400 }}>{t.l}</button>))}<button onClick={() => setModal({ type: "realHoldingsRanking" })} title="実質保有銘柄ランキング（ETF・投信を構成銘柄まで分解して合算）" className="text-[10px] px-1 py-0.5 rounded whitespace-nowrap" style={{ color: C.textMuted, background: "transparent", border: "none", cursor: "pointer" }}>Rkg</button></div>} className="h-full">
