@@ -2376,7 +2376,6 @@ function YearComparePanel({ FULL, fontSize = 10 }) {
         {note && <span className="text-[10px]" style={{ color: C.amber }}>{note}</span>}
       </div>
       <div className="flex-1 min-h-0 relative">
-        {hoverYear != null && <div className="absolute mono font-bold text-sm" style={{ left: 64, top: 8, color: hoverYear === currentYear ? C.teal : C.text, zIndex: 2, pointerEvents: "none" }}>{hoverYear}年</div>}
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={data} margin={{ top: 10, right: 16, left: 0, bottom: 0 }} onMouseLeave={() => setHoverYear(null)}>
             <CartesianGrid stroke={C.borderSoft} vertical={false} />
@@ -2397,6 +2396,8 @@ function YearComparePanel({ FULL, fontSize = 10 }) {
         </ResponsiveContainer>
       </div>
       <div className="flex items-center gap-1 flex-wrap px-2 pt-1 shrink-0 text-[10px] mono" style={{ color: C.textDim }}>
+        {/* 触れている（または固定した）年のラベル：グラフの線やツールチップと重ならないよう、チャートの外の左下に出す（幅を確保して年ボタンの位置がずれないようにする） */}
+        <span data-testid="year-hover-label" className="font-bold text-sm" style={{ minWidth: 58, color: hoverYear === currentYear ? C.teal : C.text }}>{hoverYear != null ? `${hoverYear}年` : ""}</span>
         <span className="mr-1">年：</span>
         {years.map((y) => (<button key={y} onMouseEnter={() => setHoverYear(y)} onMouseLeave={() => setHoverYear(null)} onClick={() => togglePin(y)} title={pinnedYear === y ? "クリックで固定を解除" : "クリックで強調を固定"} className="px-1 rounded" style={{ color: hoverYear === y ? C.bg : C.textMuted, background: hoverYear === y ? C.white : "transparent", border: `1px solid ${pinnedYear === y ? C.white : C.borderSoft}`, cursor: "pointer" }}>{y}</button>))}
         <span className="ml-1" style={{ color: C.teal }}>━ {currentYear}年（今年）</span>
