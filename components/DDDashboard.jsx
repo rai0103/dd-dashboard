@@ -12,6 +12,7 @@ import { parseInvestmentExcel, computeOwnAssetDrawdown, computeBenchmarkCAGR, si
 import { computeRealHoldingsRanking } from "@/lib/realHoldingsRanking";
 import { formatPct } from "@/lib/totalMetrics";
 import { isStaleSince } from "@/lib/marketClock";
+import { amountsByClass, largestRemainderPercent, allocationDiff, topHoldingsByClass, ddLabel } from "@/lib/currentAllocation";
 import { computeAccelSensor } from "@/lib/accelSensor";
 import { buildVooEquivalentSeries } from "@/lib/sp500Synthetic";
 import { buildYearSeries, completeYears, selectCompareYears, computeYearStats, averageYearStats, YEAR_PRESETS } from "@/lib/yearCompare";
@@ -3461,8 +3462,47 @@ function RealHoldingsRankingContent({ holdings }) {
 }
 
 const AXIS_TICKS = [0, 20, 40, 60, 80, 100];
-function DDTableContent({ modelRow, modelRows = MODEL_ROWS, holdings }) {
-  const rankLabels = useMemo(() => rankCategoryLabels(holdings), [holdings]);
+// A〜Eの100%積み上げバー（目標行・現状行で共通）。titleOf(cat, v) で各セグメントのツールチップを作る。
+function AllocationBar({ values, outlineColor, titleOf }) {
+  return (
+    <div className="flex-1 relative flex rounded overflow-hidden h-11 md:h-[22px]" style={{ background: C.panel2, outline: outlineColor ? `1.5px solid ${outlineColor}` : "none", outlineOffset: 1 }}>
+      {AXIS_TICKS.slice(1, -1).map((t) => (<div key={t} className="absolute top-0 bottom-0" style={{ left: `${t}%`, width: 1, background: C.borderSoft, opacity: 0.6 }} />))}
+      {CATS.map((cat) => {
+        const v = values[cat];
+        return (
+          <div key={cat} title={titleOf(cat, v)} className="flex items-center justify-center mono font-semibold" style={{ width: `${v}%`, background: rankColor(cat), color: C.bg }}>
+            {/* PC幅：従来通り横一列（8%未満は省略） */}
+            <span className="hidden md:inline" style={{ fontSize: 10 }}>{v >= 8 ? `${cat} ${v}%` : ""}</span>
+            {/* スマホ幅：5%未満は省略、狭い区間はラベルを縦2行に分けて幅を節約 */}
+            <span className="md:hidden leading-tight" style={{ fontSize: v >= 12 ? 10 : 9 }}>
+              {v < 5 ? "" : v < 12 ? (
+                <span className="flex flex-col items-center">
+                  <span>{cat}</span>
+                  <span>{v}%</span>
+                </span>
+              ) : `${cat} ${v}%`}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// 最上段に「現状」行（実際のA〜E構成比＋VOOのDD）を出し、現在のDDに対応する目標行（既存の「←現在」行＝A〜E配分乖離・リバランス提案と同じ行）との差を添える。
+// currentDD は DEPTH GAUGE と同じ d.currentDD、actualHoldings は「A〜E配分乖離」と同じ合算済み保有データ（combinedHoldings）。
+function DDTableContent({ modelRow, modelRows = MODEL_ROWS, holdings, actualHoldings = holdings, currentDD, asOfLabel, lastSyncedLabel }) {
+  const rankLabels = useMemo(() => rankCategoryLabels(actualHoldings), [actualHoldings]);
+  const actualAmounts = useMemo(() => amountsByClass(actualHoldings), [actualHoldings]);
+  const actualPct = useMemo(() => largestRemainderPercent(actualAmounts), [actualAmounts]);
+  const actualTotal = CATS.reduce((sum, c) => sum + actualAmounts[c], 0);
+  const diff = actualPct ? allocationDiff(actualPct, modelRow) : null;
+  const longDD = ddLabel(currentDD) ?? "VOO DD —", shortDD = ddLabel(currentDD, true) ?? "—";
+  const rowTitle = [`VOOのDD：${longDD.replace("VOO ", "")}`, asOfLabel ? `資産データ基準日：${asOfLabel}` : null, lastSyncedLabel ? `最終同期：${lastSyncedLabel}` : null].filter(Boolean).join("\n");
+  const actualTitle = (cat, v) => {
+    const tops = topHoldingsByClass(actualHoldings, cat, 3).map((h) => `・${h.name} ¥${Math.round(h.amount).toLocaleString()}`);
+    return [`${cat}（${rankLabels[cat]}）：${v}%　¥${Math.round(actualAmounts[cat]).toLocaleString()}`, `目標（${modelRow.label}）：${modelRow[cat]}%（${diff[cat] > 0 ? "+" : ""}${diff[cat]}pt）`, ...(tops.length ? ["主な銘柄：", ...tops] : [])].join("\n");
+  };
   return (
     <div>
       <div className="flex items-center gap-4 mb-4 flex-wrap">
@@ -3483,6 +3523,32 @@ function DDTableContent({ modelRow, modelRows = MODEL_ROWS, holdings }) {
         </div>
       </div>
 
+      {/* 現状行：背景と区切り線で目標行と区別する */}
+      <div className="rounded px-2 py-2 mb-3 -mx-2" style={{ background: "rgba(217,162,75,0.07)", borderBottom: `1px solid ${C.border}` }}>
+        <div className="flex flex-col gap-1 md:flex-row md:items-center md:gap-3">
+          <div className="mono shrink-0 whitespace-nowrap md:w-24 md:text-right leading-tight" title={rowTitle}>
+            <span className="text-xs font-bold" style={{ color: C.amber }}>現状</span>
+            <span className="md:hidden text-[10px] ml-2" style={{ color: C.textMuted }}>VOO {shortDD}</span>
+            <div className="hidden md:block text-[10px]" style={{ color: C.textMuted }}>{longDD}</div>
+          </div>
+          {actualPct ? (
+            <AllocationBar values={actualPct} outlineColor={C.amber} titleOf={actualTitle} />
+          ) : (
+            <div className="flex-1 flex items-center rounded h-11 md:h-[22px] px-3 text-[11px]" style={{ background: C.panel2, color: C.textDim }}>資産データ未登録</div>
+          )}
+        </div>
+        {diff && (
+          <div className="flex items-center gap-3 mt-1 md:pl-[108px] flex-wrap mono text-[10px]" style={{ color: C.textMuted }}>
+            <span style={{ color: C.textDim }}>対応目標（{modelRow.label}）との差</span>
+            {CATS.map((cat) => {
+              const v = diff[cat], strong = Math.abs(v) >= 2;
+              return <span key={cat} style={{ color: strong ? rankColor(cat) : C.textMuted, fontWeight: strong ? 700 : 400 }}>{cat} {v > 0 ? `+${v}pt` : v < 0 ? `−${Math.abs(v)}pt` : "0"}</span>;
+            })}
+            <span style={{ color: C.textDim }}>（合計 ¥{Math.round(actualTotal).toLocaleString()}）</span>
+          </div>
+        )}
+      </div>
+
       {modelRows.map((r) => {
         const isCurrent = r.label === modelRow.label;
         return (
@@ -3490,31 +3556,11 @@ function DDTableContent({ modelRow, modelRows = MODEL_ROWS, holdings }) {
             <div className="mono text-xs md:text-right shrink-0 whitespace-nowrap md:w-24" style={{ color: isCurrent ? C.teal : C.textMuted, fontWeight: isCurrent ? 700 : 400 }}>
               {r.label}{isCurrent && " ←現在"}
             </div>
-            <div className="flex-1 relative flex rounded overflow-hidden h-11 md:h-[22px]" style={{ background: C.panel2, outline: isCurrent ? `1.5px solid ${C.teal}` : "none", outlineOffset: 1 }}>
-              {AXIS_TICKS.slice(1, -1).map((t) => (<div key={t} className="absolute top-0 bottom-0" style={{ left: `${t}%`, width: 1, background: C.borderSoft, opacity: 0.6 }} />))}
-              {CATS.map((cat) => {
-                const v = r[cat];
-                return (
-                  <div key={cat} title={`${cat}（${rankLabels[cat]}）: ${v}%`} className="flex items-center justify-center mono font-semibold" style={{ width: `${v}%`, background: rankColor(cat), color: C.bg }}>
-                    {/* PC幅：従来通り横一列（8%未満は省略） */}
-                    <span className="hidden md:inline" style={{ fontSize: 10 }}>{v >= 8 ? `${cat} ${v}%` : ""}</span>
-                    {/* スマホ幅：5%未満は省略、狭い区間はラベルを縦2行に分けて幅を節約 */}
-                    <span className="md:hidden leading-tight" style={{ fontSize: v >= 12 ? 10 : 9 }}>
-                      {v < 5 ? "" : v < 12 ? (
-                        <span className="flex flex-col items-center">
-                          <span>{cat}</span>
-                          <span>{v}%</span>
-                        </span>
-                      ) : `${cat} ${v}%`}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
+            <AllocationBar values={r} outlineColor={isCurrent ? C.teal : null} titleOf={(cat, v) => `${cat}（${rankLabels[cat]}）: ${v}%${actualPct ? `（現状 ${actualPct[cat]}%）` : ""}`} />
           </div>
         );
       })}
-      <div className="text-[10px] mt-3" style={{ color: C.textDim }}>各行は横棒の合計が100%（A〜Eの構成比の目安）。バーにマウスを乗せると各セグメントの詳細を確認できます。</div>
+      <div className="text-[10px] mt-3" style={{ color: C.textDim }}>各行は横棒の合計が100%（A〜Eの構成比の目安）。最上段の「現状」は保有データの実際の構成比（合計100%に端数調整）で、「←現在」はVOOの現在のDDが到達している行（A〜E配分乖離・リバランス提案と同じ基準）です。バーにマウスを乗せると各セグメントの詳細を確認できます。</div>
     </div>
   );
 }
@@ -7292,7 +7338,7 @@ export default function DDDashboard() {
 
       {modal?.type === "speedAlert" && (speedAlertInstrument === "qqq" ? dQqq : dVoo) && <FullScreenModal title={`DD加速度アラート（速度・経過日数の法則・${speedAlertInstrument.toUpperCase()}基準）`} onClose={() => setModal(null)}><SpeedAlertModalContent d={speedAlertInstrument === "qqq" ? dQqq : dVoo} instrumentLabel={speedAlertInstrument.toUpperCase()} vooSeries={vooCalcSeries} qqqSeries={qqqCalcSeries} /></FullScreenModal>}
       {modal?.type === "portfolio" && <FullScreenModal title={<>ポートフォリオ構成表{holdingsDateSuffix}</>} onClose={() => setModal(null)}><PortfolioTableContent view={pieView} holdings={holdings} brokerSummaries={brokerSummaries} ownerDates={ownerUpdatedDates} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
-      {modal?.type === "ddTable" && <FullScreenModal title="DD毎のA〜E配分表" onClose={() => setModal(null)}><DDTableContent modelRow={d.modelRow} modelRows={d.trackRecord.dynamicModelRows} holdings={holdings} /></FullScreenModal>}
+      {modal?.type === "ddTable" && <FullScreenModal title="DD毎のA〜E配分表" onClose={() => setModal(null)}><DDTableContent modelRow={d.modelRow} modelRows={d.trackRecord.dynamicModelRows} holdings={holdings} actualHoldings={combinedHoldings} currentDD={d.currentDD} asOfLabel={holdingsDateLabel} lastSyncedLabel={lastSyncedLabel} /></FullScreenModal>}
       {modal?.type === "modelDebug" && <FullScreenModal title="動的配分モデル デバッグビュー" onClose={() => setModal(null)}><ModelDebugContent d={d} dQqq={dQqq} qqqAmplification={qqqAmplification} /></FullScreenModal>}
       {modal?.type === "investmentUpload" && <FullScreenModal title="投資収支Excel アップロード" onClose={() => setModal(null)}><InvestmentUploadModalContent existing={investmentPerformance} onSave={handleSaveInvestmentPerformance} onClose={() => setModal(null)} /></FullScreenModal>}
       {modal?.type === "investmentPerformance" && <FullScreenModal title="実績パフォーマンス" onClose={() => setModal(null)}><InvestmentPerformanceModalContent tradeHistory={tradeHistory} onSaveTradeHistory={handleSaveTradeHistory} onResetTradeHistory={handleResetTradeHistory} data={investmentPerformance} d={d} dQqq={dQqq} holdings={holdings} holdingsAsOf={holdingsAsOf} brokerHoldingHistory={brokerHoldingHistory} brokerSummaries={brokerSummaries} onOpenUpload={() => setModal({ type: "investmentUpload" })} onReset={() => { if (window.confirm("投資収支データを削除しますか？")) { handleResetInvestmentPerformance(); setModal(null); } }} /></FullScreenModal>}
