@@ -12,7 +12,7 @@ import { parseInvestmentExcel, computeOwnAssetDrawdown, computeBenchmarkCAGR, si
 import { computeRealHoldingsRanking } from "@/lib/realHoldingsRanking";
 import { formatPct } from "@/lib/totalMetrics";
 import { computeAccelSensor } from "@/lib/accelSensor";
-import { buildYearSeries, completeYears, selectCompareYears, computeYearStats, YEAR_PRESETS } from "@/lib/yearCompare";
+import { buildYearSeries, completeYears, selectCompareYears, computeYearStats, averageYearStats, YEAR_PRESETS } from "@/lib/yearCompare";
 import { yearEventText, recoveryInfo } from "@/lib/yearEvents";
 import { decodeCp932, parseTradeCsv, mergeTrades, computeRealizedEvents, aggregateRanking, splitRanking, periodOptions, emptyTradeHistory, TRADE_KIND_LABEL } from "@/lib/tradeHistory";
 import { OWNER_RAKUTEN_SAKI, OWNER_RAKUTEN_SHIN, OWNER_MOOMOO, OWNER_OPTIONS, RAKUTEN_OWNERS, migrateHoldingsOwners, migrateAsOfKeys, detectRakutenOwnerFromFileName } from "@/lib/owners";
@@ -2338,6 +2338,9 @@ function YearComparePanel({ FULL, fontSize = 10, showTable = false }) {
   const [pinnedYear, setPinnedYear] = useState(null); // クリック／タップで固定した年（もう一度押すと解除）
   const hoverYear = hoverYearRaw ?? pinnedYear;
   const togglePin = (y) => setPinnedYear((v) => (v === y ? null : y));
+  // 一覧表のチェックボックスで非表示にした年（既定は全年表示）。比較年セットが変わったら全表示に戻す。
+  const [hiddenYears, setHiddenYears] = useState(() => new Set());
+  const toggleHidden = (y) => setHiddenYears((prev) => { const next = new Set(prev); if (next.has(y)) next.delete(y); else next.add(y); return next; });
   const series = useMemo(() => buildYearSeries(FULL.map((pt) => ({ date: pt.date, price: pt.price }))), [FULL]);
   const currentYear = useMemo(() => Math.max(...series.keys()), [series]);
   const allYears = useMemo(() => completeYears(series, currentYear), [series, currentYear]);
@@ -2355,6 +2358,10 @@ function YearComparePanel({ FULL, fontSize = 10, showTable = false }) {
   }, [years, currentYear, series, metric]);
   const unit = metric === "index" ? "" : "%";
   const tableYears = useMemo(() => [currentYear, ...[...years].sort((a, b) => b - a)], [years, currentYear]);
+  const yearsKey = years.join(",");
+  useEffect(() => { setHiddenYears(new Set()); }, [yearsKey]);
+  const visibleYears = years.filter((y) => !hiddenYears.has(y));
+  const showCurrent = !hiddenYears.has(currentYear);
   // 年初来ATH更新回数の区切り：今年の最新データの月日（例 "10-06"）。過去の各年も1月1日〜この月日で数える
   const cutoffMD = series.get(currentYear)?.at(-1)?.date.slice(5) ?? null;
   const cutoffLabel = cutoffMD ? `${Number(cutoffMD.slice(0, 2))}/${Number(cutoffMD.slice(3))}` : "";
@@ -2391,12 +2398,12 @@ function YearComparePanel({ FULL, fontSize = 10, showTable = false }) {
             <YAxis domain={metric === "index" ? ["auto", "auto"] : ["auto", 0]} tick={{ fill: C.textDim, fontSize }} axisLine={false} tickLine={false} width={44} tickFormatter={(v) => `${Math.round(v)}${unit}`} />
             <ReferenceLine y={metric === "index" ? 100 : 0} stroke={C.border} />
             <Tooltip content={<TooltipBody />} />
-            {years.map((y) => (
+            {visibleYears.map((y) => (
               <Line key={y} type="linear" dataKey={`y${y}`} stroke={C.white} strokeOpacity={hoverYear === y ? 0.95 : 0.22} strokeWidth={hoverYear === y ? 2.6 : 0.9} dot={false} activeDot={false} isAnimationActive={false} connectNulls name={`${y}年`} />
             ))}
-            <Line type="linear" dataKey={`y${currentYear}`} stroke={C.teal} strokeWidth={hoverYear === currentYear ? 3.8 : 2.6} dot={false} isAnimationActive={false} connectNulls name={`${currentYear}年（今年）`} />
+            {showCurrent && <Line type="linear" dataKey={`y${currentYear}`} stroke={C.teal} strokeWidth={hoverYear === currentYear ? 3.8 : 2.6} dot={false} isAnimationActive={false} connectNulls name={`${currentYear}年（今年）`} />}
             {/* ホバー判定用の透明な太線（細い線の上にマウスを乗せやすくする）。タップでも選択できる */}
-            {[...years, currentYear].map((y) => (
+            {[...visibleYears, ...(showCurrent ? [currentYear] : [])].map((y) => (
               <Line key={`hit-${y}`} type="linear" dataKey={`y${y}`} stroke="#000" strokeOpacity={0} strokeWidth={10} dot={false} activeDot={false} isAnimationActive={false} connectNulls legendType="none"
                 onMouseEnter={() => setHoverYear(y)} onMouseLeave={() => setHoverYear(null)} onClick={() => togglePin(y)} />
             ))}
@@ -2407,26 +2414,47 @@ function YearComparePanel({ FULL, fontSize = 10, showTable = false }) {
         {/* 触れている（または固定した）年のラベル：グラフの線やツールチップと重ならないよう、チャートの外の左下に出す（幅を確保して年ボタンの位置がずれないようにする） */}
         <span data-testid="year-hover-label" className="font-bold text-sm" style={{ minWidth: 58, color: hoverYear === currentYear ? C.teal : C.text }}>{hoverYear != null ? `${hoverYear}年` : ""}</span>
         <span className="mr-1">年：</span>
-        {years.map((y) => (<button key={y} onMouseEnter={() => setHoverYear(y)} onMouseLeave={() => setHoverYear(null)} onClick={() => togglePin(y)} title={pinnedYear === y ? "クリックで固定を解除" : "クリックで強調を固定"} className="px-1 rounded" style={{ color: hoverYear === y ? C.bg : C.textMuted, background: hoverYear === y ? C.white : "transparent", border: `1px solid ${pinnedYear === y ? C.white : C.borderSoft}`, cursor: "pointer" }}>{y}</button>))}
+        {visibleYears.map((y) => (<button key={y} onMouseEnter={() => setHoverYear(y)} onMouseLeave={() => setHoverYear(null)} onClick={() => togglePin(y)} title={pinnedYear === y ? "クリックで固定を解除" : "クリックで強調を固定"} className="px-1 rounded" style={{ color: hoverYear === y ? C.bg : C.textMuted, background: hoverYear === y ? C.white : "transparent", border: `1px solid ${pinnedYear === y ? C.white : C.borderSoft}`, cursor: "pointer" }}>{y}</button>))}
         <span className="ml-1" style={{ color: C.teal }}>━ {currentYear}年（今年）</span>
       </div>
-      {showTable && yearStats && (
+      {showTable && yearStats && (() => {
+        const checkedPast = years.filter((y) => !hiddenYears.has(y) && yearStats.get(y));
+        const avg = averageYearStats(checkedPast.map((y) => yearStats.get(y)));
+        const sub = "text-right font-normal py-0.5 px-1";
+        const cnt = (v) => (v == null ? "—" : `${v}回`);
+        const pct = (v, signed = false) => (v == null || !Number.isFinite(v) ? "—" : `${signed && v >= 0 ? "+" : ""}${v.toFixed(1)}%`);
+        const dim = (v) => (v ? C.text : C.textDim);
+        return (
         <div className="mt-3 px-2">
-          <div className="text-[11px] mb-1" style={{ color: C.textMuted }}>パフォーマンス一覧（年をクリックするとチャートの線を太線で強調・もう一度クリックで解除）</div>
+          <div className="flex items-center gap-2 mb-1 text-[11px]" style={{ color: C.textMuted }}>
+            <span>パフォーマンス一覧</span>
+            <button onClick={() => setHiddenYears(new Set())} className="px-2 py-0.5 rounded" style={{ color: C.text, background: C.panel2, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>全表示</button>
+            <button onClick={() => setHiddenYears(new Set(years))} className="px-2 py-0.5 rounded" style={{ color: C.text, background: C.panel2, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>全非表示（当年のみ表示）</button>
+            <span className="text-[10px]" style={{ color: C.textDim }}>チェックでグラフに表示／年をクリックで太線強調</span>
+          </div>
           {/* 列幅を固定し、各行を1行に収める（イベント欄は長い場合「…」で省略し、ホバーで全文を表示） */}
           <table className="mono text-[10.5px] w-full" style={{ borderCollapse: "collapse", tableLayout: "fixed" }}>
             <colgroup>
-              <col style={{ width: 84 }} /><col style={{ width: 56 }} /><col style={{ width: 52 }} /><col style={{ width: 86 }} /><col style={{ width: 62 }} /><col style={{ width: 62 }} /><col />
+              <col style={{ width: 88 }} /><col style={{ width: 50 }} />
+              <col style={{ width: 42 }} /><col style={{ width: 47 }} /><col style={{ width: 38 }} />
+              <col style={{ width: 64 }} /><col style={{ width: 47 }} /><col style={{ width: 38 }} />
+              <col />
             </colgroup>
             <thead>
+              <tr className="whitespace-nowrap" style={{ color: C.textDim }}>
+                <th rowSpan={2} className="text-left font-normal py-1" style={{ borderBottom: `1px solid ${C.borderSoft}` }}>年</th>
+                <th rowSpan={2} className="text-right font-normal py-1 px-1" style={{ borderBottom: `1px solid ${C.borderSoft}` }}>騰落率</th>
+                <th colSpan={3} className="font-normal py-0.5" style={{ color: C.textMuted, borderBottom: `1px solid ${C.borderSoft}`, borderLeft: `1px solid ${C.borderSoft}` }} title="その年単独：年初来高値（年内の最高値）を基準にした値（年ごとにリセット）">年度</th>
+                <th colSpan={3} className="font-normal py-0.5" style={{ color: C.textMuted, borderBottom: `1px solid ${C.borderSoft}`, borderLeft: `1px solid ${C.borderSoft}` }} title="全期間を通した史上最高値を基準にした値">通期</th>
+                <th rowSpan={2} className="text-left font-normal py-1 pl-2" style={{ borderBottom: `1px solid ${C.borderSoft}`, borderLeft: `1px solid ${C.borderSoft}` }}>イベント</th>
+              </tr>
               <tr className="whitespace-nowrap" style={{ color: C.textDim, borderBottom: `1px solid ${C.borderSoft}` }}>
-                <th className="text-left font-normal py-1">年</th>
-                <th className="text-right font-normal py-1 px-1">騰落率</th>
-                <th className="text-right font-normal py-1 px-1" title="その年の最大ドローダウン（史上最高値からの下落率の最小値）">MDD</th>
-                <th className="text-right font-normal py-1 px-1" title={`その年に終値が史上最高値を上回った日数。通年（括弧内は1月1日〜${cutoffLabel}の年初来）`}>ATH更新<span className="text-[9px]">（{cutoffLabel}）</span></th>
-                <th className="text-right font-normal py-1 px-1" title="史上最高値（全期間）から-3%以下に入った回数。次に史上最高値を更新するまでは1回（前年から続く局面は数えない）">DD-3%通期</th>
-                <th className="text-right font-normal py-1 px-1" title="年初来高値から-3%以下に入った回数。年内の高値を更新するまでは1回">DD-3%年内</th>
-                <th className="text-left font-normal py-1 pl-2">イベント</th>
+                <th className={sub} style={{ borderLeft: `1px solid ${C.borderSoft}` }} title="年初来高値を更新した日数">ATH</th>
+                <th className={sub} title="年初来高値からの最大下落率">MDD</th>
+                <th className={sub} title="年初来高値から-3%以下に入った回数（年内の高値を更新するまでは1回）">DD-3%</th>
+                <th className={sub} style={{ borderLeft: `1px solid ${C.borderSoft}` }} title={`史上最高値を更新した日数（括弧内は1月1日〜${cutoffLabel}の年初来）`}>ATH<span className="text-[9px]">（{cutoffLabel}）</span></th>
+                <th className={sub} title="史上最高値からの最大下落率">MDD</th>
+                <th className={sub} title="史上最高値から-3%以下に入った回数（史上最高値を更新するまでは1回、前年から続く局面は数えない）">DD-3%</th>
               </tr>
             </thead>
             <tbody>
@@ -2434,6 +2462,7 @@ function YearComparePanel({ FULL, fontSize = 10, showTable = false }) {
                 const st = yearStats.get(y);
                 if (!st) return null;
                 const isCur = y === currentYear;
+                const visible = !hiddenYears.has(y);
                 const ev = yearEventText(y, currentYear, true); // 党名は「民」「共」に省略して1行に収める
                 const rec = recoveryInfo(y, st.athCount, st.dd3Count);
                 const recovery = rec?.text ?? null;
@@ -2442,32 +2471,50 @@ function YearComparePanel({ FULL, fontSize = 10, showTable = false }) {
                 const fullText = [recovery, ...evParts].filter(Boolean).join(" ／ ");
                 const active = pinnedYear === y;
                 const lastMd = `${Number(st.lastDate.slice(5, 7))}/${Number(st.lastDate.slice(8, 10))}`;
+                // グラフに表示中（チェック済み）の行をハイライト。年クリックで太線強調中の行はさらに濃くする
+                const bg = active ? (isCur ? "rgba(69,196,176,0.22)" : "rgba(255,255,255,0.13)") : visible ? (isCur ? "rgba(69,196,176,0.08)" : "rgba(255,255,255,0.045)") : "transparent";
                 return (
-                  <tr key={y} className="whitespace-nowrap" style={{ borderBottom: `1px solid ${C.borderSoft}`, background: active ? (isCur ? "rgba(69,196,176,0.14)" : "rgba(255,255,255,0.08)") : "transparent" }}>
+                  <tr key={y} className="whitespace-nowrap" style={{ borderBottom: `1px solid ${C.borderSoft}`, background: bg, opacity: visible ? 1 : 0.6 }}>
                     <td className="py-1 overflow-hidden">
-                      <button onClick={() => togglePin(y)} className="font-bold underline-offset-2 hover:underline" style={{ color: isCur ? C.teal : active ? C.white : C.text, background: "transparent", border: "none", padding: 0, cursor: "pointer" }}>
-                        {isCur ? <>{y}<span className="font-normal text-[9.5px]">（{lastMd}時点）</span></> : y}
+                      <input type="checkbox" checked={visible} onChange={() => toggleHidden(y)} title="グラフに表示" style={{ verticalAlign: "middle", marginRight: 4, accentColor: isCur ? C.teal : C.textMuted, cursor: "pointer" }} />
+                      <button onClick={() => togglePin(y)} className="font-bold underline-offset-2 hover:underline" style={{ color: isCur ? C.teal : active ? C.white : C.text, background: "transparent", border: "none", padding: 0, cursor: "pointer", verticalAlign: "middle" }}>
+                        {isCur ? <>{y}<span className="font-normal text-[9.5px]">（{lastMd}）</span></> : y}
                       </button>
                     </td>
-                    <td className="py-1 px-1 text-right font-bold" style={{ color: st.returnPct >= 0 ? C.teal : C.rust }}>{st.returnPct >= 0 ? "+" : ""}{st.returnPct.toFixed(1)}%</td>
-                    <td className="py-1 px-1 text-right" style={{ color: depthColor(st.mdd) }}>{st.mdd.toFixed(1)}%</td>
-                    <td className="py-1 px-1 text-right" style={{ color: C.textMuted }}>{isCur ? <>{st.athCount}回</> : <>{st.athCount}回<span style={{ color: C.textDim }}>（{st.athCountToDate}）</span></>}</td>
-                    <td className="py-1 px-1 text-right" style={{ color: st.dd3Count ? C.text : C.textDim }}>{st.dd3Count}回</td>
-                    <td className="py-1 px-1 text-right" style={{ color: st.dd3CountYtd ? C.text : C.textDim }}>{st.dd3CountYtd}回</td>
-                    <td className="py-1 pl-2 text-[10px]" title={fullText} style={{ color: C.textMuted, overflow: "hidden", textOverflow: "ellipsis" }}>
+                    <td className="py-1 px-1 text-right font-bold" style={{ color: st.returnPct >= 0 ? C.teal : C.rust }}>{pct(st.returnPct, true)}</td>
+                    <td className="py-1 px-1 text-right" style={{ color: C.textMuted, borderLeft: `1px solid ${C.borderSoft}` }}>{cnt(st.athCountYear)}</td>
+                    <td className="py-1 px-1 text-right" style={{ color: depthColor(st.mddYear) }}>{pct(st.mddYear)}</td>
+                    <td className="py-1 px-1 text-right" style={{ color: dim(st.dd3CountYtd) }}>{cnt(st.dd3CountYtd)}</td>
+                    <td className="py-1 px-1 text-right" style={{ color: C.textMuted, borderLeft: `1px solid ${C.borderSoft}` }}>{isCur ? cnt(st.athCount) : <>{st.athCount}回<span style={{ color: C.textDim }}>（{st.athCountToDate}）</span></>}</td>
+                    <td className="py-1 px-1 text-right" style={{ color: depthColor(st.mdd) }}>{pct(st.mdd)}</td>
+                    <td className="py-1 px-1 text-right" style={{ color: dim(st.dd3Count) }}>{cnt(st.dd3Count)}</td>
+                    <td className="py-1 pl-2 text-[10px]" title={fullText} style={{ color: C.textMuted, overflow: "hidden", textOverflow: "ellipsis", borderLeft: `1px solid ${C.borderSoft}` }}>
                       {recovery && <span style={{ color: C.amber }}>{recovery}{evParts.length ? " ／ " : ""}</span>}{evParts.join(" ／ ")}
                     </td>
                   </tr>
                 );
               })}
+              {/* チェックした比較年（当年を除く）の平均。チェックを変えるたびに再計算 */}
+              <tr className="whitespace-nowrap" style={{ borderTop: `2px solid ${C.border}`, background: "rgba(217,162,75,0.08)" }}>
+                <td className="py-1 font-bold" style={{ color: C.amber }}>平均<span className="font-normal text-[9.5px]">（{checkedPast.length}年）</span></td>
+                <td className="py-1 px-1 text-right font-bold" style={{ color: avg && avg.returnPct < 0 ? C.rust : C.teal }}>{avg ? pct(avg.returnPct, true) : "—"}</td>
+                <td className="py-1 px-1 text-right" style={{ color: C.textMuted, borderLeft: `1px solid ${C.borderSoft}` }}>{avg ? `${avg.athCountYear.toFixed(1)}回` : "—"}</td>
+                <td className="py-1 px-1 text-right" style={{ color: avg ? depthColor(avg.mddYear) : C.textDim }}>{avg ? pct(avg.mddYear) : "—"}</td>
+                <td className="py-1 px-1 text-right" style={{ color: C.text }}>{avg ? `${avg.dd3CountYtd.toFixed(1)}回` : "—"}</td>
+                <td className="py-1 px-1 text-right" style={{ color: C.textMuted, borderLeft: `1px solid ${C.borderSoft}` }}>{avg ? `${avg.athCount.toFixed(1)}回` : "—"}</td>
+                <td className="py-1 px-1 text-right" style={{ color: avg ? depthColor(avg.mdd) : C.textDim }}>{avg ? pct(avg.mdd) : "—"}</td>
+                <td className="py-1 px-1 text-right" style={{ color: C.text }}>{avg ? `${avg.dd3Count.toFixed(1)}回` : "—"}</td>
+                <td className="py-1 pl-2 text-[10px]" style={{ color: C.textDim, borderLeft: `1px solid ${C.borderSoft}` }}>チェックした比較年（当年{currentYear}を除く）の平均</td>
+              </tr>
             </tbody>
           </table>
           <div className="text-[10px] mt-1 leading-relaxed" style={{ color: C.textDim }}>
-            ※騰落率は年初（前年最終営業日の終値）→年末（今年は最新日）の終値。MDD・ATH更新・DD-3%通期は全期間を通した史上最高値が基準（ATH更新＝終値が史上最高値を上回った日数、括弧内は1月1日〜{cutoffLabel}の年初来で今年と同じ期間の比較用）。DD-3%は-3%以下に入ってから基準の高値を更新するまでを1回と数えます（通期＝史上最高値基準で前年から続く局面は数えない、年内＝年初来高値基準で年ごとにリセット）。
-            <span style={{ color: C.amber }}>オレンジ</span>の注記は、ATH更新0〜1回かつDD-3%通期0〜1回の年（大きな下落の後でまだ本格回復していない可能性が高い年）に、直近の暴落の発生年・底値年から自動で付けています。イベント欄は長い場合「…」で省略され、カーソルを合わせると全文を表示します。
+            ※騰落率は年初（前年最終営業日の終値）→年末（今年は最新日）の終値。年度＝その年単独で年初来高値を基準（ATH＝年初来高値を更新した日数、MDD＝年初来高値からの最大下落率、DD-3%＝年内の高値を更新するまでを1回）。通期＝全期間の史上最高値を基準（ATH＝史上最高値を更新した日数で括弧内は1月1日〜{cutoffLabel}の年初来、MDD＝史上最高値からの最大下落率、DD-3%＝史上最高値を更新するまでを1回・前年から続く局面は数えない）。
+            <span style={{ color: C.amber }}>オレンジ</span>の注記は、通期ATH0〜1回かつ通期DD-3%0〜1回の年に、直近の暴落の発生年・底値年から自動で付けています。平均は当年を除くチェックした比較年の単純平均です。
           </div>
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 }

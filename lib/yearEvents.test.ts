@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { marketEventsFor, presidentFor, recoveryComment } from "./yearEvents.ts";
-import { computeYearStats } from "./yearCompare.ts";
+import { computeYearStats, averageYearStats } from "./yearCompare.ts";
 
 test("市場イベント：発生年は補足付き、継続中・複数年のイベントは2年目以降に「（〇年目）」", () => {
   assert.deepEqual(marketEventsFor(2008, 2026), ["サブプライム・世界金融危機（2年目）", "リーマンショック（9月）"]);
@@ -54,9 +54,9 @@ test("年ごとの統計：DD-3%は高値を更新するまで1局面（−3%の
 });
 
 test("回復期コメント：ATH更新0〜1回 かつ DD-3%（通期）0〜1回の年だけ、直近の暴落の発生年・底値年から文言を作る", () => {
-  assert.equal(recoveryComment(2001, 0, 0), "下落局面：ドットコムバブル（2000）から1年・底値2002年");
-  assert.equal(recoveryComment(2002, 0, 0), "ドットコムバブル（2000）の底値の年");
-  assert.equal(recoveryComment(2004, 0, 0), "回復期：ドットコムバブル（2000）底値2002年から2年");
+  assert.equal(recoveryComment(2001, 0, 0), "下落局面：ITバブル（2000）から1年・底値2002年");
+  assert.equal(recoveryComment(2002, 0, 0), "ITバブル（2000）の底値の年");
+  assert.equal(recoveryComment(2004, 0, 0), "回復期：ITバブル（2000）底値2002年から2年");
   assert.equal(recoveryComment(2011, 0, 0), "回復期：世界金融危機（2007）底値2009年から2年");
   assert.equal(recoveryComment(2023, 0, 0), "回復期：利上げ相場（2022）の底から1年");
   assert.equal(recoveryComment(2022, 1, 1), "利上げ相場（2022）の底値の年");
@@ -70,4 +70,20 @@ test("年初来（同じ月日まで）のATH更新回数", () => {
   const pts = [{ date: "2019-12-31", price: 100 }, { date: "2020-03-01", price: 101 }, { date: "2020-10-06", price: 102 }, { date: "2020-10-07", price: 103 }, { date: "2020-12-01", price: 104 }];
   const s = computeYearStats(pts, [2020], "10-06").get(2020)!;
   assert.deepEqual([s.athCount, s.athCountToDate], [4, 2]);
+});
+
+test("年度（年初来高値基準）のATH更新・MDDと、チェックした年の平均", () => {
+  const pts = [
+    { date: "2019-12-31", price: 200 }, // 史上最高値（通期の基準）
+    { date: "2020-01-02", price: 100 }, // 年初の起点（初日は年度ATHに数えない）
+    { date: "2020-01-03", price: 110 }, // 年度ATH 1
+    { date: "2020-01-06", price: 99 }, // 年度：110から-10%
+    { date: "2020-01-07", price: 120 }, // 年度ATH 2
+  ];
+  const s = computeYearStats(pts, [2020]).get(2020)!;
+  assert.deepEqual([s.athCountYear, Math.round(s.mddYear), s.athCount, Math.round(s.mdd)], [2, -10, 0, -50]);
+  const avg = averageYearStats([s, { ...s, returnPct: s.returnPct + 10, athCountYear: 4 }])!;
+  assert.equal(avg.athCountYear, 3);
+  assert.equal(Math.round(avg.returnPct - s.returnPct), 5);
+  assert.equal(averageYearStats([]), null);
 });

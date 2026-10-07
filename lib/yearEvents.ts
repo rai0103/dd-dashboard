@@ -25,7 +25,7 @@ export const MARKET_EVENTS: MarketEvent[] = [
   { start: 1994, label: "債券大暴落（FRB急利上げ）" },
   { start: 1997, label: "アジア通貨危機", note: "7月〜" },
   { start: 1998, label: "ロシア危機・LTCM破綻", note: "8〜9月" },
-  { start: 2000, end: 2002, label: "ITバブル崩壊", crash: { name: "ドットコムバブル", bottom: 2002 } },
+  { start: 2000, end: 2002, label: "ITバブル崩壊", crash: { name: "ITバブル", bottom: 2002 } },
   { start: 2001, label: "米同時多発テロ", note: "9月" },
   { start: 2002, label: "エンロン・ワールドコム不正会計" },
   { start: 2003, label: "イラク戦争開戦", note: "3月" },
