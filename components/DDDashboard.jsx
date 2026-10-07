@@ -2330,17 +2330,23 @@ const YEAR_MONTH_TICKS = [1, 32, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335]
 const doyLabel = (doy) => { const d = new Date(Date.UTC(2025, 0, doy)); return `${d.getUTCMonth() + 1}月${d.getUTCDate()}日`; };
 // showTable：拡大表示ページだけ、チャートの下に年ごとのパフォーマンス一覧表（騰落率・MDD・ATH更新・DD-3%・イベント）を出す。
 // 一覧表の「年」をクリックすると、その年の線を太線で強調する（もう一度クリックで解除。年ボタンのクリック固定と同じ状態）。
-function YearComparePanel({ FULL, fontSize = 10, showTable = false }) {
-  const [metric, setMetric] = useState("index");
-  const [preset, setPreset] = useState("recent10");
-  const [inputYear, setInputYear] = useState("");
+// state/setState：通常表示と拡大表示で同じ選択状態（評価額/DD・プリセット・入力年・チェックで非表示にした年）を共有するため、
+// 親（ダッシュボード本体）が持つ状態を渡す。渡されない場合はこのパネル内だけの状態で動く。
+const YEAR_COMPARE_INITIAL = { metric: "index", preset: "recent10", inputYear: "", hidden: { key: "", years: [] } };
+function YearComparePanel({ FULL, fontSize = 10, showTable = false, state: sharedState = null, setState: setSharedState = null }) {
+  const [localState, setLocalState] = useState(YEAR_COMPARE_INITIAL);
+  const state = sharedState ?? localState;
+  const setState = setSharedState ?? setLocalState;
+  const { metric, preset, inputYear } = state;
+  const setMetric = (v) => setState((st) => ({ ...st, metric: v }));
+  const setPreset = (v) => setState((st) => ({ ...st, preset: v }));
+  const setInputYear = (v) => setState((st) => ({ ...st, inputYear: v }));
   const [hoverYearRaw, setHoverYear] = useState(null); // マウスが乗っている年（一時的）
   const [pinnedYear, setPinnedYear] = useState(null); // クリック／タップで固定した年（もう一度押すと解除）
   const hoverYear = hoverYearRaw ?? pinnedYear;
   const togglePin = (y) => setPinnedYear((v) => (v === y ? null : y));
-  // 一覧表のチェックボックスで非表示にした年（既定は全年表示）。比較年セットが変わったら全表示に戻す。
-  const [hiddenYears, setHiddenYears] = useState(() => new Set());
-  const toggleHidden = (y) => setHiddenYears((prev) => { const next = new Set(prev); if (next.has(y)) next.delete(y); else next.add(y); return next; });
+  // 一覧表のチェックボックスで非表示にした年（既定は全年表示）。比較年セット（yearsKey）と組で保持し、セットが変わったら全表示に戻る
+  // （拡大表示を開いたときなど、同じセットのままなら選択状態をそのまま引き継ぐ）。
   const series = useMemo(() => buildYearSeries(FULL.map((pt) => ({ date: pt.date, price: pt.price }))), [FULL]);
   const currentYear = useMemo(() => Math.max(...series.keys()), [series]);
   const allYears = useMemo(() => completeYears(series, currentYear), [series, currentYear]);
@@ -2358,8 +2364,14 @@ function YearComparePanel({ FULL, fontSize = 10, showTable = false }) {
   }, [years, currentYear, series, metric]);
   const unit = metric === "index" ? "" : "%";
   const tableYears = useMemo(() => [currentYear, ...[...years].sort((a, b) => b - a)], [years, currentYear]);
-  const yearsKey = years.join(",");
-  useEffect(() => { setHiddenYears(new Set()); }, [yearsKey]);
+  const yearsKey = `${years.join(",")}|${currentYear}`;
+  const hiddenYears = useMemo(() => new Set(state.hidden?.key === yearsKey ? state.hidden.years : []), [state.hidden, yearsKey]);
+  const setHiddenYears = (next) => setState((st) => {
+    const cur = new Set(st.hidden?.key === yearsKey ? st.hidden.years : []);
+    const value = typeof next === "function" ? next(cur) : next;
+    return { ...st, hidden: { key: yearsKey, years: [...value] } };
+  });
+  const toggleHidden = (y) => setHiddenYears((prev) => { const next = new Set(prev); if (next.has(y)) next.delete(y); else next.add(y); return next; });
   const visibleYears = years.filter((y) => !hiddenYears.has(y));
   const showCurrent = !hiddenYears.has(currentYear);
   // 比較年の線の見え方：表示している年が少ないほどはっきり（1年のみ＝強調表示と同じ）、多いほど薄く（全年表示＝従来の薄い白線）。
@@ -2527,7 +2539,7 @@ function YearComparePanel({ FULL, fontSize = 10, showTable = false }) {
 // 通常表示（評価額/DD%）と暴落比較（経過日数ベース）をタブで切り替えられる拡大チャート。
 // PCの拡大表示（ddChartモーダル）とスマホの横向き拡大表示（MobileChartZoomModal）の両方から共通で使う。
 // chartSourcesでVOO/QQQ/GOLDを選択（複数選択時は評価額のみの比較チャート）。暴落比較タブはVOOのみ選択時。
-function DDChartModalContent({ chartData, rangeDays, d, hidden, toggle, period, setPeriod, periodStats, historicalCrashes, selectedCrash, onSelectCrash, comparisonData, hiddenCrash, toggleCrash, crashLegendItems, dQqq, qqqChartData, qqqRangeDays, qqqPeriodStats, goldView = null, sourceViews, chartSources, onToggleChartSource, initialTab = null, fontSize = 12 }) {
+function DDChartModalContent({ chartData, rangeDays, d, hidden, toggle, period, setPeriod, periodStats, historicalCrashes, selectedCrash, onSelectCrash, comparisonData, hiddenCrash, toggleCrash, crashLegendItems, dQqq, qqqChartData, qqqRangeDays, qqqPeriodStats, goldView = null, sourceViews, chartSources, onToggleChartSource, initialTab = null, yearCompare = null, setYearCompare = null, fontSize = 12 }) {
   const [chartTab, setChartTab] = useState(initialTab ?? "normal"); // initialTab：メイン画面で開いていたタブ（年比較から拡大した場合など）
   const chartSource = chartSourceMode(chartSources); // "sp500" | "qqq" | "gold" | "multi"（複数選択）
   const hasCrashCompare = !!(historicalCrashes && onSelectCrash) && chartSource === "sp500";
@@ -2585,7 +2597,7 @@ function DDChartModalContent({ chartData, rangeDays, d, hidden, toggle, period, 
           <div className="mt-3 text-[10px]" style={{ color: C.textDim }}>{isMultiSource ? MULTI_CHART_NOTE : "下部のスクロールバーをドラッグして期間を絞り込み（ズーム）できます。グラフ上にカーソルを合わせるとツールチップが表示されます。"}</div>
         </>
       ) : chartTab === "year" ? (
-        <YearComparePanel FULL={d.FULL} fontSize={fontSize} showTable />
+        <YearComparePanel FULL={d.FULL} fontSize={fontSize} showTable state={yearCompare} setState={setYearCompare} />
       ) : (
         <div style={{ height: "min(70vh, 640px)" }}>
           <ResponsiveContainer width="100%" height="100%">
@@ -5764,7 +5776,7 @@ function MobilePager({ activeIndex, onChange, pages }) {
 }
 // 評価額チャートの「拡大」時に開く全画面モーダル。CSSで常に横向き（landscape）表示に固定し、
 // 対応端末ではあわせてScreen Orientation APIでの実回転ロックも試みる（非対応環境ではCSS回転のみで代替）。
-function MobileChartZoomModal({ onClose, chartData, rangeDays, d, hidden, toggle, period, setPeriod, periodStats, historicalCrashes, selectedCrash, onSelectCrash, comparisonData, hiddenCrash, toggleCrash, crashLegendItems, dQqq, qqqChartData, qqqRangeDays, qqqPeriodStats, goldView = null, sourceViews, chartSources, onToggleChartSource, isRealDevice = true }) {
+function MobileChartZoomModal({ onClose, chartData, rangeDays, d, hidden, toggle, period, setPeriod, periodStats, historicalCrashes, selectedCrash, onSelectCrash, comparisonData, hiddenCrash, toggleCrash, crashLegendItems, dQqq, qqqChartData, qqqRangeDays, qqqPeriodStats, goldView = null, sourceViews, chartSources, onToggleChartSource, yearCompare = null, setYearCompare = null, isRealDevice = true }) {
   useEffect(() => {
     if (!isRealDevice) return; // PC上でのスマホ表示プレビュー中は、実機用の全画面化・画面回転ロックを行わない（PC自体が全画面化されてしまうため）
     (async () => {
@@ -5787,7 +5799,7 @@ function MobileChartZoomModal({ onClose, chartData, rangeDays, d, hidden, toggle
             <button onClick={onClose} className="flex items-center gap-1 text-xs px-2 py-1 rounded" style={{ color: C.textMuted, background: "transparent", border: "none", cursor: "pointer" }}><X size={13} /> 閉じる</button>
           </div>
           <div className="flex-1 min-h-0 overflow-y-auto">
-            <DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={onSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} sourceViews={sourceViews} chartSources={chartSources} onToggleChartSource={onToggleChartSource} fontSize={13} />
+            <DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={onSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} sourceViews={sourceViews} chartSources={chartSources} onToggleChartSource={onToggleChartSource} yearCompare={yearCompare} setYearCompare={setYearCompare} fontSize={13} />
           </div>
         </div>
       </div>
@@ -6696,6 +6708,8 @@ export default function DDDashboard() {
   const [chartSources, setChartSources] = useState(["sp500"]);
   const chartSource = chartSourceMode(chartSources); // "sp500" | "qqq" | "gold" | "multi"
   const toggleChartSource = (key) => setChartSources((prev) => toggleChartSourceList(prev, key));
+  // 年比較の選択状態（評価額/DD・プリセット・入力年・非表示にした年）。通常表示と拡大表示で共有し、拡大時にそのまま引き継ぐ
+  const [yearCompare, setYearCompare] = useState(YEAR_COMPARE_INITIAL);
   const [selectedCrashId, setSelectedCrashId] = useState(null); // 「過去の暴落との比較」の選択。null中は自動選択（現在のDD推移に最も類似したイベント）に従う
   const [crashAutoFollow, setCrashAutoFollow] = useState(true); // trueの間は経過日数が進むたび自動で最類似イベントに追従。ユーザーが手動選択したらfalseにして固定する
   const [modal, setModal] = useState(null);
@@ -7274,13 +7288,13 @@ export default function DDDashboard() {
       {modal?.type === "investmentPerformance" && <FullScreenModal title="実績パフォーマンス" onClose={() => setModal(null)}><InvestmentPerformanceModalContent tradeHistory={tradeHistory} onSaveTradeHistory={handleSaveTradeHistory} onResetTradeHistory={handleResetTradeHistory} data={investmentPerformance} d={d} dQqq={dQqq} holdings={holdings} holdingsAsOf={holdingsAsOf} brokerHoldingHistory={brokerHoldingHistory} brokerSummaries={brokerSummaries} onOpenUpload={() => setModal({ type: "investmentUpload" })} onReset={() => { if (window.confirm("投資収支データを削除しますか？")) { handleResetInvestmentPerformance(); setModal(null); } }} /></FullScreenModal>}
       {modal?.type === "rank" && <FullScreenModal title={`${modal.rank}ランクの保有銘柄`} onClose={() => setModal(null)}><RankHoldingsContent rank={modal.rank} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
       {modal?.type === "crash" && <FullScreenModal title={`${crashDisplayName(modal.crash)}（${modal.crash.start} 〜）と現状の比較`} onClose={() => setModal(null)}><CrashModalContent crash={modal.crash} daysSinceATH={d.daysSinceATH} currentDD={d.currentDD} currentEpisodeCurve={d.currentEpisodeCurve} qqqFull={dQqq?.FULL ?? null} goldFull={goldSeries} allCrashes={historicalCrashes} onJump={(c) => setModal({ type: "crash", crash: c })} /></FullScreenModal>}
-      {modal?.type === "ddChart" && <FullScreenModal title={chartSourceTitle(chartSource)} onClose={() => setModal(null)}><DDChartModalContent initialTab={chartTab} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} sourceViews={sourceViews} chartSources={chartSources} onToggleChartSource={toggleChartSource} /></FullScreenModal>}
+      {modal?.type === "ddChart" && <FullScreenModal title={chartSourceTitle(chartSource)} onClose={() => setModal(null)}><DDChartModalContent initialTab={chartTab} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} sourceViews={sourceViews} chartSources={chartSources} onToggleChartSource={toggleChartSource} yearCompare={yearCompare} setYearCompare={setYearCompare} /></FullScreenModal>}
       {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} vooQqqSeries={vooQqqSeries} onAppendVooQqq={handleAppendVooQqq} onImportVooQqq={handleImportVooQqq} onApplyApiGold={handleApplyApiGold} onResetVooQqqField={handleResetVooQqqField} virtualAggregateLabels={virtualAggregateLabels} onRegisterBrokerHoldings={handleRegisterBrokerHoldings} brokerSummaries={brokerSummaries} />}
       {modal?.type === "checkpointSettings" && <FullScreenModal title="チェックポイント設定" onClose={() => setModal(null)}><CheckpointSettingsContent checkpoints={checkpoints} onCheckpointChange={handleCheckpointChange} holdings={holdings} /></FullScreenModal>}
       {modal?.type === "bottomScore" && <FullScreenModal title={bottom.hold.applicable ? `底値判定：${bottomLabel(d.FULL, bottom.hold.state)} が底値として確定する確率（SP500実績から都度算出）` : "底値判定（SP500実績から都度算出）"} onClose={() => setModal(null)}><BottomScoreModalContent bottom={bottom} FULL={d.FULL} /></FullScreenModal>}
       {modal?.type === "realHoldingsRanking" && <FullScreenModal title="実質保有銘柄ランキング" onClose={() => setModal(null)}><RealHoldingsRankingContent holdings={combinedHoldings} /></FullScreenModal>}
       {modal?.type === "summary" && <FullScreenModal title="詳細サマリー出力（AI相談用）" onClose={() => setModal(null)}><SummaryModalContent d={d} dVoo={dVoo} dQqq={dQqq} holdings={holdings} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} blocks={blocks} rankLabels={rankLabels} lifecycle={lifecycle} onLifecycleChange={handleLifecycleChange} fixedPositions={fixedPositions} onFixedPositionChange={handleFixedPositionChange} checkpoints={checkpoints} prevSnapshot={prevSnapshot} onSaveSnapshot={handleSaveSnapshot} /></FullScreenModal>}
-      {modal?.type === "mobileChartZoom" && <MobileChartZoomModal onClose={() => setModal(null)} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} sourceViews={sourceViews} chartSources={chartSources} onToggleChartSource={toggleChartSource} isRealDevice={isMobileAuto} />}
+      {modal?.type === "mobileChartZoom" && <MobileChartZoomModal onClose={() => setModal(null)} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} sourceViews={sourceViews} chartSources={chartSources} onToggleChartSource={toggleChartSource} yearCompare={yearCompare} setYearCompare={setYearCompare} isRealDevice={isMobileAuto} />}
 
       {isMobile ? (
         // スマホ版はヘッダーの縦幅を最小化し、各ページの表示領域を最大化するため、タイトルを短縮し、
@@ -7405,7 +7419,7 @@ export default function DDDashboard() {
                     </div>
                   </div>
                 ) : chartTab === "year" ? (
-                  <YearComparePanel FULL={d.FULL} />
+                  <YearComparePanel FULL={d.FULL} state={yearCompare} setState={setYearCompare} />
                 ) : (
                   <div className="h-full flex flex-col">
                     <div className="flex items-center gap-2 px-2 pt-1 pb-1.5 flex-wrap shrink-0">
