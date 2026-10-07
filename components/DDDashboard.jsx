@@ -7324,29 +7324,25 @@ export default function DDDashboard() {
           </div>
         </div>
       ) : (
-      <div className="flex items-center px-4 py-1 shrink-0 flex-wrap gap-x-2 gap-y-1" style={{ borderBottom: `1px solid ${C.border}`, background: C.panel2 }}>
-        {/* タイトルの右に「スマホ表示に切替」〜「最高値更新モード」までを1行で並べ、上下の余白を詰めてチャート領域を広げる */}
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-sm font-bold tracking-wide mr-1">DD戦略ダッシュボード　VOO(SP500)/QQQ(NQ100)　{usEasternYMD()}（us）</span>
-          <button onClick={toggleViewMode} title="スマホ表示／PC表示を切り替え" className="flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+      <div className="flex items-center px-4 py-1 shrink-0 gap-2 flex-nowrap overflow-hidden whitespace-nowrap" style={{ borderBottom: `1px solid ${C.border}`, background: C.panel2 }}>
+        {/* タイトルの右に「スマホ表示に切替」〜「最高値更新モード」までを常に1行で並べる（折り返さない）。幅が足りない時はタイトルを省略表示にしてボタンは縮めない */}
+          <span className="text-sm font-bold tracking-wide mr-1 min-w-0 truncate" title="DD戦略ダッシュボード　VOO(SP500)/QQQ(NQ100)">DD戦略ダッシュボード　VOO(SP500)/QQQ(NQ100)　{usEasternYMD()}（us）</span>
+          <button onClick={toggleViewMode} title="スマホ表示／PC表示を切り替え" className="shrink-0 flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
             <Smartphone size={12} /> スマホ表示に切替
           </button>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <button onClick={() => setModal({ type: "summary" })} title="詳細サマリー" className="flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+          <button onClick={() => setModal({ type: "summary" })} title="詳細サマリー" className="shrink-0 flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
             <FileText size={12} /> 詳細サマリー
           </button>
-          <button onClick={() => setModal({ type: "dataInput" })} title="データ入力・出力" className="flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+          <button onClick={() => setModal({ type: "dataInput" })} title="データ入力・出力" className="shrink-0 flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
             <Database size={12} /> データ入力・出力
           </button>
-          <button onClick={() => setModal({ type: "investmentPerformance" })} title="実績パフォーマンス" className="flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+          <button onClick={() => setModal({ type: "investmentPerformance" })} title="実績パフォーマンス" className="shrink-0 flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
             <Wallet size={12} /> 実績パフォーマンス
           </button>
-          <button onClick={handleManualSync} title="今すぐ同期" className="flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: syncError ? C.rust : C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+          <button onClick={handleManualSync} title="今すぐ同期" className="shrink-0 flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: syncError ? C.rust : C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
             <RefreshCw size={12} className={syncing ? "animate-spin" : undefined} /> {lastSyncedLabel ? `最終同期 ${lastSyncedLabel}` : "今すぐ同期"}
           </button>
-          <span className="flex items-center gap-1.5 text-xs font-semibold px-2.5 py-0.5 rounded-full" style={{ color: depthColor(d.currentDD), background: `${depthColor(d.currentDD)}1a`, border: `1px solid ${depthColor(d.currentDD)}44` }}>{d.isDrawdown ? <TrendingDown size={12} /> : <TrendingUp size={12} />} {d.mode}</span>
-        </div>
+          <span className="shrink-0 flex items-center gap-1.5 text-xs font-semibold px-2.5 py-0.5 rounded-full" style={{ color: depthColor(d.currentDD), background: `${depthColor(d.currentDD)}1a`, border: `1px solid ${depthColor(d.currentDD)}44` }}>{d.isDrawdown ? <TrendingDown size={12} /> : <TrendingUp size={12} />} {d.mode}</span>
       </div>
       )}
 
