@@ -2362,6 +2362,11 @@ function YearComparePanel({ FULL, fontSize = 10, showTable = false }) {
   useEffect(() => { setHiddenYears(new Set()); }, [yearsKey]);
   const visibleYears = years.filter((y) => !hiddenYears.has(y));
   const showCurrent = !hiddenYears.has(currentYear);
+  // 比較年の線の見え方：表示している年が少ないほどはっきり（1年のみ＝強調表示と同じ）、多いほど薄く（全年表示＝従来の薄い白線）。
+  // 中間は表示年数に応じて不透明度・太さを線形に補間する。
+  const LINE_FAINT = { opacity: 0.22, width: 0.9 }, LINE_STRONG = { opacity: 0.95, width: 2.6 };
+  const lineT = visibleYears.length <= 1 ? 1 : years.length <= 1 ? 1 : (years.length - visibleYears.length) / (years.length - 1);
+  const baseLine = { opacity: LINE_FAINT.opacity + (LINE_STRONG.opacity - LINE_FAINT.opacity) * lineT, width: LINE_FAINT.width + (LINE_STRONG.width - LINE_FAINT.width) * lineT };
   // 年初来ATH更新回数の区切り：今年の最新データの月日（例 "10-06"）。過去の各年も1月1日〜この月日で数える
   const cutoffMD = series.get(currentYear)?.at(-1)?.date.slice(5) ?? null;
   const cutoffLabel = cutoffMD ? `${Number(cutoffMD.slice(0, 2))}/${Number(cutoffMD.slice(3))}` : "";
@@ -2399,7 +2404,7 @@ function YearComparePanel({ FULL, fontSize = 10, showTable = false }) {
             <ReferenceLine y={metric === "index" ? 100 : 0} stroke={C.border} />
             <Tooltip content={<TooltipBody />} />
             {visibleYears.map((y) => (
-              <Line key={y} type="linear" dataKey={`y${y}`} stroke={C.white} strokeOpacity={hoverYear === y ? 0.95 : 0.22} strokeWidth={hoverYear === y ? 2.6 : 0.9} dot={false} activeDot={false} isAnimationActive={false} connectNulls name={`${y}年`} />
+              <Line key={y} type="linear" dataKey={`y${y}`} stroke={C.white} strokeOpacity={hoverYear === y ? LINE_STRONG.opacity : baseLine.opacity} strokeWidth={hoverYear === y ? LINE_STRONG.width : baseLine.width} dot={false} activeDot={false} isAnimationActive={false} connectNulls name={`${y}年`} />
             ))}
             {showCurrent && <Line type="linear" dataKey={`y${currentYear}`} stroke={C.teal} strokeWidth={hoverYear === currentYear ? 3.8 : 2.6} dot={false} isAnimationActive={false} connectNulls name={`${currentYear}年（今年）`} />}
             {/* ホバー判定用の透明な太線（細い線の上にマウスを乗せやすくする）。タップでも選択できる */}
@@ -2419,6 +2424,7 @@ function YearComparePanel({ FULL, fontSize = 10, showTable = false }) {
       </div>
       {showTable && yearStats && (() => {
         const checkedPast = years.filter((y) => !hiddenYears.has(y) && yearStats.get(y));
+        const checkedCount = tableYears.filter((y) => !hiddenYears.has(y)).length; // 当年を含むチェック数（ヘッダーの親チェックボックス用）
         const avg = averageYearStats(checkedPast.map((y) => yearStats.get(y)));
         const sub = "text-right font-normal py-0.5 px-1";
         const cnt = (v) => (v == null ? "—" : `${v}回`);
@@ -2428,8 +2434,6 @@ function YearComparePanel({ FULL, fontSize = 10, showTable = false }) {
         <div className="mt-3 px-2">
           <div className="flex items-center gap-2 mb-1 text-[11px]" style={{ color: C.textMuted }}>
             <span>パフォーマンス一覧</span>
-            <button onClick={() => setHiddenYears(new Set())} className="px-2 py-0.5 rounded" style={{ color: C.text, background: C.panel2, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>全表示</button>
-            <button onClick={() => setHiddenYears(new Set(years))} className="px-2 py-0.5 rounded" style={{ color: C.text, background: C.panel2, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>全非表示（当年のみ表示）</button>
             <span className="text-[10px]" style={{ color: C.textDim }}>チェックでグラフに表示／年をクリックで太線強調</span>
           </div>
           {/* 列幅を固定し、各行を1行に収める（イベント欄は長い場合「…」で省略し、ホバーで全文を表示） */}
@@ -2442,7 +2446,9 @@ function YearComparePanel({ FULL, fontSize = 10, showTable = false }) {
             </colgroup>
             <thead>
               <tr className="whitespace-nowrap" style={{ color: C.textDim }}>
-                <th rowSpan={2} className="text-left font-normal py-1" style={{ borderBottom: `1px solid ${C.borderSoft}` }}>年</th>
+                <th rowSpan={2} className="text-left font-normal py-1" style={{ borderBottom: `1px solid ${C.borderSoft}` }}>
+                  <input type="checkbox" ref={(el) => { if (el) el.indeterminate = checkedCount > 0 && checkedCount < tableYears.length; }} checked={checkedCount === tableYears.length} onChange={() => setHiddenYears(checkedCount === tableYears.length ? new Set(tableYears) : new Set())} title="全チェック／全解除" style={{ verticalAlign: "middle", marginRight: 4, accentColor: C.textMuted, cursor: "pointer" }} />年
+                </th>
                 <th rowSpan={2} className="text-right font-normal py-1 px-1" style={{ borderBottom: `1px solid ${C.borderSoft}` }}>騰落率</th>
                 <th colSpan={3} className="font-normal py-0.5" style={{ color: C.textMuted, borderBottom: `1px solid ${C.borderSoft}`, borderLeft: `1px solid ${C.borderSoft}` }} title="その年単独：年初来高値（年内の最高値）を基準にした値（年ごとにリセット）">年度</th>
                 <th colSpan={3} className="font-normal py-0.5" style={{ color: C.textMuted, borderBottom: `1px solid ${C.borderSoft}`, borderLeft: `1px solid ${C.borderSoft}` }} title="全期間を通した史上最高値を基準にした値">通期</th>
