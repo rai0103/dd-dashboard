@@ -11,6 +11,7 @@ import { pullSyncAndApply, pushSyncNow, scheduleSyncPush, getLastSyncedAt, onSyn
 import { parseInvestmentExcel, computeOwnAssetDrawdown, computeBenchmarkCAGR, simulateDcaBenchmark, simulateMonthlyRebasedBenchmark, accountChanges, resolveBeginnerTrial, trialAxis } from "@/lib/investmentPerformance";
 import { computeRealHoldingsRanking } from "@/lib/realHoldingsRanking";
 import { formatPct } from "@/lib/totalMetrics";
+import { isStaleSince } from "@/lib/marketClock";
 import { computeAccelSensor } from "@/lib/accelSensor";
 import { buildVooEquivalentSeries } from "@/lib/sp500Synthetic";
 import { buildYearSeries, completeYears, selectCompareYears, computeYearStats, averageYearStats, YEAR_PRESETS } from "@/lib/yearCompare";
@@ -1990,9 +1991,10 @@ function usEasternYMD(date = new Date()) {
   return `${get("year")}/${get("month")}/${get("day")}`;
 }
 // 系列の各日付はUTC0時基準（CSV/API取り込み・手動入力とも "YYYY-MM-DD" をnew Date()した値）で保持されているため、
-// UTC基準の年月日を米国東部時間の「今日」と比較することで、その日の終値が反映済みかを判定する。
+// UTC基準の年月日がそのまま米国の取引日になる。最新データの日付の「翌取引日の開場（9:30 ET、NYSE休場日は飛ばす）」を過ぎても
+// 次の終値が入っていなければ未更新とみなす（開場前は前取引日の終値が最新なので、グレーアウトしない）。
 function dateYMD_UTC(d) { return `${d.getUTCFullYear()}/${d.getUTCMonth() + 1}/${d.getUTCDate()}`; }
-function isUpdatedToday(dObj) { return !!dObj && dateYMD_UTC(dObj.last.date) === usEasternYMD(); }
+function isUpdatedToday(dObj) { return !!dObj && !isStaleSince(dObj.last.date.toISOString().slice(0, 10)); }
 // チャートのX軸はcategory軸のため、ReferenceDotのxはchartData内の実際の点と一致している必要がある。
 // 間引き表示で厳密な日付が省略されている場合があるため、表示中の点のうち最も日付が近いものにスナップする。
 function nearestChartPoint(chartData, targetDate) {
@@ -2982,18 +2984,23 @@ function SpeedAlertRow({ label, dInstrument, onOpen }) {
 // 経過日数・DD加速度アラートはVOO/QQQを上下2段で常時表示する（切替トグルは使わない）。onOpenSpeedAlert(instrument)でその銘柄の詳細ページを開く。
 function StatusPanel({ d, dVoo, dQqq, onOpenSpeedAlert }) {
   const tickers = [{ label: "VOO", data: dVoo }, { label: "QQQ", data: dQqq }]; // SP500はVOO換算に統合済みのため行を廃止
+  // 見出し横に出す最新データの日付（米国時間の取引日。VOO・QQQのうち新しい方）。系列の日付はUTC0時基準のためUTCの年月日がそのまま米国の取引日
+  const latestDate = [dVoo?.last.date, dQqq?.last.date].filter(Boolean).sort((a, b) => b - a)[0];
   return (
     <Panel title="現在のステータス" hideHeader className="h-full">
       {/* 列幅：評価額/ATH・最高値比は内容の幅ちょうど（auto）に詰め、残りをVOO/QQQ2段＋平常期間の指標を出す「経過日数」（広め）と
           DD加速度アラートで分け合う（画面幅が狭くても前2列の数値が重ならないようにする） */}
       <div className="grid h-full" style={{ gridTemplateColumns: "auto auto minmax(0, 1.7fr) minmax(0, 1fr)" }}>
         <div className="px-3 py-1 flex flex-col min-w-0" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
-          <div className="text-[10px] mb-0.5" style={{ color: C.textDim }}>評価額 / ATH</div>
+          <div className="text-[10px] mb-0.5 whitespace-nowrap" style={{ color: C.textDim }}>
+            評価額 / ATH
+            {latestDate && <span className="ml-2" title="最新データの日付（米国時間）">{dateYMD_UTC(latestDate)}</span>}
+          </div>
           {/* VOO・QQQの2行を、経過日数・DD加速度アラートの2段表示と同じく上下に均等配置する */}
           <div className="flex-1 flex flex-col justify-around min-h-0">
           {tickers.map(({ label, data }) => {
             const chg = dayChangePct(data);
-            const updated = isUpdatedToday(data); // 当日分が入っているか（未更新の行は文字をグレーアウトして示す）
+            const updated = isUpdatedToday(data); // 翌取引日の開場（9:30 ET）を過ぎても次の終値が無ければ未更新（文字をグレーアウトして示す）
             const atAth = data ? data.currentDD >= 0 : false; // 最新値がATH（ATH更新中）
             return (
               <div key={label} className="text-[13px] mono whitespace-nowrap flex items-center rounded" style={{ height: 26, padding: "0 5px", marginLeft: -6, border: `1px solid ${atAth ? C.rust : "transparent"}`, background: atAth ? "rgba(192,101,75,0.08)" : "transparent" }}>
@@ -5326,7 +5333,7 @@ function MobileAthPage({ d, dVoo, dQqq }) {
     <div className="p-2 flex flex-col gap-2 h-full">
       {tickers.map(({ label, data }) => {
         const chg = data ? dayChangePct(data) : null;
-        const updated = data ? isUpdatedToday(data) : false; // 当日分が入っているか（未更新は文字のグレーアウトで示す）
+        const updated = data ? isUpdatedToday(data) : false; // 翌取引日の開場（9:30 ET）を過ぎても次の終値が無ければ未更新（文字のグレーアウトで示す）
         const atAth = data ? data.currentDD >= 0 : false; // 最新値がATH（ATH更新中）。PCのステータス欄と同じく強調する（当日未更新ならやや薄く）
         const athDim = atAth && !updated ? 0.6 : 1;
         return (
@@ -7326,7 +7333,7 @@ export default function DDDashboard() {
       ) : (
       <div className="flex items-center px-4 py-1 shrink-0 gap-2 flex-nowrap overflow-hidden whitespace-nowrap" style={{ borderBottom: `1px solid ${C.border}`, background: C.panel2 }}>
         {/* タイトルの右に「スマホ表示に切替」〜「最高値更新モード」までを常に1行で並べる（折り返さない）。幅が足りない時はタイトルを省略表示にしてボタンは縮めない */}
-          <span className="text-sm font-bold tracking-wide mr-1 min-w-0 truncate" title="DD戦略ダッシュボード　VOO(SP500)/QQQ(NQ100)">DD戦略ダッシュボード　VOO(SP500)/QQQ(NQ100)　{usEasternYMD()}（us）</span>
+          <span className="text-sm font-bold tracking-wide mr-1 min-w-0 truncate" title="DD戦略ダッシュボード　VOO(SP500)/QQQ(NQ100)">DD戦略ダッシュボード　VOO(SP500)/QQQ(NQ100)</span>
           <button onClick={toggleViewMode} title="スマホ表示／PC表示を切り替え" className="shrink-0 flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
             <Smartphone size={12} /> スマホ表示に切替
           </button>
