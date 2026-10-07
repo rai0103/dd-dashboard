@@ -24,20 +24,24 @@ test("大統領：通常の年は〇年目、1月の就任は「→に交代」�
   assert.equal(presidentFor(1958), "アイゼンハワー大統領（共和党）6年目");
 });
 
-test("年ごとの統計：騰落率は前年最終値から、MDD・ATH更新は既存のdd（ATH基準）、DD-3%は年初来高値基準で連続は1回", () => {
+test("年ごとの統計：ATH更新・DD-3%は全期間の史上最高値基準で、年をまたいで継続する下落局面は新規に数えない", () => {
   const pts = [
-    { date: "2019-12-31", price: 100, dd: 0 },
-    { date: "2020-01-02", price: 105, dd: 0 }, // ATH更新
-    { date: "2020-01-03", price: 101, dd: -3.81 }, // 年初来高値105から-3.8% → 1回目
-    { date: "2020-01-06", price: 100, dd: -4.76 }, // 連続中（数えない）
-    { date: "2020-01-07", price: 104, dd: -0.95 }, // -3%より浅く戻る
-    { date: "2020-01-08", price: 101.5, dd: -3.33 }, // 2回目
-    { date: "2020-01-09", price: 110, dd: 0 }, // ATH更新
+    { date: "2019-12-02", price: 100 },
+    { date: "2019-12-31", price: 96 }, // 史上最高値100から-4%：2019年に1回
+    { date: "2020-01-02", price: 95 }, // 前年から継続（2020年の新規ではない）
+    { date: "2020-01-03", price: 98 }, // -2%：-3%より浅く回復
+    { date: "2020-01-06", price: 96.5 }, // 再び-3.5%：2020年の新規1回
+    { date: "2020-01-07", price: 100 }, // 史上最高値と同値（更新ではない）
+    { date: "2020-01-08", price: 104 }, // 史上最高値を更新
+    { date: "2021-01-04", price: 90 }, // 104から-13.5%：2021年に1回
+    { date: "2021-06-01", price: 95 }, // 下落継続・更新なし
   ];
-  const s = computeYearStats(pts, [2020]).get(2020)!;
-  assert.equal(Math.round(s.returnPct * 10) / 10, 10);
-  assert.equal(s.mdd, -4.76);
-  assert.equal(s.athCount, 2);
-  assert.equal(s.dd3Count, 2);
-  assert.equal(s.lastDate, "2020-01-09");
+  const st = computeYearStats(pts, [2019, 2020, 2021]);
+  const s19 = st.get(2019)!, s20 = st.get(2020)!, s21 = st.get(2021)!;
+  assert.deepEqual([s19.athCount, s19.dd3Count], [0, 1]);
+  assert.deepEqual([s20.athCount, s20.dd3Count], [1, 1]);
+  assert.equal(Math.round(s20.returnPct * 10) / 10, 8.3); // 96 → 104
+  assert.equal(Math.round(s20.mdd * 10) / 10, -5); // 史上最高値100から95
+  assert.deepEqual([s21.athCount, s21.dd3Count], [0, 1]);
+  assert.equal(s21.lastDate, "2021-06-01");
 });
