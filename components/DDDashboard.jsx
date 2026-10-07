@@ -12,7 +12,8 @@ import { parseInvestmentExcel, computeOwnAssetDrawdown, computeBenchmarkCAGR, si
 import { computeRealHoldingsRanking } from "@/lib/realHoldingsRanking";
 import { formatPct } from "@/lib/totalMetrics";
 import { computeAccelSensor } from "@/lib/accelSensor";
-import { buildYearSeries, completeYears, selectCompareYears, YEAR_PRESETS } from "@/lib/yearCompare";
+import { buildYearSeries, completeYears, selectCompareYears, computeYearStats, YEAR_PRESETS } from "@/lib/yearCompare";
+import { yearEventText } from "@/lib/yearEvents";
 import { decodeCp932, parseTradeCsv, mergeTrades, computeRealizedEvents, aggregateRanking, splitRanking, periodOptions, emptyTradeHistory, TRADE_KIND_LABEL } from "@/lib/tradeHistory";
 import { OWNER_RAKUTEN_SAKI, OWNER_RAKUTEN_SHIN, OWNER_MOOMOO, OWNER_OPTIONS, RAKUTEN_OWNERS, migrateHoldingsOwners, migrateAsOfKeys, detectRakutenOwnerFromFileName } from "@/lib/owners";
 import { BROKERS, brokerByKey, extractionToPreviewRows, previewRowsToHoldings, replaceBrokerHoldings, aggregateLabelsReplacedByBrokers, exposureCurrency, rowValue, reconcileWithAccountTotal, isPlausibleBrokerRate, guessBrokerRank, reconciliationTarget, sectionChecks, buildBrokerSummary, profitChecks, appendHoldingSnapshot, holdingChanges } from "@/lib/brokerImport";
@@ -2327,7 +2328,9 @@ function multiLegendItems(keys, views) { return keys.filter((k) => views[k]).map
 // 評価額＝年初（前年最終値）=100の指数、DD＝年初来高値からの下落率。線（または下の年ボタン）にホバー／タップするとその年を強調して表示する。
 const YEAR_MONTH_TICKS = [1, 32, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335]; // 各月1日の通算日（平年）
 const doyLabel = (doy) => { const d = new Date(Date.UTC(2025, 0, doy)); return `${d.getUTCMonth() + 1}月${d.getUTCDate()}日`; };
-function YearComparePanel({ FULL, fontSize = 10 }) {
+// showTable：拡大表示ページだけ、チャートの下に年ごとのパフォーマンス一覧表（騰落率・MDD・ATH更新・DD-3%・イベント）を出す。
+// 一覧表の「年」をクリックすると、その年の線を太線で強調する（もう一度クリックで解除。年ボタンのクリック固定と同じ状態）。
+function YearComparePanel({ FULL, fontSize = 10, showTable = false }) {
   const [metric, setMetric] = useState("index");
   const [preset, setPreset] = useState("recent10");
   const [inputYear, setInputYear] = useState("");
@@ -2351,6 +2354,8 @@ function YearComparePanel({ FULL, fontSize = 10 }) {
     return [...rows.values()].sort((a, b) => a.doy - b.doy);
   }, [years, currentYear, series, metric]);
   const unit = metric === "index" ? "" : "%";
+  const tableYears = useMemo(() => [currentYear, ...[...years].sort((a, b) => b - a)], [years, currentYear]);
+  const yearStats = useMemo(() => (showTable ? computeYearStats(FULL, tableYears) : null), [showTable, FULL, tableYears]);
   const sel = { background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text, padding: "2px 6px", cursor: "pointer" };
   const curLast = series.get(currentYear)?.at(-1);
   const TooltipBody = ({ active, payload, label }) => {
@@ -2367,7 +2372,7 @@ function YearComparePanel({ FULL, fontSize = 10 }) {
     );
   };
   return (
-    <div className="h-full flex flex-col min-h-0" onClick={(e) => e.stopPropagation()}>
+    <div className={showTable ? "flex flex-col" : "h-full flex flex-col min-h-0"} onClick={(e) => e.stopPropagation()}>
       <div className="flex items-center gap-2 flex-wrap px-2 pt-1 pb-1 shrink-0 text-[11px]" style={{ color: C.textMuted }}>
         <div className="flex gap-0.5">{[{ k: "index", l: "評価額" }, { k: "dd", l: "DD" }].map((t) => (<button key={t.k} onClick={() => setMetric(t.k)} className="px-2 py-0.5 rounded" style={{ color: metric === t.k ? C.bg : C.textMuted, background: metric === t.k ? C.teal : "transparent", fontWeight: metric === t.k ? 700 : 400, border: `1px solid ${metric === t.k ? C.teal : C.borderSoft}`, cursor: "pointer" }}>{t.l}</button>))}</div>
         <select value={preset} onChange={(e) => setPreset(e.target.value)} className="rounded" style={sel}>{YEAR_PRESETS.map((x) => <option key={x.key} value={x.key}>{x.label}</option>)}</select>
@@ -2375,7 +2380,7 @@ function YearComparePanel({ FULL, fontSize = 10 }) {
         <span className="text-[10px]" style={{ color: C.textDim }}>{metric === "index" ? "年初=100の指数" : "年初来高値からの下落率"}・比較{years.length}年{curLast ? `・今年 ${curLast[metric].toFixed(metric === "index" ? 1 : 1)}${unit}（${fmtDateSlash(curLast.date)}）` : ""}</span>
         {note && <span className="text-[10px]" style={{ color: C.amber }}>{note}</span>}
       </div>
-      <div className="flex-1 min-h-0 relative">
+      <div className={showTable ? "relative" : "flex-1 min-h-0 relative"} style={showTable ? { height: "min(56vh, 520px)" } : undefined}>
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={data} margin={{ top: 10, right: 16, left: 0, bottom: 0 }} onMouseLeave={() => setHoverYear(null)}>
             <CartesianGrid stroke={C.borderSoft} vertical={false} />
@@ -2384,9 +2389,9 @@ function YearComparePanel({ FULL, fontSize = 10 }) {
             <ReferenceLine y={metric === "index" ? 100 : 0} stroke={C.border} />
             <Tooltip content={<TooltipBody />} />
             {years.map((y) => (
-              <Line key={y} type="linear" dataKey={`y${y}`} stroke={C.white} strokeOpacity={hoverYear === y ? 0.95 : 0.22} strokeWidth={hoverYear === y ? 2 : 0.9} dot={false} activeDot={false} isAnimationActive={false} connectNulls name={`${y}年`} />
+              <Line key={y} type="linear" dataKey={`y${y}`} stroke={C.white} strokeOpacity={hoverYear === y ? 0.95 : 0.22} strokeWidth={hoverYear === y ? 2.6 : 0.9} dot={false} activeDot={false} isAnimationActive={false} connectNulls name={`${y}年`} />
             ))}
-            <Line type="linear" dataKey={`y${currentYear}`} stroke={C.teal} strokeWidth={2.6} dot={false} isAnimationActive={false} connectNulls name={`${currentYear}年（今年）`} />
+            <Line type="linear" dataKey={`y${currentYear}`} stroke={C.teal} strokeWidth={hoverYear === currentYear ? 3.8 : 2.6} dot={false} isAnimationActive={false} connectNulls name={`${currentYear}年（今年）`} />
             {/* ホバー判定用の透明な太線（細い線の上にマウスを乗せやすくする）。タップでも選択できる */}
             {[...years, currentYear].map((y) => (
               <Line key={`hit-${y}`} type="linear" dataKey={`y${y}`} stroke="#000" strokeOpacity={0} strokeWidth={10} dot={false} activeDot={false} isAnimationActive={false} connectNulls legendType="none"
@@ -2402,6 +2407,51 @@ function YearComparePanel({ FULL, fontSize = 10 }) {
         {years.map((y) => (<button key={y} onMouseEnter={() => setHoverYear(y)} onMouseLeave={() => setHoverYear(null)} onClick={() => togglePin(y)} title={pinnedYear === y ? "クリックで固定を解除" : "クリックで強調を固定"} className="px-1 rounded" style={{ color: hoverYear === y ? C.bg : C.textMuted, background: hoverYear === y ? C.white : "transparent", border: `1px solid ${pinnedYear === y ? C.white : C.borderSoft}`, cursor: "pointer" }}>{y}</button>))}
         <span className="ml-1" style={{ color: C.teal }}>━ {currentYear}年（今年）</span>
       </div>
+      {showTable && yearStats && (
+        <div className="mt-3 px-2 overflow-x-auto">
+          <div className="text-[11px] mb-1" style={{ color: C.textMuted }}>パフォーマンス一覧（年をクリックするとチャートの線を太線で強調・もう一度クリックで解除）</div>
+          <table className="mono text-[11px] w-full" style={{ borderCollapse: "collapse", minWidth: 760 }}>
+            <thead>
+              <tr className="whitespace-nowrap" style={{ color: C.textDim, borderBottom: `1px solid ${C.borderSoft}` }}>
+                <th className="text-left font-normal py-1 pr-2">年</th>
+                <th className="text-right font-normal py-1 px-2">騰落率</th>
+                <th className="text-right font-normal py-1 px-2" title="その年の最大ドローダウン（過去最高値からの下落率の最小値）">MDD</th>
+                <th className="text-right font-normal py-1 px-2" title="その年に終値が最高値を更新した日数">ATH更新</th>
+                <th className="text-right font-normal py-1 px-2" title="年初来高値からの下落率が-3%以下に新たに入った回数（連続中は1回）">DD-3%以上</th>
+                <th className="text-left font-normal py-1 pl-3">イベント</th>
+              </tr>
+            </thead>
+            <tbody>
+              {tableYears.map((y) => {
+                const st = yearStats.get(y);
+                if (!st) return null;
+                const isCur = y === currentYear;
+                const ev = yearEventText(y, currentYear);
+                const evText = [...ev.market, ev.president].filter(Boolean).join(" ／ ");
+                const active = pinnedYear === y;
+                const lastMd = `${Number(st.lastDate.slice(5, 7))}/${Number(st.lastDate.slice(8, 10))}`;
+                return (
+                  <tr key={y} style={{ borderBottom: `1px solid ${C.borderSoft}`, background: active ? (isCur ? "rgba(69,196,176,0.14)" : "rgba(255,255,255,0.08)") : "transparent" }}>
+                    <td className="py-1 pr-2 whitespace-nowrap">
+                      <button onClick={() => togglePin(y)} className="font-bold underline-offset-2 hover:underline" style={{ color: isCur ? C.teal : active ? C.white : C.text, background: "transparent", border: "none", padding: 0, cursor: "pointer" }}>
+                        {isCur ? `${y}年（年初来・${lastMd}時点）` : `${y}年`}
+                      </button>
+                    </td>
+                    <td className="py-1 px-2 text-right font-bold" style={{ color: st.returnPct >= 0 ? C.teal : C.rust }}>{st.returnPct >= 0 ? "+" : ""}{st.returnPct.toFixed(1)}%</td>
+                    <td className="py-1 px-2 text-right" style={{ color: depthColor(st.mdd) }}>{st.mdd.toFixed(1)}%</td>
+                    <td className="py-1 px-2 text-right" style={{ color: C.textMuted }}>{st.athCount}回</td>
+                    <td className="py-1 px-2 text-right" style={{ color: st.dd3Count ? C.text : C.textDim }}>{st.dd3Count}回</td>
+                    <td className="py-1 pl-3" style={{ color: C.textMuted, whiteSpace: "normal" }}>{evText}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <div className="text-[10px] mt-1 leading-relaxed" style={{ color: C.textDim }}>
+            ※騰落率は年初（前年最終営業日の終値）→年末（今年は最新日）の終値。MDD・ATH更新は既存の期間統計と同じ定義（過去最高値基準のDD・終値が最高値を更新した日数）。DD-3%以上は年初来高値からの下落率で数えています。イベントは主な市場イベントの年表と米大統領の在任情報です。
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2466,7 +2516,7 @@ function DDChartModalContent({ chartData, rangeDays, d, hidden, toggle, period, 
           <div className="mt-3 text-[10px]" style={{ color: C.textDim }}>{isMultiSource ? MULTI_CHART_NOTE : "下部のスクロールバーをドラッグして期間を絞り込み（ズーム）できます。グラフ上にカーソルを合わせるとツールチップが表示されます。"}</div>
         </>
       ) : chartTab === "year" ? (
-        <div style={{ height: "min(74vh, 680px)" }}><YearComparePanel FULL={d.FULL} fontSize={fontSize} /></div>
+        <YearComparePanel FULL={d.FULL} fontSize={fontSize} showTable />
       ) : (
         <div style={{ height: "min(70vh, 640px)" }}>
           <ResponsiveContainer width="100%" height="100%">
@@ -5667,7 +5717,7 @@ function MobileChartZoomModal({ onClose, chartData, rangeDays, d, hidden, toggle
             <span className="text-xs font-semibold">{chartSourceTitle(chartSourceMode(chartSources))}</span>
             <button onClick={onClose} className="flex items-center gap-1 text-xs px-2 py-1 rounded" style={{ color: C.textMuted, background: "transparent", border: "none", cursor: "pointer" }}><X size={13} /> 閉じる</button>
           </div>
-          <div className="flex-1 min-h-0">
+          <div className="flex-1 min-h-0 overflow-y-auto">
             <DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={onSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} sourceViews={sourceViews} chartSources={chartSources} onToggleChartSource={onToggleChartSource} fontSize={13} />
           </div>
         </div>
