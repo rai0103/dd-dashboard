@@ -15,6 +15,17 @@ export const OWNER_OPTIONS = [OWNER_RAKUTEN_SAKI, OWNER_RAKUTEN_SHIN, OWNER_MOOM
 // 楽天証券CSVの取り込み先として選べる口座主
 export const RAKUTEN_OWNERS = [OWNER_RAKUTEN_SHIN, OWNER_RAKUTEN_SAKI];
 
+// 画面表示用の口座名（凡例など表示だけに使う）。内部の値（集計・並び順・色・CSVの紐づけ・保存データ）は上の定数のまま変えない。
+// 対応表に無い口座名はそのまま表示する。
+export const OWNER_DISPLAY_LABELS: Record<string, string> = {
+  [OWNER_RAKUTEN_SHIN]: "楽天証券（私）",
+  [OWNER_RAKUTEN_SAKI]: "楽天証券（妻）",
+  [OWNER_DAIWA]: "大和コネクト",
+};
+export function ownerDisplayLabel(owner: string): string {
+  return OWNER_DISPLAY_LABELS[owner] ?? owner;
+}
+
 // 旧バージョンの値 → 新しい値
 const LEGACY_OWNERS: Record<string, string> = { shin: OWNER_RAKUTEN_SHIN, saki: OWNER_RAKUTEN_SAKI };
 

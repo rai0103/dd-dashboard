@@ -18,7 +18,7 @@ import { buildVooEquivalentSeries } from "@/lib/sp500Synthetic";
 import { buildYearSeries, completeYears, selectCompareYears, computeYearStats, averageYearStats, YEAR_PRESETS } from "@/lib/yearCompare";
 import { yearEventText, recoveryInfo } from "@/lib/yearEvents";
 import { decodeCp932, parseTradeCsv, mergeTrades, computeRealizedEvents, aggregateRanking, splitRanking, periodOptions, emptyTradeHistory, TRADE_KIND_LABEL } from "@/lib/tradeHistory";
-import { OWNER_RAKUTEN_SAKI, OWNER_RAKUTEN_SHIN, OWNER_MOOMOO, OWNER_OPTIONS, RAKUTEN_OWNERS, migrateHoldingsOwners, migrateAsOfKeys, detectRakutenOwnerFromFileName } from "@/lib/owners";
+import { OWNER_RAKUTEN_SAKI, OWNER_RAKUTEN_SHIN, OWNER_MOOMOO, OWNER_OPTIONS, RAKUTEN_OWNERS, migrateHoldingsOwners, migrateAsOfKeys, detectRakutenOwnerFromFileName, ownerDisplayLabel } from "@/lib/owners";
 import { BROKERS, brokerByKey, extractionToPreviewRows, previewRowsToHoldings, replaceBrokerHoldings, aggregateLabelsReplacedByBrokers, exposureCurrency, rowValue, reconcileWithAccountTotal, isPlausibleBrokerRate, guessBrokerRank, reconciliationTarget, sectionChecks, buildBrokerSummary, profitChecks, appendHoldingSnapshot, holdingChanges } from "@/lib/brokerImport";
 import { importUserPrices, applyApiGold, resetPriceField, goldHistoryFetchStart } from "@/lib/priceSeries";
 import { buildStatsTable, computeMddHoldProbability, depthBucketIndex, LOW_SAMPLE_N } from "@/lib/bottomScore";
@@ -869,6 +869,17 @@ function virtualAccountDates(investmentPerformance) {
   return out;
 }
 // 凡例に添える更新日。今年なら「M/D」、それ以外は「YYYY/M/D」
+// 「口座」タブの凡例ラベル：表示用の口座名（lib/owners の対応表）＋更新日（「9/30」）を1行に収める。
+// 幅が足りない時は口座名だけを「…」で省略し、日付は削らない。titleで正式名・最終更新日の完全な表記を確認できる。
+function OwnerLegendLabel({ name, date, fontSize = 10, dateFontSize = 9 }) {
+  const label = ownerDisplayLabel(name);
+  return (
+    <span className="flex items-baseline min-w-0 whitespace-nowrap" style={{ fontSize }}>
+      <span className="truncate min-w-0" title={label === name ? label : `${label}（${name}）`}>{label}</span>
+      {date && <span className="mono shrink-0 ml-1" title={`最終更新：${fmtDateSlash(date)}`} style={{ color: C.textDim, fontSize: dateFontSize }}>{fmtUpdatedShort(date)}</span>}
+    </span>
+  );
+}
 function fmtUpdatedShort(iso) {
   if (!iso) return "";
   const [y, m, day] = String(iso).split("-").map(Number);
@@ -3074,21 +3085,21 @@ function PortfolioPie({ view, holdings, onOpen, layout = "row", ownerDates = {} 
     <div onClick={onOpen} className={`h-full flex cursor-pointer ${isColumn ? "flex-col" : "items-center"}`} style={isColumn ? { padding: "6px 8px", gap: 6 } : { padding: "4px 6px", gap: 8 }}>
       <div className="relative shrink-0" style={isColumn ? { width: "100%", height: "64%" } : { width: 130, height: "92%" }}>
         <ResponsiveContainer width="100%" height="100%">
-          <PieChart><Pie data={data} dataKey="value" nameKey="name" startAngle={90} endAngle={-270} innerRadius="55%" outerRadius="88%" paddingAngle={2} stroke={C.panel} strokeWidth={2} isAnimationActive={false}>{data.map((d, i) => (<Cell key={i} fill={colorForView(view, d.name)} />))}</Pie><Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} itemStyle={{ color: C.text }} labelStyle={{ color: C.textMuted }} formatter={(v, n) => [`¥${v.toLocaleString()}`, n]} /></PieChart>
+          <PieChart><Pie data={data} dataKey="value" nameKey="name" startAngle={90} endAngle={-270} innerRadius="55%" outerRadius="88%" paddingAngle={2} stroke={C.panel} strokeWidth={2} isAnimationActive={false}>{data.map((d, i) => (<Cell key={i} fill={colorForView(view, d.name)} />))}</Pie><Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} itemStyle={{ color: C.text }} labelStyle={{ color: C.textMuted }} formatter={(v, n) => [`¥${v.toLocaleString()}`, view === "owner" ? ownerDisplayLabel(n) : n]} /></PieChart>
         </ResponsiveContainer>
         <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none"><span className="text-[9px]" style={{ color: C.textDim }}>合計評価額</span><span className="mono text-xs font-bold">¥{Math.round(total / 10000).toLocaleString()}万</span></div>
       </div>
       {isColumn ? (
         <div className="flex-1 min-w-0 min-h-0 flex flex-col justify-center gap-1 overflow-y-auto w-full">
-          {data.map((d) => (<div key={d.name} title={`${d.name}：¥${Math.round(d.value).toLocaleString()}`} className="flex items-center gap-1 text-[10px]"><span style={{ width: 7, height: 7, borderRadius: 2, background: colorForView(view, d.name), flexShrink: 0 }} /><span style={{ color: C.textMuted }} className={`flex-1 min-w-0 ${isColumn ? "truncate" : "line-clamp-2 leading-tight"}`}>{d.name}{view === "owner" && ownerDates[d.name] && <span className="mono text-[9px] ml-1" title={`最終更新 ${fmtDateSlash(ownerDates[d.name])}`} style={{ color: C.textDim }}>{fmtUpdatedShort(ownerDates[d.name])}更新</span>}</span><span className="mono shrink-0 text-right whitespace-nowrap" style={{ color: C.textDim, width: isColumn ? 76 : 50 }}>{isColumn ? `¥${Math.round(d.value).toLocaleString()}` : `¥${Math.round(d.value / 10000).toLocaleString()}万`}</span><span className="mono shrink-0 text-right" style={{ color: C.text, width: 36 }}>{((d.value / total) * 100).toFixed(1)}%</span></div>))}
+          {data.map((d) => (<div key={d.name} title={`${view === "owner" ? ownerDisplayLabel(d.name) : d.name}：¥${Math.round(d.value).toLocaleString()}`} className="flex items-center gap-1 text-[10px]"><span style={{ width: 7, height: 7, borderRadius: 2, background: colorForView(view, d.name), flexShrink: 0 }} />{view === "owner" ? <span className="flex-1 min-w-0" style={{ color: C.textMuted }}><OwnerLegendLabel name={d.name} date={ownerDates[d.name]} /></span> : <span style={{ color: C.textMuted }} className="flex-1 min-w-0 truncate">{d.name}</span>}<span className="mono shrink-0 text-right whitespace-nowrap" style={{ color: C.textDim, width: isColumn ? 76 : 50 }}>{isColumn ? `¥${Math.round(d.value).toLocaleString()}` : `¥${Math.round(d.value / 10000).toLocaleString()}万`}</span><span className="mono shrink-0 text-right" style={{ color: C.text, width: 36 }}>{((d.value / total) * 100).toFixed(1)}%</span></div>))}
         </div>
       ) : (
         /* PC：凡例を内容幅の4列グリッド（色・口座名＋更新日・金額（万円）・構成比）に詰めて並べる。金額・構成比は右揃えで桁を揃える。
            省略された名前・正確な金額はホバーで確認できる */
         <div className="min-w-0 min-h-0 overflow-y-auto text-[10px]" style={{ display: "grid", gridTemplateColumns: "7px minmax(0, max-content) max-content max-content", columnGap: 5, rowGap: 3, alignItems: "center", alignContent: "center", maxHeight: "100%" }}>
           {data.map((d) => (<Fragment key={d.name}>
-            <span title={`${d.name}：¥${Math.round(d.value).toLocaleString()}`} style={{ width: 7, height: 7, borderRadius: 2, background: colorForView(view, d.name) }} />
-            <span style={{ color: C.textMuted }} className={"min-w-0 line-clamp-2 leading-tight"}>{d.name}{view === "owner" && ownerDates[d.name] && <span className="mono text-[9px] ml-1" title={`最終更新 ${fmtDateSlash(ownerDates[d.name])}`} style={{ color: C.textDim }}>{fmtUpdatedShort(ownerDates[d.name])}更新</span>}</span>
+            <span title={`${view === "owner" ? ownerDisplayLabel(d.name) : d.name}：¥${Math.round(d.value).toLocaleString()}`} style={{ width: 7, height: 7, borderRadius: 2, background: colorForView(view, d.name) }} />
+            {view === "owner" ? <span className="min-w-0 overflow-hidden" style={{ color: C.textMuted }}><OwnerLegendLabel name={d.name} date={ownerDates[d.name]} /></span> : <span style={{ color: C.textMuted }} className={"min-w-0 line-clamp-2 leading-tight"}>{d.name}</span>}
             <span className="mono text-right whitespace-nowrap" style={{ color: C.textDim, fontVariantNumeric: "tabular-nums" }}>¥{Math.round(d.value / 10000).toLocaleString()}万</span>
             <span className="mono text-right" style={{ color: C.text, fontVariantNumeric: "tabular-nums" }}>{((d.value / total) * 100).toFixed(1)}%</span>
           </Fragment>))}
@@ -3363,7 +3374,7 @@ function PortfolioTableContent({ view, holdings, brokerSummaries = {}, ownerDate
     <div>
       <div className="mb-6">
         <div className="text-xs mb-3" style={{ color: C.textDim }}>内訳（{viewLabel}）</div>
-        {visibleGrouped.map((g) => (<div key={g.name} className="flex items-center gap-2 mb-1.5"><span style={{ width: 10, height: 10, borderRadius: 2, background: colorForView(view, g.name), flexShrink: 0 }} /><span className="text-xs shrink-0" style={{ width: 168, color: C.textMuted, whiteSpace: "nowrap", overflow: "visible" }}>{g.name}{view === "owner" && ownerDates[g.name] && <span className="mono text-[10px] ml-1.5" style={{ color: C.textDim }}>{fmtDateSlash(ownerDates[g.name])}更新</span>}</span><div className="flex-1 h-2 rounded-full" style={{ background: C.panel2 }}><div className="h-2 rounded-full" style={{ width: `${(g.value / total) * 100}%`, background: colorForView(view, g.name) }} /></div><span className="mono text-xs w-14 text-right shrink-0">{((g.value / total) * 100).toFixed(1)}%</span><span className="mono text-xs w-28 text-right shrink-0" style={{ color: C.textMuted }}>¥{g.value.toLocaleString()}</span></div>))}
+        {visibleGrouped.map((g) => (<div key={g.name} className="flex items-center gap-2 mb-1.5"><span style={{ width: 10, height: 10, borderRadius: 2, background: colorForView(view, g.name), flexShrink: 0 }} /><span className="text-xs shrink-0" style={{ width: 168, color: C.textMuted, whiteSpace: "nowrap", overflow: "visible" }}>{view === "owner" ? ownerDisplayLabel(g.name) : g.name}{view === "owner" && ownerDates[g.name] && <span className="mono text-[10px] ml-1.5" title={`最終更新：${fmtDateSlash(ownerDates[g.name])}`} style={{ color: C.textDim }}>{fmtUpdatedShort(ownerDates[g.name])}</span>}</span><div className="flex-1 h-2 rounded-full" style={{ background: C.panel2 }}><div className="h-2 rounded-full" style={{ width: `${(g.value / total) * 100}%`, background: colorForView(view, g.name) }} /></div><span className="mono text-xs w-14 text-right shrink-0">{((g.value / total) * 100).toFixed(1)}%</span><span className="mono text-xs w-28 text-right shrink-0" style={{ color: C.textMuted }}>¥{g.value.toLocaleString()}</span></div>))}
         {hasMore && (
           <button onClick={() => setShowAllBreakdown((v) => !v)} className="text-[11px] mt-1 flex items-center gap-1" style={{ color: C.textMuted, background: "transparent", border: "none", cursor: "pointer" }}>
             {showAllBreakdown ? "▲ 閉じる" : `▼ もっと見る（他${grouped.length - BREAKDOWN_COLLAPSE_LIMIT}件）`}
