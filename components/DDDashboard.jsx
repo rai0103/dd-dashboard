@@ -12,6 +12,7 @@ import { parseInvestmentExcel, computeOwnAssetDrawdown, computeBenchmarkCAGR, si
 import { computeRealHoldingsRanking } from "@/lib/realHoldingsRanking";
 import { formatPct } from "@/lib/totalMetrics";
 import { computeAccelSensor } from "@/lib/accelSensor";
+import { buildVooEquivalentSeries } from "@/lib/sp500Synthetic";
 import { buildYearSeries, completeYears, selectCompareYears, computeYearStats, averageYearStats, YEAR_PRESETS } from "@/lib/yearCompare";
 import { yearEventText, recoveryInfo } from "@/lib/yearEvents";
 import { decodeCp932, parseTradeCsv, mergeTrades, computeRealizedEvents, aggregateRanking, splitRanking, periodOptions, emptyTradeHistory, TRADE_KIND_LABEL } from "@/lib/tradeHistory";
@@ -4272,7 +4273,7 @@ function BrokerScreenshotImport({ holdings, virtualAggregateLabels, onRegister, 
   );
 }
 
-function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, source, holdings, onUpdateHoldings, onResetAndImportHoldings, onResetHoldings, holdingsSource, overrides, categoryDefaultRanks, onCategoryDefaultRankChange, vooQqqSeries, onAppendVooQqq, onImportVooQqq, onApplyApiGold, onResetVooQqqField, virtualAggregateLabels, onRegisterBrokerHoldings, brokerSummaries }) {
+function DataInputModal({ onClose, synthetic = null, rawSeries, onReplace, onAppend, onReset, source, holdings, onUpdateHoldings, onResetAndImportHoldings, onResetHoldings, holdingsSource, overrides, categoryDefaultRanks, onCategoryDefaultRankChange, vooQqqSeries, onAppendVooQqq, onImportVooQqq, onApplyApiGold, onResetVooQqqField, virtualAggregateLabels, onRegisterBrokerHoldings, brokerSummaries }) {
   const [dataset, setDataset] = useState("voo"); // "voo" | "holdings" | "broker"
   const [instrument, setInstrument] = useState("sp500"); // "sp500" | "voo" | "qqq" | "gold"（voo/qqq/goldのCSV/手動入力/削除の対象切り替え）
   const [tab, setTab] = useState("csv");
@@ -4357,7 +4358,7 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
       onAppendVooQqq({ date, voo: data.voo, qqq: data.qqq });
       const hasGold = data.goldDate && typeof data.gold === "number";
       if (hasGold) onApplyApiGold([{ date: parseDateOnly(data.goldDate), price: data.gold }]); // CSV/直接入力で登録済みの日は上書きしない
-      setUpdateMsg(`更新完了：${date.toLocaleDateString("ja-JP")} のVOO/QQQ終値${hasGold ? "・GOLDの最新値" : ""}を記録しました（S&P500はStooq取り込み/直接入力で更新してください）`);
+      setUpdateMsg(`更新完了：${date.toLocaleDateString("ja-JP")} のVOO/QQQ終値${hasGold ? "・GOLDの最新値" : ""}を記録しました（SP500本系列はVOO換算で自動的に更新されます）`);
     } catch (e) {
       setUpdateError(true);
       setUpdateMsg("データ取得失敗。稼働時間外の可能性があります");
@@ -4407,22 +4408,19 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
       // 見つかればSP500・VOO・QQQをそれぞれの既存の取り込み経路（onReplace/onImportVooQqq）にそのまま渡すため、
       // ロジックはPC・スマホどちらでこのモーダルを開いても完全に同一になる。
       const combined = parseCombinedTrackRecordCSV(text);
-      if (combined && (combined.sp500.length || combined.voo.length || combined.qqq.length || combined.gold.length)) {
-        if (combined.sp500.length) onReplace(combined.sp500);
+      // SP500指数の手動入力は終了したため、統合形式のSP500列は取り込まない（バックアップの手動データを上書きしない）。
+      if (combined && (combined.voo.length || combined.qqq.length || combined.gold.length)) {
         if (combined.voo.length) onImportVooQqq("voo", combined.voo);
         if (combined.qqq.length) onImportVooQqq("qqq", combined.qqq);
         if (combined.gold.length) onImportVooQqq("gold", combined.gold);
         const parts = [];
-        if (combined.sp500.length) parts.push(`SP500 ${combined.sp500.length}件`);
         if (combined.voo.length) parts.push(`VOO ${combined.voo.length}件`);
         if (combined.qqq.length) parts.push(`QQQ ${combined.qqq.length}件`);
         if (combined.gold.length) parts.push(`GOLD ${combined.gold.length}件`);
-        setFileMsg(`統合形式（Date,SP500,VOO,QQQ,GOLD）として読み込みました：${parts.join("・")}`);
+        setFileMsg(`統合形式（Date,SP500,VOO,QQQ,GOLD）として読み込みました：${parts.join("・")}${combined.sp500.length ? "（SP500列は手動入力終了のため取り込んでいません）" : ""}`);
         return;
       }
-      const parsed = parseStooqCSV(text);
-      if (parsed.length) { onReplace(parsed); setFileMsg(`${parsed.length}件を読み込みました（${parsed[0].date.toLocaleDateString("ja-JP")} 〜 ${parsed[parsed.length - 1].date.toLocaleDateString("ja-JP")}）`); }
-      else setFileMsg("CSVを解析できませんでした。Date,Open,High,Low,Close,Volume 形式、または「データ出力」で生成した Date,SP500,VOO,QQQ 形式か確認してください。");
+      setFileMsg("SP500指数の手動取り込みは終了しました。VOO・QQQ・GOLD単体のCSVは各タブから、「データ出力」のCSVはここから取り込めます。");
     };
     reader.readAsText(file);
   };
@@ -4501,11 +4499,11 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
               <Download size={13} /> データ出力
             </button>
           </div>
-          <div className="text-[10px] mb-2" style={{ color: C.textDim }}>※「データ更新」はVOO/QQQ・GOLDの最新値を自動取得します（GOLDはCSV/直接入力で登録済みの日は上書きしません）。S&P500はダッシュボードのDD計算に使う本系列のため、引き続き下記のCSV取り込み・直接入力で更新してください。</div>
+          <div className="text-[10px] mb-2" style={{ color: C.textDim }}>※「データ更新」はVOO/QQQ・GOLDの最新値を自動取得します（GOLDはCSV/直接入力で登録済みの日は上書きしません）。SP500本系列（DD計算に使用）はVOOの終値からVOO換算で自動更新されるため、手動入力は不要です。</div>
           {updateMsg && <div className="text-xs mb-4" style={{ color: updateError ? C.rust : C.teal }}>{updateMsg}</div>}
 
           <div className="flex gap-2 mb-5">
-            {tabBtn(instrument, setInstrument, "sp500", "SP500（本系列・DD計算に使用）")}
+            {tabBtn(instrument, setInstrument, "sp500", "SP500（VOO換算・自動）")}
             {tabBtn(instrument, setInstrument, "voo", "VOO")}
             {tabBtn(instrument, setInstrument, "qqq", "QQQ")}
             {tabBtn(instrument, setInstrument, "gold", "GOLD（XAUUSD）")}
@@ -4513,36 +4511,28 @@ function DataInputModal({ onClose, rawSeries, onReplace, onAppend, onReset, sour
 
           {instrument === "sp500" ? (
             <>
-              <div className="flex gap-2 mb-5">{tabBtn(tab, setTab, "csv", "方式A：CSV取り込み（Stooq）")}{tabBtn(tab, setTab, "manual", "方式B：直接入力")}</div>
-              {tab === "csv" ? (
-                <div>
-                  <p className="text-sm mb-1 leading-relaxed" style={{ color: C.textMuted }}>Stooqからダウンロードした SPY.US の日次CSV（Date,Open,High,Low,Close,Volume・日付昇順）を選択してください。（この値をダッシュボードでは「S&P500」本系列として表示します。VOO・QQQ単体のデータは上のVOO・QQQタブから取り込んでください）</p>
-                  <p className="text-sm mb-1 leading-relaxed" style={{ color: C.textMuted }}>下の「データ出力」で書き出したCSV（Date,SP500,VOO,QQQ）もそのまま選択できます。その場合はSP500・VOO・QQQの3列がまとめて取り込まれます。</p>
-                  <p className="text-xs mb-4" style={{ color: C.textDim }}>取得元: https://stooq.com/q/d/l/?s=spy.us&i=d</p>
-                  <label className="inline-flex items-center gap-2 text-xs px-3 py-2 rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.textMuted, cursor: "pointer" }}>
-                    <Upload size={13} /> CSVファイルを選択
-                    <input type="file" accept=".csv,text/csv,text/comma-separated-values,application/csv,application/vnd.ms-excel,text/plain,application/octet-stream" onChange={handleFile} style={{ display: "none" }} />
-                  </label>
-                  {fileName && <div className="text-xs mt-2" style={{ color: C.textDim }}>選択中: {fileName}</div>}
-                  {fileMsg && <div className="text-xs mt-2" style={{ color: C.teal }}>{fileMsg}</div>}
-                </div>
-              ) : (
-                <div>
-                  <p className="text-sm mb-4" style={{ color: C.textMuted }}>毎日の運用でその日のS&P500終値だけを入力する簡易方式です。既存データに追記・上書きされます。</p>
-                  <div className="flex items-end gap-3">
-                    <div><label className="text-[10px] block mb-1" style={{ color: C.textDim }}>日付</label><input type="date" value={manualDate} onChange={(e) => setManualDate(e.target.value)} className="text-xs px-2 py-1.5 rounded mono" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }} /></div>
-                    <div><label className="text-[10px] block mb-1" style={{ color: C.textDim }}>終値（$）</label><input type="number" step="0.01" value={manualPrice} onChange={(e) => setManualPrice(e.target.value)} placeholder={sp500PrevPrice != null ? sp500PrevPrice.toFixed(2) : "704.20"} className="text-xs px-2 py-1.5 rounded w-28 mono" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }} /></div>
-                    <button onClick={handleAddManual} className="text-xs px-4 py-1.5 rounded" style={{ background: C.teal, color: C.bg, fontWeight: 700, border: "none", cursor: "pointer" }}>追加</button>
-                  </div>
-                </div>
-              )}
-
-              <div className="mt-8 pt-4 flex items-center justify-between" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
-                <div className="flex items-center gap-2 text-xs" style={{ color: C.textDim }}>
-                  <Database size={13} />
-                  <span>現在のデータ: {rawSeries.length.toLocaleString()}件・最終日 {rawSeries[rawSeries.length - 1]?.date?.toLocaleDateString("ja-JP")}　（{source === "seed" ? "初期バンドルデータ" : "取り込み済みデータ"}）</span>
-                </div>
-                <button onClick={onReset} className="text-xs px-2 py-1 rounded" style={{ color: C.textMuted, background: "transparent", border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>SP500データを初期化</button>
+              {/* SP500指数の手動入力（CSV取り込み・直接入力・初期化）は終了。VOOの自動取得で更新される合成シリーズの状況と、バックアップの情報を表示する */}
+              <div className="rounded p-3 mb-4 text-sm leading-relaxed" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.textMuted }}>
+                <div className="font-semibold mb-1" style={{ color: C.text }}>SP500の手動入力は終了しました（VOOの自動取得で更新）</div>
+                <div>DDチャート・年比較・トラックレコードなどに使う「SP500本系列」は、VOO換算の合成シリーズです：接続点より前＝これまで手動入力したSP500指数×補正係数、接続点以降＝自動取得のVOO終値。騰落率・ドローダウン率は換算前と同じです。</div>
+                {synthetic?.mode === "spliced" ? (
+                  <div className="mono text-xs mt-2" style={{ color: C.textDim }}>接続点 {synthetic.junctionDate}・補正係数 {synthetic.factor.toFixed(6)}（VOO÷SP500指数）・SP500換算 {synthetic.sp500Count.toLocaleString()}件＋VOO {synthetic.vooCount.toLocaleString()}件</div>
+                ) : (
+                  <div className="text-xs mt-2" style={{ color: C.amber }}>{synthetic?.mode === "voo-only" ? "SP500の手動データとVOOの重複日が無いため、VOOのデータのみで計算しています。" : "VOOのデータが未取り込みのため、手動データのSP500指数のまま計算しています。"}</div>
+                )}
+              </div>
+              <div>
+                <p className="text-sm mb-1 leading-relaxed" style={{ color: C.textMuted }}>下の「データ出力」で書き出したCSV（Date,SP500,VOO,QQQ,GOLD）を取り込むと、VOO・QQQ・GOLDの列を復元できます（SP500列は取り込みません）。</p>
+                <label className="inline-flex items-center gap-2 text-xs px-3 py-2 rounded mt-1" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.textMuted, cursor: "pointer" }}>
+                  <Upload size={13} /> データ出力CSVを選択
+                  <input type="file" accept=".csv,text/csv,text/comma-separated-values,application/csv,application/vnd.ms-excel,text/plain,application/octet-stream" onChange={handleFile} style={{ display: "none" }} />
+                </label>
+                {fileName && <div className="text-xs mt-2" style={{ color: C.textDim }}>選択中: {fileName}</div>}
+                {fileMsg && <div className="text-xs mt-2" style={{ color: C.teal }}>{fileMsg}</div>}
+              </div>
+              <div className="mt-8 pt-4 flex items-center gap-2 text-xs" style={{ borderTop: `1px solid ${C.borderSoft}`, color: C.textDim }}>
+                <Database size={13} />
+                <span>SP500手動データ（バックアップとして保持・ロールバック用）：{rawSeries.length.toLocaleString()}件・最終日 {rawSeries[rawSeries.length - 1]?.date?.toLocaleDateString("ja-JP")}　（{source === "seed" ? "初期バンドルデータ" : "取り込み済みデータ"}）</span>
               </div>
             </>
           ) : (
@@ -6755,6 +6745,8 @@ export default function DDDashboard() {
       await pullSyncAndApply();
       try {
         const res = await storage.get("voo_price_history");
+        // SP500手動入力の終了に伴うロールバック用バックアップ（初回のみ、手動データの写しを別キーに保存。以後は上書きしない）
+        if (res && res.value && !(await storage.get("sp500_manual_backup"))) await storage.set("sp500_manual_backup", res.value);
         if (res && res.value) {
           const parsed = JSON.parse(res.value).map((p) => ({ date: parseDateOnly(p.date), price: p.price }));
           if (parsed.length) { setRawSeries(parsed); setDataSource("imported"); }
@@ -7133,9 +7125,14 @@ export default function DDDashboard() {
     }
   }
 
-  const d = useMemo(() => computeAll(rawSeries), [rawSeries]);
   const vooCalcSeries = useMemo(() => seriesFromVooQqq(vooQqqSeries, "voo"), [vooQqqSeries]);
   const qqqCalcSeries = useMemo(() => seriesFromVooQqq(vooQqqSeries, "qqq"), [vooQqqSeries]);
+  // SP500本系列（DDチャート・年比較・トラックレコード等の全機能の入力）＝ VOO換算の合成シリーズ（lib/sp500Synthetic.ts）。
+  // SP500指数の手動入力は終了し、これまでの手動データ（rawSeries＝IndexedDB "voo_price_history"）はバックアップ兼「接続点より前の履歴」として使う。
+  // 接続点（SP500とVOOの両方がある最も新しい日）より前＝SP500指数×補正係数、以降＝自動取得のVOO終値。初期バンドルデータ（seed）は接続に使わない。
+  const sp500Synthetic = useMemo(() => buildVooEquivalentSeries(dataSource === "seed" ? [] : rawSeries, vooCalcSeries), [rawSeries, vooCalcSeries, dataSource]);
+  const sp500Series = sp500Synthetic.series.length ? sp500Synthetic.series : rawSeries;
+  const d = useMemo(() => computeAll(sp500Series), [sp500Series]);
   const goldSeries = useMemo(() => seriesFromVooQqq(vooQqqSeries, "gold"), [vooQqqSeries]); // ゴールド（XAUUSD）終値。暴落比較の重ね描き用（未取り込みなら空配列）
   // VOO/QQQ自身の実績は期間が短いため、進行確率・速度別確率などのトラックレコード統計は最も長い実績があるSP500（d.trackRecord）を使う。
   // 現在のDD%・経過日数・速度計測（DD3→5%等）はVOO/QQQ自身の評価額の動きをそのまま使う（DD加速度アラートはVOO/QQQのユーザー選択に応じて切り替える仕様）。
@@ -7289,7 +7286,7 @@ export default function DDDashboard() {
       {modal?.type === "rank" && <FullScreenModal title={`${modal.rank}ランクの保有銘柄`} onClose={() => setModal(null)}><RankHoldingsContent rank={modal.rank} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
       {modal?.type === "crash" && <FullScreenModal title={`${crashDisplayName(modal.crash)}（${modal.crash.start} 〜）と現状の比較`} onClose={() => setModal(null)}><CrashModalContent crash={modal.crash} daysSinceATH={d.daysSinceATH} currentDD={d.currentDD} currentEpisodeCurve={d.currentEpisodeCurve} qqqFull={dQqq?.FULL ?? null} goldFull={goldSeries} allCrashes={historicalCrashes} onJump={(c) => setModal({ type: "crash", crash: c })} /></FullScreenModal>}
       {modal?.type === "ddChart" && <FullScreenModal title={chartSourceTitle(chartSource)} onClose={() => setModal(null)}><DDChartModalContent initialTab={chartTab} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} sourceViews={sourceViews} chartSources={chartSources} onToggleChartSource={toggleChartSource} yearCompare={yearCompare} setYearCompare={setYearCompare} /></FullScreenModal>}
-      {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} vooQqqSeries={vooQqqSeries} onAppendVooQqq={handleAppendVooQqq} onImportVooQqq={handleImportVooQqq} onApplyApiGold={handleApplyApiGold} onResetVooQqqField={handleResetVooQqqField} virtualAggregateLabels={virtualAggregateLabels} onRegisterBrokerHoldings={handleRegisterBrokerHoldings} brokerSummaries={brokerSummaries} />}
+      {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} synthetic={sp500Synthetic} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} vooQqqSeries={vooQqqSeries} onAppendVooQqq={handleAppendVooQqq} onImportVooQqq={handleImportVooQqq} onApplyApiGold={handleApplyApiGold} onResetVooQqqField={handleResetVooQqqField} virtualAggregateLabels={virtualAggregateLabels} onRegisterBrokerHoldings={handleRegisterBrokerHoldings} brokerSummaries={brokerSummaries} />}
       {modal?.type === "checkpointSettings" && <FullScreenModal title="チェックポイント設定" onClose={() => setModal(null)}><CheckpointSettingsContent checkpoints={checkpoints} onCheckpointChange={handleCheckpointChange} holdings={holdings} /></FullScreenModal>}
       {modal?.type === "bottomScore" && <FullScreenModal title={bottom.hold.applicable ? `SP500(VOO)底値判定：${bottomLabel(d.FULL, bottom.hold.state)} が底値として確定する確率（SP500実績から都度算出）` : "SP500(VOO)底値判定（SP500実績から都度算出）"} onClose={() => setModal(null)}><BottomScoreModalContent bottom={bottom} FULL={d.FULL} /></FullScreenModal>}
       {modal?.type === "realHoldingsRanking" && <FullScreenModal title="実質保有銘柄ランキング" onClose={() => setModal(null)}><RealHoldingsRankingContent holdings={combinedHoldings} /></FullScreenModal>}
