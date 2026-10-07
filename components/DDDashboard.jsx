@@ -15,7 +15,7 @@ import { isStaleSince } from "@/lib/marketClock";
 import { amountsByClass, largestRemainderPercent, allocationDiff, topHoldingsByClass, ddLabel } from "@/lib/currentAllocation";
 import { computeAccelSensor } from "@/lib/accelSensor";
 import { buildVooEquivalentSeries } from "@/lib/sp500Synthetic";
-import { buildYearSeries, completeYears, selectCompareYears, computeYearStats, averageYearStats, YEAR_PRESETS } from "@/lib/yearCompare";
+import { buildYearSeries, completeYears, selectCompareYears, computeYearStats, averageYearStats, sortYearsBy, YEAR_PRESETS } from "@/lib/yearCompare";
 import { yearEventText, recoveryInfo } from "@/lib/yearEvents";
 import { decodeCp932, parseTradeCsv, mergeTrades, computeRealizedEvents, aggregateRanking, splitRanking, periodOptions, emptyTradeHistory, TRADE_KIND_LABEL } from "@/lib/tradeHistory";
 import { OWNER_RAKUTEN_SAKI, OWNER_RAKUTEN_SHIN, OWNER_MOOMOO, OWNER_OPTIONS, RAKUTEN_OWNERS, migrateHoldingsOwners, migrateAsOfKeys, detectRakutenOwnerFromFileName, ownerDisplayLabel } from "@/lib/owners";
@@ -2379,6 +2379,9 @@ function YearComparePanel({ FULL, fontSize = 10, showTable = false, state: share
   }, [years, currentYear, series, metric]);
   const unit = metric === "index" ? "" : "%";
   const tableYears = useMemo(() => [currentYear, ...[...years].sort((a, b) => b - a)], [years, currentYear]);
+  // 一覧表の並び順（表示順だけを変える。チェック・強調・平均・グラフはyear単位で持っているので影響しない）。既定は年の降順
+  const [tableSort, setTableSort] = useState({ key: "year", dir: "desc" });
+  const clickSort = (key) => setTableSort((cur) => (cur.key === key ? { key, dir: cur.dir === "desc" ? "asc" : "desc" } : { key, dir: "desc" }));
   const yearsKey = `${years.join(",")}|${currentYear}`;
   const hiddenYears = useMemo(() => new Set(state.hidden?.key === yearsKey ? state.hidden.years : []), [state.hidden, yearsKey]);
   const setHiddenYears = (next) => setState((st) => {
@@ -2457,6 +2460,18 @@ function YearComparePanel({ FULL, fontSize = 10, showTable = false, state: share
         const cnt = (v) => (v == null ? "—" : `${v}回`);
         const pct = (v, signed = false) => (v == null || !Number.isFinite(v) ? "—" : `${signed && v >= 0 ? "+" : ""}${v.toFixed(1)}%`);
         const dim = (v) => (v ? C.text : C.textDim);
+        const sortedYears = sortYearsBy(tableYears, yearStats, tableSort.key, tableSort.dir);
+        // 並び替えできる見出し：クリックで降順→昇順をトグル。並び替え中の列は▼（降順）／▲（昇順）、それ以外は薄い↕
+        const sortHead = (key, label, title) => {
+          const on = tableSort.key === key;
+          return (
+            <button type="button" onClick={() => clickSort(key)} title={`${title ? `${title}
+` : ""}クリックで並び替え（${on && tableSort.dir === "desc" ? "昇順" : "降順"}にする）`} aria-sort={on ? (tableSort.dir === "asc" ? "ascending" : "descending") : "none"}
+              className="inline-flex items-center gap-0.5 whitespace-nowrap" style={{ background: "transparent", border: "none", padding: "2px 0", cursor: "pointer", color: on ? C.text : "inherit", fontWeight: on ? 700 : 400, font: "inherit" }}>
+              {label}<span className="text-[8px]" style={{ color: on ? C.amber : C.textDim, opacity: on ? 1 : 0.5 }}>{on ? (tableSort.dir === "desc" ? "▼" : "▲") : "↕"}</span>
+            </button>
+          );
+        };
         return (
         <div className="mt-3 px-2">
           <div className="flex items-center gap-2 mb-1 text-[11px]" style={{ color: C.textMuted }}>
@@ -2466,32 +2481,32 @@ function YearComparePanel({ FULL, fontSize = 10, showTable = false, state: share
           {/* 列幅を固定し、各行を1行に収める（イベント欄は長い場合「…」で省略し、ホバーで全文を表示） */}
           <table className="mono text-[10.5px] w-full" style={{ borderCollapse: "collapse", tableLayout: "fixed" }}>
             <colgroup>
-              <col style={{ width: 88 }} /><col style={{ width: 50 }} />
-              <col style={{ width: 42 }} /><col style={{ width: 47 }} /><col style={{ width: 38 }} />
-              <col style={{ width: 64 }} /><col style={{ width: 47 }} /><col style={{ width: 38 }} />
+              <col style={{ width: 92 }} /><col style={{ width: 56 }} />
+              <col style={{ width: 48 }} /><col style={{ width: 54 }} /><col style={{ width: 56 }} />
+              <col style={{ width: 72 }} /><col style={{ width: 54 }} /><col style={{ width: 56 }} />
               <col />
             </colgroup>
             <thead>
               <tr className="whitespace-nowrap" style={{ color: C.textDim }}>
                 <th rowSpan={2} className="text-left font-normal py-1" style={{ borderBottom: `1px solid ${C.borderSoft}` }}>
-                  <input type="checkbox" ref={(el) => { if (el) el.indeterminate = checkedCount > 0 && checkedCount < tableYears.length; }} checked={checkedCount === tableYears.length} onChange={() => setHiddenYears(checkedCount === tableYears.length ? new Set(tableYears) : new Set())} title="全チェック／全解除" style={{ verticalAlign: "middle", marginRight: 4, accentColor: C.textMuted, cursor: "pointer" }} />年
+                  <input type="checkbox" ref={(el) => { if (el) el.indeterminate = checkedCount > 0 && checkedCount < tableYears.length; }} checked={checkedCount === tableYears.length} onChange={() => setHiddenYears(checkedCount === tableYears.length ? new Set(tableYears) : new Set())} title="全チェック／全解除" style={{ verticalAlign: "middle", marginRight: 4, accentColor: C.textMuted, cursor: "pointer" }} />{sortHead("year", "年")}
                 </th>
-                <th rowSpan={2} className="text-right font-normal py-1 px-1" style={{ borderBottom: `1px solid ${C.borderSoft}` }}>騰落率</th>
+                <th rowSpan={2} className="text-right font-normal py-1 px-1" style={{ borderBottom: `1px solid ${C.borderSoft}` }}>{sortHead("returnPct", "騰落率")}</th>
                 <th colSpan={3} className="font-normal py-0.5" style={{ color: C.textMuted, borderBottom: `1px solid ${C.borderSoft}`, borderLeft: `1px solid ${C.borderSoft}` }} title="その年単独：年初来高値（年内の最高値）を基準にした値（年ごとにリセット）">年度</th>
                 <th colSpan={3} className="font-normal py-0.5" style={{ color: C.textMuted, borderBottom: `1px solid ${C.borderSoft}`, borderLeft: `1px solid ${C.borderSoft}` }} title="全期間を通した史上最高値を基準にした値">通期</th>
                 <th rowSpan={2} className="text-left font-normal py-1 pl-2" style={{ borderBottom: `1px solid ${C.borderSoft}`, borderLeft: `1px solid ${C.borderSoft}` }}>イベント</th>
               </tr>
               <tr className="whitespace-nowrap" style={{ color: C.textDim, borderBottom: `1px solid ${C.borderSoft}` }}>
-                <th className={sub} style={{ borderLeft: `1px solid ${C.borderSoft}` }} title="年初来高値を更新した日数">ATH</th>
-                <th className={sub} title="年初来高値からの最大下落率">MDD</th>
-                <th className={sub} title="年初来高値から-3%以下に入った回数（年内の高値を更新するまでは1回）">DD-3%</th>
-                <th className={sub} style={{ borderLeft: `1px solid ${C.borderSoft}` }} title={`史上最高値を更新した日数（括弧内は1月1日〜${cutoffLabel}の年初来）`}>ATH<span className="text-[9px]">（{cutoffLabel}）</span></th>
-                <th className={sub} title="史上最高値からの最大下落率">MDD</th>
-                <th className={sub} title="史上最高値から-3%以下に入った回数（史上最高値を更新するまでは1回、前年から続く局面は数えない）">DD-3%</th>
+                <th className={sub} style={{ borderLeft: `1px solid ${C.borderSoft}` }} >{sortHead("athCountYear", "ATH", "年初来高値を更新した日数")}</th>
+                <th className={sub}>{sortHead("mddYear", "MDD", "年初来高値からの最大下落率")}</th>
+                <th className={sub}>{sortHead("dd3CountYtd", "DD-3%", "年初来高値から-3%以下に入った回数（年内の高値を更新するまでは1回）")}</th>
+                <th className={sub} style={{ borderLeft: `1px solid ${C.borderSoft}` }} >{sortHead("athCount", <>ATH<span className="text-[9px] font-normal">（{cutoffLabel}）</span></>, `史上最高値を更新した日数（括弧内は1月1日〜${cutoffLabel}の年初来）。並び替えは通期の回数で行う`)}</th>
+                <th className={sub}>{sortHead("mdd", "MDD", "史上最高値からの最大下落率")}</th>
+                <th className={sub}>{sortHead("dd3Count", "DD-3%", "史上最高値から-3%以下に入った回数（史上最高値を更新するまでは1回、前年から続く局面は数えない）")}</th>
               </tr>
             </thead>
             <tbody>
-              {tableYears.map((y) => {
+              {sortedYears.map((y) => {
                 const st = yearStats.get(y);
                 if (!st) return null;
                 const isCur = y === currentYear;

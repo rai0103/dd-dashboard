@@ -1,7 +1,7 @@
 // 実行: npm test
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildYearSeries, completeYears, presidentialTermYear, selectCompareYears, rankSimilarYears } from "./yearCompare.ts";
+import { buildYearSeries, completeYears, presidentialTermYear, selectCompareYears, rankSimilarYears, sortYearsBy } from "./yearCompare.ts";
 
 // year年の1月2日〜12月30日に、毎月1日・15日の2点の終値を置いた簡易シリーズ（priceFn(year, i) で値を決める）
 function series(years: number[], priceFn: (y: number, i: number) => number) {
@@ -67,4 +67,18 @@ test("類似年：今年と同じ期間の推移のRMSEが小さい順", () => {
   // 今年のデータが少なすぎる場合は判定しない
   const tiny = buildYearSeries([...series([2010], () => 100), { date: "2026-01-02", price: 100 }]);
   assert.deepEqual(rankSimilarYears(tiny, 2026, [2010], "index"), []);
+});
+
+test("一覧表の並び替え：昇順/降順、同値は新しい年が上、値が無い年は末尾", () => {
+  const mk = (year: number, returnPct: number, mdd: number, athCount: number) => [year, { year, lastDate: `${year}-12-31`, returnPct, mdd, athCount, athCountToDate: 0, dd3Count: 0, athCountYear: 0, mddYear: 0, dd3CountYtd: 0 }] as const;
+  const stats = new Map([mk(2020, 16.3, -33.9, 33), mk(2021, 26.9, -5.2, 70), mk(2022, -19.4, -25.4, 1), mk(2023, 24.2, -10.3, 0), mk(2024, 23.3, -8.5, 57), mk(2025, 16.4, -18.9, 39)]);
+  const ys = [2026, 2025, 2024, 2023, 2022, 2021, 2020]; // 2026は統計なし
+  assert.deepEqual(sortYearsBy(ys, stats, "year", "desc"), [2026, 2025, 2024, 2023, 2022, 2021, 2020]);
+  assert.deepEqual(sortYearsBy(ys, stats, "year", "asc"), [2020, 2021, 2022, 2023, 2024, 2025, 2026]);
+  assert.deepEqual(sortYearsBy(ys, stats, "returnPct", "desc"), [2021, 2023, 2024, 2025, 2020, 2022, 2026]);
+  assert.deepEqual(sortYearsBy(ys, stats, "returnPct", "asc"), [2022, 2020, 2025, 2024, 2023, 2021, 2026]);
+  assert.deepEqual(sortYearsBy(ys, stats, "mdd", "asc"), [2020, 2022, 2025, 2023, 2024, 2021, 2026]); // 下落が深い順
+  assert.deepEqual(sortYearsBy(ys, stats, "mdd", "desc"), [2021, 2024, 2023, 2025, 2022, 2020, 2026]);
+  const tie = new Map([mk(2018, 1, -1, 5), mk(2019, 2, -1, 5)]);
+  assert.deepEqual(sortYearsBy([2018, 2019], tie, "athCount", "asc"), [2019, 2018]); // 同値は新しい年が上
 });

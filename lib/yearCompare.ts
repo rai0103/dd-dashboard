@@ -187,3 +187,20 @@ export function averageYearStats(stats: YearStats[]): Record<"returnPct" | "athC
   const avg = (k: keyof YearStats) => stats.reduce((sum, s) => sum + (s[k] as number), 0) / stats.length;
   return { returnPct: avg("returnPct"), athCountYear: avg("athCountYear"), mddYear: avg("mddYear"), dd3CountYtd: avg("dd3CountYtd"), athCount: avg("athCount"), mdd: avg("mdd"), dd3Count: avg("dd3Count") };
 }
+
+// 一覧表の並び替え。key は "year" または YearStats の数値列（騰落率・年度/通期のATH・MDD・DD-3%）。
+// 値が無い年（統計を出せない年）は向きに関係なく末尾に置き、同じ値の年は新しい年を上にする（表示順が毎回同じになるように）。
+export type YearSortKey = "year" | "returnPct" | "athCountYear" | "mddYear" | "dd3CountYtd" | "athCount" | "mdd" | "dd3Count";
+export function sortYearsBy(years: number[], stats: Map<number, YearStats>, key: YearSortKey, dir: "asc" | "desc"): number[] {
+  const sign = dir === "asc" ? 1 : -1;
+  const val = (y: number): number | null => {
+    if (key === "year") return y;
+    const v = stats.get(y)?.[key];
+    return typeof v === "number" && Number.isFinite(v) ? v : null;
+  };
+  return [...years].sort((a, b) => {
+    const va = val(a), vb = val(b);
+    if (va == null || vb == null) return va == null && vb == null ? b - a : va == null ? 1 : -1;
+    return va !== vb ? (va - vb) * sign : b - a;
+  });
+}
