@@ -355,7 +355,7 @@ function buildAnalysis(d, currentHoldingPct, totalValue, dQqq, qqqAmplification)
     notes.push("買い増し額の抑制分は現金として温存し、より深い下落局面での買い増しに繰り越す前提です。");
   }
   items.push(buildRebalanceItem(d, currentHoldingPct, totalValue));
-  notes.push("過去実績はSP500の日次終値から都度算出した統計です。統計は過去傾向であり、将来を保証するものではありません。");
+  notes.push("過去実績はVOO（上場前はSP500指数をVOO換算した長期履歴）の日次終値から都度算出した統計です。統計は過去傾向であり、将来を保証するものではありません。");
   return { items, notes: notes.filter(Boolean) };
 }
 
@@ -1681,7 +1681,7 @@ function autoEpisodeName(maxDD, troughDay, isOngoing) {
 }
 // 価格データから下落局面の主要イベント（ATH・DD節目の到達・底値・ATH回復／直近の状況）を年表形式（{ date, text }）で自動生成する。
 function autoEpisodeAnnotations(FULL, e) {
-  const out = [{ date: isoFromDate(e.athDate), text: `S&P500が最高値 $${e.athPrice.toFixed(2)} を記録（この局面の起点）` }];
+  const out = [{ date: isoFromDate(e.athDate), text: `VOOが最高値 $${e.athPrice.toFixed(2)} を記録（この局面の起点）` }];
   const endIdx = e.isOngoing ? FULL.length - 1 : e.recoveryIdx;
   for (const level of [-3, -5, -10, -20, -30]) {
     if (e.troughDD > level) break;
@@ -2187,7 +2187,7 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBru
       {MILESTONES.filter((t) => t !== -3).map((t) => (<ReferenceLine key={t} yAxisId="dd" y={t} stroke={C.borderSoft} strokeDasharray="2 3" label={{ value: `${t}%`, position: "insideBottomRight", fill: C.textDim, fontSize: Math.max(8, fontSize - 2) }} />))}
       {/* DD-3%の目安ライン。値はDD%軸の目盛（常に-3を含む）で示すため、チャート内のラベルは付けない */}
       <ReferenceLine yAxisId="dd" y={-3} stroke={C.rust} strokeDasharray="4 3" strokeWidth={1.3} />
-      {showSpyListing && chartData[0].date < SPY_LISTING_DATE && chartData[chartData.length - 1].date > SPY_LISTING_DATE && (<ReferenceLine yAxisId="price" x={SPY_LISTING_DATE} stroke={C.violet} strokeDasharray="3 3" label={{ value: "S&P500上場", fill: C.violet, fontSize: Math.max(9, fontSize - 1), position: "top" }} />)}
+      {showSpyListing && chartData[0].date < SPY_LISTING_DATE && chartData[chartData.length - 1].date > SPY_LISTING_DATE && (<ReferenceLine yAxisId="price" x={SPY_LISTING_DATE} stroke={C.violet} strokeDasharray="3 3" label={{ value: "SPY上場（1993）", fill: C.violet, fontSize: Math.max(9, fontSize - 1), position: "top" }} />)}
       <Area yAxisId="dd" type="linear" dataKey="dd" stroke={C.rust} fill="url(#ddFill)" strokeWidth={1.3} dot={false} isAnimationActive={false} fillOpacity={hidden.dd ? 0 : 1} strokeOpacity={hidden.dd ? 0 : 1} />
       <Area yAxisId="price" type="linear" dataKey="price" stroke={C.teal} fill="url(#priceFill)" strokeWidth={1.8} dot={false} isAnimationActive={false} fillOpacity={hidden.price ? 0 : 1} strokeOpacity={hidden.price ? 0 : 1} />
       <Line yAxisId="price" type="linear" dataKey="ath" stroke={C.textDim} strokeDasharray="3 4" strokeWidth={1} dot={false} isAnimationActive={false} strokeOpacity={hidden.price || hidden.markers ? 0 : 1} />
@@ -2609,7 +2609,7 @@ function DDChartModalContent({ chartData, rangeDays, d, hidden, toggle, period, 
               {comparisonData[0]?.gold !== undefined && !hiddenCrash.gold && <YAxis yAxisId="gold" orientation="right" domain={["auto", "auto"]} tick={{ fill: C.gold, fillOpacity: 0.75, fontSize }} tickFormatter={(v) => `$${Math.round(v).toLocaleString()}`} axisLine={false} tickLine={false} width={52} />}
               <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} formatter={goldTooltipFormatter} />
               {selectedCrash && !hiddenCrash[selectedCrash.id] && <Line type="monotone" dataKey={selectedCrash.id} stroke={C.rust} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls={false} name={crashDisplayName(selectedCrash)} />}
-              {!hiddenCrash.current && <Line type="monotone" dataKey="current" stroke={C.teal} strokeWidth={2.6} dot={false} isAnimationActive={false} connectNulls={false} name="SP500（現在）" />}
+              {!hiddenCrash.current && <Line type="monotone" dataKey="current" stroke={C.teal} strokeWidth={2.6} dot={false} isAnimationActive={false} connectNulls={false} name="VOO（現在）" />}
               {comparisonData[0]?.qqq !== undefined && !hiddenCrash.qqq && <Line type="monotone" dataKey="qqq" stroke={C.violet} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls={false} name="Nasdaq（QQQ・同期間）" />}
               {comparisonData[0]?.gold !== undefined && !hiddenCrash.gold && <Line yAxisId="gold" type="monotone" dataKey="gold" stroke={C.gold} strokeOpacity={GOLD_LINE_OPACITY} strokeWidth={1.6} dot={false} isAnimationActive={false} connectNulls={false} name="GOLD（同期間・右軸$）" />}
             </LineChart>
@@ -2981,21 +2981,23 @@ function SpeedAlertRow({ label, dInstrument, onOpen }) {
 /* ---------------- status panel ---------------- */
 // 経過日数・DD加速度アラートはVOO/QQQを上下2段で常時表示する（切替トグルは使わない）。onOpenSpeedAlert(instrument)でその銘柄の詳細ページを開く。
 function StatusPanel({ d, dVoo, dQqq, onOpenSpeedAlert }) {
-  const tickers = [{ label: "SP500", data: d }, { label: "VOO", data: dVoo }, { label: "QQQ", data: dQqq }];
+  const tickers = [{ label: "VOO", data: dVoo }, { label: "QQQ", data: dQqq }]; // SP500はVOO換算に統合済みのため行を廃止
   return (
     <Panel title="現在のステータス" hideHeader className="h-full">
       {/* 列幅：評価額/ATH・最高値比は内容の幅ちょうど（auto）に詰め、残りをVOO/QQQ2段＋平常期間の指標を出す「経過日数」（広め）と
           DD加速度アラートで分け合う（画面幅が狭くても前2列の数値が重ならないようにする） */}
       <div className="grid h-full" style={{ gridTemplateColumns: "auto auto minmax(0, 1.7fr) minmax(0, 1fr)" }}>
-        <div className="px-3 py-2 flex flex-col justify-center min-w-0" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
+        <div className="px-3 py-2 flex flex-col min-w-0" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
           <div className="text-[10px] mb-1" style={{ color: C.textDim }}>評価額 / ATH</div>
+          {/* VOO・QQQの2行を、経過日数・DD加速度アラートの2段表示と同じく上下に均等配置する */}
+          <div className="flex-1 flex flex-col justify-around min-h-0">
           {tickers.map(({ label, data }) => {
             const chg = dayChangePct(data);
             const updated = isUpdatedToday(data); // 当日分が入っているか（未更新の行は文字をグレーアウトして示す）
             const atAth = data ? data.currentDD >= 0 : false; // 最新値がATH（ATH更新中）
             return (
-              <div key={label} className="text-xs mono whitespace-nowrap flex items-center rounded" style={{ height: 21, padding: "0 4px", marginLeft: -5, border: `1px solid ${atAth ? C.rust : "transparent"}`, background: atAth ? "rgba(192,101,75,0.08)" : "transparent" }}>
-                <span className="font-bold" style={{ color: atAth ? C.text : C.textMuted, display: "inline-block", width: 42 }}>{label}</span>
+              <div key={label} className="text-[13px] mono whitespace-nowrap flex items-center rounded" style={{ height: 30, padding: "0 5px", marginLeft: -6, border: `1px solid ${atAth ? C.rust : "transparent"}`, background: atAth ? "rgba(192,101,75,0.08)" : "transparent" }}>
+                <span className="font-bold" style={{ color: atAth ? C.text : C.textMuted, display: "inline-block", width: 38 }}>{label}</span>
                 {data ? (<>
                   <span style={{ display: "inline-block", width: 68, textAlign: "right", color: updated ? C.text : C.textDim }}>${data.currentPrice.toFixed(2)}</span>
                   {chg !== null && (<span style={{ display: "inline-block", width: 54, textAlign: "right", marginLeft: 4, color: updated ? (chg >= 0 ? C.teal : C.rust) : C.textDim }}>（{chg >= 0 ? "+" : ""}{chg.toFixed(1)}%）</span>)}
@@ -3007,23 +3009,26 @@ function StatusPanel({ d, dVoo, dQqq, onOpenSpeedAlert }) {
               </div>
             );
           })}
+          </div>
         </div>
-        <div className="px-3 py-2 flex flex-col justify-center min-w-0 overflow-hidden" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
+        <div className="px-3 py-2 flex flex-col min-w-0 overflow-hidden" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
           <div className="flex items-center gap-1.5 mb-1"><TrendingDown size={11} style={{ color: C.rust }} /><span className="text-[10px] font-bold" style={{ color: C.rust }}>最高値比</span></div>
+          <div className="flex-1 flex flex-col justify-around min-h-0">
           {tickers.map(({ label, data }) => (
-            <div key={label} className="mono whitespace-nowrap flex items-baseline" style={{ height: 20 }}>
-              <span className="font-bold text-xs" style={{ color: C.textMuted, display: "inline-block", width: 42 }}>{label}</span>
+            <div key={label} className="mono whitespace-nowrap flex items-center text-[13px]" style={{ height: 30 }}>
+              <span className="font-bold" style={{ color: C.textMuted, display: "inline-block", width: 38 }}>{label}</span>
               {data ? (<>
-                <span className="font-bold text-xs" style={{ display: "inline-block", width: 50, textAlign: "right", color: data.currentDD >= 0 ? C.teal : C.rust }}>{data.currentDD.toFixed(1)}%</span>
+                <span className="font-bold" style={{ display: "inline-block", width: 50, textAlign: "right", color: data.currentDD >= 0 ? C.teal : C.rust }}>{data.currentDD.toFixed(1)}%</span>
                 {/* 次の節目：「DD-3%（$評価額） 残り%」の短い表記（横幅を経過日数パネルに回すため「評価額」「まで」は省く） */}
                 {data.nextMilestone !== null && (<>
-                  <span className="text-xs" style={{ marginLeft: 8, color: C.textMuted }}>DD{data.nextMilestone}%</span>
-                  <span className="font-bold text-xs" style={{ color: C.text }}>（${(data.nextMilestone === -3 ? data.currentATH * 0.97 : data.nextMilestonePrice).toFixed(2)}）</span>
-                  <span className="font-bold text-xs" style={{ marginLeft: 2, color: C.text }}>{data.distanceToNextMilestone.toFixed(1)}%</span>
+                  <span className="" style={{ marginLeft: 8, color: C.textMuted }}>DD{data.nextMilestone}%</span>
+                  <span className="font-bold" style={{ color: C.text }}>（${(data.nextMilestone === -3 ? data.currentATH * 0.97 : data.nextMilestonePrice).toFixed(2)}）</span>
+                  <span className="font-bold" style={{ marginLeft: 2, color: C.text }}>{data.distanceToNextMilestone.toFixed(1)}%</span>
                 </>)}
-              </>) : (<span className="text-xs" style={{ color: C.textDim }}>—</span>)}
+              </>) : (<span style={{ color: C.textDim }}>—</span>)}
             </div>
           ))}
+          </div>
         </div>
         <div className="px-3 py-2 flex flex-col min-w-0" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
           <div className="flex items-center gap-1.5 mb-1"><Clock size={11} style={{ color: C.textDim }} /><span className="text-[10px]" style={{ color: C.textDim }}>経過日数</span></div>
@@ -3106,7 +3111,7 @@ function TrackRecordContent({ currentT, trackRecord }) {
   return (
     <div className="grid grid-cols-2 gap-x-8 gap-y-6">
       <div>
-        <div className="text-xs mb-3" style={{ color: C.textDim }}>節目間の進行確率<span className="ml-1" style={{ color: C.textDim }}>（SP500実績 n={tr.n}局面）</span></div>
+        <div className="text-xs mb-3" style={{ color: C.textDim }}>節目間の進行確率<span className="ml-1" style={{ color: C.textDim }}>（VOO実績 n={tr.n}局面）</span></div>
         {tr.progression.map((row) => (
           <div key={row.from} className="grid items-center gap-2 mb-1.5" style={{ gridTemplateColumns: "92px 1fr 76px 44px" }}>
             <span className="mono text-xs" style={{ color: row.from === currentT ? C.text : C.textMuted }}>{row.label ?? `${row.from}%→${row.to}%`}</span>
@@ -3117,7 +3122,7 @@ function TrackRecordContent({ currentT, trackRecord }) {
         ))}
       </div>
       <div>
-        <div className="text-xs mb-3" style={{ color: C.textDim }}>DD-3%到達からの最終到達確率<span className="ml-1" style={{ color: C.textDim }}>（SP500実績 n={tr.n}局面）</span></div>
+        <div className="text-xs mb-3" style={{ color: C.textDim }}>DD-3%到達からの最終到達確率<span className="ml-1" style={{ color: C.textDim }}>（VOO実績 n={tr.n}局面）</span></div>
         {tr.finalReach.map((r) => (
           <div key={r.label} className="grid items-center gap-2 mb-1.5" style={{ gridTemplateColumns: "56px 1fr 76px 76px" }}>
             <span className="mono text-xs" style={{ color: C.textMuted }}>{r.label}</span>
@@ -3126,10 +3131,10 @@ function TrackRecordContent({ currentT, trackRecord }) {
             <span className="text-[10px] text-right" style={{ color: C.textDim }}>{r.p !== null ? freqLabelFromP(r.p, tr.ddFreqPerYear) : "—"}</span>
           </div>
         ))}
-        <div className="text-[9px] mt-2" style={{ color: C.textDim }}>発生頻度は、SP500の実績データ全体でDD3%級の押し目が年{tr.ddFreqPerYear !== null ? tr.ddFreqPerYear.toFixed(1) : "—"}回発生している実績に基づく換算値です。</div>
+        <div className="text-[9px] mt-2" style={{ color: C.textDim }}>発生頻度は、VOO（換算込み）の実績データ全体でDD3%級の押し目が年{tr.ddFreqPerYear !== null ? tr.ddFreqPerYear.toFixed(1) : "—"}回発生している実績に基づく換算値です。</div>
       </div>
       <div className="col-span-2">
-        <div className="text-xs mb-3" style={{ color: C.textDim }}>速度条件付き確率（DD3→5%区間の日数別・SP500実績 DD5%到達{tr.reachedD5Count}局面）</div>
+        <div className="text-xs mb-3" style={{ color: C.textDim }}>速度条件付き確率（DD3→5%区間の日数別・VOO実績 DD5%到達{tr.reachedD5Count}局面）</div>
         <table className="w-full text-xs mono"><thead><tr style={{ color: C.textDim }}><th className="text-left font-normal py-1">区分</th><th>→8%</th><th>→10%</th><th>→15%</th><th>→20%</th></tr></thead>
           <tbody>
             <tr style={{ borderTop: `1px solid ${C.borderSoft}` }}><td className="py-1" style={{ color: C.textMuted }}>急落（5日以内）</td><td className="text-center">{pct(tr.speedTable.fast["-8"])}</td><td className="text-center">{pct(tr.speedTable.fast["-10"])}</td><td className="text-center">{pct(tr.speedTable.fast["-15"])}</td><td className="text-center">{pct(tr.speedTable.fast["-20"])}</td></tr>
@@ -3137,7 +3142,7 @@ function TrackRecordContent({ currentT, trackRecord }) {
           </tbody>
         </table>
       </div>
-      <div className="col-span-2 text-[11px] leading-relaxed" style={{ color: C.textDim }}>これらは最も長い実績があるSP500のトラックレコード（約{tr.totalYears.toFixed(0)}年・DD3%到達{tr.n}局面）から都度算出した実績値です。データをアップロード・更新すると自動的に再計算されます。過去確率は将来を保証しません。</div>
+      <div className="col-span-2 text-[11px] leading-relaxed" style={{ color: C.textDim }}>これらはVOO（上場前はSP500指数をVOO換算した長期履歴）のトラックレコード（約{tr.totalYears.toFixed(0)}年・DD3%到達{tr.n}局面）から都度算出した実績値です。データをアップロード・更新すると自動的に再計算されます。過去確率は将来を保証しません。</div>
     </div>
   );
 }
@@ -3282,7 +3287,7 @@ function SpeedAlertModalContent({ d, instrumentLabel = "VOO", vooSeries = null, 
       )}
 
       <div>
-        <div className="text-xs mb-2" style={{ color: C.textDim }}>バックテスト：DD3→5%の速度別・大暴落率（最終DD到達水準別）（最も長い実績があるSP500のデータ 約{d.trackRecord.totalYears.toFixed(0)}年・DD5%到達{d.trackRecord.reachedD5Count}局面）</div>
+        <div className="text-xs mb-2" style={{ color: C.textDim }}>バックテスト：DD3→5%の速度別・大暴落率（最終DD到達水準別）（VOO（上場前はSP500指数をVOO換算した長期履歴）のデータ 約{d.trackRecord.totalYears.toFixed(0)}年・DD5%到達{d.trackRecord.reachedD5Count}局面）</div>
         <div className="overflow-x-auto">
           <table className="w-full text-xs mono" style={{ minWidth: 560 }}>
             <thead><tr style={{ color: C.textDim }}>
@@ -3319,7 +3324,7 @@ function SpeedAlertModalContent({ d, instrumentLabel = "VOO", vooSeries = null, 
         ・急落警報（5日以内）は{d.trackRecord.fastMissRate !== null ? `${d.trackRecord.fastMissRate}%` : "多くの場合"}が空振り（浅く終わる）です。「確信」ではなく「警戒レベルを上げる」材料として使ってください。<br />
         ・緩やかに始まる大暴落もあります（2007年金融危機はspeed_3to5=13日で最終DD-57%でした）。緩慢でも油断しないでください。<br />
         ・DD8%突破後は速度の予測力が落ち、節目の進行確率（上表）が判断の主役になります。<br />
-        ・現在のDD%・速度計測はVOOの評価額、確率・バックテストは最も長い実績があるSP500のトラックレコード（約{d.trackRecord.totalYears.toFixed(0)}年・DD3%到達{d.trackRecord.n}局面）から都度算出した傾向であり、確定予測ではありません。データをアップロード・更新すると自動的に再計算されます。DD深度・金の動き・自己の判断と併用する補助指標です。本ツールは投資助言ではなく判断補助です。
+        ・現在のDD%・速度計測はVOOの評価額、確率・バックテストはVOO（上場前はSP500指数をVOO換算した長期履歴）のトラックレコード（約{d.trackRecord.totalYears.toFixed(0)}年・DD3%到達{d.trackRecord.n}局面）から都度算出した傾向であり、確定予測ではありません。データをアップロード・更新すると自動的に再計算されます。DD深度・金の動き・自己の判断と併用する補助指標です。本ツールは投資助言ではなく判断補助です。
       </div>
     </div>
   );
@@ -3624,7 +3629,7 @@ function CrashDetailChart({ crash, compareCrashes = [], daysSinceATH, currentDD,
   // ニュースの吹き出し表示中は標準Tooltip（経過日数のポップアップ）と重なるため非表示にする。
   const [newsHover, setNewsHover] = useState(false);
   const nameFor = (id) => {
-    if (id === "current") return "SP500（現在）";
+    if (id === "current") return "VOO（現在）";
     if (id === "qqq") return `Nasdaq（QQQ・${crashDisplayName(qqq.crash)}）`;
     if (id === "gold") return `GOLD（${crashDisplayName(gold.crash)}）`;
     if (id === crash.id) return crashDisplayName(crash);
@@ -3773,7 +3778,7 @@ function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve
           </div>
           <div className="flex items-center gap-2 text-[11px]" style={{ color: C.textDim }}>
             <LineSwatch color={C.teal} hidden={!!hiddenLines.current} onToggle={() => toggleLine("current")} />
-            <span style={rowStyle("current")}>SP500 現在（ATH更新から{daysSinceATH}日目・DD{currentDD.toFixed(1)}%）</span>
+            <span style={rowStyle("current")}>VOO 現在（ATH更新から{daysSinceATH}日目・DD{currentDD.toFixed(1)}%）</span>
           </div>
           {qqqFull?.length > 0 && (
             <div className="flex items-center gap-2 flex-wrap text-[11px]" style={{ color: C.textDim }}>
@@ -3823,7 +3828,7 @@ function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve
         <div>現在はATH更新から{daysSinceATH}日目でDD{currentDD.toFixed(1)}%。</div>
         {[crash, ...compareCrashes].map((c) => {
           // 進行中の局面は現在のSP500そのもの（同じ系列）なので、ペース比較ではなく現時点の底値を示す。
-          if (c.isOngoing) return <div key={c.id}>{crashDisplayName(c)}は現在のSP500の局面です（{fmtDateSlash(c.start)}のATHから、{fmtDateSlash(c.low)}に現時点の底値DD{c.maxDD}%）。</div>;
+          if (c.isOngoing) return <div key={c.id}>{crashDisplayName(c)}は現在のVOOの局面です（{fmtDateSlash(c.start)}のATHから、{fmtDateSlash(c.low)}に現時点の底値DD{c.maxDD}%）。</div>;
           const { ddAtSameDay, isDeeper } = comparisonRow(c);
           return (
             <div key={c.id}>
@@ -3850,7 +3855,7 @@ function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve
       ) : (
         <div className="text-[11px]" style={{ color: C.textDim }}>{crash.cause}</div>
       )}
-      <div className="mt-2 text-[10px]" style={{ color: C.textDim }}>※ 読み込まれているSP500の実日次終値をもとに算出しています。ATH・底値・回復日の判定は終値ベースです。</div>
+      <div className="mt-2 text-[10px]" style={{ color: C.textDim }}>※ VOO（上場前はSP500指数をVOO換算した長期履歴）の日次終値をもとに算出しています。ATH・底値・回復日の判定は終値ベースです。</div>
     </div>
   );
 }
@@ -4358,7 +4363,7 @@ function DataInputModal({ onClose, synthetic = null, rawSeries, onReplace, onApp
       onAppendVooQqq({ date, voo: data.voo, qqq: data.qqq });
       const hasGold = data.goldDate && typeof data.gold === "number";
       if (hasGold) onApplyApiGold([{ date: parseDateOnly(data.goldDate), price: data.gold }]); // CSV/直接入力で登録済みの日は上書きしない
-      setUpdateMsg(`更新完了：${date.toLocaleDateString("ja-JP")} のVOO/QQQ終値${hasGold ? "・GOLDの最新値" : ""}を記録しました（SP500本系列はVOO換算で自動的に更新されます）`);
+      setUpdateMsg(`更新完了：${date.toLocaleDateString("ja-JP")} のVOO/QQQ終値${hasGold ? "・GOLDの最新値" : ""}を記録しました（本系列はVOO換算で自動的に更新されます）`);
     } catch (e) {
       setUpdateError(true);
       setUpdateMsg("データ取得失敗。稼働時間外の可能性があります");
@@ -4485,7 +4490,7 @@ function DataInputModal({ onClose, synthetic = null, rawSeries, onReplace, onApp
 
   return (
     <FullScreenModal title="データの入力" onClose={handleModalClose}>
-      <div className="flex gap-2 mb-3 flex-wrap">{tabBtn(dataset, setDataset, "voo", "SP500/VOO/QQQ/GOLD価格データ")}{tabBtn(dataset, setDataset, "holdings", "保有資産データ（ポートフォリオ）")}{tabBtn(dataset, setDataset, "broker", "証券会社スクショ取込")}</div>
+      <div className="flex gap-2 mb-3 flex-wrap">{tabBtn(dataset, setDataset, "voo", "VOO/QQQ/GOLD価格データ")}{tabBtn(dataset, setDataset, "holdings", "保有資産データ（ポートフォリオ）")}{tabBtn(dataset, setDataset, "broker", "証券会社スクショ取込")}</div>
 
       {dataset === "broker" ? (
         <BrokerScreenshotImport holdings={holdings} virtualAggregateLabels={virtualAggregateLabels} onRegister={onRegisterBrokerHoldings} brokerSummaries={brokerSummaries || {}} />
@@ -4499,11 +4504,11 @@ function DataInputModal({ onClose, synthetic = null, rawSeries, onReplace, onApp
               <Download size={13} /> データ出力
             </button>
           </div>
-          <div className="text-[10px] mb-2" style={{ color: C.textDim }}>※「データ更新」はVOO/QQQ・GOLDの最新値を自動取得します（GOLDはCSV/直接入力で登録済みの日は上書きしません）。SP500本系列（DD計算に使用）はVOOの終値からVOO換算で自動更新されるため、手動入力は不要です。</div>
+          <div className="text-[10px] mb-2" style={{ color: C.textDim }}>※「データ更新」はVOO/QQQ・GOLDの最新値を自動取得します（GOLDはCSV/直接入力で登録済みの日は上書きしません）。本系列（DD計算に使用）はVOOの終値で自動更新されるため、手動入力は不要です。</div>
           {updateMsg && <div className="text-xs mb-4" style={{ color: updateError ? C.rust : C.teal }}>{updateMsg}</div>}
 
           <div className="flex gap-2 mb-5">
-            {tabBtn(instrument, setInstrument, "sp500", "SP500（VOO換算・自動）")}
+            {tabBtn(instrument, setInstrument, "sp500", "本系列（VOO換算・自動）")}
             {tabBtn(instrument, setInstrument, "voo", "VOO")}
             {tabBtn(instrument, setInstrument, "qqq", "QQQ")}
             {tabBtn(instrument, setInstrument, "gold", "GOLD（XAUUSD）")}
@@ -4514,7 +4519,7 @@ function DataInputModal({ onClose, synthetic = null, rawSeries, onReplace, onApp
               {/* SP500指数の手動入力（CSV取り込み・直接入力・初期化）は終了。VOOの自動取得で更新される合成シリーズの状況と、バックアップの情報を表示する */}
               <div className="rounded p-3 mb-4 text-sm leading-relaxed" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.textMuted }}>
                 <div className="font-semibold mb-1" style={{ color: C.text }}>SP500の手動入力は終了しました（VOOの自動取得で更新）</div>
-                <div>DDチャート・年比較・トラックレコードなどに使う「SP500本系列」は、VOO換算の合成シリーズです：接続点より前＝これまで手動入力したSP500指数×補正係数、接続点以降＝自動取得のVOO終値。騰落率・ドローダウン率は換算前と同じです。</div>
+                <div>DDチャート・年比較・トラックレコードなどに使う「本系列（VOO）」は、VOO換算の合成シリーズです：接続点より前＝これまで手動入力したSP500指数×補正係数、接続点以降＝自動取得のVOO終値。騰落率・ドローダウン率は換算前と同じです。</div>
                 {synthetic?.mode === "spliced" ? (
                   <div className="mono text-xs mt-2" style={{ color: C.textDim }}>接続点 {synthetic.junctionDate}・補正係数 {synthetic.factor.toFixed(6)}（VOO÷SP500指数）・SP500換算 {synthetic.sp500Count.toLocaleString()}件＋VOO {synthetic.vooCount.toLocaleString()}件</div>
                 ) : (
@@ -4913,7 +4918,7 @@ function buildSummaryMarkdown(ctx) {
   L.push(`世帯総資産: ${amt(total)}（うち現金${amt(cash)}）`);
   L.push(`ライフステージ: ${lifecycle.spouseWorking ? "配偶者就労中" : "配偶者非就労"}（フェーズ${lifecycle.phase}）/ 取り崩し年${amt(lifecycle.annualWithdrawal)}`);
   L.push("");
-  L.push("■ S&P500 状況");
+  L.push("■ VOO 状況");
   L.push(`現在値 $${d.currentPrice.toFixed(2)} / ATH $${d.currentATH.toFixed(2)}（${fmtYMD(d.athDate)}） / DD ${d.currentDD.toFixed(1)}%`);
   L.push(`モード: ${d.mode}${d.isDrawdown ? `（DD開始＝ATH翌日から${d.daysSinceATH}営業日経過）` : ""}`);
   const sa = d.speedAlert;
@@ -5059,7 +5064,7 @@ function buildSummaryJSON(ctx) {
       qqq: dQqq ? seriesToPairs(dQqq) : null,
     },
     dd_strategy: {
-      note: "DD戦略：S&P500がATHから-3%以上下落する節目ごとにA〜E配分をこのモデルに沿って調整する。値は目標構成比(%)。DD-5〜DD-30%はDD到達水準別フォワードリターン効率カーブに基づき、読み込み済みトラックレコードから動的に再配分される（allocation_model_staticは比較用の固定モデル）。",
+      note: "DD戦略：VOOがATHから-3%以上下落する節目ごとにA〜E配分をこのモデルに沿って調整する。値は目標構成比(%)。DD-5〜DD-30%はDD到達水準別フォワードリターン効率カーブに基づき、読み込み済みトラックレコードから動的に再配分される（allocation_model_staticは比較用の固定モデル）。",
       milestones_pct: MILESTONES,
       allocation_model: d.trackRecord.dynamicModelRows,
       allocation_model_static: MODEL_ROWS,
@@ -5212,7 +5217,7 @@ function SummaryModalContent({ d, dVoo, dQqq, holdings, currentHoldingPct, effec
   return (
     <div className="flex flex-col">
       <p className="text-xs mb-3 leading-relaxed" style={{ color: C.textDim }}>
-        ポートフォリオ・SP500/VOO/QQQの日次価格系列（バックテスト用の全履歴）・DD戦略モデル（全節目のA〜E目標配分と現状差異）・過去の全DD局面など、AIによる投資判断・分析に必要な情報をできる限り詳細に書き出します。人が読みやすい必要はないため、JSON形式が最も網羅的です。そのままチャットに貼り付けて相談できます。
+        ポートフォリオ・VOO/QQQの日次価格系列（バックテスト用の全履歴）・DD戦略モデル（全節目のA〜E目標配分と現状差異）・過去の全DD局面など、AIによる投資判断・分析に必要な情報をできる限り詳細に書き出します。人が読みやすい必要はないため、JSON形式が最も網羅的です。そのままチャットに貼り付けて相談できます。
       </p>
       <div className="flex items-center gap-2 mb-3 flex-wrap">
         <div className="flex gap-0.5">
@@ -5314,8 +5319,9 @@ function SummaryModalContent({ d, dVoo, dQqq, holdings, currentHoldingPct, effec
 // SP500/VOO/QQQの3指数分を、スクロールなしで1画面に収まるようそれぞれ均等割り（flex-1）のカードで表示する。
 // 各カードは上段に「評価額（金額・大きく強調）」と「最高値比DD%（金額同様に大きく強調）」を横並びで、
 // 下段に「ATH金額」と「次の節目までの残り%・その節目の評価額」を1行にまとめて、金額と%の両方を一目で読み取れるようにする。
+// VOO・QQQの2枚構成（SP500はVOO換算に統合済み）。1枚あたりの高さに余裕があるため、数値を大きめに表示する。
 function MobileAthPage({ d, dVoo, dQqq }) {
-  const tickers = [{ label: "SP500", data: d }, { label: "VOO", data: dVoo }, { label: "QQQ", data: dQqq }];
+  const tickers = [{ label: "VOO", data: dVoo }, { label: "QQQ", data: dQqq }]; // SP500はVOO換算に統合済みのため行を廃止
   return (
     <div className="p-2 flex flex-col gap-2 h-full">
       {tickers.map(({ label, data }) => {
@@ -5325,27 +5331,27 @@ function MobileAthPage({ d, dVoo, dQqq }) {
         const athDim = atAth && !updated ? 0.6 : 1;
         return (
           <div key={label} className="rounded-lg px-3 py-2 flex-1 flex flex-col justify-center min-h-0" style={{ background: C.panel, border: `1px solid ${atAth ? C.rust : C.border}` }}>
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-xs font-bold" style={{ color: C.textMuted }}>{label}</span>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-base font-bold" style={{ color: C.textMuted }}>{label}</span>
             </div>
             {data ? (
               <>
                 <div className="grid grid-cols-2 gap-x-2 items-end mono">
                   <div className="min-w-0">
-                    <div className="text-[9px] truncate" style={{ color: C.textDim }}>評価額{chg !== null && <span className="ml-1" style={{ color: updated ? (chg >= 0 ? C.teal : C.rust) : C.textDim }}>{chg >= 0 ? "+" : ""}{chg.toFixed(1)}%</span>}</div>
-                    <div className="text-xl font-bold leading-tight truncate" style={{ color: updated ? C.text : C.textDim }}>${data.currentPrice.toFixed(2)}</div>
+                    <div className="text-[11px] truncate" style={{ color: C.textDim }}>評価額{chg !== null && <span className="ml-1" style={{ color: updated ? (chg >= 0 ? C.teal : C.rust) : C.textDim }}>{chg >= 0 ? "+" : ""}{chg.toFixed(1)}%</span>}</div>
+                    <div className="text-3xl font-bold leading-tight truncate" style={{ color: updated ? C.text : C.textDim }}>${data.currentPrice.toFixed(2)}</div>
                   </div>
                   <div className="text-right min-w-0">
-                    <div className="text-[9px]" style={{ color: C.textDim }}>最高値比</div>
-                    <div className="text-xl font-bold leading-tight" style={{ color: data.currentDD >= 0 ? C.teal : C.rust }}>{data.currentDD.toFixed(1)}%</div>
+                    <div className="text-[11px]" style={{ color: C.textDim }}>最高値比</div>
+                    <div className="text-3xl font-bold leading-tight" style={{ color: data.currentDD >= 0 ? C.teal : C.rust }}>{data.currentDD.toFixed(1)}%</div>
                   </div>
                 </div>
-                <div className="mono mt-1 pt-1" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
-                  <div className="text-[9px]" style={{ color: atAth ? C.teal : C.textDim, fontWeight: atAth ? 700 : 400, opacity: athDim }}>ATH ${data.currentATH.toFixed(2)}（{fmtYMD(data.athDate)}）</div>
+                <div className="mono mt-3 pt-2" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+                  <div className="text-[11px]" style={{ color: atAth ? C.teal : C.textDim, fontWeight: atAth ? 700 : 400, opacity: athDim }}>ATH ${data.currentATH.toFixed(2)}（{fmtYMD(data.athDate)}）</div>
                   {data.nextMilestone !== null && (
                     <>
-                      <div className="text-[9px] mt-0.5" style={{ color: C.textDim }}>DD{data.nextMilestone}%まで {data.distanceToNextMilestone.toFixed(1)}%</div>
-                      <div className="text-xl font-bold leading-tight truncate" style={{ color: C.rust }}>${data.nextMilestonePrice.toFixed(2)}</div>
+                      <div className="text-[11px] mt-1" style={{ color: C.textDim }}>DD{data.nextMilestone}%まで {data.distanceToNextMilestone.toFixed(1)}%</div>
+                      <div className="text-3xl font-bold leading-tight truncate" style={{ color: C.rust }}>${data.nextMilestonePrice.toFixed(2)}</div>
                     </>
                   )}
                 </div>
@@ -5606,7 +5612,7 @@ function BottomScorePanelBody({ bottom, FULL, onOpen, large = false }) {
       ) : (
         <div className="flex-1 flex items-center justify-center text-[11px] text-center px-3" style={{ color: C.textDim }}>{h.reason}</div>
       )}
-      <div className="text-[9px] leading-tight" style={{ color: C.textDim }}>SP500 {bottom.stats.n.toLocaleString()}営業日の実績から都度算出。投資助言ではありません。</div>
+      <div className="text-[9px] leading-tight" style={{ color: C.textDim }}>VOO（換算込み）{bottom.stats.n.toLocaleString()}営業日の実績から都度算出。投資助言ではありません。</div>
     </div>
   );
 }
@@ -5698,7 +5704,7 @@ function BottomScoreModalContent({ bottom, FULL }) {
       </div>
 
       <div className="text-[11px] leading-relaxed" style={{ color: C.textDim }}>
-        底値＝DD-3%を越えた下落局面の、その時点までのMDD。過去の解消済み局面を日次でたどり、「MDDが同じ深度帯」「底値から同じ割合以上戻している」「底値から同じ日数以上経過」した時点を底値ごとに1件として集計し、その底値を終値で割る前にATHを更新したかで判定しています。統計はすべて、読み込まれているSP500日次終値（{stats.n.toLocaleString()}営業日）から毎回再計算しており、日次終値を追加すると自動的に反映されます。n&lt;{LOW_SAMPLE_N}は参考値です。過去の統計は将来を保証しません。
+        底値＝DD-3%を越えた下落局面の、その時点までのMDD。過去の解消済み局面を日次でたどり、「MDDが同じ深度帯」「底値から同じ割合以上戻している」「底値から同じ日数以上経過」した時点を底値ごとに1件として集計し、その底値を終値で割る前にATHを更新したかで判定しています。統計はすべて、VOO（上場前はSP500指数をVOO換算）の日次終値（{stats.n.toLocaleString()}営業日）から毎回再計算しており、日次終値を追加すると自動的に反映されます。n&lt;{LOW_SAMPLE_N}は参考値です。過去の統計は将来を保証しません。
       </div>
     </div>
   );
@@ -5708,7 +5714,7 @@ function MobileBottomScorePage({ bottom, FULL, onOpen }) {
     <div className="p-3 h-full">
       <div className="rounded-lg h-full flex flex-col" style={{ background: C.panel, border: `1px solid ${C.border}` }}>
         <div className="px-3 pt-2 text-[11px] shrink-0 flex items-baseline justify-between gap-2 whitespace-nowrap" style={{ color: C.textDim }}>
-          <span>SP500(VOO)底値判定{bottom.hold.applicable && <> <span className="mono font-bold text-[12px]" style={{ color: depthColor(bottom.hold.state.mdd) }}>{bottomLabel(FULL, bottom.hold.state)}</span></>}</span>
+          <span>VOO底値判定{bottom.hold.applicable && <> <span className="mono font-bold text-[12px]" style={{ color: depthColor(bottom.hold.state.mdd) }}>{bottomLabel(FULL, bottom.hold.state)}</span></>}</span>
           <span className="text-[10px]">詳細 ›</span>
         </div>
         <div className="flex-1 min-h-0"><BottomScorePanelBody bottom={bottom} FULL={FULL} onOpen={onOpen} large /></div>
@@ -5948,7 +5954,7 @@ function FireTrialTooltipContent({ active, payload, label, yen }) {
     <div style={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 11, padding: 8, borderRadius: 4 }}>
       <div className="mono" style={{ marginBottom: 4, color: C.textMuted }}>{isFireDateCol(label) ? fmtDateSlash(label) : label}</div>
       <div>総資産: <b>{yen(p.totalAssets)}</b></div>
-      {p.spFullInvest != null && <div>SP500フルインベストメント: <b>{yen(p.spFullInvest)}</b>{p.totalAssets != null && <span style={{ color: p.totalAssets - p.spFullInvest >= 0 ? C.teal : C.rust }}>（実績{p.totalAssets - p.spFullInvest >= 0 ? "+" : "-"}{yen(Math.abs(p.totalAssets - p.spFullInvest))}）</span>}</div>}
+      {p.spFullInvest != null && <div>VOOフルインベストメント: <b>{yen(p.spFullInvest)}</b>{p.totalAssets != null && <span style={{ color: p.totalAssets - p.spFullInvest >= 0 ? C.teal : C.rust }}>（実績{p.totalAssets - p.spFullInvest >= 0 ? "+" : "-"}{yen(Math.abs(p.totalAssets - p.spFullInvest))}）</span>}</div>}
       {p.spBase != null && <div style={{ color: C.textDim }}>└ 前月の起点（総資産−取り崩し）: {yen(p.spBase)}</div>}
       <div>当月パフォーマンス: <b>{yen(p.monthPerformance)}</b></div>
       <div>取り崩し: <b>{yen(p.withdrawal)}</b></div>
@@ -6407,7 +6413,7 @@ function InvestmentPerformanceModalContent({ data, d, dQqq, holdings = [], holdi
   const fireMonthly = useMemo(() => monthlySeriesAll.filter((p) =>
     p.date >= "2026-01-01" && (p.prevMonthTotal != null || p.monthPerformance != null || p.withdrawal != null || p.excessReturn != null)
   ), [monthlySeriesAll]);
-  // SP500フルインベストメント比較（実績と同じ取り崩し条件）：各月の起点＝「総資産（前月末/月初）」−「取り崩し」（6・12月はボーナス込み）
+  // VOOフルインベストメント比較（実績と同じ取り崩し条件）：各月の起点＝「総資産（前月末/月初）」−「取り崩し」（6・12月はボーナス込み）
   // をその月にSP500で運用した場合の月末評価額。月末評価額は同じ時点の実績＝翌月の列の「総資産（前月末/月初）」と並べて比較する。
   const fireSpFullInvestSim = useMemo(() => (fireMonthly.length ? simulateMonthlyRebasedBenchmark(d.FULL, fireMonthly) : null), [fireMonthly, d.FULL]);
   const fireChartData = useMemo(() => {
@@ -6559,7 +6565,7 @@ function InvestmentPerformanceModalContent({ data, d, dQqq, holdings = [], holdi
           <>
             <div className="flex items-center gap-3 mb-1 flex-wrap text-[10px]" style={{ color: C.textMuted }}>
               <span className="flex items-center gap-1"><span style={{ width: 10, height: 2, background: C.teal, display: "inline-block" }} />実績（総資産）</span>
-              <span className="flex items-center gap-1"><span style={{ width: 10, height: 2, background: C.amber, display: "inline-block" }} />SP500積立シミュレーション</span>
+              <span className="flex items-center gap-1"><span style={{ width: 10, height: 2, background: C.amber, display: "inline-block" }} />VOO積立シミュレーション</span>
               {qqqSim && (
                 <button onClick={() => setShowQqqSim((v) => !v)} className="flex items-center gap-1" style={{ opacity: showQqqSim ? 1 : 0.4, background: "transparent", border: "none", cursor: "pointer", color: C.textMuted, padding: 0 }}>
                   <span style={{ width: 10, height: 2, background: C.blue, display: "inline-block" }} />QQQ積立シミュレーション{showQqqSim ? "" : "（非表示）"}
@@ -6574,23 +6580,23 @@ function InvestmentPerformanceModalContent({ data, d, dQqq, holdings = [], holdi
                   <YAxis tick={{ fontSize: 9, fill: C.textDim }} tickFormatter={(v) => `${Math.round(v / 10000)}万`} />
                   <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 11 }} labelFormatter={(v) => fmtDateSlash(v)} formatter={(v, n) => [yen(v), n]} />
                   <Line type="monotone" dataKey="actual" name="実績（総資産）" stroke={C.teal} strokeWidth={2} dot={false} isAnimationActive={false} connectNulls />
-                  <Line type="monotone" dataKey="spSim" name="SP500積立シミュレーション" stroke={C.amber} strokeWidth={1.5} strokeDasharray="4 3" dot={false} isAnimationActive={false} connectNulls />
+                  <Line type="monotone" dataKey="spSim" name="VOO積立シミュレーション" stroke={C.amber} strokeWidth={1.5} strokeDasharray="4 3" dot={false} isAnimationActive={false} connectNulls />
                   {qqqSim && showQqqSim && <Line type="monotone" dataKey="qqqSim" name="QQQ積立シミュレーション" stroke={C.blue} strokeWidth={1.5} strokeDasharray="4 3" dot={false} isAnimationActive={false} connectNulls />}
                 </LineChart>
               </ResponsiveContainer>
             </div>
           </>
-        ) : <div className="text-xs" style={{ color: C.textDim }}>グラフ表示に必要なデータ（元本・SP500価格）がありません。</div>}
+        ) : <div className="text-xs" style={{ color: C.textDim }}>グラフ表示に必要なデータ（元本・VOO価格）がありません。</div>}
         <div className="mono text-xs mt-2" style={{ color: C.textMuted }}>
           {data.totalMetrics
             ? <>自己 年率リターン（TWR）<HelpTip text={TWR_HELP} />: <b>{formatPct(data.totalMetrics.summary.annualTwr, 2)}</b></>
             : <>自己トータル利回り（年）: <b>{latestTotalYield?.totalYield != null ? `${latestTotalYield.totalYield}%` : "算出不可"}</b></>}
-          ／ SP500 CAGR: <b>{spCAGR != null ? `${spCAGR}%` : "算出不可"}</b>
+          ／ VOO CAGR: <b>{spCAGR != null ? `${spCAGR}%` : "算出不可"}</b>
           ／ QQQ CAGR: <b>{qqqCAGR != null ? `${qqqCAGR}%` : "算出不可（QQQ未取り込み）"}</b>
         </div>
         <div className="text-[10px] mt-1" style={{ color: C.textDim }}>
-          ※折れ線は、実際の元本増分を都度その時点でSP500{qqqSim ? "・QQQ" : ""}へ新規投資したとみなす積立シミュレーションです。拠出額・タイミングを揃えているため、総資産の絶対額をそのまま指数と比べるより公正な比較になりますが、実際の運用（個別銘柄選択・為替・手数料等）とは異なる点にご留意ください。
-          {spSim?.truncated && <> ※SP500価格データが{spSim.coverageStartDate ? fmtDateSlash(spSim.coverageStartDate) : "一部期間"}までしか遡れないため、シミュレーションはその範囲のみで行っています。</>}
+          ※折れ線は、実際の元本増分を都度その時点でVOO{qqqSim ? "・QQQ" : ""}へ新規投資したとみなす積立シミュレーションです。拠出額・タイミングを揃えているため、総資産の絶対額をそのまま指数と比べるより公正な比較になりますが、実際の運用（個別銘柄選択・為替・手数料等）とは異なる点にご留意ください。
+          {spSim?.truncated && <> ※VOO価格データが{spSim.coverageStartDate ? fmtDateSlash(spSim.coverageStartDate) : "一部期間"}までしか遡れないため、シミュレーションはその範囲のみで行っています。</>}
         </div>
       </div>
 
@@ -6615,7 +6621,7 @@ function InvestmentPerformanceModalContent({ data, d, dQqq, holdings = [], holdi
           <>
             <div className="flex items-center gap-3 mb-1 flex-wrap text-[10px]" style={{ color: C.textMuted }}>
               <span className="flex items-center gap-1"><span style={{ width: 10, height: 2, background: C.teal, display: "inline-block" }} />FIREトライアル総資産（実績・左軸）</span>
-              <span className="flex items-center gap-1"><span style={{ width: 10, height: 2, background: C.amber, display: "inline-block" }} />SP500フルインベストメント（比較・左軸）</span>
+              <span className="flex items-center gap-1"><span style={{ width: 10, height: 2, background: C.amber, display: "inline-block" }} />VOOフルインベストメント（比較・左軸）</span>
               <span className="flex items-center gap-1"><span style={{ width: 8, height: 8, background: C.teal, display: "inline-block" }} />当月パフォーマンス（右軸）</span>
               <span className="flex items-center gap-1"><span style={{ width: 8, height: 8, background: C.tealDeep, display: "inline-block" }} />半期計・年計（超過収益）</span>
             </div>
@@ -6641,14 +6647,14 @@ function InvestmentPerformanceModalContent({ data, d, dQqq, holdings = [], holdi
                     {fireChartDataWithSummary.map((p, i) => <Cell key={i} fill={(p.summaryExcessReturn ?? 0) >= 0 ? C.tealDeep : C.rustDeep} />)}
                   </Bar>
                   <Line yAxisId="left" type="linear" dataKey="totalAssets" name="FIREトライアル総資産（実績）" stroke={C.teal} strokeWidth={2} dot={false} isAnimationActive={false} connectNulls />
-                  <Line yAxisId="left" type="linear" dataKey="spFullInvest" name="SP500フルインベストメント（比較）" stroke={C.amber} strokeWidth={1.5} strokeDasharray="4 3" dot={false} isAnimationActive={false} connectNulls />
+                  <Line yAxisId="left" type="linear" dataKey="spFullInvest" name="VOOフルインベストメント（比較）" stroke={C.amber} strokeWidth={1.5} strokeDasharray="4 3" dot={false} isAnimationActive={false} connectNulls />
                 </ComposedChart>
               </ResponsiveContainer>
             </div>
             <div className="text-[10px] mt-2 space-y-0.5" style={{ color: C.textDim }}>
               <div>※FIREトライアルの総資産とは楽天証券口座のみを対象としています。</div>
               <div>※取り崩しは毎月40万円です（グラフには表示せず、ツールチップに金額を表示しています）。</div>
-              <div>※SP500フルインベストメントは、各月の起点を「総資産（前月末/月初）−取り崩し（6・12月はボーナス込み）」とし、その月にSP500へ全額投資した場合の月末評価額です。同じ時点の実績（翌月の「総資産（前月末/月初）」）と並べて表示しています（最新月は比較する実績がまだ無いため表示しません）。</div>
+              <div>※VOOフルインベストメントは、各月の起点を「総資産（前月末/月初）−取り崩し（6・12月はボーナス込み）」とし、その月にVOOへ全額投資した場合の月末評価額です。同じ時点の実績（翌月の「総資産（前月末/月初）」）と並べて表示しています（最新月は比較する実績がまだ無いため表示しません）。</div>
               <div>※ボーナスは6月と12月に、超過収益（月次パフォーマンス－取り崩し40万円）の直近6カ月合計の10％を計上しています。</div>
             </div>
           </>
@@ -7247,7 +7253,7 @@ export default function DDDashboard() {
   // 暴落比較の凡例：類似暴落（SP500）・SP500（現在）・同じ期間のNasdaq（QQQ）・同じ期間のGOLD（騰落率）。既定はすべて表示で、凡例クリックで個別に表示/非表示を切り替える。
   const crashLegendItems = selectedCrash ? [
     { key: selectedCrash.id, label: crashDisplayName(selectedCrash), color: C.rust },
-    { key: "current", label: "SP500（現在）", color: C.teal },
+    { key: "current", label: "VOO（現在）", color: C.teal },
     ...(selectedQqqCrashCurve ? [{ key: "qqq", label: "Nasdaq（QQQ・同期間）", color: C.violet }] : []),
     ...(selectedGoldCrashCurve ? [{ key: "gold", label: "GOLD（同期間・右軸$）", color: C.gold }] : []),
   ] : [];
@@ -7288,7 +7294,7 @@ export default function DDDashboard() {
       {modal?.type === "ddChart" && <FullScreenModal title={chartSourceTitle(chartSource)} onClose={() => setModal(null)}><DDChartModalContent initialTab={chartTab} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} sourceViews={sourceViews} chartSources={chartSources} onToggleChartSource={toggleChartSource} yearCompare={yearCompare} setYearCompare={setYearCompare} /></FullScreenModal>}
       {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} synthetic={sp500Synthetic} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} vooQqqSeries={vooQqqSeries} onAppendVooQqq={handleAppendVooQqq} onImportVooQqq={handleImportVooQqq} onApplyApiGold={handleApplyApiGold} onResetVooQqqField={handleResetVooQqqField} virtualAggregateLabels={virtualAggregateLabels} onRegisterBrokerHoldings={handleRegisterBrokerHoldings} brokerSummaries={brokerSummaries} />}
       {modal?.type === "checkpointSettings" && <FullScreenModal title="チェックポイント設定" onClose={() => setModal(null)}><CheckpointSettingsContent checkpoints={checkpoints} onCheckpointChange={handleCheckpointChange} holdings={holdings} /></FullScreenModal>}
-      {modal?.type === "bottomScore" && <FullScreenModal title={bottom.hold.applicable ? `SP500(VOO)底値判定：${bottomLabel(d.FULL, bottom.hold.state)} が底値として確定する確率（SP500実績から都度算出）` : "SP500(VOO)底値判定（SP500実績から都度算出）"} onClose={() => setModal(null)}><BottomScoreModalContent bottom={bottom} FULL={d.FULL} /></FullScreenModal>}
+      {modal?.type === "bottomScore" && <FullScreenModal title={bottom.hold.applicable ? `VOO底値判定：${bottomLabel(d.FULL, bottom.hold.state)} が底値として確定する確率（VOO実績から都度算出）` : "VOO底値判定（VOO実績から都度算出）"} onClose={() => setModal(null)}><BottomScoreModalContent bottom={bottom} FULL={d.FULL} /></FullScreenModal>}
       {modal?.type === "realHoldingsRanking" && <FullScreenModal title="実質保有銘柄ランキング" onClose={() => setModal(null)}><RealHoldingsRankingContent holdings={combinedHoldings} /></FullScreenModal>}
       {modal?.type === "summary" && <FullScreenModal title="詳細サマリー出力（AI相談用）" onClose={() => setModal(null)}><SummaryModalContent d={d} dVoo={dVoo} dQqq={dQqq} holdings={holdings} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} blocks={blocks} rankLabels={rankLabels} lifecycle={lifecycle} onLifecycleChange={handleLifecycleChange} fixedPositions={fixedPositions} onFixedPositionChange={handleFixedPositionChange} checkpoints={checkpoints} prevSnapshot={prevSnapshot} onSaveSnapshot={handleSaveSnapshot} /></FullScreenModal>}
       {modal?.type === "mobileChartZoom" && <MobileChartZoomModal onClose={() => setModal(null)} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} sourceViews={sourceViews} chartSources={chartSources} onToggleChartSource={toggleChartSource} yearCompare={yearCompare} setYearCompare={setYearCompare} isRealDevice={isMobileAuto} />}
@@ -7320,7 +7326,7 @@ export default function DDDashboard() {
       ) : (
       <div className="flex items-center justify-between px-5 py-3 shrink-0 flex-wrap gap-y-1.5" style={{ borderBottom: `1px solid ${C.border}`, background: C.panel2 }}>
         <div className="flex items-center gap-3 flex-wrap">
-          <span className="text-sm font-bold tracking-wide">DD戦略ダッシュボード　S&P500（VOO/QQQ）{usEasternYMD()}（us）</span>
+          <span className="text-sm font-bold tracking-wide">DD戦略ダッシュボード　VOO(SP500)/QQQ(NQ100)　{usEasternYMD()}（us）</span>
           <button onClick={toggleViewMode} title="スマホ表示／PC表示を切り替え" className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
             <Smartphone size={12} /> スマホ表示に切替
           </button>
@@ -7356,7 +7362,7 @@ export default function DDDashboard() {
               { key: "chart", label: "チャート", icon: Activity, content: <MobileChartPage d={d} onZoom={() => setModal({ type: "mobileChartZoom" })} /> },
               { key: "portfolio", label: "構成", icon: Layers, content: <MobilePortfolioPage pieView={pieView} setPieView={setPieView} holdings={combinedHoldings} ownerDates={ownerUpdatedDates} onOpen={() => setModal({ type: "portfolio" })} onOpenRealHoldingsRanking={() => setModal({ type: "realHoldingsRanking" })} dateLabel={holdingsDateLabel} /> },
               { key: "diff", label: "配分乖離", icon: ListChecks, content: <MobileDiffPage modelOverride={modelOverride} setModelOverride={setModelOverride} d={d} currentHoldingPct={currentHoldingPct} currentHoldingAmount={currentHoldingAmount} effectiveModelRow={effectiveModelRow} rankLabels={rankLabels} blocks={blocks} onOpenRank={(rank) => setModal({ type: "rank", rank })} onOpenDDTable={() => setModal({ type: "ddTable" })} dateLabel={holdingsDateLabel} /> },
-              { key: "bottom", label: "SP500(VOO)底値判定", icon: Gauge, content: <MobileBottomScorePage bottom={bottom} FULL={d.FULL} onOpen={() => setModal({ type: "bottomScore" })} /> },
+              { key: "bottom", label: "VOO底値判定", icon: Gauge, content: <MobileBottomScorePage bottom={bottom} FULL={d.FULL} onOpen={() => setModal({ type: "bottomScore" })} /> },
               { key: "analysis", label: "現状分析", icon: Info, content: <MobileAnalysisPage analysis={analysis} onNavigate={setModal} checkpointResults={checkpointResults} onOpenCheckpointSettings={() => setModal({ type: "checkpointSettings" })} /> },
             ]}
           />
@@ -7373,7 +7379,7 @@ export default function DDDashboard() {
             {/* top-left: chart */}
             <div style={{ minHeight: 0 }}>
               <Panel
-                title={(chartTab === "normal" || chartSource !== "sp500") ? chartSourceTitle(chartSource) : chartTab === "year" ? "年比較（SP500）" : "過去の暴落との比較（経過日数ベース）"}
+                title={(chartTab === "normal" || chartSource !== "sp500") ? chartSourceTitle(chartSource) : chartTab === "year" ? "年比較（VOO）" : "過去の暴落との比較（経過日数ベース）"}
                 compactHeader
                 action={
                   <div className="flex items-center gap-2">
@@ -7446,7 +7452,7 @@ export default function DDDashboard() {
               {comparisonData[0]?.gold !== undefined && !hiddenCrash.gold && <YAxis yAxisId="gold" orientation="right" domain={["auto", "auto"]} tick={{ fill: C.gold, fillOpacity: 0.75, fontSize: 10 }} tickFormatter={(v) => `$${Math.round(v).toLocaleString()}`} axisLine={false} tickLine={false} width={52} />}
                           <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} formatter={goldTooltipFormatter} />
                           {selectedCrash && !hiddenCrash[selectedCrash.id] && <Line type="monotone" dataKey={selectedCrash.id} stroke={C.rust} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls={false} name={crashDisplayName(selectedCrash)} />}
-                          {!hiddenCrash.current && <Line type="monotone" dataKey="current" stroke={C.teal} strokeWidth={2.6} dot={false} isAnimationActive={false} connectNulls={false} name="SP500（現在）" />}
+                          {!hiddenCrash.current && <Line type="monotone" dataKey="current" stroke={C.teal} strokeWidth={2.6} dot={false} isAnimationActive={false} connectNulls={false} name="VOO（現在）" />}
                           {comparisonData[0]?.qqq !== undefined && !hiddenCrash.qqq && <Line type="monotone" dataKey="qqq" stroke={C.violet} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls={false} name="Nasdaq（QQQ・同期間）" />}
                           {comparisonData[0]?.gold !== undefined && !hiddenCrash.gold && <Line yAxisId="gold" type="monotone" dataKey="gold" stroke={C.gold} strokeOpacity={GOLD_LINE_OPACITY} strokeWidth={1.6} dot={false} isAnimationActive={false} connectNulls={false} name="GOLD（同期間・右軸$）" />}
                         </LineChart>
@@ -7512,7 +7518,7 @@ export default function DDDashboard() {
 
             {/* bottom-far-right: 底値判定スコア */}
             <div style={{ minHeight: 0 }}>
-              <Panel title={bottom.hold.applicable ? <>SP500(VOO)底値判定 <span className="mono" style={{ color: depthColor(bottom.hold.state.mdd) }}>{bottomLabel(d.FULL, bottom.hold.state)}</span></> : "SP500(VOO)底値判定"} action={<button onClick={() => setModal({ type: "bottomScore" })} title="条件別の確率・過去事例・統計テーブルを表示" style={{ background: "transparent", border: "none", cursor: "pointer" }}><Info size={14} style={{ color: C.textDim }} /></button>} className="h-full">
+              <Panel title={bottom.hold.applicable ? <>VOO底値判定 <span className="mono" style={{ color: depthColor(bottom.hold.state.mdd) }}>{bottomLabel(d.FULL, bottom.hold.state)}</span></> : "VOO底値判定"} action={<button onClick={() => setModal({ type: "bottomScore" })} title="条件別の確率・過去事例・統計テーブルを表示" style={{ background: "transparent", border: "none", cursor: "pointer" }}><Info size={14} style={{ color: C.textDim }} /></button>} className="h-full">
                 <BottomScorePanelBody bottom={bottom} FULL={d.FULL} onOpen={() => setModal({ type: "bottomScore" })} />
               </Panel>
             </div>
