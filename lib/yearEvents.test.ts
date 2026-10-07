@@ -5,7 +5,7 @@ import { marketEventsFor, presidentFor, recoveryComment } from "./yearEvents.ts"
 import { computeYearStats } from "./yearCompare.ts";
 
 test("市場イベント：発生年は補足付き、継続中・複数年のイベントは2年目以降に「（〇年目）」", () => {
-  assert.deepEqual(marketEventsFor(2008, 2026), ["サブプライム・世界金融危機（2年目）", "リーマンショック（9月破綻・10月暴落）"]);
+  assert.deepEqual(marketEventsFor(2008, 2026), ["サブプライム・世界金融危機（2年目）", "リーマンショック（9月）"]);
   assert.deepEqual(marketEventsFor(2022, 2026), ["ロシアのウクライナ侵攻（2月）", "米FRB急速利上げ"]);
   assert.deepEqual(marketEventsFor(2023, 2026), ["ロシアのウクライナ侵攻（2年目）", "SVB破綻（3月）"]);
   assert.deepEqual(marketEventsFor(2001, 2026), ["ITバブル崩壊（2年目）", "米同時多発テロ（9月）"]);
@@ -22,6 +22,9 @@ test("大統領：通常の年は〇年目、1月の就任は「→に交代」�
   assert.equal(presidentFor(1963), "ケネディ（民主党）→ジョンソン大統領（民主党）に交代（11月）");
   assert.equal(presidentFor(1974), "ニクソン（共和党）→フォード大統領（共和党）に交代（8月）");
   assert.equal(presidentFor(1958), "アイゼンハワー大統領（共和党）6年目");
+  // 一覧表用の省略表記（党名を民・共に）
+  assert.equal(presidentFor(2016, undefined, true), "オバマ大統領（民）8年目");
+  assert.equal(presidentFor(2025, undefined, true), "バイデン（民）→トランプ大統領（共・2期目）に交代");
 });
 
 test("年ごとの統計：DD-3%は高値を更新するまで1局面（−3%の上下動では増えない）。通期＝史上最高値基準、年内＝年初来高値基準", () => {
@@ -51,15 +54,16 @@ test("年ごとの統計：DD-3%は高値を更新するまで1局面（−3%の
 });
 
 test("回復期コメント：ATH更新0〜1回 かつ DD-3%（通期）0〜1回の年だけ、直近の暴落の発生年・底値年から文言を作る", () => {
-  assert.equal(recoveryComment(2001, 0, 0), "下落局面：ドットコムバブル（2000）発生から1年・底値2002年");
+  assert.equal(recoveryComment(2001, 0, 0), "下落局面：ドットコムバブル（2000）から1年・底値2002年");
   assert.equal(recoveryComment(2002, 0, 0), "ドットコムバブル（2000）の底値の年");
   assert.equal(recoveryComment(2004, 0, 0), "回復期：ドットコムバブル（2000）底値2002年から2年");
   assert.equal(recoveryComment(2011, 0, 0), "回復期：世界金融危機（2007）底値2009年から2年");
-  assert.equal(recoveryComment(2023, 0, 0), "回復期：2022年の利上げ相場（2022）底値2022年から1年");
-  assert.equal(recoveryComment(2022, 1, 1), "2022年の利上げ相場（2022）の底値の年");
+  assert.equal(recoveryComment(2023, 0, 0), "回復期：利上げ相場（2022）の底から1年");
+  assert.equal(recoveryComment(2022, 1, 1), "利上げ相場（2022）の底値の年");
   assert.equal(recoveryComment(2021, 70, 6), null); // 条件外
   assert.equal(recoveryComment(2013, 44, 4), null);
   assert.equal(recoveryComment(1958, 0, 0), null); // それ以前に暴落データが無い
+  assert.equal(recoveryComment(1981, 0, 0), "下落局面：1981〜82年の高金利不況の発生年・底値1982年");
 });
 
 test("年初来（同じ月日まで）のATH更新回数", () => {

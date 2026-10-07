@@ -13,7 +13,7 @@ import { computeRealHoldingsRanking } from "@/lib/realHoldingsRanking";
 import { formatPct } from "@/lib/totalMetrics";
 import { computeAccelSensor } from "@/lib/accelSensor";
 import { buildYearSeries, completeYears, selectCompareYears, computeYearStats, YEAR_PRESETS } from "@/lib/yearCompare";
-import { yearEventText, recoveryComment } from "@/lib/yearEvents";
+import { yearEventText, recoveryInfo } from "@/lib/yearEvents";
 import { decodeCp932, parseTradeCsv, mergeTrades, computeRealizedEvents, aggregateRanking, splitRanking, periodOptions, emptyTradeHistory, TRADE_KIND_LABEL } from "@/lib/tradeHistory";
 import { OWNER_RAKUTEN_SAKI, OWNER_RAKUTEN_SHIN, OWNER_MOOMOO, OWNER_OPTIONS, RAKUTEN_OWNERS, migrateHoldingsOwners, migrateAsOfKeys, detectRakutenOwnerFromFileName } from "@/lib/owners";
 import { BROKERS, brokerByKey, extractionToPreviewRows, previewRowsToHoldings, replaceBrokerHoldings, aggregateLabelsReplacedByBrokers, exposureCurrency, rowValue, reconcileWithAccountTotal, isPlausibleBrokerRate, guessBrokerRank, reconciliationTarget, sectionChecks, buildBrokerSummary, profitChecks, appendHoldingSnapshot, holdingChanges } from "@/lib/brokerImport";
@@ -2416,7 +2416,7 @@ function YearComparePanel({ FULL, fontSize = 10, showTable = false }) {
           {/* 列幅を固定し、各行を1行に収める（イベント欄は長い場合「…」で省略し、ホバーで全文を表示） */}
           <table className="mono text-[10.5px] w-full" style={{ borderCollapse: "collapse", tableLayout: "fixed" }}>
             <colgroup>
-              <col style={{ width: 92 }} /><col style={{ width: 60 }} /><col style={{ width: 56 }} /><col style={{ width: 92 }} /><col style={{ width: 70 }} /><col style={{ width: 70 }} /><col />
+              <col style={{ width: 84 }} /><col style={{ width: 56 }} /><col style={{ width: 52 }} /><col style={{ width: 86 }} /><col style={{ width: 62 }} /><col style={{ width: 62 }} /><col />
             </colgroup>
             <thead>
               <tr className="whitespace-nowrap" style={{ color: C.textDim, borderBottom: `1px solid ${C.borderSoft}` }}>
@@ -2426,7 +2426,7 @@ function YearComparePanel({ FULL, fontSize = 10, showTable = false }) {
                 <th className="text-right font-normal py-1 px-1" title={`その年に終値が史上最高値を上回った日数。通年（括弧内は1月1日〜${cutoffLabel}の年初来）`}>ATH更新<span className="text-[9px]">（{cutoffLabel}）</span></th>
                 <th className="text-right font-normal py-1 px-1" title="史上最高値（全期間）から-3%以下に入った回数。次に史上最高値を更新するまでは1回（前年から続く局面は数えない）">DD-3%通期</th>
                 <th className="text-right font-normal py-1 px-1" title="年初来高値から-3%以下に入った回数。年内の高値を更新するまでは1回">DD-3%年内</th>
-                <th className="text-left font-normal py-1 pl-3">イベント</th>
+                <th className="text-left font-normal py-1 pl-2">イベント</th>
               </tr>
             </thead>
             <tbody>
@@ -2434,9 +2434,11 @@ function YearComparePanel({ FULL, fontSize = 10, showTable = false }) {
                 const st = yearStats.get(y);
                 if (!st) return null;
                 const isCur = y === currentYear;
-                const ev = yearEventText(y, currentYear);
-                const recovery = recoveryComment(y, st.athCount, st.dd3Count);
-                const evParts = [...ev.market, ev.president].filter(Boolean);
+                const ev = yearEventText(y, currentYear, true); // 党名は「民」「共」に省略して1行に収める
+                const rec = recoveryInfo(y, st.athCount, st.dd3Count);
+                const recovery = rec?.text ?? null;
+                // 回復期コメントと同じ暴落を指すイベント（例：サブプライム・世界金融危機（2年目））は重複になるので省く
+                const evParts = [...ev.market.filter((m) => !rec || !m.startsWith(rec.crashLabel)), ev.president].filter(Boolean);
                 const fullText = [recovery, ...evParts].filter(Boolean).join(" ／ ");
                 const active = pinnedYear === y;
                 const lastMd = `${Number(st.lastDate.slice(5, 7))}/${Number(st.lastDate.slice(8, 10))}`;
@@ -2452,7 +2454,7 @@ function YearComparePanel({ FULL, fontSize = 10, showTable = false }) {
                     <td className="py-1 px-1 text-right" style={{ color: C.textMuted }}>{isCur ? <>{st.athCount}回</> : <>{st.athCount}回<span style={{ color: C.textDim }}>（{st.athCountToDate}）</span></>}</td>
                     <td className="py-1 px-1 text-right" style={{ color: st.dd3Count ? C.text : C.textDim }}>{st.dd3Count}回</td>
                     <td className="py-1 px-1 text-right" style={{ color: st.dd3CountYtd ? C.text : C.textDim }}>{st.dd3CountYtd}回</td>
-                    <td className="py-1 pl-3" title={fullText} style={{ color: C.textMuted, overflow: "hidden", textOverflow: "ellipsis" }}>
+                    <td className="py-1 pl-2 text-[10px]" title={fullText} style={{ color: C.textMuted, overflow: "hidden", textOverflow: "ellipsis" }}>
                       {recovery && <span style={{ color: C.amber }}>{recovery}{evParts.length ? " ／ " : ""}</span>}{evParts.join(" ／ ")}
                     </td>
                   </tr>

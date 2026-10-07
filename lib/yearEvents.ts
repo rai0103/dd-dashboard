@@ -30,7 +30,7 @@ export const MARKET_EVENTS: MarketEvent[] = [
   { start: 2002, label: "エンロン・ワールドコム不正会計" },
   { start: 2003, label: "イラク戦争開戦", note: "3月" },
   { start: 2007, end: 2009, label: "サブプライム・世界金融危機", crash: { name: "世界金融危機", bottom: 2009 } },
-  { start: 2008, label: "リーマンショック", note: "9月破綻・10月暴落" },
+  { start: 2008, label: "リーマンショック", note: "9月" },
   { start: 2010, label: "欧州債務危機・フラッシュクラッシュ", note: "5月" },
   { start: 2011, label: "米国債格下げショック", note: "8月" },
   { start: 2011, label: "東日本大震災", note: "3月" },
@@ -41,7 +41,7 @@ export const MARKET_EVENTS: MarketEvent[] = [
   { start: 2018, end: 2019, label: "米中貿易摩擦" },
   { start: 2020, label: "コロナショック", note: "3月", crash: { name: "コロナショック", bottom: 2020 } },
   { start: 2022, end: null, label: "ロシアのウクライナ侵攻", note: "2月" },
-  { start: 2022, label: "米FRB急速利上げ", crash: { name: "2022年の利上げ相場", bottom: 2022 } },
+  { start: 2022, label: "米FRB急速利上げ", crash: { name: "利上げ相場", bottom: 2022 } },
   { start: 2023, label: "SVB破綻", note: "3月" },
   { start: 2025, label: "トランプ関税ショック", note: "4月" },
   { start: 2026, label: "イラン情勢緊迫", note: "3月" },
@@ -73,10 +73,11 @@ export const PRESIDENTS: President[] = [
 ];
 
 // 「〇〇大統領（〇党）〇年目」／政権交代の年は「〇（〇党）→□大統領（□党）に交代」（1月以外の交代は月を添える）。
-export function presidentFor(year: number, presidents: President[] = PRESIDENTS): string | null {
+// short=true は一覧表の1行に収めるための省略表記（党名を「民」「共」にする）。
+export function presidentFor(year: number, presidents: President[] = PRESIDENTS, short = false): string | null {
   const list = [...presidents].sort((a, b) => a.start.localeCompare(b.start));
   const startYear = (p: President) => Number(p.start.slice(0, 4));
-  const party = (p: President) => `${p.party}${p.note ? `・${p.note}` : ""}`; // 例：共和党・2期目
+  const party = (p: President) => `${short ? (p.party === "民主党" ? "民" : "共") : p.party}${p.note ? `・${p.note}` : ""}`; // 例：共和党・2期目（省略時：共・2期目）
   const changes = list.filter((p) => startYear(p) === year);
   const before = [...list].reverse().find((p) => startYear(p) < year) ?? null;
   if (changes.length) {
@@ -90,19 +91,25 @@ export function presidentFor(year: number, presidents: President[] = PRESIDENTS)
 }
 
 // 一覧表のイベント欄：市場イベント（あれば）と大統領情報を「／」でつなぐ。
-export function yearEventText(year: number, currentYear: number): { market: string[]; president: string | null } {
-  return { market: marketEventsFor(year, currentYear), president: presidentFor(year) };
+export function yearEventText(year: number, currentYear: number, short = false): { market: string[]; president: string | null } {
+  return { market: marketEventsFor(year, currentYear), president: presidentFor(year, PRESIDENTS, short) };
 }
 
 // 暴落からの回復期コメント：ATH更新0〜1回 かつ DD-3%（通期）0〜1回の年（大きな下落の後でまだ本格回復していない可能性が高い年）だけに付ける。
 // 直近（その年以前に発生した中で最も新しい）暴落を MARKET_EVENTS の crash から探し、発生年・底値年との位置関係で文言を作る。
 export function recoveryComment(year: number, athCount: number, dd3Count: number, events: MarketEvent[] = MARKET_EVENTS): string | null {
+  return recoveryInfo(year, athCount, dd3Count, events)?.text ?? null;
+}
+// crashLabel：コメントの元になった暴落のイベント名（一覧表で、同じ暴落を指すイベント欄の項目を重複表示しないために使う）。
+export function recoveryInfo(year: number, athCount: number, dd3Count: number, events: MarketEvent[] = MARKET_EVENTS): { text: string; crashLabel: string } | null {
   if (athCount > 1 || dd3Count > 1) return null;
   const crash = events.filter((e) => e.crash && e.start <= year).sort((a, b) => b.start - a.start)[0];
   if (!crash?.crash) return null;
   const { name, bottom } = crash.crash;
   // 一覧表の1行に収まるよう簡潔な表記にする（暴落名・発生年・底値年・経過年数は必ず含める）
-  if (year < bottom) return `下落局面：${name}（${crash.start}）発生から${year - crash.start}年・底値${bottom}年`;
-  if (year === bottom) return `${name}（${crash.start}）の底値の年`;
-  return `回復期：${name}（${crash.start}）底値${bottom}年から${year - bottom}年`;
+  const text = year < bottom
+    ? (year === crash.start ? `下落局面：${name}の発生年・底値${bottom}年` : `下落局面：${name}（${crash.start}）から${year - crash.start}年・底値${bottom}年`)
+    : year === bottom ? `${name}（${crash.start}）の底値の年`
+    : crash.start === bottom ? `回復期：${name}（${bottom}）の底から${year - bottom}年` : `回復期：${name}（${crash.start}）底値${bottom}年から${year - bottom}年`;
+  return { text, crashLabel: crash.label };
 }
