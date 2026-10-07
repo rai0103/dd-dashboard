@@ -9,25 +9,27 @@ export interface MarketEvent {
   end?: number | null; // 複数年にわたる場合の最終年（null＝現在も継続中。省略＝その年のみ）
   label: string; // 2年目以降にも使う名称
   note?: string; // 発生年だけに添える補足（月など）
+  crash?: { name: string; bottom: number }; // 大きな下落相場（暴落）の場合：回復期コメントに使う名称と、底値（最大下落）の年
 }
 export const MARKET_EVENTS: MarketEvent[] = [
   { start: 1962, label: "キューバ危機", note: "10月" },
   { start: 1963, label: "ケネディ大統領暗殺", note: "11月" },
-  { start: 1966, label: "信用収縮（クレジット・クランチ）" },
-  { start: 1970, label: "景気後退・ペン・セントラル破綻", note: "6月" },
-  { start: 1973, end: 1974, label: "第1次オイルショック", note: "10月" },
+  { start: 1966, label: "信用収縮（クレジット・クランチ）", crash: { name: "1966年の信用収縮", bottom: 1966 } },
+  { start: 1970, label: "景気後退・ペン・セントラル破綻", note: "6月", crash: { name: "1969〜70年の弱気相場", bottom: 1970 } },
+  { start: 1973, end: 1974, label: "第1次オイルショック", note: "10月", crash: { name: "オイルショック", bottom: 1974 } },
   { start: 1974, label: "ウォーターゲート事件・ニクソン辞任", note: "8月" },
   { start: 1979, end: 1980, label: "第2次オイルショック" },
-  { start: 1987, label: "ブラックマンデー", note: "10月" },
+  { start: 1981, end: 1982, label: "ボルカー高金利・景気後退", crash: { name: "1981〜82年の高金利不況", bottom: 1982 } },
+  { start: 1987, label: "ブラックマンデー", note: "10月", crash: { name: "ブラックマンデー", bottom: 1987 } },
   { start: 1990, label: "湾岸危機・S&L危機", note: "8月" },
   { start: 1994, label: "債券大暴落（FRB急利上げ）" },
   { start: 1997, label: "アジア通貨危機", note: "7月〜" },
   { start: 1998, label: "ロシア危機・LTCM破綻", note: "8〜9月" },
-  { start: 2000, end: 2002, label: "ITバブル崩壊" },
+  { start: 2000, end: 2002, label: "ITバブル崩壊", crash: { name: "ドットコムバブル", bottom: 2002 } },
   { start: 2001, label: "米同時多発テロ", note: "9月" },
   { start: 2002, label: "エンロン・ワールドコム不正会計" },
   { start: 2003, label: "イラク戦争開戦", note: "3月" },
-  { start: 2007, end: 2009, label: "サブプライム・世界金融危機" },
+  { start: 2007, end: 2009, label: "サブプライム・世界金融危機", crash: { name: "世界金融危機", bottom: 2009 } },
   { start: 2008, label: "リーマンショック", note: "9月破綻・10月暴落" },
   { start: 2010, label: "欧州債務危機・フラッシュクラッシュ", note: "5月" },
   { start: 2011, label: "米国債格下げショック", note: "8月" },
@@ -37,9 +39,9 @@ export const MARKET_EVENTS: MarketEvent[] = [
   { start: 2016, label: "英国EU離脱決定", note: "6月" },
   { start: 2018, label: "VIXショック", note: "2月" },
   { start: 2018, end: 2019, label: "米中貿易摩擦" },
-  { start: 2020, label: "コロナショック", note: "3月" },
+  { start: 2020, label: "コロナショック", note: "3月", crash: { name: "コロナショック", bottom: 2020 } },
   { start: 2022, end: null, label: "ロシアのウクライナ侵攻", note: "2月" },
-  { start: 2022, label: "米FRB急速利上げ" },
+  { start: 2022, label: "米FRB急速利上げ", crash: { name: "2022年の利上げ相場", bottom: 2022 } },
   { start: 2023, label: "SVB破綻", note: "3月" },
   { start: 2025, label: "トランプ関税ショック", note: "4月" },
   { start: 2026, label: "イラン情勢緊迫", note: "3月" },
@@ -90,4 +92,17 @@ export function presidentFor(year: number, presidents: President[] = PRESIDENTS)
 // 一覧表のイベント欄：市場イベント（あれば）と大統領情報を「／」でつなぐ。
 export function yearEventText(year: number, currentYear: number): { market: string[]; president: string | null } {
   return { market: marketEventsFor(year, currentYear), president: presidentFor(year) };
+}
+
+// 暴落からの回復期コメント：ATH更新0〜1回 かつ DD-3%（通期）0〜1回の年（大きな下落の後でまだ本格回復していない可能性が高い年）だけに付ける。
+// 直近（その年以前に発生した中で最も新しい）暴落を MARKET_EVENTS の crash から探し、発生年・底値年との位置関係で文言を作る。
+export function recoveryComment(year: number, athCount: number, dd3Count: number, events: MarketEvent[] = MARKET_EVENTS): string | null {
+  if (athCount > 1 || dd3Count > 1) return null;
+  const crash = events.filter((e) => e.crash && e.start <= year).sort((a, b) => b.start - a.start)[0];
+  if (!crash?.crash) return null;
+  const { name, bottom } = crash.crash;
+  // 一覧表の1行に収まるよう簡潔な表記にする（暴落名・発生年・底値年・経過年数は必ず含める）
+  if (year < bottom) return `下落局面：${name}（${crash.start}）発生から${year - crash.start}年・底値${bottom}年`;
+  if (year === bottom) return `${name}（${crash.start}）の底値の年`;
+  return `回復期：${name}（${crash.start}）底値${bottom}年から${year - bottom}年`;
 }

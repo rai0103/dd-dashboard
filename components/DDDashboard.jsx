@@ -13,7 +13,7 @@ import { computeRealHoldingsRanking } from "@/lib/realHoldingsRanking";
 import { formatPct } from "@/lib/totalMetrics";
 import { computeAccelSensor } from "@/lib/accelSensor";
 import { buildYearSeries, completeYears, selectCompareYears, computeYearStats, YEAR_PRESETS } from "@/lib/yearCompare";
-import { yearEventText } from "@/lib/yearEvents";
+import { yearEventText, recoveryComment } from "@/lib/yearEvents";
 import { decodeCp932, parseTradeCsv, mergeTrades, computeRealizedEvents, aggregateRanking, splitRanking, periodOptions, emptyTradeHistory, TRADE_KIND_LABEL } from "@/lib/tradeHistory";
 import { OWNER_RAKUTEN_SAKI, OWNER_RAKUTEN_SHIN, OWNER_MOOMOO, OWNER_OPTIONS, RAKUTEN_OWNERS, migrateHoldingsOwners, migrateAsOfKeys, detectRakutenOwnerFromFileName } from "@/lib/owners";
 import { BROKERS, brokerByKey, extractionToPreviewRows, previewRowsToHoldings, replaceBrokerHoldings, aggregateLabelsReplacedByBrokers, exposureCurrency, rowValue, reconcileWithAccountTotal, isPlausibleBrokerRate, guessBrokerRank, reconciliationTarget, sectionChecks, buildBrokerSummary, profitChecks, appendHoldingSnapshot, holdingChanges } from "@/lib/brokerImport";
@@ -2355,7 +2355,10 @@ function YearComparePanel({ FULL, fontSize = 10, showTable = false }) {
   }, [years, currentYear, series, metric]);
   const unit = metric === "index" ? "" : "%";
   const tableYears = useMemo(() => [currentYear, ...[...years].sort((a, b) => b - a)], [years, currentYear]);
-  const yearStats = useMemo(() => (showTable ? computeYearStats(FULL, tableYears) : null), [showTable, FULL, tableYears]);
+  // 年初来ATH更新回数の区切り：今年の最新データの月日（例 "10-06"）。過去の各年も1月1日〜この月日で数える
+  const cutoffMD = series.get(currentYear)?.at(-1)?.date.slice(5) ?? null;
+  const cutoffLabel = cutoffMD ? `${Number(cutoffMD.slice(0, 2))}/${Number(cutoffMD.slice(3))}` : "";
+  const yearStats = useMemo(() => (showTable ? computeYearStats(FULL, tableYears, cutoffMD) : null), [showTable, FULL, tableYears, cutoffMD]);
   const sel = { background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text, padding: "2px 6px", cursor: "pointer" };
   const curLast = series.get(currentYear)?.at(-1);
   const TooltipBody = ({ active, payload, label }) => {
@@ -2408,17 +2411,21 @@ function YearComparePanel({ FULL, fontSize = 10, showTable = false }) {
         <span className="ml-1" style={{ color: C.teal }}>━ {currentYear}年（今年）</span>
       </div>
       {showTable && yearStats && (
-        <div className="mt-3 px-2 overflow-x-auto">
+        <div className="mt-3 px-2">
           <div className="text-[11px] mb-1" style={{ color: C.textMuted }}>パフォーマンス一覧（年をクリックするとチャートの線を太線で強調・もう一度クリックで解除）</div>
-          <table className="mono text-[11px] w-full" style={{ borderCollapse: "collapse", minWidth: 840 }}>
+          {/* 列幅を固定し、各行を1行に収める（イベント欄は長い場合「…」で省略し、ホバーで全文を表示） */}
+          <table className="mono text-[10.5px] w-full" style={{ borderCollapse: "collapse", tableLayout: "fixed" }}>
+            <colgroup>
+              <col style={{ width: 92 }} /><col style={{ width: 60 }} /><col style={{ width: 56 }} /><col style={{ width: 92 }} /><col style={{ width: 70 }} /><col style={{ width: 70 }} /><col />
+            </colgroup>
             <thead>
               <tr className="whitespace-nowrap" style={{ color: C.textDim, borderBottom: `1px solid ${C.borderSoft}` }}>
-                <th className="text-left font-normal py-1 pr-2">年</th>
-                <th className="text-right font-normal py-1 px-2">騰落率</th>
-                <th className="text-right font-normal py-1 px-2" title="その年の最大ドローダウン（過去最高値からの下落率の最小値）">MDD</th>
-                <th className="text-right font-normal py-1 px-2" title="その年に終値が史上最高値（全期間）を上回った日数">ATH更新</th>
-                <th className="text-right font-normal py-1 px-2" title="史上最高値（全期間）から-3%以下に入った回数。次に史上最高値を更新するまでは1回（前年から続く局面は数えない）">DD-3%（通期）</th>
-                <th className="text-right font-normal py-1 px-2" title="年初来高値から-3%以下に入った回数。年内の高値を更新するまでは1回">DD-3%（年内）</th>
+                <th className="text-left font-normal py-1">年</th>
+                <th className="text-right font-normal py-1 px-1">騰落率</th>
+                <th className="text-right font-normal py-1 px-1" title="その年の最大ドローダウン（史上最高値からの下落率の最小値）">MDD</th>
+                <th className="text-right font-normal py-1 px-1" title={`その年に終値が史上最高値を上回った日数。通年（括弧内は1月1日〜${cutoffLabel}の年初来）`}>ATH更新<span className="text-[9px]">（{cutoffLabel}）</span></th>
+                <th className="text-right font-normal py-1 px-1" title="史上最高値（全期間）から-3%以下に入った回数。次に史上最高値を更新するまでは1回（前年から続く局面は数えない）">DD-3%通期</th>
+                <th className="text-right font-normal py-1 px-1" title="年初来高値から-3%以下に入った回数。年内の高値を更新するまでは1回">DD-3%年内</th>
                 <th className="text-left font-normal py-1 pl-3">イベント</th>
               </tr>
             </thead>
@@ -2428,29 +2435,34 @@ function YearComparePanel({ FULL, fontSize = 10, showTable = false }) {
                 if (!st) return null;
                 const isCur = y === currentYear;
                 const ev = yearEventText(y, currentYear);
-                const evText = [...ev.market, ev.president].filter(Boolean).join(" ／ ");
+                const recovery = recoveryComment(y, st.athCount, st.dd3Count);
+                const evParts = [...ev.market, ev.president].filter(Boolean);
+                const fullText = [recovery, ...evParts].filter(Boolean).join(" ／ ");
                 const active = pinnedYear === y;
                 const lastMd = `${Number(st.lastDate.slice(5, 7))}/${Number(st.lastDate.slice(8, 10))}`;
                 return (
-                  <tr key={y} style={{ borderBottom: `1px solid ${C.borderSoft}`, background: active ? (isCur ? "rgba(69,196,176,0.14)" : "rgba(255,255,255,0.08)") : "transparent" }}>
-                    <td className="py-1 pr-2 whitespace-nowrap">
+                  <tr key={y} className="whitespace-nowrap" style={{ borderBottom: `1px solid ${C.borderSoft}`, background: active ? (isCur ? "rgba(69,196,176,0.14)" : "rgba(255,255,255,0.08)") : "transparent" }}>
+                    <td className="py-1 overflow-hidden">
                       <button onClick={() => togglePin(y)} className="font-bold underline-offset-2 hover:underline" style={{ color: isCur ? C.teal : active ? C.white : C.text, background: "transparent", border: "none", padding: 0, cursor: "pointer" }}>
-                        {isCur ? `${y}年（年初来・${lastMd}時点）` : `${y}年`}
+                        {isCur ? <>{y}<span className="font-normal text-[9.5px]">（{lastMd}時点）</span></> : y}
                       </button>
                     </td>
-                    <td className="py-1 px-2 text-right font-bold" style={{ color: st.returnPct >= 0 ? C.teal : C.rust }}>{st.returnPct >= 0 ? "+" : ""}{st.returnPct.toFixed(1)}%</td>
-                    <td className="py-1 px-2 text-right" style={{ color: depthColor(st.mdd) }}>{st.mdd.toFixed(1)}%</td>
-                    <td className="py-1 px-2 text-right" style={{ color: C.textMuted }}>{st.athCount}回</td>
-                    <td className="py-1 px-2 text-right" style={{ color: st.dd3Count ? C.text : C.textDim }}>{st.dd3Count}回</td>
-                    <td className="py-1 px-2 text-right" style={{ color: st.dd3CountYtd ? C.text : C.textDim }}>{st.dd3CountYtd}回</td>
-                    <td className="py-1 pl-3" style={{ color: C.textMuted, whiteSpace: "normal" }}>{evText}</td>
+                    <td className="py-1 px-1 text-right font-bold" style={{ color: st.returnPct >= 0 ? C.teal : C.rust }}>{st.returnPct >= 0 ? "+" : ""}{st.returnPct.toFixed(1)}%</td>
+                    <td className="py-1 px-1 text-right" style={{ color: depthColor(st.mdd) }}>{st.mdd.toFixed(1)}%</td>
+                    <td className="py-1 px-1 text-right" style={{ color: C.textMuted }}>{isCur ? <>{st.athCount}回</> : <>{st.athCount}回<span style={{ color: C.textDim }}>（{st.athCountToDate}）</span></>}</td>
+                    <td className="py-1 px-1 text-right" style={{ color: st.dd3Count ? C.text : C.textDim }}>{st.dd3Count}回</td>
+                    <td className="py-1 px-1 text-right" style={{ color: st.dd3CountYtd ? C.text : C.textDim }}>{st.dd3CountYtd}回</td>
+                    <td className="py-1 pl-3" title={fullText} style={{ color: C.textMuted, overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {recovery && <span style={{ color: C.amber }}>{recovery}{evParts.length ? " ／ " : ""}</span>}{evParts.join(" ／ ")}
+                    </td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
           <div className="text-[10px] mt-1 leading-relaxed" style={{ color: C.textDim }}>
-            ※騰落率は年初（前年最終営業日の終値）→年末（今年は最新日）の終値。MDD・ATH更新・DD-3%（通期）は全期間を通した史上最高値が基準（ATH更新＝終値が史上最高値を上回った日数）。DD-3%は-3%以下に入ってから基準の高値を更新するまでを1回と数え、-3%ラインの上下動では増やしません（通期＝史上最高値基準で前年から続く局面は数えない、年内＝年初来高値基準で年ごとにリセット）。イベントは主な市場イベントの年表と米大統領の在任情報です。
+            ※騰落率は年初（前年最終営業日の終値）→年末（今年は最新日）の終値。MDD・ATH更新・DD-3%通期は全期間を通した史上最高値が基準（ATH更新＝終値が史上最高値を上回った日数、括弧内は1月1日〜{cutoffLabel}の年初来で今年と同じ期間の比較用）。DD-3%は-3%以下に入ってから基準の高値を更新するまでを1回と数えます（通期＝史上最高値基準で前年から続く局面は数えない、年内＝年初来高値基準で年ごとにリセット）。
+            <span style={{ color: C.amber }}>オレンジ</span>の注記は、ATH更新0〜1回かつDD-3%通期0〜1回の年（大きな下落の後でまだ本格回復していない可能性が高い年）に、直近の暴落の発生年・底値年から自動で付けています。イベント欄は長い場合「…」で省略され、カーソルを合わせると全文を表示します。
           </div>
         </div>
       )}

@@ -1,7 +1,7 @@
 // 実行: npm test
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { marketEventsFor, presidentFor } from "./yearEvents.ts";
+import { marketEventsFor, presidentFor, recoveryComment } from "./yearEvents.ts";
 import { computeYearStats } from "./yearCompare.ts";
 
 test("市場イベント：発生年は補足付き、継続中・複数年のイベントは2年目以降に「（〇年目）」", () => {
@@ -48,4 +48,22 @@ test("年ごとの統計：DD-3%は高値を更新するまで1局面（−3%の
   assert.equal(Math.round(s20.mdd * 10) / 10, -6); // 史上最高値100から94
   assert.deepEqual([s21.athCount, s21.dd3Count, s21.dd3CountYtd], [0, 0, 0]);
   assert.equal(s21.lastDate, "2021-06-01");
+});
+
+test("回復期コメント：ATH更新0〜1回 かつ DD-3%（通期）0〜1回の年だけ、直近の暴落の発生年・底値年から文言を作る", () => {
+  assert.equal(recoveryComment(2001, 0, 0), "下落局面：ドットコムバブル（2000）発生から1年・底値2002年");
+  assert.equal(recoveryComment(2002, 0, 0), "ドットコムバブル（2000）の底値の年");
+  assert.equal(recoveryComment(2004, 0, 0), "回復期：ドットコムバブル（2000）底値2002年から2年");
+  assert.equal(recoveryComment(2011, 0, 0), "回復期：世界金融危機（2007）底値2009年から2年");
+  assert.equal(recoveryComment(2023, 0, 0), "回復期：2022年の利上げ相場（2022）底値2022年から1年");
+  assert.equal(recoveryComment(2022, 1, 1), "2022年の利上げ相場（2022）の底値の年");
+  assert.equal(recoveryComment(2021, 70, 6), null); // 条件外
+  assert.equal(recoveryComment(2013, 44, 4), null);
+  assert.equal(recoveryComment(1958, 0, 0), null); // それ以前に暴落データが無い
+});
+
+test("年初来（同じ月日まで）のATH更新回数", () => {
+  const pts = [{ date: "2019-12-31", price: 100 }, { date: "2020-03-01", price: 101 }, { date: "2020-10-06", price: 102 }, { date: "2020-10-07", price: 103 }, { date: "2020-12-01", price: 104 }];
+  const s = computeYearStats(pts, [2020], "10-06").get(2020)!;
+  assert.deepEqual([s.athCount, s.athCountToDate], [4, 2]);
 });

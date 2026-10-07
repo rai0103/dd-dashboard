@@ -138,17 +138,19 @@ export function selectCompareYears(preset: YearPresetKey, opts: { series: YearSe
 //       局面中に −3% を一時的に上回って再び下回っても数えない。前年から続く局面は年をまたいでも数えない（局面が始まった年に1回）。
 //     年内 dd3CountYtd：同じ考え方を、その年の年初来高値（その年の終値の最高値）を基準に適用する。年内の高値を更新するまでを
 //       1つの局面として1回。年が変わると基準（年初来高値）も局面もリセットする。
-export interface YearStats { year: number; lastDate: string; returnPct: number; mdd: number; athCount: number; dd3Count: number; dd3CountYtd: number }
-export function computeYearStats(points: { date: Date | string; price: number; dd?: number }[], years: number[]): Map<number, YearStats> {
+//   年初来ATH更新回数 athCountToDate：cutoffMD（"MM-DD"、例：今年の最新日 "10-06"）以前の日付だけで数えたATH更新回数
+//     （進行中の今年と過去の各年を、1月1日〜同じ月日の同じ期間で比べるため）。
+export interface YearStats { year: number; lastDate: string; returnPct: number; mdd: number; athCount: number; athCountToDate: number; dd3Count: number; dd3CountYtd: number }
+export function computeYearStats(points: { date: Date | string; price: number; dd?: number }[], years: number[], cutoffMD: string | null = null): Map<number, YearStats> {
   const want = new Set(years);
   const sorted = points.map((p) => ({ date: toIso(p.date), price: p.price })).filter((p) => Number.isFinite(p.price) && p.price > 0).sort((a, b) => a.date.localeCompare(b.date));
-  const acc = new Map<number, { first: number; last: number; lastDate: string; prevYearLast: number | null; mdd: number; athCount: number; dd3Count: number; dd3CountYtd: number }>();
+  const acc = new Map<number, { first: number; last: number; lastDate: string; prevYearLast: number | null; mdd: number; athCount: number; athCountToDate: number; dd3Count: number; dd3CountYtd: number }>();
   let ath = -Infinity, inDD = false, prevPrice: number | null = null, prevYear: number | null = null;
   let ytdHigh = -Infinity, inDDYtd = false;
   for (const p of sorted) {
     const y = Number(p.date.slice(0, 4));
     if (!acc.has(y)) {
-      acc.set(y, { first: p.price, last: p.price, lastDate: p.date, prevYearLast: prevYear === y - 1 ? prevPrice : null, mdd: 0, athCount: 0, dd3Count: 0, dd3CountYtd: 0 });
+      acc.set(y, { first: p.price, last: p.price, lastDate: p.date, prevYearLast: prevYear === y - 1 ? prevPrice : null, mdd: 0, athCount: 0, athCountToDate: 0, dd3Count: 0, dd3CountYtd: 0 });
       ytdHigh = -Infinity; inDDYtd = false; // 年内の基準と局面は年ごとにリセット
     }
     const a = acc.get(y)!;
@@ -156,7 +158,7 @@ export function computeYearStats(points: { date: Date | string; price: number; d
     const isNewAth = p.price > ath && ath !== -Infinity; // データ先頭の1日は比較対象が無いので更新に数えない
     if (p.price > ath) { ath = p.price; inDD = false; }
     const dd = (p.price / ath - 1) * 100;
-    if (isNewAth) a.athCount++;
+    if (isNewAth) { a.athCount++; if (cutoffMD === null || p.date.slice(5) <= cutoffMD) a.athCountToDate++; }
     if (dd <= -3 && !inDD) { a.dd3Count++; inDD = true; }
     // 年内：年初来高値を更新したら局面終了。−3%以下に入ったら（局面中でなければ）新規1回
     if (p.price > ytdHigh) { ytdHigh = p.price; inDDYtd = false; }
@@ -170,7 +172,7 @@ export function computeYearStats(points: { date: Date | string; price: number; d
     const a = acc.get(y);
     if (!a) continue;
     const base = a.prevYearLast ?? a.first;
-    out.set(y, { year: y, lastDate: a.lastDate, returnPct: (a.last / base - 1) * 100, mdd: a.mdd, athCount: a.athCount, dd3Count: a.dd3Count, dd3CountYtd: a.dd3CountYtd });
+    out.set(y, { year: y, lastDate: a.lastDate, returnPct: (a.last / base - 1) * 100, mdd: a.mdd, athCount: a.athCount, athCountToDate: a.athCountToDate, dd3Count: a.dd3Count, dd3CountYtd: a.dd3CountYtd });
   }
   return out;
 }
