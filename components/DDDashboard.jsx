@@ -2410,14 +2410,15 @@ function YearComparePanel({ FULL, fontSize = 10, showTable = false }) {
       {showTable && yearStats && (
         <div className="mt-3 px-2 overflow-x-auto">
           <div className="text-[11px] mb-1" style={{ color: C.textMuted }}>パフォーマンス一覧（年をクリックするとチャートの線を太線で強調・もう一度クリックで解除）</div>
-          <table className="mono text-[11px] w-full" style={{ borderCollapse: "collapse", minWidth: 760 }}>
+          <table className="mono text-[11px] w-full" style={{ borderCollapse: "collapse", minWidth: 840 }}>
             <thead>
               <tr className="whitespace-nowrap" style={{ color: C.textDim, borderBottom: `1px solid ${C.borderSoft}` }}>
                 <th className="text-left font-normal py-1 pr-2">年</th>
                 <th className="text-right font-normal py-1 px-2">騰落率</th>
                 <th className="text-right font-normal py-1 px-2" title="その年の最大ドローダウン（過去最高値からの下落率の最小値）">MDD</th>
                 <th className="text-right font-normal py-1 px-2" title="その年に終値が史上最高値（全期間）を上回った日数">ATH更新</th>
-                <th className="text-right font-normal py-1 px-2" title="史上最高値からの下落率が-3%以下に新たに入った回数（前年から続く下落は数えない）">DD-3%以上</th>
+                <th className="text-right font-normal py-1 px-2" title="史上最高値（全期間）から-3%以下に入った回数。次に史上最高値を更新するまでは1回（前年から続く局面は数えない）">DD-3%（通期）</th>
+                <th className="text-right font-normal py-1 px-2" title="年初来高値から-3%以下に入った回数。年内の高値を更新するまでは1回">DD-3%（年内）</th>
                 <th className="text-left font-normal py-1 pl-3">イベント</th>
               </tr>
             </thead>
@@ -2441,6 +2442,7 @@ function YearComparePanel({ FULL, fontSize = 10, showTable = false }) {
                     <td className="py-1 px-2 text-right" style={{ color: depthColor(st.mdd) }}>{st.mdd.toFixed(1)}%</td>
                     <td className="py-1 px-2 text-right" style={{ color: C.textMuted }}>{st.athCount}回</td>
                     <td className="py-1 px-2 text-right" style={{ color: st.dd3Count ? C.text : C.textDim }}>{st.dd3Count}回</td>
+                    <td className="py-1 px-2 text-right" style={{ color: st.dd3CountYtd ? C.text : C.textDim }}>{st.dd3CountYtd}回</td>
                     <td className="py-1 pl-3" style={{ color: C.textMuted, whiteSpace: "normal" }}>{evText}</td>
                   </tr>
                 );
@@ -2448,7 +2450,7 @@ function YearComparePanel({ FULL, fontSize = 10, showTable = false }) {
             </tbody>
           </table>
           <div className="text-[10px] mt-1 leading-relaxed" style={{ color: C.textDim }}>
-            ※騰落率は年初（前年最終営業日の終値）→年末（今年は最新日）の終値。MDD・ATH更新・DD-3%以上は年ごとにリセットせず、全期間を通した史上最高値を基準にしています（ATH更新＝終値が史上最高値を上回った日数、DD-3%以上＝史上最高値から-3%以下に新たに入った回数。前年から続く下落局面は数えません）。イベントは主な市場イベントの年表と米大統領の在任情報です。
+            ※騰落率は年初（前年最終営業日の終値）→年末（今年は最新日）の終値。MDD・ATH更新・DD-3%（通期）は全期間を通した史上最高値が基準（ATH更新＝終値が史上最高値を上回った日数）。DD-3%は-3%以下に入ってから基準の高値を更新するまでを1回と数え、-3%ラインの上下動では増やしません（通期＝史上最高値基準で前年から続く局面は数えない、年内＝年初来高値基準で年ごとにリセット）。イベントは主な市場イベントの年表と米大統領の在任情報です。
           </div>
         </div>
       )}
