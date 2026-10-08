@@ -14,6 +14,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { extractHoldings, type ExtractImage } from "./extractHoldings";
+import { computeChanges, fetchDailyCloses, shiftMonths, type Close } from "./marketSummary";
 
 export interface Env {
   TWELVE_DATA_API_KEY: string;
@@ -142,6 +143,37 @@ export default {
         return jsonResponse({ values });
       } catch {
         return jsonResponse({ error: "ゴールドの価格履歴の取得に失敗しました" }, 502);
+      }
+    }
+
+    // GET /api/market-summary
+    // VOO・QQQ・ゴールド（XAU/USD）の最新終値と、前日・前週・前月・前年比（%）を返す。
+    // 1日1回の呼び出しを想定（Twelve Data time_series を3銘柄分呼ぶ＝約3クレジット）。
+    // 応答: { date, voo: {close,d1,w1,m1,y1}, qqq: {...}, gold?: {...} }
+    // 失敗時: 502 + { error }
+    if (url.pathname === "/api/market-summary") {
+      try {
+        const today = new Date().toISOString().slice(0, 10);
+        const start = shiftMonths(today, 13); // 前年比の基準日（1年前）を確実に含むよう13か月分取得
+        const [voo, qqq, gold] = await Promise.all([
+          fetchDailyCloses("VOO", env.TWELVE_DATA_API_KEY, start),
+          fetchDailyCloses("QQQ", env.TWELVE_DATA_API_KEY, start),
+          fetchDailyCloses("XAU/USD", env.TWELVE_DATA_API_KEY, start).catch(() => [] as Close[]),
+        ]);
+        const isWeekend = (ymd: string) => { const w = new Date(ymd + "T00:00:00Z").getUTCDay(); return w === 0 || w === 6; };
+        const goldTrading = gold.filter((p) => !isWeekend(p.date));
+        const v = computeChanges(voo), q = computeChanges(qqq);
+        if (!v || !q) throw new Error("insufficient series");
+        const g = computeChanges(goldTrading);
+        const date = voo[voo.length - 1].date;
+        return jsonResponse({
+          date,
+          voo: v,
+          qqq: q,
+          ...(g ? { gold: { ...g, date: goldTrading[goldTrading.length - 1].date } } : {}),
+        });
+      } catch (e) {
+        return jsonResponse({ error: "市場データの取得に失敗しました" }, 502);
       }
     }
 
