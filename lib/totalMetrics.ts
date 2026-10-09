@@ -175,3 +175,34 @@ export function formatPct(v: number | null | undefined, digits = 1, signed = fal
   const s = (v * 100).toFixed(digits);
   return `${signed && v > 0 ? "+" : ""}${s}%`;
 }
+
+// 暦年ごとの元本投入額（入金−出金の純額）＝その年の最後の時点の累計純入金 − 前年の最後の時点の累計純入金。
+// 前年以前に時点が無い年（運用開始年）は0円を起点とする。その年に累計純入金のある時点が無ければnull。
+export function calendarYearPrincipalChanges(series: TotalMetricsPoint[], years: number[]): Map<number, number | null> {
+  const pts = series.filter((p) => p.principal != null).sort((a, b) => a.date.localeCompare(b.date));
+  const lastUpTo = (year: number) => { let v: number | null = null; for (const p of pts) { if (Number(p.date.slice(0, 4)) <= year) v = p.principal; else break; } return v; };
+  const out = new Map<number, number | null>();
+  for (const y of years) {
+    const hasPoint = pts.some((p) => Number(p.date.slice(0, 4)) === y);
+    out.set(y, hasPoint ? (lastUpTo(y) as number) - (lastUpTo(y - 1) ?? 0) : null);
+  }
+  return out;
+}
+
+// 価格系列（VOO換算）の暦年TWR＝年末終値 ÷ 前年末終値 − 1（入出金の無い単一銘柄なので、日次リターンの連鎖＝始点と終点の比）。
+// endIso（YYYY-MM-DD）を渡すと、その日までで打ち切る（最新年をポートフォリオの最新日に揃えたYTDにするため）。
+// 前年末・その年の終値のどちらかが系列に無ければnull。
+export function calendarYearPriceTwr(prices: { date: Date; price: number }[], years: number[], endIso: string | null = null): Map<number, number | null> {
+  const isoOf = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const pts = prices.filter((p) => p && Number.isFinite(p.price) && p.price > 0).map((p) => ({ iso: isoOf(p.date), price: p.price })).sort((a, b) => a.iso.localeCompare(b.iso));
+  const lastOnOrBefore = (iso: string) => { let v: number | null = null; for (const p of pts) { if (p.iso <= iso) v = p.price; else break; } return v; };
+  const out = new Map<number, number | null>();
+  for (const y of years) {
+    const start = lastOnOrBefore(`${y - 1}-12-31`);
+    const endLimit = endIso && endIso < `${y}-12-31` ? endIso : `${y}-12-31`;
+    const hasPointInYear = pts.some((p) => p.iso >= `${y}-01-01` && p.iso <= endLimit);
+    const end = hasPointInYear ? lastOnOrBefore(endLimit) : null;
+    out.set(y, start != null && end != null ? end / start - 1 : null);
+  }
+  return out;
+}

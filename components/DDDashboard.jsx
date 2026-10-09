@@ -10,7 +10,7 @@ import { storage } from "@/lib/storage";
 import { pullSyncAndApply, pushSyncNow, scheduleSyncPush, getLastSyncedAt, onSyncMergedFromRemote } from "@/lib/sync";
 import { parseInvestmentExcel, computeOwnAssetDrawdown, computeBenchmarkCAGR, simulateDcaBenchmark, simulateMonthlyRebasedBenchmark, accountChanges, resolveBeginnerTrial, trialAxis } from "@/lib/investmentPerformance";
 import { computeRealHoldingsRanking } from "@/lib/realHoldingsRanking";
-import { formatPct } from "@/lib/totalMetrics";
+import { formatPct, calendarYearPrincipalChanges, calendarYearPriceTwr } from "@/lib/totalMetrics";
 import { isStaleSince } from "@/lib/marketClock";
 import { amountsByClass, largestRemainderPercent, allocationDiff, topHoldingsByClass, ddLabel } from "@/lib/currentAllocation";
 import { computeAccelSensor } from "@/lib/accelSensor";
@@ -6386,22 +6386,44 @@ function TotalMetricsCards({ tm }) {
     </div>
   );
 }
-// 暦年別リターン（TWR）の表。
-function CalendarYearTable({ years }) {
+// 暦年別リターン（TWR）の表。年 → 元本投入 → 年間リターン（TWR）→ 年間損益 → VOO（比較用）。
+// 元本投入＝TOTAL指標の累計純入金の年末時点の前年差、VOO＝VOO換算系列（旧SP500データ統合済み）の暦年TWR。
+// 最新年のVOOはポートフォリオの最新日（YTD）までで揃える。
+function CalendarYearTable({ tm, benchmark = [] }) {
+  const years = tm?.calendarYears;
+  const yearList = useMemo(() => (years ?? []).map((y) => y.year), [years]);
+  const deposits = useMemo(() => calendarYearPrincipalChanges(tm?.series ?? [], yearList), [tm, yearList]);
+  const endIso = tm?.summary?.latestDate ?? tm?.series?.[tm.series.length - 1]?.date ?? null;
+  const vooTwr = useMemo(() => calendarYearPriceTwr(benchmark, yearList, endIso), [benchmark, yearList, endIso]);
   if (!years?.length) return <div className="text-xs" style={{ color: C.textDim }}>暦年別リターンのデータがありません。</div>;
+  const th = "text-right font-normal py-1 pl-1 sm:pl-2 align-bottom leading-tight";
   return (
-    <table className="mono text-xs w-full" style={{ borderCollapse: "collapse", maxWidth: 420 }}>
-      <thead><tr style={{ color: C.textDim, borderBottom: `1px solid ${C.borderSoft}` }}><th className="text-left font-normal py-1">年</th><th className="text-right font-normal py-1">年間リターン（TWR）</th><th className="text-right font-normal py-1">年間損益</th></tr></thead>
-      <tbody>
-        {years.map((y) => (
-          <tr key={y.year} style={{ borderBottom: `1px solid ${C.borderSoft}` }}>
-            <td className="py-1">{y.year}{y.note && /YTD/i.test(y.note) && <span className="ml-1 text-[9px]" style={{ color: C.textDim }}>YTD</span>}</td>
-            <td className="py-1 text-right font-bold" style={{ color: pctColor(y.twr) }}>{formatPct(y.twr, 1, true)}</td>
-            <td className="py-1 text-right" style={{ color: pctColor(y.pnl) }}>{tmYen(y.pnl)}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <div className="overflow-x-auto">
+      <table className="mono text-[10px] sm:text-xs w-full" style={{ borderCollapse: "collapse", maxWidth: 600 }}>
+        <thead><tr style={{ color: C.textDim, borderBottom: `1px solid ${C.borderSoft}` }}>
+          <th className="text-left font-normal py-1 align-bottom">年</th>
+          <th className={th}>元本投入</th>
+          <th className={th}><span className="whitespace-nowrap">年間リターン</span><wbr /><span className="whitespace-nowrap">（TWR）</span></th>
+          <th className={th}>年間損益</th>
+          <th className={th} style={{ borderLeft: `1px solid ${C.borderSoft}` }}>VOO<br /><span className="text-[9px] whitespace-nowrap">比較用</span></th>
+        </tr></thead>
+        <tbody>
+          {years.map((y) => {
+            const dep = deposits.get(y.year);
+            const voo = vooTwr.get(y.year);
+            return (
+              <tr key={y.year} style={{ borderBottom: `1px solid ${C.borderSoft}` }}>
+                <td className="py-1 whitespace-nowrap">{y.year}{y.note && /YTD/i.test(y.note) && <span className="ml-1 text-[9px]" style={{ color: C.textDim }}>YTD</span>}</td>
+                <td className="py-1 pl-1 sm:pl-2 text-right whitespace-nowrap" style={{ color: dep == null || Math.round(dep) === 0 ? C.textDim : pctColor(dep) }}>{dep == null || Math.round(dep) === 0 ? "—" : tmYen(dep)}</td>
+                <td className="py-1 pl-1 sm:pl-2 text-right font-bold whitespace-nowrap" style={{ color: pctColor(y.twr) }}>{formatPct(y.twr, 1, true)}</td>
+                <td className="py-1 pl-1 sm:pl-2 text-right whitespace-nowrap" style={{ color: pctColor(y.pnl) }}>{tmYen(y.pnl)}</td>
+                <td className="py-1 pl-1 sm:pl-2 text-right whitespace-nowrap" style={{ color: pctColor(voo), borderLeft: `1px solid ${C.borderSoft}` }}>{formatPct(voo, 1, true)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }
 // 総資産・元本（累計純入金）の推移（左軸）と、TWR指数（開始=1.0、右軸）。TWR指数は入金の影響を除いた運用成績の基準線。
@@ -6701,7 +6723,7 @@ function InvestmentPerformanceModalContent({ data, d, dQqq, holdings = [], holdi
             </div>
             <div>
               <div className="text-[11px] mb-1.5 flex items-center gap-1" style={{ color: C.textMuted }}>暦年別リターン（TWR）<HelpTip text={TWR_HELP} /></div>
-              <CalendarYearTable years={data.totalMetrics.calendarYears} />
+              <CalendarYearTable tm={data.totalMetrics} benchmark={d?.FULL} />
             </div>
           </div>
         ) : (

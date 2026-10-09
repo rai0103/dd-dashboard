@@ -1,7 +1,7 @@
 // 実行: npm test
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseTotalMetricsSheet, formatPct, toIsoDate, type SheetRows } from "./totalMetrics.ts";
+import { parseTotalMetricsSheet, formatPct, toIsoDate, calendarYearPrincipalChanges, calendarYearPriceTwr, type SheetRows, type TotalMetricsPoint } from "./totalMetrics.ts";
 
 // 実ファイル（TOTAL指標シート）と同じ並び・ラベルの架空データ。値は検算しやすい小さな数。
 function sampleRows(): SheetRows {
@@ -108,4 +108,21 @@ test("日付：Excelシリアル値・Date・文字列", () => {
   assert.equal(toIsoDate("2026/9/30"), "2026-09-30");
   assert.equal(toIsoDate(new Date(2026, 8, 30)), "2026-09-30");
   assert.equal(toIsoDate(null), null);
+});
+
+test("暦年の元本投入：年末時点の累計純入金の前年差（開始年は0起点・時点の無い年はnull・出金超過はマイナス）", () => {
+  const pt = (date: string, principal: number | null) => ({ date, principal }) as TotalMetricsPoint;
+  const series = [pt("2018-12-31", 675581), pt("2019-12-31", 5475778), pt("2021-03-01", 6000000), pt("2021-12-28", 7000000), pt("2022-06-30", null), pt("2022-09-30", 6500000)];
+  const m = calendarYearPrincipalChanges(series, [2018, 2019, 2020, 2021, 2022]);
+  assert.deepEqual([...m.entries()], [[2018, 675581], [2019, 4800197], [2020, null], [2021, 1524222], [2022, -500000]]);
+});
+
+test("暦年のVOO TWR：前年末終値→年末終値。endIsoで最新年を打ち切り、前年末が無い年はnull", () => {
+  const p = (y: number, m: number, d: number, price: number) => ({ date: new Date(y, m - 1, d), price });
+  const prices = [p(2019, 12, 31, 100), p(2020, 6, 30, 90), p(2020, 12, 31, 120), p(2021, 9, 30, 150), p(2021, 12, 31, 132)];
+  const m = calendarYearPriceTwr(prices, [2019, 2020, 2021], "2021-09-30");
+  assert.equal(m.get(2019), null);
+  assert.ok(Math.abs((m.get(2020) as number) - 0.2) < 1e-12);
+  assert.ok(Math.abs((m.get(2021) as number) - 0.25) < 1e-12);
+  assert.ok(Math.abs((calendarYearPriceTwr(prices, [2021]).get(2021) as number) - 0.1) < 1e-12);
 });
