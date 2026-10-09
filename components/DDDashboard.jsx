@@ -2104,9 +2104,10 @@ function troughLabel(FULL, athIdx, troughIdx, troughDate, troughPrice, troughDD,
 }
 // 選択期間の要約（DD-3%以上の発生回数・最大DD・評価額の騰落%）。チャートに重ねず、期間選択ボタンの下に常時表示する。
 // label・color：複数選択時に先頭へ銘柄名を付ける（単体表示では省略）。compact：複数行を詰めて並べるときに下余白をなくす。
-function PeriodStatsBar({ periodStats, label = null, color = C.textMuted, compact = false }) {
+// wrap：スマホ縦画面など横幅が狭いときに折り返して表示する。
+function PeriodStatsBar({ periodStats, label = null, color = C.textMuted, compact = false, wrap = false }) {
   return (
-    <div className={`mono text-[10px] flex items-center gap-3 px-1 ${compact ? "" : "mb-1.5 "}whitespace-nowrap`} style={{ color: C.textMuted, flexShrink: 0 }}>
+    <div className={`mono text-[10px] flex items-center ${wrap ? "flex-wrap gap-x-3 gap-y-0" : "gap-3 whitespace-nowrap"} px-1 ${compact ? "" : "mb-1.5 "}`} style={{ color: C.textMuted, flexShrink: 0 }}>
       {label && <b style={{ color, minWidth: 34 }}>{label}</b>}
       <span>この期間 DD-3%以上：<b style={{ color: C.text }}>{periodStats.ddCount}回</b></span>
       <span>最大DD：<b style={{ color: depthColor(periodStats.maxDD) }}>{periodStats.maxDD.toFixed(1)}%</b></span>
@@ -2116,10 +2117,10 @@ function PeriodStatsBar({ periodStats, label = null, color = C.textMuted, compac
   );
 }
 // 複数選択時：選択した銘柄（VOO・QQQ・GOLD）ごとの期間統計を1行ずつ縦に並べる。
-function MultiPeriodStatsBar({ keys, views }) {
+function MultiPeriodStatsBar({ keys, views, wrap = false }) {
   return (
     <div className="flex flex-col gap-0.5 mb-1.5" style={{ flexShrink: 0 }}>
-      {keys.filter((k) => views[k]).map((k) => (<PeriodStatsBar key={k} periodStats={views[k].periodStats} label={MULTI_SERIES[k].name} color={MULTI_SERIES[k].color} compact />))}
+      {keys.filter((k) => views[k]).map((k) => (<PeriodStatsBar key={k} periodStats={views[k].periodStats} label={MULTI_SERIES[k].name} color={MULTI_SERIES[k].color} compact wrap={wrap} />))}
     </div>
   );
 }
@@ -2348,7 +2349,8 @@ const doyLabel = (doy) => { const d = new Date(Date.UTC(2025, 0, doy)); return `
 // state/setState：通常表示と拡大表示で同じ選択状態（評価額/DD・プリセット・入力年・チェックで非表示にした年）を共有するため、
 // 親（ダッシュボード本体）が持つ状態を渡す。渡されない場合はこのパネル内だけの状態で動く。
 const YEAR_COMPARE_INITIAL = { metric: "index", preset: "recent10", inputYear: "", hidden: { key: "", years: [] } };
-function YearComparePanel({ FULL, fontSize = 10, showTable = false, state: sharedState = null, setState: setSharedState = null }) {
+// onChartTap：指定時（スマホ縦画面のチャートタブ）はチャート本体のタップで拡大表示を開く。年の強調固定は下の年ボタンで行う。
+function YearComparePanel({ FULL, fontSize = 10, showTable = false, state: sharedState = null, setState: setSharedState = null, onChartTap = null }) {
   const [localState, setLocalState] = useState(YEAR_COMPARE_INITIAL);
   const state = sharedState ?? localState;
   const setState = setSharedState ?? setLocalState;
@@ -2425,7 +2427,7 @@ function YearComparePanel({ FULL, fontSize = 10, showTable = false, state: share
         <span className="text-[10px]" style={{ color: C.textDim }}>{metric === "index" ? "年初=100の指数" : "年初来高値からの下落率"}・比較{years.length}年{curLast ? `・今年 ${curLast[metric].toFixed(metric === "index" ? 1 : 1)}${unit}（${fmtDateSlash(curLast.date)}）` : ""}</span>
         {note && <span className="text-[10px]" style={{ color: C.amber }}>{note}</span>}
       </div>
-      <div className={showTable ? "relative" : "flex-1 min-h-0 relative"} style={showTable ? { height: "min(56vh, 520px)" } : undefined}>
+      <div className={showTable ? "relative" : `flex-1 min-h-0 relative${onChartTap ? " cursor-zoom-in" : ""}`} style={showTable ? { height: "min(56vh, 520px)" } : undefined} onClick={onChartTap ?? undefined}>
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={data} margin={{ top: 10, right: 16, left: 0, bottom: 0 }} onMouseLeave={() => setHoverYear(null)}>
             <CartesianGrid stroke={C.borderSoft} vertical={false} />
@@ -2438,7 +2440,7 @@ function YearComparePanel({ FULL, fontSize = 10, showTable = false, state: share
             ))}
             {showCurrent && <Line type="linear" dataKey={`y${currentYear}`} stroke={C.teal} strokeWidth={hoverYear === currentYear ? 3.8 : 2.6} dot={false} isAnimationActive={false} connectNulls name={`${currentYear}年（今年）`} />}
             {/* ホバー判定用の透明な太線（細い線の上にマウスを乗せやすくする）。タップでも選択できる */}
-            {[...visibleYears, ...(showCurrent ? [currentYear] : [])].map((y) => (
+            {!onChartTap && [...visibleYears, ...(showCurrent ? [currentYear] : [])].map((y) => (
               <Line key={`hit-${y}`} type="linear" dataKey={`y${y}`} stroke="#000" strokeOpacity={0} strokeWidth={10} dot={false} activeDot={false} isAnimationActive={false} connectNulls legendType="none"
                 onMouseEnter={() => setHoverYear(y)} onMouseLeave={() => setHoverYear(null)} onClick={() => togglePin(y)} />
             ))}
@@ -2566,6 +2568,23 @@ function YearComparePanel({ FULL, fontSize = 10, showTable = false, state: share
     </div>
   );
 }
+// 暴落比較（経過日数ベース）のチャート本体。拡大表示（DDChartModalContent）とスマホ縦画面のチャートタブで共通。
+// ResponsiveContainerの直下に置く（width/heightはResponsiveContainerから渡される）。
+function CrashCompareChartBody({ comparisonData, selectedCrash, hiddenCrash, fontSize = 10, margin = { top: 12, right: 20, left: 0, bottom: 0 }, width, height }) {
+  return (
+    <LineChart width={width} height={height} data={comparisonData} margin={margin}>
+      <CartesianGrid stroke={C.borderSoft} vertical={false} />
+      <XAxis dataKey="day" tick={{ fill: C.textDim, fontSize }} axisLine={{ stroke: C.border }} tickLine={false} label={{ value: "経過日数（下落開始起点）", position: "insideBottom", offset: -2, fill: C.textDim, fontSize }} />
+      <YAxis domain={comparisonYDomain(comparisonData)} tick={{ fill: C.textDim, fontSize }} axisLine={false} tickLine={false} width={44} />
+      {comparisonData[0]?.gold !== undefined && !hiddenCrash.gold && <YAxis yAxisId="gold" orientation="right" domain={["auto", "auto"]} tick={{ fill: C.gold, fillOpacity: 0.75, fontSize }} tickFormatter={(v) => `$${Math.round(v).toLocaleString()}`} axisLine={false} tickLine={false} width={52} />}
+      <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} formatter={goldTooltipFormatter} />
+      {selectedCrash && !hiddenCrash[selectedCrash.id] && <Line type="monotone" dataKey={selectedCrash.id} stroke={C.rust} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls={false} name={crashDisplayName(selectedCrash)} />}
+      {!hiddenCrash.current && <Line type="monotone" dataKey="current" stroke={C.teal} strokeWidth={2.6} dot={false} isAnimationActive={false} connectNulls={false} name="VOO（現在）" />}
+      {comparisonData[0]?.qqq !== undefined && !hiddenCrash.qqq && <Line type="monotone" dataKey="qqq" stroke={C.violet} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls={false} name="Nasdaq（QQQ・同期間）" />}
+      {comparisonData[0]?.gold !== undefined && !hiddenCrash.gold && <Line yAxisId="gold" type="monotone" dataKey="gold" stroke={C.gold} strokeOpacity={GOLD_LINE_OPACITY} strokeWidth={1.6} dot={false} isAnimationActive={false} connectNulls={false} name="GOLD（同期間・右軸$）" />}
+    </LineChart>
+  );
+}
 // 通常表示（評価額/DD%）と暴落比較（経過日数ベース）をタブで切り替えられる拡大チャート。
 // PCの拡大表示（ddChartモーダル）とスマホの横向き拡大表示（MobileChartZoomModal）の両方から共通で使う。
 // chartSourcesでVOO/QQQ/GOLDを選択（複数選択時は評価額のみの比較チャート）。暴落比較タブはVOOのみ選択時。
@@ -2631,17 +2650,7 @@ function DDChartModalContent({ chartData, rangeDays, d, hidden, toggle, period, 
       ) : (
         <div style={{ height: "min(70vh, 640px)" }}>
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={comparisonData} margin={{ top: 12, right: 20, left: 0, bottom: 0 }}>
-              <CartesianGrid stroke={C.borderSoft} vertical={false} />
-              <XAxis dataKey="day" tick={{ fill: C.textDim, fontSize }} axisLine={{ stroke: C.border }} tickLine={false} label={{ value: "経過日数（下落開始起点）", position: "insideBottom", offset: -2, fill: C.textDim, fontSize }} />
-              <YAxis domain={comparisonYDomain(comparisonData)} tick={{ fill: C.textDim, fontSize }} axisLine={false} tickLine={false} width={44} />
-              {comparisonData[0]?.gold !== undefined && !hiddenCrash.gold && <YAxis yAxisId="gold" orientation="right" domain={["auto", "auto"]} tick={{ fill: C.gold, fillOpacity: 0.75, fontSize }} tickFormatter={(v) => `$${Math.round(v).toLocaleString()}`} axisLine={false} tickLine={false} width={52} />}
-              <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} formatter={goldTooltipFormatter} />
-              {selectedCrash && !hiddenCrash[selectedCrash.id] && <Line type="monotone" dataKey={selectedCrash.id} stroke={C.rust} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls={false} name={crashDisplayName(selectedCrash)} />}
-              {!hiddenCrash.current && <Line type="monotone" dataKey="current" stroke={C.teal} strokeWidth={2.6} dot={false} isAnimationActive={false} connectNulls={false} name="VOO（現在）" />}
-              {comparisonData[0]?.qqq !== undefined && !hiddenCrash.qqq && <Line type="monotone" dataKey="qqq" stroke={C.violet} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls={false} name="Nasdaq（QQQ・同期間）" />}
-              {comparisonData[0]?.gold !== undefined && !hiddenCrash.gold && <Line yAxisId="gold" type="monotone" dataKey="gold" stroke={C.gold} strokeOpacity={GOLD_LINE_OPACITY} strokeWidth={1.6} dot={false} isAnimationActive={false} connectNulls={false} name="GOLD（同期間・右軸$）" />}
-            </LineChart>
+            <CrashCompareChartBody comparisonData={comparisonData} selectedCrash={selectedCrash} hiddenCrash={hiddenCrash} fontSize={fontSize} />
           </ResponsiveContainer>
         </div>
       )}
@@ -5511,23 +5520,77 @@ function MobileSpeedAlertBlock({ label, dInstrument, onOpen }) {
     </button>
   );
 }
-// 初期表示ではチャートを描画せずサマリー数値のみ表示し、「拡大表示」タップ時のみ横向き全画面モーダルでチャートを表示する。
-function MobileChartPage({ d, onZoom }) {
+// スマホ縦画面の「チャート」タブ。PCの評価額/DDパネルと同じ構成（通常／暴落／年比較のタブ、VOO・QQQ・GOLDの切替、凡例・DD印・期間、チャート本体）を
+// 縦画面のまま1画面に収める（ページ自体はスクロールさせず、チャートが残りの高さを使う）。期間統計は折りたたみ可能。
+// チャート本体のタップでonZoom（横向き全画面の拡大表示。開いているタブを引き継ぐ）を開く。拡大表示側では従来どおりBrush・年比較の一覧表などが使える。
+function MobileChartPage({ chartTab, setChartTab, chartSources, onToggleChartSource, sourceViews, chartData, rangeDays, d, dQqq, qqqChartData, qqqRangeDays, qqqPeriodStats, goldView, hidden, toggle, period, setPeriod, periodStats, historicalCrashes, selectedCrash, onSelectCrash, comparisonData, hiddenCrash, toggleCrash, crashLegendItems, yearCompare, setYearCompare, onZoom, onOpenCrash }) {
+  const [statsOpen, setStatsOpen] = useState(true);
+  const chartSource = chartSourceMode(chartSources);
+  const tab = chartSource === "sp500" ? chartTab : "normal"; // VOO以外（QQQ・GOLD・複数選択）は通常表示のみ（PCと同じ）
+  const isQqq = chartSource === "qqq", isGold = chartSource === "gold", isMulti = chartSource === "multi";
+  const activeD = isQqq ? dQqq : isGold ? goldView?.d : d;
+  const activeStats = isQqq ? qqqPeriodStats : isGold ? goldView?.periodStats : periodStats;
+  const unavailable = (isQqq && !dQqq) || (isGold && !goldView);
+  const zoomHint = <div className="text-[9px] text-center shrink-0 pt-1" style={{ color: C.textDim }}>チャートをタップで拡大表示（横向き）</div>;
   return (
-    <div className="p-3 flex flex-col gap-3 h-full justify-center">
-      <div className="rounded-lg p-4" style={{ background: C.panel, border: `1px solid ${C.border}` }}>
-        <div className="text-[11px] mb-2" style={{ color: C.textDim }}>評価額 / ATH（{fmtYMD(d.athDate)}）</div>
-        <div className="mono text-2xl font-bold mb-1">${d.currentPrice.toFixed(2)}</div>
-        <div className="mono text-xs mb-3" style={{ color: C.textDim }}>ATH ${d.currentATH.toFixed(2)}</div>
-        <div className="flex items-center justify-between pt-3" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
-          <span className="text-[10px]" style={{ color: C.textDim }}>最高値比（DD%）</span>
-          <span className="mono font-bold text-xl" style={{ color: d.currentDD >= 0 ? C.teal : C.rust }}>{d.currentDD.toFixed(1)}%</span>
+    <div className="p-2 h-full flex flex-col min-h-0">
+      <div className="rounded-lg flex-1 min-h-0 flex flex-col px-2 pt-2 pb-1.5" style={{ background: C.panel, border: `1px solid ${C.border}` }}>
+        <div className="flex items-center justify-between gap-2 shrink-0 mb-1.5">
+          {chartSource === "sp500" ? (
+            <div className="flex gap-0.5">{[{ k: "normal", l: "通常" }, { k: "crash", l: "暴落" }, { k: "year", l: "年比較" }].map((t) => (<button key={t.k} onClick={() => setChartTab(t.k)} className="text-[11px] px-2 py-1 rounded" style={{ color: tab === t.k ? C.bg : C.textMuted, background: tab === t.k ? C.amber : "transparent", fontWeight: tab === t.k ? 700 : 400, border: `1px solid ${tab === t.k ? C.amber : C.borderSoft}`, cursor: "pointer" }}>{t.l}</button>))}</div>
+          ) : (<span className="text-[11px] font-medium" style={{ color: C.textMuted }}>{chartSourceTitle(chartSource)}</span>)}
+          {tab === "normal" && <ChartSourceToggle value={chartSources} onToggle={onToggleChartSource} qqqAvailable={!!dQqq} goldAvailable={!!goldView} size="md" />}
         </div>
+        {tab === "normal" ? (
+          <>
+            <div className="flex items-center gap-1.5 flex-wrap shrink-0 mb-1">
+              {isMulti ? <ClickLegend items={multiLegendItems(chartSources, sourceViews)} hidden={hidden} onToggle={toggle} />
+                : <ClickLegend items={[{ key: "price", label: "評価額", color: C.teal }, { key: "dd", label: "DD%", color: C.rust }]} hidden={hidden} onToggle={toggle} />}
+              <DDMarkerToggle hidden={hidden} toggle={toggle} size="md" />
+              <PeriodSelect value={period} onChange={setPeriod} size="md" />
+              <button onClick={() => setStatsOpen((v) => !v)} className="text-[10px] ml-auto flex items-center gap-0.5" style={{ color: C.textDim, background: "transparent", border: "none", cursor: "pointer" }}>期間統計<ChevronRight size={11} style={{ transform: statsOpen ? "rotate(90deg)" : "none" }} /></button>
+            </div>
+            {statsOpen && !unavailable && (isMulti ? <MultiPeriodStatsBar keys={chartSources} views={sourceViews} wrap /> : <PeriodStatsBar periodStats={activeStats} wrap />)}
+            <div className="flex-1 min-h-0 cursor-zoom-in" onClick={onZoom}>
+              {unavailable ? (
+                <div className="h-full flex items-center justify-center text-xs text-center px-4" style={{ color: C.textDim }}>{isGold ? "GOLD" : "QQQ"}のトラックレコードが未取り込みです。データ入力・出力画面から{isGold ? "GOLD" : "QQQ"}のCSVを取り込んでください。</div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%" key={`${period}-${chartSources.join("+")}`}>
+                  {isMulti
+                    ? <MultiPriceChartBody keys={chartSources} views={sourceViews} hidden={hidden} fontSize={9} />
+                    : <EvalDDChartBody chartData={isQqq ? qqqChartData : isGold ? goldView.chartData : chartData} rangeDays={isQqq ? qqqRangeDays : isGold ? goldView.rangeDays : rangeDays} d={activeD} hidden={hidden} periodStats={activeStats} showSpyListing={!isGold} fontSize={9} />}
+                </ResponsiveContainer>
+              )}
+            </div>
+            {zoomHint}
+          </>
+        ) : tab === "crash" ? (
+          <>
+            <div className="flex items-center gap-1.5 shrink-0 mb-1">
+              {historicalCrashes.length > 0 && (
+                <select value={selectedCrash?.id ?? ""} onChange={(e) => onSelectCrash(e.target.value)} className="mono text-[11px] rounded px-1.5 py-1 min-w-0 flex-1" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text, cursor: "pointer" }}>
+                  {historicalCrashes.map((c) => (<option key={c.id} value={c.id}>{crashButtonLabel(c)}</option>))}
+                </select>
+              )}
+              {selectedCrash && <button onClick={() => onOpenCrash(selectedCrash)} className="text-[11px] px-2 py-1 rounded shrink-0" style={{ color: C.bg, background: C.teal, fontWeight: 700, border: "none", cursor: "pointer" }}>詳細比較</button>}
+            </div>
+            <div className="shrink-0 mb-1"><ClickLegend items={crashLegendItems} hidden={hiddenCrash} onToggle={toggleCrash} /></div>
+            <div className="flex-1 min-h-0 cursor-zoom-in" onClick={onZoom}>
+              <ResponsiveContainer width="100%" height="100%">
+                <CrashCompareChartBody comparisonData={comparisonData} selectedCrash={selectedCrash} hiddenCrash={hiddenCrash} fontSize={9} margin={{ top: 8, right: 8, left: -8, bottom: 4 }} />
+              </ResponsiveContainer>
+            </div>
+            {zoomHint}
+          </>
+        ) : (
+          <>
+            <div className="flex-1 min-h-0 flex flex-col -mx-2">
+              <YearComparePanel FULL={d.FULL} fontSize={9} state={yearCompare} setState={setYearCompare} onChartTap={onZoom} />
+            </div>
+            <div className="text-[9px] text-center shrink-0 pt-1" style={{ color: C.textDim }}>チャートをタップで拡大表示（パフォーマンス一覧つき）</div>
+          </>
+        )}
       </div>
-      <button onClick={onZoom} className="flex items-center justify-center gap-2 rounded-lg py-3.5" style={{ background: C.teal, color: C.bg, fontWeight: 700, border: "none", cursor: "pointer" }}>
-        <Activity size={15} /> チャートを拡大表示（横向き）
-      </button>
-      <div className="text-[10px] leading-relaxed" style={{ color: C.textDim }}>評価額・DD%の推移チャート、および過去の暴落局面との比較（暴落比較）は拡大表示でご覧いただけます。拡大表示は横向き（landscape）で全画面表示されます。</div>
     </div>
   );
 }
@@ -5880,7 +5943,7 @@ function MobilePager({ activeIndex, onChange, pages }) {
 }
 // 評価額チャートの「拡大」時に開く全画面モーダル。CSSで常に横向き（landscape）表示に固定し、
 // 対応端末ではあわせてScreen Orientation APIでの実回転ロックも試みる（非対応環境ではCSS回転のみで代替）。
-function MobileChartZoomModal({ onClose, chartData, rangeDays, d, hidden, toggle, period, setPeriod, periodStats, historicalCrashes, selectedCrash, onSelectCrash, comparisonData, hiddenCrash, toggleCrash, crashLegendItems, dQqq, qqqChartData, qqqRangeDays, qqqPeriodStats, goldView = null, sourceViews, chartSources, onToggleChartSource, yearCompare = null, setYearCompare = null, isRealDevice = true }) {
+function MobileChartZoomModal({ onClose, chartData, rangeDays, d, hidden, toggle, period, setPeriod, periodStats, historicalCrashes, selectedCrash, onSelectCrash, comparisonData, hiddenCrash, toggleCrash, crashLegendItems, dQqq, qqqChartData, qqqRangeDays, qqqPeriodStats, goldView = null, sourceViews, chartSources, onToggleChartSource, yearCompare = null, setYearCompare = null, initialTab = null, isRealDevice = true }) {
   useEffect(() => {
     if (!isRealDevice) return; // PC上でのスマホ表示プレビュー中は、実機用の全画面化・画面回転ロックを行わない（PC自体が全画面化されてしまうため）
     (async () => {
@@ -5903,7 +5966,7 @@ function MobileChartZoomModal({ onClose, chartData, rangeDays, d, hidden, toggle
             <button onClick={onClose} className="flex items-center gap-1 text-xs px-2 py-1 rounded" style={{ color: C.textMuted, background: "transparent", border: "none", cursor: "pointer" }}><X size={13} /> 閉じる</button>
           </div>
           <div className="flex-1 min-h-0 overflow-y-auto">
-            <DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={onSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} sourceViews={sourceViews} chartSources={chartSources} onToggleChartSource={onToggleChartSource} yearCompare={yearCompare} setYearCompare={setYearCompare} fontSize={13} />
+            <DDChartModalContent chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={onSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} sourceViews={sourceViews} chartSources={chartSources} onToggleChartSource={onToggleChartSource} yearCompare={yearCompare} setYearCompare={setYearCompare} initialTab={initialTab} fontSize={13} />
           </div>
         </div>
       </div>
@@ -7405,7 +7468,7 @@ export default function DDDashboard() {
       {modal?.type === "bottomScore" && <FullScreenModal title={bottom.hold.applicable ? `VOO底値判定：${bottomLabel(d.FULL, bottom.hold.state)} が底値として確定する確率（VOO実績から都度算出）` : "VOO底値判定（VOO実績から都度算出）"} onClose={() => setModal(null)}><BottomScoreModalContent bottom={bottom} FULL={d.FULL} /></FullScreenModal>}
       {modal?.type === "realHoldingsRanking" && <FullScreenModal title="実質保有銘柄ランキング" onClose={() => setModal(null)}><RealHoldingsRankingContent holdings={combinedHoldings} /></FullScreenModal>}
       {modal?.type === "summary" && <FullScreenModal title="詳細サマリー出力（AI相談用）" onClose={() => setModal(null)}><SummaryModalContent d={d} dVoo={dVoo} dQqq={dQqq} holdings={holdings} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} blocks={blocks} rankLabels={rankLabels} lifecycle={lifecycle} onLifecycleChange={handleLifecycleChange} fixedPositions={fixedPositions} onFixedPositionChange={handleFixedPositionChange} checkpoints={checkpoints} prevSnapshot={prevSnapshot} onSaveSnapshot={handleSaveSnapshot} /></FullScreenModal>}
-      {modal?.type === "mobileChartZoom" && <MobileChartZoomModal onClose={() => setModal(null)} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} sourceViews={sourceViews} chartSources={chartSources} onToggleChartSource={toggleChartSource} yearCompare={yearCompare} setYearCompare={setYearCompare} isRealDevice={isMobileAuto} />}
+      {modal?.type === "mobileChartZoom" && <MobileChartZoomModal onClose={() => setModal(null)} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} sourceViews={sourceViews} chartSources={chartSources} onToggleChartSource={toggleChartSource} yearCompare={yearCompare} setYearCompare={setYearCompare} initialTab={chartTab} isRealDevice={isMobileAuto} />}
 
       {isMobile ? (
         // スマホ版はタイトルを短縮し、「PC表示に切替」を含む全ボタンをアイコンのみで1行にまとめる（PC版のレイアウトはこの分岐の外で従来通り維持）。
@@ -7464,7 +7527,7 @@ export default function DDDashboard() {
             pages={[
               { key: "ath", label: "評価額/ATH", icon: TrendingUp, content: <MobileAthPage d={d} dVoo={dVoo} dQqq={dQqq} /> },
               { key: "speed", label: "経過日数", icon: Clock, content: <MobileSpeedPage dVoo={dVoo} dQqq={dQqq} vooSeries={vooCalcSeries} qqqSeries={qqqCalcSeries} onOpenSpeedAlert={(inst) => { setSpeedAlertInstrument(inst); setModal({ type: "speedAlert" }); }} /> },
-              { key: "chart", label: "チャート", icon: Activity, content: <MobileChartPage d={d} onZoom={() => setModal({ type: "mobileChartZoom" })} /> },
+              { key: "chart", label: "チャート", icon: Activity, content: <MobileChartPage chartTab={chartTab} setChartTab={setChartTab} chartSources={chartSources} onToggleChartSource={toggleChartSource} sourceViews={sourceViews} chartData={chartData} rangeDays={rangeDays} d={d} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} yearCompare={yearCompare} setYearCompare={setYearCompare} onZoom={() => setModal({ type: "mobileChartZoom" })} onOpenCrash={(c) => setModal({ type: "crash", crash: c })} /> },
               { key: "portfolio", label: "構成", icon: Layers, content: <MobilePortfolioPage pieView={pieView} setPieView={setPieView} holdings={combinedHoldings} ownerDates={ownerUpdatedDates} onOpen={() => setModal({ type: "portfolio" })} onOpenRealHoldingsRanking={() => setModal({ type: "realHoldingsRanking" })} dateLabel={holdingsDateLabel} /> },
               { key: "diff", label: "配分乖離", icon: ListChecks, content: <MobileDiffPage modelOverride={modelOverride} setModelOverride={setModelOverride} d={d} currentHoldingPct={currentHoldingPct} currentHoldingAmount={currentHoldingAmount} effectiveModelRow={effectiveModelRow} rankLabels={rankLabels} blocks={blocks} onOpenRank={(rank) => setModal({ type: "rank", rank })} onOpenDDTable={() => setModal({ type: "ddTable" })} dateLabel={holdingsDateLabel} /> },
               { key: "bottom", label: "VOO底値判定", icon: Gauge, content: <MobileBottomScorePage bottom={bottom} FULL={d.FULL} onOpen={() => setModal({ type: "bottomScore" })} /> },
