@@ -3141,15 +3141,16 @@ function FullScreenModal({ title, onClose, children }) {
   );
 }
 
-function TrackRecordContent({ currentT, trackRecord }) {
+// stacked=true（スマホ）：節目間の進行確率と最終到達確率を横並びではなく上下に並べる。
+function TrackRecordContent({ currentT, trackRecord, stacked = false }) {
   const tr = trackRecord;
   const pct = (v, hits, n) => v === null ? "—" : `${v}%${(hits !== undefined && n !== undefined) ? `（${hits}/${n}）` : ""}`;
   return (
-    <div className="grid grid-cols-2 gap-x-8 gap-y-6">
+    <div className={`grid ${stacked ? "grid-cols-1" : "grid-cols-2"} gap-x-8 gap-y-6`}>
       <div>
         <div className="text-xs mb-3" style={{ color: C.textDim }}>節目間の進行確率<span className="ml-1" style={{ color: C.textDim }}>（VOO実績 n={tr.n}局面）</span></div>
         {tr.progression.map((row) => (
-          <div key={row.from} className="grid items-center gap-2 mb-1.5" style={{ gridTemplateColumns: "92px 1fr 76px 44px" }}>
+          <div key={row.from} className="grid items-center gap-2 mb-1.5" style={{ gridTemplateColumns: stacked ? "84px 1fr 98px 36px" : "92px 1fr 76px 44px" }}>
             <span className="mono text-xs" style={{ color: row.from === currentT ? C.text : C.textMuted }}>{row.label ?? `${row.from}%→${row.to}%`}</span>
             <div className="h-2 rounded-full" style={{ background: C.panel2 }}><div className="h-2 rounded-full" style={{ width: `${row.p ?? 0}%`, background: row.watershed ? C.rust : C.teal }} /></div>
             <span className="mono text-xs text-right">{pct(row.p, row.hits, row.n)}</span>
@@ -3169,7 +3170,7 @@ function TrackRecordContent({ currentT, trackRecord }) {
         ))}
         <div className="text-[9px] mt-2" style={{ color: C.textDim }}>発生頻度は、VOO（換算込み）の実績データ全体でDD3%級の押し目が年{tr.ddFreqPerYear !== null ? tr.ddFreqPerYear.toFixed(1) : "—"}回発生している実績に基づく換算値です。</div>
       </div>
-      <div className="col-span-2">
+      <div className="col-span-full">
         <div className="text-xs mb-3" style={{ color: C.textDim }}>速度条件付き確率（DD3→5%区間の日数別・VOO実績 DD5%到達{tr.reachedD5Count}局面）</div>
         <table className="w-full text-xs mono"><thead><tr style={{ color: C.textDim }}><th className="text-left font-normal py-1">区分</th><th>→8%</th><th>→10%</th><th>→15%</th><th>→20%</th></tr></thead>
           <tbody>
@@ -3178,7 +3179,7 @@ function TrackRecordContent({ currentT, trackRecord }) {
           </tbody>
         </table>
       </div>
-      <div className="col-span-2 text-[11px] leading-relaxed" style={{ color: C.textDim }}>これらはVOO（上場前はSP500指数をVOO換算した長期履歴）のトラックレコード（約{tr.totalYears.toFixed(0)}年・DD3%到達{tr.n}局面）から都度算出した実績値です。データをアップロード・更新すると自動的に再計算されます。過去確率は将来を保証しません。</div>
+      <div className="col-span-full text-[11px] leading-relaxed" style={{ color: C.textDim }}>これらはVOO（上場前はSP500指数をVOO換算した長期履歴）のトラックレコード（約{tr.totalYears.toFixed(0)}年・DD3%到達{tr.n}局面）から都度算出した実績値です。データをアップロード・更新すると自動的に再計算されます。過去確率は将来を保証しません。</div>
     </div>
   );
 }
@@ -3258,7 +3259,7 @@ function AccelSensorSection({ vooSeries, qqqSeries, compact = false }) {
 }
 
 /* ---------------- DD加速度アラート 詳細モーダル ---------------- */
-function SpeedAlertModalContent({ d, instrumentLabel = "VOO", vooSeries = null, qqqSeries = null }) {
+function SpeedAlertModalContent({ d, instrumentLabel = "VOO", vooSeries = null, qqqSeries = null, isMobile = false }) {
   const sa = d.speedAlert;
   const deepProbRows = sa.level === "confirmed5" ? [
     { label: "DD8%まで", p: sa.deepProb["-8"] }, { label: "DD10%まで", p: sa.deepProb["-10"] },
@@ -3353,7 +3354,7 @@ function SpeedAlertModalContent({ d, instrumentLabel = "VOO", vooSeries = null, 
         </div>
       </div>
 
-      <TrackRecordContent currentT={d.episode.currentT} trackRecord={d.trackRecord} />
+      <TrackRecordContent currentT={d.episode.currentT} trackRecord={d.trackRecord} stacked={isMobile} />
 
       <div className="text-[11px] leading-relaxed rounded px-3 py-2" style={{ color: C.textDim, background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
         <div className="font-semibold mb-1" style={{ color: C.textMuted }}>重要な限界（必ずお読みください）</div>
@@ -7455,7 +7456,7 @@ export default function DDDashboard() {
         @media (orientation: landscape) { .force-landscape-inner { width: 100vw; height: 100vh; transform: translate(-50%, -50%); } }
       `}</style>
 
-      {modal?.type === "speedAlert" && (speedAlertInstrument === "qqq" ? dQqq : dVoo) && <FullScreenModal title={`DD加速度アラート（速度・経過日数の法則・${speedAlertInstrument.toUpperCase()}基準）`} onClose={() => setModal(null)}><SpeedAlertModalContent d={speedAlertInstrument === "qqq" ? dQqq : dVoo} instrumentLabel={speedAlertInstrument.toUpperCase()} vooSeries={vooCalcSeries} qqqSeries={qqqCalcSeries} /></FullScreenModal>}
+      {modal?.type === "speedAlert" && (speedAlertInstrument === "qqq" ? dQqq : dVoo) && <FullScreenModal title={`DD加速度アラート（速度・経過日数の法則・${speedAlertInstrument.toUpperCase()}基準）`} onClose={() => setModal(null)}><SpeedAlertModalContent d={speedAlertInstrument === "qqq" ? dQqq : dVoo} instrumentLabel={speedAlertInstrument.toUpperCase()} vooSeries={vooCalcSeries} qqqSeries={qqqCalcSeries} isMobile={isMobile} /></FullScreenModal>}
       {modal?.type === "portfolio" && <FullScreenModal title={<>ポートフォリオ構成表{holdingsDateSuffix}</>} onClose={() => setModal(null)}><PortfolioTableContent view={pieView} holdings={holdings} brokerSummaries={brokerSummaries} ownerDates={ownerUpdatedDates} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
       {modal?.type === "ddTable" && <FullScreenModal title="DD毎のA〜E配分表" onClose={() => setModal(null)}><DDTableContent modelRow={d.modelRow} modelRows={d.trackRecord.dynamicModelRows} holdings={holdings} actualHoldings={combinedHoldings} currentDD={d.currentDD} asOfLabel={holdingsDateLabel} lastSyncedLabel={lastSyncedLabel} /></FullScreenModal>}
       {modal?.type === "modelDebug" && <FullScreenModal title="動的配分モデル デバッグビュー" onClose={() => setModal(null)}><ModelDebugContent d={d} dQqq={dQqq} qqqAmplification={qqqAmplification} /></FullScreenModal>}
