@@ -2174,7 +2174,8 @@ function buildEpisodeMarkers({ chartData, d, periodStats, fontSize, series = nul
 }
 /* ---------------- reusable evaluation/DD composed chart ---------------- */
 // showSpyListing：S&P500上場日の縦線を出すか（SP500系列のみ。GOLDのように1993年以前のデータがある別銘柄では出さない）
-function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBrush = false, showSpyListing = true, fontSize = 10, width, height }) {
+// compact：スマホ縦画面用。右端の余白と左右の軸幅を詰めて、プロット部分を画面幅いっぱいに広げる（PC・拡大表示は既定値のまま）。
+function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBrush = false, showSpyListing = true, fontSize = 10, compact = false, width, height }) {
   // 現在カーソル追従ツールチップが指している日付。ChartMarkersの常時表示ラベルをこの日付と重ならないよう
   // 一時的に隠す判定と、EvalTooltipContentでマーカー注釈を同じ吹き出しに統合するための照合の両方に使う。
   const [activeDate, setActiveDate] = useState(null);
@@ -2186,7 +2187,7 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBru
   const markerByTime = new Map(markerPoints.map((m) => [m.date.getTime(), m]));
   return (
     <ComposedChart
-      width={width} height={height} data={chartData} margin={{ top: 12, right: 44, left: 0, bottom: withBrush ? 0 : 0 }}
+      width={width} height={height} data={chartData} margin={compact ? { top: 10, right: 2, left: 0, bottom: 0 } : { top: 12, right: 44, left: 0, bottom: withBrush ? 0 : 0 }}
       onMouseMove={(state) => setActiveDate(state && state.isTooltipActive && state.activeLabel ? state.activeLabel : null)}
       onMouseLeave={() => setActiveDate(null)}
     >
@@ -2196,8 +2197,8 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBru
       </defs>
       <CartesianGrid stroke={C.borderSoft} vertical={false} />
       <XAxis dataKey="date" tickFormatter={(dt) => fmtAxisDate(dt, rangeDays)} tick={{ fill: C.textDim, fontSize }} axisLine={{ stroke: C.border }} tickLine={false} minTickGap={40} />
-      <YAxis yAxisId="price" domain={["auto", "auto"]} tick={{ fill: C.teal, fontSize }} axisLine={false} tickLine={false} width={48} label={{ value: "評価額", angle: -90, position: "insideLeft", fill: C.teal, fontSize }} />
-      <YAxis yAxisId="dd" orientation="right" domain={[ddTicks[ddTicks.length - 1], 0]} ticks={ddTicks} interval={0} tick={{ fill: C.rust, fontSize }} axisLine={false} tickLine={false} width={46} label={{ value: "DD%", angle: 90, position: "insideRight", fill: C.rust, fontSize }} />
+      <YAxis yAxisId="price" domain={["auto", "auto"]} tick={{ fill: C.teal, fontSize }} axisLine={false} tickLine={false} width={compact ? 40 : 48} label={{ value: "評価額", angle: -90, position: "insideLeft", fill: C.teal, fontSize }} />
+      <YAxis yAxisId="dd" orientation="right" domain={[ddTicks[ddTicks.length - 1], 0]} ticks={ddTicks} interval={0} tick={{ fill: C.rust, fontSize }} axisLine={false} tickLine={false} width={compact ? 38 : 46} label={{ value: "DD%", angle: 90, position: "insideRight", fill: C.rust, fontSize }} />
       <Tooltip content={(props) => <EvalTooltipContent {...props} markerByTime={markerByTime} />} />
       {MILESTONES.filter((t) => t !== -3).map((t) => (<ReferenceLine key={t} yAxisId="dd" y={t} stroke={C.borderSoft} strokeDasharray="2 3" label={{ value: `${t}%`, position: "insideBottomRight", fill: C.textDim, fontSize: Math.max(8, fontSize - 2) }} />))}
       {/* DD-3%の目安ライン。値はDD%軸の目盛（常に-3を含む）で示すため、チャート内のラベルは付けない */}
@@ -2309,7 +2310,7 @@ function MultiTooltipContent({ active, payload, label, markersByTime, hidden, ke
   );
 }
 // keys：選択中の銘柄（CHART_SOURCE_ORDER順）、views：銘柄ごとの { d, chartData, periodStats }
-function MultiPriceChartBody({ keys, views, hidden, fontSize = 10, width, height }) {
+function MultiPriceChartBody({ keys, views, hidden, fontSize = 10, compact = false, width, height }) {
   const active = keys.filter((k) => views[k]);
   const data = mergeMultiChartData(active, views);
   const rangeDays = data.length ? Math.round((data[data.length - 1].date - data[0].date) / 86400000) : 0;
@@ -2323,12 +2324,12 @@ function MultiPriceChartBody({ keys, views, hidden, fontSize = 10, width, height
   const markersByTime = new Map();
   for (const m of markerPoints) { const t = m.date.getTime(); if (!markersByTime.has(t)) markersByTime.set(t, []); markersByTime.get(t).push(m); }
   return (
-    <ComposedChart width={width} height={height} data={data} margin={{ top: 12, right: 8, left: 0, bottom: 0 }}>
+    <ComposedChart width={width} height={height} data={data} margin={compact ? { top: 10, right: 2, left: 0, bottom: 0 } : { top: 12, right: 8, left: 0, bottom: 0 }}>
       <CartesianGrid stroke={C.borderSoft} vertical={false} />
       <XAxis dataKey="date" tickFormatter={(dt) => fmtAxisDate(dt, rangeDays)} tick={{ fill: C.textDim, fontSize }} axisLine={{ stroke: C.border }} tickLine={false} minTickGap={40} />
       {active.map((k, i) => {
         const sr = MULTI_SERIES[k];
-        return <YAxis key={k} yAxisId={sr.yAxisId} orientation={i === 0 ? "left" : "right"} domain={["auto", "auto"]} tick={{ fill: sr.color, fontSize }} axisLine={false} tickLine={false} width={52} label={{ value: sr.name, angle: i === 0 ? -90 : 90, position: i === 0 ? "insideLeft" : "insideRight", fill: sr.color, fontSize }} />;
+        return <YAxis key={k} yAxisId={sr.yAxisId} orientation={i === 0 ? "left" : "right"} domain={["auto", "auto"]} tick={{ fill: sr.color, fontSize }} axisLine={false} tickLine={false} width={compact ? 44 : 52} label={{ value: sr.name, angle: i === 0 ? -90 : 90, position: i === 0 ? "insideLeft" : "insideRight", fill: sr.color, fontSize }} />;
       })}
       <Tooltip content={(props) => <MultiTooltipContent {...props} markersByTime={markersByTime} hidden={hidden} keys={active} />} />
       {active.map((k) => { const sr = MULTI_SERIES[k]; return <Line key={k} yAxisId={sr.yAxisId} type="linear" dataKey={sr.priceKey} stroke={sr.color} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls hide={!!hidden[sr.hiddenKey]} name={sr.name} />; })}
@@ -5551,14 +5552,14 @@ function MobileChartPage({ chartTab, setChartTab, chartSources, onToggleChartSou
               <button onClick={() => setStatsOpen((v) => !v)} className="text-[10px] ml-auto flex items-center gap-0.5" style={{ color: C.textDim, background: "transparent", border: "none", cursor: "pointer" }}>期間統計<ChevronRight size={11} style={{ transform: statsOpen ? "rotate(90deg)" : "none" }} /></button>
             </div>
             {statsOpen && !unavailable && (isMulti ? <MultiPeriodStatsBar keys={chartSources} views={sourceViews} wrap /> : <PeriodStatsBar periodStats={activeStats} wrap />)}
-            <div className="flex-1 min-h-0 cursor-zoom-in" onClick={onZoom}>
+            <div className="flex-1 min-h-0 cursor-zoom-in -mx-1.5" onClick={onZoom}>
               {unavailable ? (
                 <div className="h-full flex items-center justify-center text-xs text-center px-4" style={{ color: C.textDim }}>{isGold ? "GOLD" : "QQQ"}のトラックレコードが未取り込みです。データ入力・出力画面から{isGold ? "GOLD" : "QQQ"}のCSVを取り込んでください。</div>
               ) : (
                 <ResponsiveContainer width="100%" height="100%" key={`${period}-${chartSources.join("+")}`}>
                   {isMulti
-                    ? <MultiPriceChartBody keys={chartSources} views={sourceViews} hidden={hidden} fontSize={9} />
-                    : <EvalDDChartBody chartData={isQqq ? qqqChartData : isGold ? goldView.chartData : chartData} rangeDays={isQqq ? qqqRangeDays : isGold ? goldView.rangeDays : rangeDays} d={activeD} hidden={hidden} periodStats={activeStats} showSpyListing={!isGold} fontSize={9} />}
+                    ? <MultiPriceChartBody keys={chartSources} views={sourceViews} hidden={hidden} fontSize={9} compact />
+                    : <EvalDDChartBody chartData={isQqq ? qqqChartData : isGold ? goldView.chartData : chartData} rangeDays={isQqq ? qqqRangeDays : isGold ? goldView.rangeDays : rangeDays} d={activeD} hidden={hidden} periodStats={activeStats} showSpyListing={!isGold} fontSize={9} compact />}
                 </ResponsiveContainer>
               )}
             </div>
