@@ -7408,27 +7408,27 @@ export default function DDDashboard() {
       {modal?.type === "mobileChartZoom" && <MobileChartZoomModal onClose={() => setModal(null)} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} sourceViews={sourceViews} chartSources={chartSources} onToggleChartSource={toggleChartSource} yearCompare={yearCompare} setYearCompare={setYearCompare} isRealDevice={isMobileAuto} />}
 
       {isMobile ? (
-        // スマホ版はヘッダーの縦幅を最小化し、各ページの表示領域を最大化するため、タイトルを短縮し、
-        // 「PC表示に切替」を含む全ボタンをアイコンのみで1行にまとめる（PC版のレイアウトはこの分岐の外で従来通り維持）。
-        <div className="flex items-center justify-between px-2 py-1.5 shrink-0 gap-1.5" style={{ borderBottom: `1px solid ${C.border}`, background: C.panel2 }}>
-          <span className="text-[11px] font-bold tracking-wide truncate min-w-0">DD戦略 {usEasternYMD()}</span>
-          <div className="flex items-center gap-1 shrink-0">
-            <button onClick={toggleViewMode} title="PC表示に切り替え" className="flex items-center p-1 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
-              <Monitor size={12} />
+        // スマホ版はタイトルを短縮し、「PC表示に切替」を含む全ボタンをアイコンのみで1行にまとめる（PC版のレイアウトはこの分岐の外で従来通り維持）。
+        // タップしやすさのため丸ボタンは30px角（幅374px以下の端末は28px）・アイコン16pxとし、横幅を確保するためタイトルは「DD戦略」と日付の2段にする。
+        <div className="flex items-center justify-between px-2.5 py-2 shrink-0 gap-2 max-[374px]:px-2" style={{ borderBottom: `1px solid ${C.border}`, background: C.panel2 }}>
+          <span className="flex flex-col min-w-0 leading-tight"><span className="text-[13px] font-bold tracking-wide truncate">DD戦略</span><span className="text-[11px] max-[374px]:text-[10px] mono truncate" style={{ color: C.textMuted }}>{usEasternYMD()}</span></span>
+          <div className="flex items-center gap-[5px] max-[374px]:gap-1 shrink-0">
+            <button onClick={toggleViewMode} title="PC表示に切り替え" className="flex items-center justify-center w-[30px] h-[30px] max-[374px]:w-7 max-[374px]:h-7 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+              <Monitor size={16} />
             </button>
-            <button onClick={() => setModal({ type: "summary" })} title="詳細サマリー" className="flex items-center p-1 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
-              <FileText size={12} />
+            <button onClick={() => setModal({ type: "summary" })} title="詳細サマリー" className="flex items-center justify-center w-[30px] h-[30px] max-[374px]:w-7 max-[374px]:h-7 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+              <FileText size={16} />
             </button>
-            <button onClick={() => setModal({ type: "dataInput" })} title="データ入力・出力" className="flex items-center p-1 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
-              <Database size={12} />
+            <button onClick={() => setModal({ type: "dataInput" })} title="データ入力・出力" className="flex items-center justify-center w-[30px] h-[30px] max-[374px]:w-7 max-[374px]:h-7 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+              <Database size={16} />
             </button>
-            <button onClick={() => setModal({ type: "investmentPerformance" })} title="実績パフォーマンス" className="flex items-center p-1 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
-              <Wallet size={12} />
+            <button onClick={() => setModal({ type: "investmentPerformance" })} title="実績パフォーマンス" className="flex items-center justify-center w-[30px] h-[30px] max-[374px]:w-7 max-[374px]:h-7 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+              <Wallet size={16} />
             </button>
-            <button onClick={handleManualSync} title={`今すぐ同期${lastSyncedLabel ? `（最終同期 ${lastSyncedLabel}）` : ""}`} className="flex items-center p-1 rounded-full" style={{ color: syncError ? C.rust : C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
-              <RefreshCw size={12} className={syncing ? "animate-spin" : undefined} />
+            <button onClick={handleManualSync} title={`今すぐ同期${lastSyncedLabel ? `（最終同期 ${lastSyncedLabel}）` : ""}`} className="flex items-center justify-center w-[30px] h-[30px] max-[374px]:w-7 max-[374px]:h-7 rounded-full" style={{ color: syncError ? C.rust : C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+              <RefreshCw size={16} className={syncing ? "animate-spin" : undefined} />
             </button>
-            <span className="flex items-center gap-0.5 text-[10px] font-semibold px-1.5 py-1 rounded-full whitespace-nowrap" style={{ color: depthColor(d.currentDD), background: `${depthColor(d.currentDD)}1a`, border: `1px solid ${depthColor(d.currentDD)}44` }}>{d.isDrawdown ? <TrendingDown size={11} /> : <TrendingUp size={11} />} {d.mode}</span>
+            <span className="flex items-center justify-center gap-1 text-[11px] font-semibold h-[30px] max-[374px]:h-7 px-2 max-[374px]:px-1.5 rounded-full whitespace-nowrap" style={{ color: depthColor(d.currentDD), background: `${depthColor(d.currentDD)}1a`, border: `1px solid ${depthColor(d.currentDD)}44` }}>{d.isDrawdown ? <TrendingDown size={14} /> : <TrendingUp size={14} />} {d.mode}</span>
           </div>
         </div>
       ) : (
