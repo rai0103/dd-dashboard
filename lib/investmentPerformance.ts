@@ -19,6 +19,7 @@ export interface InvestmentSeriesPoint {
   realizedYield: number | null; // %表記（例：8.5 = 8.5%）
   totalReturn: number | null;
   totalYield: number | null; // %表記
+  usdJpy?: number | null; // 月末のドル円レート（Sheet1の10行目）。古いバージョンで解析・保存したデータには無い（再アップロードで追加される）
 }
 export interface InvestmentAccountPoint {
   date: string;
@@ -275,9 +276,16 @@ export async function parseInvestmentExcel(arrayBuffer: ArrayBuffer, fileName: s
   const totalReturnVals = extractRowSeries(totalReturnRow, parseNumericCell);
   const totalYieldVals = extractRowSeries(totalYieldRow, parseYieldCell);
 
+  // 月末のドル円レート：Sheet1の10行目（row9）。ユーザー指定の固定行のため、他の行と違いラベルではなく行番号で読む。
+  // ドル円としてありえない値（50〜300円の範囲外）は別の行を読んでいるとみなしてnullにする。
+  const FX_RATE_ROW = 9;
+  const usdJpyVals = extractRowSeries(FX_RATE_ROW, parseNumericCell).map((v) => (v != null && v >= 50 && v <= 300 ? v : null));
+  if (dateCols.length && !usdJpyVals.some((v) => v != null)) errors.push("10行目に月末のドル円レート（50〜300円の数値）が見つかりませんでした（為替の影響額は表示されません）。");
+
   const series: InvestmentSeriesPoint[] = dateCols.map(({ date }, i) => ({
     date: ymd(date), periodYears: periodVals[i], totalAssets: totalAssetsVals[i], principal: principalVals[i],
     realizedReturn: realizedReturnVals[i], realizedYield: realizedYieldVals[i], totalReturn: totalReturnVals[i], totalYield: totalYieldVals[i],
+    usdJpy: usdJpyVals[i],
   }));
 
   // FREトライアル（楽天証券のみ）セクション：直近月次パフォーマンス。
@@ -575,4 +583,19 @@ export function trialAxis(values: number[], goal: number): { domain: [number, nu
   const ticks: number[] = [];
   for (let t = start; t <= end + step / 2; t += step) ticks.push(Math.round(t));
   return { domain: [start, end], ticks, showGoal };
+}
+
+// 投資収支Excelの月末ドル円レートのうち、直近（latest）とその前の月末（prev）。レートの無い月は飛ばす。
+export function latestUsdJpyRates(series: Pick<InvestmentSeriesPoint, "date" | "usdJpy">[] | null | undefined):
+  { latest: { date: string; rate: number } | null; prev: { date: string; rate: number } | null } {
+  const pts = (series ?? []).filter((p) => p.usdJpy != null && Number.isFinite(p.usdJpy)).map((p) => ({ date: p.date, rate: p.usdJpy as number })).sort((a, b) => a.date.localeCompare(b.date));
+  return { latest: pts[pts.length - 1] ?? null, prev: pts[pts.length - 2] ?? null };
+}
+
+// ドル資産（円換算額）の為替感応度の目安。ドル建て額＝ドル資産÷直近レート。
+// perYen：ドル円が±1円動いた場合の影響額（＝ドル建て額）。month：直近1か月のレート変化（直近−前月末）による影響額（円安＋／円高−）。
+export function fxImpact(usdAssetsJpy: number, rates: ReturnType<typeof latestUsdJpyRates>): { perYen: number | null; month: number | null } {
+  if (!rates.latest || !(rates.latest.rate > 0) || !(usdAssetsJpy > 0)) return { perYen: null, month: null };
+  const usd = usdAssetsJpy / rates.latest.rate;
+  return { perYen: usd, month: rates.prev ? usd * (rates.latest.rate - rates.prev.rate) : null };
 }

@@ -8,7 +8,7 @@ import {
 import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Download, RefreshCw, Database, Trash2, Zap, Copy, FileText, Activity, Layers, ListChecks, Smartphone, Monitor, Wallet, Gauge } from "lucide-react";
 import { storage } from "@/lib/storage";
 import { pullSyncAndApply, pushSyncNow, scheduleSyncPush, getLastSyncedAt, onSyncMergedFromRemote } from "@/lib/sync";
-import { parseInvestmentExcel, computeOwnAssetDrawdown, computeBenchmarkCAGR, simulateDcaBenchmark, simulateMonthlyRebasedBenchmark, accountChanges, resolveBeginnerTrial, trialAxis } from "@/lib/investmentPerformance";
+import { parseInvestmentExcel, computeOwnAssetDrawdown, computeBenchmarkCAGR, latestUsdJpyRates, fxImpact, simulateDcaBenchmark, simulateMonthlyRebasedBenchmark, accountChanges, resolveBeginnerTrial, trialAxis } from "@/lib/investmentPerformance";
 import { computeRealHoldingsRanking } from "@/lib/realHoldingsRanking";
 import { formatPct, calendarYearPrincipalChanges, calendarYearPriceTwr } from "@/lib/totalMetrics";
 import { fxExposureOf } from "@/lib/fxExposure";
@@ -3082,9 +3082,24 @@ function StatusPanel({ d, dVoo, dQqq, onOpenSpeedAlert }) {
 }
 
 /* ---------------- portfolio pie panel ---------------- */
+// 為替タブの凡例の下に出す為替感応度の目安。レートは投資収支Excelの月末ドル円（Sheet1の10行目）の直近値・前月末値。
+function FxImpactNote({ usdAssetsJpy, fxRates, compact = false }) {
+  const yen = (v) => `¥${Math.round(Math.abs(v)).toLocaleString()}`;
+  const md = (iso) => { const [, m, d] = iso.split("-").map(Number); return `${m}/${d}`; };
+  if (!fxRates?.latest) return <div className="text-[9px] leading-snug" style={{ color: C.textDim }}>為替の影響：投資収支Excel（10行目の月末ドル円）を再アップロードすると表示されます</div>;
+  const { perYen, month } = fxImpact(usdAssetsJpy, fxRates);
+  const fs = compact ? "text-[10px]" : "text-[11px]";
+  return (
+    <div className={`${fs} leading-snug mono`} style={{ color: C.textMuted, borderTop: `1px solid ${C.borderSoft}`, paddingTop: 4 }}>
+      <div className="flex justify-between gap-2"><span>1円円高・安の場合の影響</span><b style={{ color: C.text }}>{perYen == null ? "—" : `±${yen(perYen)}`}</b></div>
+      <div className="flex justify-between gap-2"><span>1カ月の為替の影響</span><b style={{ color: month == null ? C.textDim : month >= 0 ? C.teal : C.rust }}>{month == null ? "—" : `${month >= 0 ? "+" : "−"}${yen(month)}`}</b></div>
+      <div className="text-[9px]" style={{ color: C.textDim }}>ドル円 {fxRates.prev ? `${md(fxRates.prev.date)} ${fxRates.prev.rate.toFixed(2)}円 → ` : ""}{md(fxRates.latest.date)} {fxRates.latest.rate.toFixed(2)}円（投資収支Excel）</div>
+    </div>
+  );
+}
 // layout="row"（既定・PC）は円グラフと凡例を横並びに、layout="column"（スマホ）は円グラフを上に大きく・凡例をその下に配置し、
 // 横幅が狭い画面でも凡例と重ならずに円グラフ自体を大きく表示できるようにする。
-function PortfolioPie({ view, holdings, onOpen, layout = "row", ownerDates = {} }) {
+function PortfolioPie({ view, holdings, onOpen, layout = "row", ownerDates = {}, fxRates = null }) {
   const field = fieldForView(view);
   const total = useMemo(() => holdingsTotal(holdings), [holdings]);
   const data = useMemo(() => {
@@ -3092,6 +3107,7 @@ function PortfolioPie({ view, holdings, onOpen, layout = "row", ownerDates = {} 
     return view === "category" ? aggregateTopN(grouped, 6) : grouped;
   }, [holdings, field, view]);
   const isColumn = layout === "column";
+  const fxNote = view === "currency" ? <FxImpactNote usdAssetsJpy={data.find((d) => d.name === "ドル")?.value ?? 0} fxRates={fxRates} compact={!isColumn} /> : null;
   return (
     <div onClick={onOpen} className={`h-full flex cursor-pointer ${isColumn ? "flex-col" : "items-center"}`} style={isColumn ? { padding: "6px 8px", gap: 6 } : { padding: "4px 6px", gap: 8 }}>
       <div className="relative shrink-0" style={isColumn ? { width: "100%", height: "64%" } : { width: 130, height: "92%" }}>
@@ -3103,10 +3119,12 @@ function PortfolioPie({ view, holdings, onOpen, layout = "row", ownerDates = {} 
       {isColumn ? (
         <div className="flex-1 min-w-0 min-h-0 flex flex-col justify-center gap-1 overflow-y-auto w-full">
           {data.map((d) => (<div key={d.name} title={`${view === "owner" ? ownerDisplayLabel(d.name) : d.name}：¥${Math.round(d.value).toLocaleString()}`} className="flex items-center gap-1 text-[10px]"><span style={{ width: 7, height: 7, borderRadius: 2, background: colorForView(view, d.name), flexShrink: 0 }} />{view === "owner" ? <span className="flex-1 min-w-0" style={{ color: C.textMuted }}><OwnerLegendLabel name={d.name} date={ownerDates[d.name]} /></span> : <span style={{ color: C.textMuted }} className="flex-1 min-w-0 truncate">{d.name}</span>}<span className="mono shrink-0 text-right whitespace-nowrap" style={{ color: C.textDim, width: isColumn ? 76 : 50 }}>{isColumn ? `¥${Math.round(d.value).toLocaleString()}` : `¥${Math.round(d.value / 10000).toLocaleString()}万`}</span><span className="mono shrink-0 text-right" style={{ color: C.text, width: 36 }}>{((d.value / total) * 100).toFixed(1)}%</span></div>))}
+          {fxNote}
         </div>
       ) : (
         /* PC：凡例を内容幅の4列グリッド（色・口座名＋更新日・金額（万円）・構成比）に詰めて並べる。金額・構成比は右揃えで桁を揃える。
            省略された名前・正確な金額はホバーで確認できる */
+        <div className="min-w-0 min-h-0 flex flex-col justify-center gap-2" style={{ maxHeight: "100%" }}>
         <div className="min-w-0 min-h-0 overflow-y-auto text-[10px]" style={{ display: "grid", gridTemplateColumns: "7px minmax(0, max-content) max-content max-content", columnGap: 5, rowGap: 3, alignItems: "center", alignContent: "center", maxHeight: "100%" }}>
           {data.map((d) => (<Fragment key={d.name}>
             <span title={`${view === "owner" ? ownerDisplayLabel(d.name) : d.name}：¥${Math.round(d.value).toLocaleString()}`} style={{ width: 7, height: 7, borderRadius: 2, background: colorForView(view, d.name) }} />
@@ -3114,6 +3132,8 @@ function PortfolioPie({ view, holdings, onOpen, layout = "row", ownerDates = {} 
             <span className="mono text-right whitespace-nowrap" style={{ color: C.textDim, fontVariantNumeric: "tabular-nums" }}>¥{Math.round(d.value / 10000).toLocaleString()}万</span>
             <span className="mono text-right" style={{ color: C.text, fontVariantNumeric: "tabular-nums" }}>{((d.value / total) * 100).toFixed(1)}%</span>
           </Fragment>))}
+        </div>
+        {fxNote}
         </div>
       )}
     </div>
@@ -5592,7 +5612,7 @@ function MobileChartPage({ chartTab, setChartTab, chartSources, onToggleChartSou
 }
 // ポートフォリオ構成の表示種別ボタン（ラベルは短縮表記、正式名はtitleで補足）
 const PIE_VIEW_TABS = [{ k: "category", l: "CAT", title: "カテゴリー別" }, { k: "currency", l: "為替", title: "為替別" }, { k: "rank", l: "クラス", title: "A〜Eクラス別" }, { k: "owner", l: "口座", title: "口座別" }];
-function MobilePortfolioPage({ pieView, setPieView, holdings, onOpen, onOpenRealHoldingsRanking, dateLabel, ownerDates }) {
+function MobilePortfolioPage({ pieView, setPieView, holdings, onOpen, onOpenRealHoldingsRanking, dateLabel, ownerDates, fxRates = null }) {
   return (
     <div className="p-3 flex flex-col gap-2 h-full">
       <div className="flex items-center justify-between gap-2 shrink-0">
@@ -5607,7 +5627,7 @@ function MobilePortfolioPage({ pieView, setPieView, holdings, onOpen, onOpenReal
       {/* 円グラフを上・凡例を下に積む縦積みレイアウト（layout="column"）にすることで、狭い画面幅でも凡例と重ならずに円グラフ自体を大きく表示できる。
           高さはvh固定ではなくflex-1で残り領域いっぱいに使うことで、タブ行を含めたページ全体が必ず1画面（スクロールなし）に収まる。 */}
       <div className="rounded-lg flex-1 min-h-0" style={{ background: C.panel, border: `1px solid ${C.border}` }}>
-        <PortfolioPie view={pieView} holdings={holdings} onOpen={onOpen} layout="column" ownerDates={ownerDates} />
+        <PortfolioPie view={pieView} holdings={holdings} onOpen={onOpen} layout="column" ownerDates={ownerDates} fxRates={fxRates} />
       </div>
     </div>
   );
@@ -7413,6 +7433,7 @@ export default function DDDashboard() {
   const virtualHoldings = useMemo(() => virtualHoldingsAll.filter((h) => !brokerReplacedLabels.has(h.name)), [virtualHoldingsAll, brokerReplacedLabels]);
   const virtualAggregateLabels = useMemo(() => new Set(virtualHoldingsAll.map((h) => h.name)), [virtualHoldingsAll]);
   const combinedHoldings = useMemo(() => [...holdings, ...virtualHoldings], [holdings, virtualHoldings]);
+  const fxRates = useMemo(() => latestUsdJpyRates(investmentPerformance?.series), [investmentPerformance]); // 為替タブの影響額に使う投資収支Excelの月末ドル円
   // 口座別の凡例に表示する口座ごとの最終更新日（YYYY-MM-DD）。
   // ・楽天CSV・スクショ取込で登録した口座：holdings_as_of。記録が無い取込（更新日の保存に対応する前のバージョンで取り込んだ分）は、
   //   口座サマリー（broker_summaries）の基準日・取込日時で補う。両方あれば新しい方。
@@ -7546,7 +7567,7 @@ export default function DDDashboard() {
               { key: "ath", label: "評価額/ATH", icon: TrendingUp, content: <MobileAthPage d={d} dVoo={dVoo} dQqq={dQqq} /> },
               { key: "speed", label: "経過日数", icon: Clock, content: <MobileSpeedPage dVoo={dVoo} dQqq={dQqq} vooSeries={vooCalcSeries} qqqSeries={qqqCalcSeries} onOpenSpeedAlert={(inst) => { setSpeedAlertInstrument(inst); setModal({ type: "speedAlert" }); }} /> },
               { key: "chart", label: "チャート", icon: Activity, content: <MobileChartPage chartTab={chartTab} setChartTab={setChartTab} chartSources={chartSources} onToggleChartSource={toggleChartSource} sourceViews={sourceViews} chartData={chartData} rangeDays={rangeDays} d={d} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} yearCompare={yearCompare} setYearCompare={setYearCompare} onZoom={() => setModal({ type: "mobileChartZoom" })} onOpenCrash={(c) => setModal({ type: "crash", crash: c })} /> },
-              { key: "portfolio", label: "構成", icon: Layers, content: <MobilePortfolioPage pieView={pieView} setPieView={setPieView} holdings={combinedHoldings} ownerDates={ownerUpdatedDates} onOpen={() => setModal({ type: "portfolio" })} onOpenRealHoldingsRanking={() => setModal({ type: "realHoldingsRanking" })} dateLabel={holdingsDateLabel} /> },
+              { key: "portfolio", label: "構成", icon: Layers, content: <MobilePortfolioPage pieView={pieView} setPieView={setPieView} holdings={combinedHoldings} ownerDates={ownerUpdatedDates} fxRates={fxRates} onOpen={() => setModal({ type: "portfolio" })} onOpenRealHoldingsRanking={() => setModal({ type: "realHoldingsRanking" })} dateLabel={holdingsDateLabel} /> },
               { key: "diff", label: "配分乖離", icon: ListChecks, content: <MobileDiffPage modelOverride={modelOverride} setModelOverride={setModelOverride} d={d} currentHoldingPct={currentHoldingPct} currentHoldingAmount={currentHoldingAmount} effectiveModelRow={effectiveModelRow} rankLabels={rankLabels} blocks={blocks} onOpenRank={(rank) => setModal({ type: "rank", rank })} onOpenDDTable={() => setModal({ type: "ddTable" })} dateLabel={holdingsDateLabel} /> },
               { key: "bottom", label: "VOO底値判定", icon: Gauge, content: <MobileBottomScorePage bottom={bottom} FULL={d.FULL} onOpen={() => setModal({ type: "bottomScore" })} /> },
               { key: "analysis", label: "現状分析", icon: Info, content: <MobileAnalysisPage analysis={analysis} onNavigate={setModal} checkpointResults={checkpointResults} onOpenCheckpointSettings={() => setModal({ type: "checkpointSettings" })} /> },
@@ -7682,7 +7703,7 @@ export default function DDDashboard() {
             {/* bottom-left: portfolio pie */}
             <div style={{ minHeight: 0 }}>
               <Panel title={<><span className="whitespace-nowrap">ポートフォリオ構成</span>{holdingsDateLabel && <span className="block text-[10px] font-normal" style={{ color: C.textDim }}>（{holdingsDateLabel} 時点）</span>}</>} action={<div className="flex items-center gap-0.5">{PIE_VIEW_TABS.map((t) => (<button key={t.k} onClick={() => setPieView(t.k)} title={t.title} className="text-[10px] px-1 py-0.5 rounded whitespace-nowrap" style={{ color: pieView === t.k ? C.bg : C.textMuted, background: pieView === t.k ? C.teal : "transparent", fontWeight: pieView === t.k ? 700 : 400 }}>{t.l}</button>))}<button onClick={() => setModal({ type: "realHoldingsRanking" })} title="実質保有銘柄ランキング（ETF・投信を構成銘柄まで分解して合算）" className="text-[10px] px-1 py-0.5 rounded whitespace-nowrap" style={{ color: C.textMuted, background: "transparent", border: "none", cursor: "pointer" }}>Rkg</button></div>} className="h-full">
-                <PortfolioPie view={pieView} holdings={combinedHoldings} onOpen={() => setModal({ type: "portfolio" })} ownerDates={ownerUpdatedDates} />
+                <PortfolioPie view={pieView} holdings={combinedHoldings} onOpen={() => setModal({ type: "portfolio" })} ownerDates={ownerUpdatedDates} fxRates={fxRates} />
               </Panel>
             </div>
 
