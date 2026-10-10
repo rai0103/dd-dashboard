@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  BROKERS, brokerByKey, guessBrokerCategory, exposureCurrency, extractionToPreviewRows, previewRowsToHoldings,
+  BROKERS, brokerByKey, guessBrokerCategory, extractionToPreviewRows, previewRowsToHoldings,
   replaceBrokerHoldings, aggregateLabelsReplacedByBrokers, holdingDisplayName, rowValue, type Extraction,
 } from "./brokerImport.ts";
 
@@ -39,10 +39,6 @@ test("カテゴリー推定と為替区分（米国株関連はドル・日本�
   assert.equal(guessBrokerCategory("VOO", "Vanguard S&P 500", "USD"), "SP500");
   assert.equal(guessBrokerCategory("TSLA", "Tesla", "USD"), "個別（米）");
   assert.equal(guessBrokerCategory("7203", "トヨタ自動車", "JPY"), "個別（日）");
-  assert.equal(exposureCurrency("個別（米）"), "ドル");
-  assert.equal(exposureCurrency("SP500"), "ドル"); // 日本上場のS&P500投信でもドル
-  assert.equal(exposureCurrency("個別（日）"), "円");
-  assert.equal(exposureCurrency("日本（N225・Topix）"), "円");
 });
 
 test("銘柄名は「ティッカー 銘柄名」形式、評価額が無ければ数量×現在値で補完", () => {

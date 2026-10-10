@@ -1,7 +1,8 @@
 // 証券会社アプリのスクリーンショット取り込み（保有銘柄の個別登録）。
 // 画像の読み取り自体はCloudflare Worker（POST /api/extract-holdings → Claude Vision）で行い、
 // ここでは「読み取り結果 → プレビュー行 → 保有資産（holdings）への置き換え」の変換だけを純粋関数で扱う。
-// このファイルは外部importを持たないため、`node --test` から直接実行できる。
+// importは同じlib内の外部依存の無いファイル（./fxExposure.ts）のみのため、`node --test` から直接実行できる。
+import { fxExposureOf } from "./fxExposure.ts";
 
 export type BrokerConfig = {
   key: string; // Worker側の BROKER_HINTS と同じキー
@@ -172,13 +173,8 @@ export function guessBrokerRank(broker: BrokerConfig, category: string): string 
   return broker.rankByCategory?.[category] ?? broker.defaultRank;
 }
 
-// ポートフォリオ構成の「為替」は、ドル円相場の影響を把握するためのもの。上場市場や表示通貨ではなく中身で決める：
-// 米国株関連（米国株・米国株指数・米国ETF）はドル、日本株関連は円。日本上場の投信・ETFでもS&P500等の米国株連動ならドル。
-const USD_CATEGORIES = new Set(["SP500", "Nasdaq", "個別（米）", "テックETF・投信（米）", "高配当ETF・投信（米）", "その他ETF・投信（米）", "レバレッジETF（米）", "ゴールド", "暗号資産"]); // 暗号資産は実質ドル建てで値付けされるためドル扱い
-export function exposureCurrency(category: string, valueCurrency?: "USD" | "JPY"): "ドル" | "円" {
-  if (category === "現金") return valueCurrency === "USD" ? "ドル" : "円"; // 現金だけは保有通貨そのもの
-  return USD_CATEGORIES.has(category) ? "ドル" : "円";
-}
+// ポートフォリオ構成の「為替」区分（実質通貨エクスポージャー）は lib/fxExposure.ts の fxExposureOf で判定する（判定ルールはそこに一元化）。
+// 下の整合性チェック（reconcileWithAccountTotal・sectionChecks）は為替区分を使わず、各行の取引通貨 valueCurrency で集計する。
 
 // 評価額が読み取れなかった場合は 数量×現在値 で補完する。
 export function rowValue(r: Pick<PreviewRow, "marketValue" | "quantity" | "currentPrice">): number | null {
@@ -234,7 +230,7 @@ export function previewRowsToHoldings(rows: PreviewRow[], broker: BrokerConfig, 
     if (r.valueCurrency === "USD" && !(usdJpy && usdJpy > 0)) { errors.push(`${label}: USD/JPYレートがありません`); continue; }
     const amount = Math.round(r.valueCurrency === "USD" ? value * (usdJpy as number) : value);
     holdings.push({
-      id: genId(), name: label, category: r.category, rank: r.rank, currency: exposureCurrency(r.category, r.valueCurrency),
+      id: genId(), name: label, category: r.category, rank: r.rank, currency: fxExposureOf({ name: label, ticker: r.code, category: r.category, valueCurrency: r.valueCurrency }),
       account: broker.account, owner: broker.owner, amount,
       broker: broker.key, ticker: r.code, quantity: r.quantity, valueCurrency: r.valueCurrency,
       valueOriginal: value, price: r.currentPrice, avgCost: r.avgCost, fxRate: r.valueCurrency === "USD" ? usdJpy : null,

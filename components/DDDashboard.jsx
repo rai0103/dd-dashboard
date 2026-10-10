@@ -11,6 +11,7 @@ import { pullSyncAndApply, pushSyncNow, scheduleSyncPush, getLastSyncedAt, onSyn
 import { parseInvestmentExcel, computeOwnAssetDrawdown, computeBenchmarkCAGR, simulateDcaBenchmark, simulateMonthlyRebasedBenchmark, accountChanges, resolveBeginnerTrial, trialAxis } from "@/lib/investmentPerformance";
 import { computeRealHoldingsRanking } from "@/lib/realHoldingsRanking";
 import { formatPct, calendarYearPrincipalChanges, calendarYearPriceTwr } from "@/lib/totalMetrics";
+import { fxExposureOf } from "@/lib/fxExposure";
 import { isStaleSince } from "@/lib/marketClock";
 import { amountsByClass, largestRemainderPercent, allocationDiff, topHoldingsByClass, ddLabel } from "@/lib/currentAllocation";
 import { computeAccelSensor } from "@/lib/accelSensor";
@@ -19,7 +20,7 @@ import { buildYearSeries, completeYears, selectCompareYears, computeYearStats, a
 import { yearEventText, recoveryInfo } from "@/lib/yearEvents";
 import { decodeCp932, parseTradeCsv, mergeTrades, computeRealizedEvents, aggregateRanking, splitRanking, periodOptions, emptyTradeHistory, TRADE_KIND_LABEL } from "@/lib/tradeHistory";
 import { OWNER_RAKUTEN_SAKI, OWNER_RAKUTEN_SHIN, OWNER_MOOMOO, OWNER_OPTIONS, RAKUTEN_OWNERS, migrateHoldingsOwners, migrateAsOfKeys, detectRakutenOwnerFromFileName, ownerDisplayLabel } from "@/lib/owners";
-import { BROKERS, brokerByKey, extractionToPreviewRows, previewRowsToHoldings, replaceBrokerHoldings, aggregateLabelsReplacedByBrokers, exposureCurrency, rowValue, reconcileWithAccountTotal, isPlausibleBrokerRate, guessBrokerRank, reconciliationTarget, sectionChecks, buildBrokerSummary, profitChecks, appendHoldingSnapshot, holdingChanges } from "@/lib/brokerImport";
+import { BROKERS, brokerByKey, extractionToPreviewRows, previewRowsToHoldings, replaceBrokerHoldings, aggregateLabelsReplacedByBrokers, rowValue, reconcileWithAccountTotal, isPlausibleBrokerRate, guessBrokerRank, reconciliationTarget, sectionChecks, buildBrokerSummary, profitChecks, appendHoldingSnapshot, holdingChanges } from "@/lib/brokerImport";
 import { importUserPrices, applyApiGold, resetPriceField, goldHistoryFetchStart } from "@/lib/priceSeries";
 import { buildStatsTable, computeMddHoldProbability, depthBucketIndex, LOW_SAMPLE_N } from "@/lib/bottomScore";
 
@@ -786,7 +787,8 @@ const HOLDINGS_DEFAULT = [
   { id: "seed-16", name: "現金(円)", category: "現金", currency: "円", rank: "A", account: "—", owner: OWNER_RAKUTEN_SHIN, amount: 4800000 },
   { id: "seed-17", name: "現金(ドル)", category: "現金", currency: "ドル", rank: "A", account: "—", owner: OWNER_RAKUTEN_SAKI, amount: 2200000 },
 ];
-function groupByField(holdings, field) { const map = {}; for (const h of holdings) { map[h[field]] = (map[h[field]] || 0) + h.amount; } return Object.entries(map).map(([k, v]) => ({ name: k, value: v })); }
+// field="fxExposure"は保存済みの値ではなく lib/fxExposure.ts の判定（実質通貨エクスポージャー）でまとめる（為替タブ・サマリー出力用）。
+function groupByField(holdings, field) { const map = {}; for (const h of holdings) { const k = field === "fxExposure" ? fxExposureOf(h) : h[field]; map[k] = (map[k] || 0) + h.amount; } return Object.entries(map).map(([k, v]) => ({ name: k, value: v })); }
 // A〜Eランク別表示は割合に関わらずA→B→C→D→Eの固定順、それ以外の表示は構成比の大きい順（降順）。
 function sortGroupedForView(data, view) {
   if (view === "rank") { const order = CATS; return [...data].sort((a, b) => order.indexOf(a.name) - order.indexOf(b.name)); }
@@ -836,7 +838,7 @@ function calcNisaBreakdown(holdings, rankClass) {
 const CURRENCY_COLORS = { "ドル": C.teal, "円": C.amber };
 const OWNER_COLORS = { [OWNER_RAKUTEN_SHIN]: C.blue, [OWNER_RAKUTEN_SAKI]: "#C77FB0", [OWNER_MOOMOO]: C.violet, "moomoo証券": C.violet, "Coin Check": C.amber, "iDeCo": "#7FA37A", "大和コネクト証券": "#BE7A63" };
 function colorForView(view, key) { return view === "category" ? (CATEGORY_COLORS[key] || C.textDim) : view === "currency" ? CURRENCY_COLORS[key] : view === "owner" ? (OWNER_COLORS[key] || C.textDim) : rankColor(key); }
-function fieldForView(view) { return view === "category" ? "category" : view === "currency" ? "currency" : view === "owner" ? "owner" : "rank"; }
+function fieldForView(view) { return view === "category" ? "category" : view === "currency" ? "fxExposure" : view === "owner" ? "owner" : "rank"; }
 
 // ---- 投資収支Excel（実績パフォーマンス／investment_performance_data）由来の口座別評価額を、
 //      楽天証券の保有銘柄データ（holdings）とは独立したデータソースとして扱いつつ、
@@ -943,14 +945,6 @@ function guessCategoryRank(rawName, ticker, assetType) {
   const category = guessCategory(rawName, ticker, assetType);
   return { category, rank: CATEGORY_DEFAULT_RANK[category] ?? "D" };
 }
-// 米国株指数・米国株連動の資産は、円建て（国内上場ETF/投信）でも為替はドルの影響を受けるため「ドル」扱いにする。
-// カテゴリーが米国系（SP500/Nasdaq/個別（米）等）であるか、銘柄名に米国関連キーワードが含まれる場合に該当。
-const USD_EXPOSURE_CATEGORIES = new Set(["SP500", "Nasdaq", "個別（米）", "テックETF・投信（米）", "高配当ETF・投信（米）", "その他ETF・投信（米）", "レバレッジETF（米）", "暗号資産"]);
-function isUsdExposure(rawName, ticker, category) {
-  if (USD_EXPOSURE_CATEGORIES.has(category)) return true;
-  const norm = toHalfWidth(`${ticker ?? ""} ${rawName ?? ""}`);
-  return /S&P\s*500|SP500|NASDAQ|ナスダック|米国|アメリカ|USA?\b/i.test(norm);
-}
 // 「ゴールドプラス」系の複合ファンド（ゴールド＋株価指数）を検出し、判明しているものは自動でペア先カテゴリーを返す。
 function detectKnownGoldPlusPair(normName) {
   if (normName.includes("FANG") && normName.includes("ゴールド")) return "テックETF・投信（米）";
@@ -971,7 +965,7 @@ function expandGoldPlusSplits(rows) {
     if (!pair) { out.push({ ...r, splitCandidate: true, suggestedPairCategory: "その他" }); continue; }
     const half = Math.round(r.amount / 2);
     out.push({ ...r, name: `${r.name}（ゴールド）`, category: "ゴールド", rank: CATEGORY_DEFAULT_RANK["ゴールド"], amount: half });
-    const pairCurrency = isUsdExposure(r.name, "", pair) ? "ドル" : r.currency;
+    const pairCurrency = fxExposureOf({ name: `${r.name}（${pair}）`, category: pair, currency: r.currency });
     out.push({ ...r, name: `${r.name}（${pair}）`, category: pair, rank: CATEGORY_DEFAULT_RANK[pair], amount: r.amount - half, currency: pairCurrency });
   }
   return out;
@@ -1040,7 +1034,7 @@ function parseRakutenCSV(text) {
       qtyIdx !== -1 ? c[qtyIdx + 1] : null,
     );
     const guess = guessCategoryRank(rawName, ticker, assetType);
-    const currency = isUsdExposure(rawName, ticker, guess.category) ? "ドル" : rawCurrency;
+    const currency = fxExposureOf({ name: rawName, ticker, category: guess.category, currency: rawCurrency }); // 為替タブ用の実質通貨（lib/fxExposure.ts）。rawCurrency＝口座通貨
     rows.push({ name, account, amount, category: guess.category, rank: guess.rank, currency });
   }
   const summaryLines = lines.slice(0, headerIdx);
@@ -3377,11 +3371,11 @@ function PortfolioTableContent({ view, holdings, brokerSummaries = {}, ownerDate
   const hasMore = grouped.length > BREAKDOWN_COLLAPSE_LIMIT;
   const visibleGrouped = showAllBreakdown ? grouped : grouped.slice(0, BREAKDOWN_COLLAPSE_LIMIT);
   const viewLabel = view === "category" ? "カテゴリー別" : view === "currency" ? "為替別" : view === "owner" ? "口座別" : "A〜Eクラス別";
-  const rows = holdings.map((h) => ({ ...h, share: (h.amount / total) * 100 }));
+  const rows = holdings.map((h) => ({ ...h, fxExposure: fxExposureOf(h), share: (h.amount / total) * 100 }));
   const columns = [
     { key: "name", label: "銘柄" },
     { key: "category", label: "カテゴリー", editable: true, options: CATEGORIES },
-    { key: "currency", label: "為替", editable: true, options: ["円", "ドル"] },
+    { key: "fxExposure", label: "為替", editable: true, options: ["円", "ドル"] }, // 実質通貨（lib/fxExposure.ts）。変更すると手動指定（fxManual）として最優先
     { key: "rank", label: "ランク", editable: true, options: CATS },
     { key: "account", label: "口座" },
     { key: "owner", label: "口座主", editable: true, options: OWNER_OPTIONS },
@@ -3401,7 +3395,7 @@ function PortfolioTableContent({ view, holdings, brokerSummaries = {}, ownerDate
       </div>
       <BrokerSummaryCards summaries={Object.values(brokerSummaries).filter((s) => holdings.some((h) => h.broker === s.broker))} />
       <div className="text-xs mb-2" style={{ color: C.textDim }}>保有銘柄一覧（列見出しクリックでソート・カテゴリー/ランク/口座主は変更可・右端の🗑で削除）</div>
-      <SortableTable columns={columns} rows={rows} defaultSortKey="amount" onEditCell={(row, key, value) => onEditHolding && onEditHolding(row.id, key, value)} onDeleteRow={(row) => onDeleteHolding && onDeleteHolding(row.id)} />
+      <SortableTable columns={columns} rows={rows} defaultSortKey="amount" onEditCell={(row, key, value) => onEditHolding && onEditHolding(row.id, key === "fxExposure" ? "fxManual" : key, value)} onDeleteRow={(row) => onDeleteHolding && onDeleteHolding(row.id)} />
     </div>
   );
 }
@@ -4323,7 +4317,7 @@ function BrokerScreenshotImport({ holdings, virtualAggregateLabels, onRegister, 
                     <div>{fieldLabel("通貨")}<select value={r.valueCurrency} onChange={(e) => updateRow(r.key, "valueCurrency", e.target.value)} className={inputCls} style={inputStyle}><option value="USD">USD</option><option value="JPY">JPY</option></select></div>
                     <div style={{ gridColumn: "span 2" }}>{fieldLabel("カテゴリー")}<select value={r.category} onChange={(e) => updateRow(r.key, "category", e.target.value)} className={inputCls} style={inputStyle}>{CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}</select></div>
                     <div>{fieldLabel("クラス")}<select value={r.rank} onChange={(e) => updateRow(r.key, "rank", e.target.value)} className={inputCls} style={inputStyle}>{CATS.map((c) => <option key={c} value={c}>{c}</option>)}</select></div>
-                    <div>{fieldLabel("為替区分")}<div className="text-xs py-1" style={{ color: C.textMuted }}>{exposureCurrency(r.category, r.valueCurrency)}</div></div>
+                    <div>{fieldLabel("為替区分")}<div className="text-xs py-1" style={{ color: C.textMuted }}>{fxExposureOf({ name: r.name, ticker: r.code, category: r.category, valueCurrency: r.valueCurrency })}</div></div>
                     {showPl && <>
                       <div>{fieldLabel("取得価額")}<input value={fmtNum(r.costBasis)} onChange={(e) => updateRow(r.key, "costBasis", numOrNull(e.target.value))} inputMode="decimal" className={inputCls} style={inputStyle} /></div>
                       <div>{fieldLabel("簿価損益")}<input value={fmtNum(r.unrealizedPl)} onChange={(e) => updateRow(r.key, "unrealizedPl", numOrNull(e.target.value.replace(/[▲△−]/g, "-")))} inputMode="decimal" className={inputCls} style={{ ...inputStyle, color: r.unrealizedPl != null && r.unrealizedPl < 0 ? C.rust : C.text }} /></div>
@@ -4712,7 +4706,7 @@ function DataInputModal({ onClose, synthetic = null, rawSeries, onReplace, onApp
                         <td className="py-1" style={{ color: C.text }}>{r.name}</td>
                         <td style={{ color: C.textMuted }}>{r.account}</td>
                         <td><select value={r.category} onChange={(e) => updatePreviewRow(i, "category", e.target.value)} className="text-xs rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }}>{CATEGORIES.map((c) => (<option key={c} value={c}>{c}</option>))}</select></td>
-                        <td><select value={r.currency} onChange={(e) => updatePreviewRow(i, "currency", e.target.value)} className="text-xs rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }}><option value="円">円</option><option value="ドル">ドル</option></select></td>
+                        <td><select value={fxExposureOf(r)} onChange={(e) => updatePreviewRow(i, "fxManual", e.target.value)} className="text-xs rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }}><option value="円">円</option><option value="ドル">ドル</option></select></td>
                         <td><select value={r.rank} onChange={(e) => updatePreviewRow(i, "rank", e.target.value)} className="text-xs rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }}>{CATS.map((c) => (<option key={c} value={c}>{c}</option>))}</select></td>
                         <td className="text-right" style={{ color: C.text }}>¥{r.amount.toLocaleString()}</td>
                         <td>
@@ -5085,7 +5079,7 @@ function buildSummaryMarkdown(ctx) {
   L.push("■ カテゴリー / 通貨");
   const catGroups = sortGroupedForView(groupByField(holdings, "category"), "category");
   L.push(catGroups.map((g) => `${g.name} ${((g.value / (total || 1)) * 100).toFixed(1)}%`).join(" / "));
-  const ccyGroups = groupByField(holdings, "currency");
+  const ccyGroups = groupByField(holdings, "fxExposure");
   L.push(ccyGroups.map((g) => `${g.name} ${((g.value / (total || 1)) * 100).toFixed(1)}%`).join(" / "));
   L.push("");
 
@@ -5192,13 +5186,13 @@ function buildSummaryJSON(ctx) {
         projection: plan.projection.map((p) => ({ cat: p.cat, current_pct: p.curPct, new_pct: Number(p.newPct.toFixed(1)), target_pct: p.tgtPct, achievement_pct: Number(p.achievement.toFixed(0)) })),
       };
     })(),
-    holdings: holdings.map((h) => ({ name: h.name, account: h.account, owner: h.owner, category: h.category, currency: h.currency, rank: h.rank, value: val(h.amount), pct_of_total: Number(((h.amount / (total || 1)) * 100).toFixed(1)), day_change_pct: null, fixed: fixedPositions[h.name] !== undefined })),
+    holdings: holdings.map((h) => ({ name: h.name, account: h.account, owner: h.owner, category: h.category, currency: fxExposureOf(h), rank: h.rank, value: val(h.amount), pct_of_total: Number(((h.amount / (total || 1)) * 100).toFixed(1)), day_change_pct: null, fixed: fixedPositions[h.name] !== undefined })),
     rank_summary: Object.fromEntries(CATS.map((cat) => [cat, { count: holdings.filter((h) => h.rank === cat).length, value: val(holdings.filter((h) => h.rank === cat).reduce((s, h) => s + h.amount, 0)) }])),
     category_summary: Object.fromEntries(sortGroupedForView(groupByField(holdings, "category"), "category").map((g) => [g.name, { count: holdings.filter((h) => h.category === g.name).length, value: val(g.value) }])),
     changes_since_last: diff ? { prev_generated_at: diff.prevDate, sold: diff.sold.map((s) => ({ name: s.name, value: val(s.amount) })), bought: diff.bought.map((b) => ({ name: b.name, value: val(b.amount) })), changed: diff.changed.map((c) => ({ name: c.name, from: val(c.from), to: val(c.to) })) } : null,
     real_exposure: exposure.map((e) => ({ ticker: e.ticker, direct: val(e.direct), via_index: val(e.viaIndex), total: val(e.total), pct: e.pct })),
     categories: Object.fromEntries(sortGroupedForView(groupByField(holdings, "category"), "category").map((g) => [g.name, Number(((g.value / (total || 1)) * 100).toFixed(1))])),
-    currency: Object.fromEntries(groupByField(holdings, "currency").map((g) => [g.name, Number(((g.value / (total || 1)) * 100).toFixed(1))])),
+    currency: Object.fromEntries(groupByField(holdings, "fxExposure").map((g) => [g.name, Number(((g.value / (total || 1)) * 100).toFixed(1))])),
     cash: { total: val(cash), jpy: val(cashByCcy.find((c) => c.name === "円")?.value ?? 0), foreign: val(cashByCcy.find((c) => c.name === "ドル")?.value ?? 0), years_buffer: lifecycle.annualWithdrawal > 0 ? Number((cash / lifecycle.annualWithdrawal).toFixed(1)) : null },
     return_target: { years: lifecycle.returnTargetYears, multiple: lifecycle.returnTargetMultiple, required_cagr_pct: lifecycle.returnTargetYears > 0 ? Number(((Math.pow(lifecycle.returnTargetMultiple, 1 / lifecycle.returnTargetYears) - 1) * 100).toFixed(1)) : null },
     user_question: consultQuestion?.trim() || "",
@@ -7236,7 +7230,7 @@ export default function DDDashboard() {
     setHoldingsSource("imported");
     setOverrides((prev) => {
       const next = { ...prev };
-      for (const r of previewRows) next[r.name] = { category: r.category, rank: r.rank, currency: r.currency };
+      for (const r of previewRows) next[r.name] = { category: r.category, rank: r.rank, currency: r.currency, ...(r.fxManual ? { fxManual: r.fxManual } : {}) };
       persistOverrides(next);
       return next;
     });
@@ -7267,7 +7261,7 @@ export default function DDDashboard() {
     persistHoldings(incoming);
     setHoldingsSource("imported");
     const next = {};
-    for (const r of previewRows) next[r.name] = { category: r.category, rank: r.rank, currency: r.currency };
+    for (const r of previewRows) next[r.name] = { category: r.category, rank: r.rank, currency: r.currency, ...(r.fxManual ? { fxManual: r.fxManual } : {}) };
     setOverrides(next);
     persistOverrides(next);
     const nextAsOf = { [owner]: asOf || localYMD() };
@@ -7289,7 +7283,7 @@ export default function DDDashboard() {
       persistHoldings(next);
       return next;
     });
-    if (field === "category" || field === "rank" || field === "currency") {
+    if (field === "category" || field === "rank" || field === "currency" || field === "fxManual") {
       setOverrides((prev) => {
         const prior = prev[target.name] || { category: target.category, rank: target.rank, currency: target.currency };
         const next = { ...prev, [target.name]: { ...prior, [field]: value, ...(field === "category" ? { rank: autoRank } : {}) } };
