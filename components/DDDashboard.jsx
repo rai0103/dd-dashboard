@@ -2169,7 +2169,10 @@ function buildEpisodeMarkers({ chartData, d, periodStats, fontSize, series = nul
 /* ---------------- reusable evaluation/DD composed chart ---------------- */
 // showSpyListing：S&P500上場日の縦線を出すか（SP500系列のみ。GOLDのように1993年以前のデータがある別銘柄では出さない）
 // compact：スマホ縦画面用。右端の余白と左右の軸幅を詰めて、プロット部分を画面幅いっぱいに広げる（PC・拡大表示は既定値のまま）。
-function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBrush = false, showSpyListing = true, fontSize = 10, compact = false, width, height }) {
+// seriesKey（sp500/qqq/gold）で評価額の線・軸の色を SERIES_COLORS から決める（複数選択時と同じ銘柄別の色）。
+function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBrush = false, showSpyListing = true, fontSize = 10, compact = false, width, height, seriesKey = "sp500" }) {
+  const priceColor = SERIES_COLORS[seriesKey] ?? SERIES_COLORS.sp500;
+  const priceFillId = `priceFill-${seriesKey}`;
   // 現在カーソル追従ツールチップが指している日付。ChartMarkersの常時表示ラベルをこの日付と重ならないよう
   // 一時的に隠す判定と、EvalTooltipContentでマーカー注釈を同じ吹き出しに統合するための照合の両方に使う。
   const [activeDate, setActiveDate] = useState(null);
@@ -2187,11 +2190,11 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBru
     >
       <defs>
         <linearGradient id="ddFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={C.rust} stopOpacity={0} /><stop offset="100%" stopColor={C.rust} stopOpacity={0.32} /></linearGradient>
-        <linearGradient id="priceFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={C.teal} stopOpacity={0.22} /><stop offset="100%" stopColor={C.teal} stopOpacity={0} /></linearGradient>
+        <linearGradient id={priceFillId} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={priceColor} stopOpacity={0.22} /><stop offset="100%" stopColor={priceColor} stopOpacity={0} /></linearGradient>
       </defs>
       <CartesianGrid stroke={C.borderSoft} vertical={false} />
       <XAxis dataKey="date" tickFormatter={(dt) => fmtAxisDate(dt, rangeDays)} tick={{ fill: C.textDim, fontSize }} axisLine={{ stroke: C.border }} tickLine={false} minTickGap={40} />
-      <YAxis yAxisId="price" domain={["auto", "auto"]} tick={{ fill: C.teal, fontSize }} axisLine={false} tickLine={false} width={compact ? 40 : 48} label={{ value: "評価額", angle: -90, position: "insideLeft", fill: C.teal, fontSize }} />
+      <YAxis yAxisId="price" domain={["auto", "auto"]} tick={{ fill: priceColor, fontSize }} axisLine={false} tickLine={false} width={compact ? 40 : 48} label={{ value: "評価額", angle: -90, position: "insideLeft", fill: priceColor, fontSize }} />
       <YAxis yAxisId="dd" orientation="right" domain={[ddTicks[ddTicks.length - 1], 0]} ticks={ddTicks} interval={0} tick={{ fill: C.rust, fontSize }} axisLine={false} tickLine={false} width={compact ? 38 : 46} label={{ value: "DD%", angle: 90, position: "insideRight", fill: C.rust, fontSize }} />
       <Tooltip content={(props) => <EvalTooltipContent {...props} markerByTime={markerByTime} />} />
       {MILESTONES.filter((t) => t !== -3).map((t) => (<ReferenceLine key={t} yAxisId="dd" y={t} stroke={C.borderSoft} strokeDasharray="2 3" label={{ value: `${t}%`, position: "insideBottomRight", fill: C.textDim, fontSize: Math.max(8, fontSize - 2) }} />))}
@@ -2199,10 +2202,10 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBru
       <ReferenceLine yAxisId="dd" y={-3} stroke={C.rust} strokeDasharray="4 3" strokeWidth={1.3} />
       {showSpyListing && chartData[0].date < SPY_LISTING_DATE && chartData[chartData.length - 1].date > SPY_LISTING_DATE && (<ReferenceLine yAxisId="price" x={SPY_LISTING_DATE} stroke={C.violet} strokeDasharray="3 3" label={{ value: "SPY上場（1993）", fill: C.violet, fontSize: Math.max(9, fontSize - 1), position: "top" }} />)}
       <Area yAxisId="dd" type="linear" dataKey="dd" stroke={C.rust} fill="url(#ddFill)" strokeWidth={1.3} dot={false} isAnimationActive={false} fillOpacity={hidden.dd ? 0 : 1} strokeOpacity={hidden.dd ? 0 : 1} />
-      <Area yAxisId="price" type="linear" dataKey="price" stroke={C.teal} fill="url(#priceFill)" strokeWidth={1.8} dot={false} isAnimationActive={false} fillOpacity={hidden.price ? 0 : 1} strokeOpacity={hidden.price ? 0 : 1} />
+      <Area yAxisId="price" type="linear" dataKey="price" stroke={priceColor} fill={`url(#${priceFillId})`} strokeWidth={1.8} dot={false} isAnimationActive={false} fillOpacity={hidden.price ? 0 : 1} strokeOpacity={hidden.price ? 0 : 1} />
       <Line yAxisId="price" type="linear" dataKey="ath" stroke={C.textDim} strokeDasharray="3 4" strokeWidth={1} dot={false} isAnimationActive={false} strokeOpacity={hidden.price || hidden.markers ? 0 : 1} />
       {markerPoints.length > 0 && <Customized component={<ChartMarkers points={markerPoints} activeDate={activeDate} />} />}
-      {withBrush && <Brush dataKey="date" height={26} stroke={C.teal} fill={C.panel2} tickFormatter={(dt) => fmtAxisDate(new Date(dt), rangeDays)} travellerWidth={8} />}
+      {withBrush && <Brush dataKey="date" height={26} stroke={priceColor} fill={C.panel2} tickFormatter={(dt) => fmtAxisDate(new Date(dt), rangeDays)} travellerWidth={8} />}
     </ComposedChart>
   );
 }
@@ -2267,10 +2270,12 @@ function ChartSourceToggle({ value, onToggle, qqqAvailable, goldAvailable = fals
 // 価格水準が大きく異なる（VOOは$数百、GOLDは$数千）ため銘柄ごとに軸を分け、1つ目を左軸・残りを右軸（外側へ順に）に置いて独立にautoスケールする。
 // 単体表示と同じDD開始・大底・DD回復マーカーを銘柄ごとの形（●VOO／▲QQQ／▼GOLD）で重ねて描画し、
 // ツールチップには各銘柄の評価額・DD%・ATHと、ホバー日付に該当するマーカー注釈（銘柄名付き）をまとめて表示する。
+// 銘柄ごとの線の色（単独表示の評価額チャート・複数選択の比較チャート・切替ボタンの共通の正本）。
+const SERIES_COLORS = { sp500: C.teal, qqq: C.violet, gold: C.gold };
 const MULTI_SERIES = {
-  sp500: { name: "VOO", title: "VOO", color: C.teal, shape: "circle", yAxisId: "sp500", hiddenKey: "sp500Line", priceKey: "sp500Price", ddKey: "sp500DD", athKey: "sp500Ath" },
-  qqq: { name: "QQQ", title: "QQQ", color: C.violet, shape: "up", yAxisId: "qqq", hiddenKey: "qqqLine", priceKey: "qqqPrice", ddKey: "qqqDD", athKey: "qqqAth" },
-  gold: { name: "GOLD", title: "GOLD", color: C.gold, shape: "down", yAxisId: "gold", hiddenKey: "goldLine", priceKey: "goldPrice", ddKey: "goldDD", athKey: "goldAth" },
+  sp500: { name: "VOO", title: "VOO", color: SERIES_COLORS.sp500, shape: "circle", yAxisId: "sp500", hiddenKey: "sp500Line", priceKey: "sp500Price", ddKey: "sp500DD", athKey: "sp500Ath" },
+  qqq: { name: "QQQ", title: "QQQ", color: SERIES_COLORS.qqq, shape: "up", yAxisId: "qqq", hiddenKey: "qqqLine", priceKey: "qqqPrice", ddKey: "qqqDD", athKey: "qqqAth" },
+  gold: { name: "GOLD", title: "GOLD", color: SERIES_COLORS.gold, shape: "down", yAxisId: "gold", hiddenKey: "goldLine", priceKey: "goldPrice", ddKey: "goldDD", athKey: "goldAth" },
 };
 // 選択した銘柄の期間データを日付キーでマージする（{ date, sp500Price, sp500DD, sp500Ath, qqqPrice, … }。無い日はそのフィールドがundefined）。
 function mergeMultiChartData(keys, views) {
@@ -2586,7 +2591,7 @@ function CrashCompareChartBody({ comparisonData, selectedCrash, hiddenCrash, fon
 function DDChartModalContent({ chartData, rangeDays, d, hidden, toggle, period, setPeriod, periodStats, historicalCrashes, selectedCrash, onSelectCrash, comparisonData, hiddenCrash, toggleCrash, crashLegendItems, dQqq, qqqChartData, qqqRangeDays, qqqPeriodStats, goldView = null, sourceViews, chartSources, onToggleChartSource, initialTab = null, yearCompare = null, setYearCompare = null, fontSize = 12 }) {
   const [chartTab, setChartTab] = useState(initialTab ?? "normal"); // initialTab：メイン画面で開いていたタブ（年比較から拡大した場合など）
   const chartSource = chartSourceMode(chartSources); // "sp500" | "qqq" | "gold" | "multi"（複数選択）
-  const hasCrashCompare = !!(historicalCrashes && onSelectCrash) && chartSource === "sp500";
+  const hasCrashCompare = !!(historicalCrashes && onSelectCrash); // 通常/暴落/年比較はVOO・QQQ・GOLDのどれを選んでいても表示する（暴落・年比較はVOO基準）
   const isQqqSource = chartSource === "qqq";
   const isGoldSource = chartSource === "gold";
   const isMultiSource = chartSource === "multi";
@@ -2607,7 +2612,7 @@ function DDChartModalContent({ chartData, rangeDays, d, hidden, toggle, period, 
             {isMultiSource ? (
               <ClickLegend items={multiLegendItems(chartSources, sourceViews)} hidden={hidden} onToggle={toggle} />
             ) : (
-              <ClickLegend items={[{ key: "price", label: "評価額", color: C.teal }, { key: "dd", label: "DD%", color: C.rust }]} hidden={hidden} onToggle={toggle} />
+              <ClickLegend items={[{ key: "price", label: "評価額", color: SERIES_COLORS[chartSource] ?? SERIES_COLORS.sp500 }, { key: "dd", label: "DD%", color: C.rust }]} hidden={hidden} onToggle={toggle} />
             )}
             <DDMarkerToggle hidden={hidden} toggle={toggle} size="md" />
             <PeriodSelect value={period} onChange={setPeriod} size="md" />
@@ -2634,7 +2639,7 @@ function DDChartModalContent({ chartData, rangeDays, d, hidden, toggle, period, 
               <ResponsiveContainer width="100%" height="100%" key={`${period}-${chartSources.join("+")}`}>
                 {isMultiSource
                   ? <MultiPriceChartBody keys={chartSources} views={sourceViews} hidden={hidden} fontSize={fontSize} />
-                  : <EvalDDChartBody chartData={activeChartData} rangeDays={activeRangeDays} d={activeD} hidden={hidden} periodStats={activePeriodStats} withBrush showSpyListing={!isGoldSource} fontSize={fontSize} />}
+                  : <EvalDDChartBody chartData={activeChartData} rangeDays={activeRangeDays} d={activeD} hidden={hidden} periodStats={activePeriodStats} withBrush showSpyListing={!isGoldSource} fontSize={fontSize} seriesKey={chartSource} />}
               </ResponsiveContainer>
             )}
           </div>
@@ -5542,7 +5547,7 @@ function MobileSpeedAlertBlock({ label, dInstrument, onOpen }) {
 function MobileChartPage({ chartTab, setChartTab, chartSources, onToggleChartSource, sourceViews, chartData, rangeDays, d, dQqq, qqqChartData, qqqRangeDays, qqqPeriodStats, goldView, hidden, toggle, period, setPeriod, periodStats, historicalCrashes, selectedCrash, onSelectCrash, comparisonData, hiddenCrash, toggleCrash, crashLegendItems, yearCompare, setYearCompare, onZoom, onOpenCrash }) {
   const [statsOpen, setStatsOpen] = useState(true);
   const chartSource = chartSourceMode(chartSources);
-  const tab = chartSource === "sp500" ? chartTab : "normal"; // VOO以外（QQQ・GOLD・複数選択）は通常表示のみ（PCと同じ）
+  const tab = chartTab; // 通常/暴落/年比較は選択銘柄によらず切り替えられる（暴落・年比較はVOO基準。銘柄の選択は通常表示に戻ったときに使う）
   const isQqq = chartSource === "qqq", isGold = chartSource === "gold", isMulti = chartSource === "multi";
   const activeD = isQqq ? dQqq : isGold ? goldView?.d : d;
   const activeStats = isQqq ? qqqPeriodStats : isGold ? goldView?.periodStats : periodStats;
@@ -5552,16 +5557,14 @@ function MobileChartPage({ chartTab, setChartTab, chartSources, onToggleChartSou
     <div className="p-2 h-full flex flex-col min-h-0">
       <div className="rounded-lg flex-1 min-h-0 flex flex-col px-2 pt-2 pb-1.5" style={{ background: C.panel, border: `1px solid ${C.border}` }}>
         <div className="flex items-center justify-between gap-2 shrink-0 mb-1.5">
-          {chartSource === "sp500" ? (
-            <div className="flex gap-0.5">{[{ k: "normal", l: "通常" }, { k: "crash", l: "暴落" }, { k: "year", l: "年比較" }].map((t) => (<button key={t.k} onClick={() => setChartTab(t.k)} className="text-[11px] px-2 py-1 rounded" style={{ color: tab === t.k ? C.bg : C.textMuted, background: tab === t.k ? C.amber : "transparent", fontWeight: tab === t.k ? 700 : 400, border: `1px solid ${tab === t.k ? C.amber : C.borderSoft}`, cursor: "pointer" }}>{t.l}</button>))}</div>
-          ) : (<span className="text-[11px] font-medium" style={{ color: C.textMuted }}>{chartSourceTitle(chartSource)}</span>)}
+          <div className="flex gap-0.5">{[{ k: "normal", l: "通常" }, { k: "crash", l: "暴落" }, { k: "year", l: "年比較" }].map((t) => (<button key={t.k} onClick={() => setChartTab(t.k)} className="text-[11px] px-2 py-1 rounded" style={{ color: tab === t.k ? C.bg : C.textMuted, background: tab === t.k ? C.amber : "transparent", fontWeight: tab === t.k ? 700 : 400, border: `1px solid ${tab === t.k ? C.amber : C.borderSoft}`, cursor: "pointer" }}>{t.l}</button>))}</div>
           {tab === "normal" && <ChartSourceToggle value={chartSources} onToggle={onToggleChartSource} qqqAvailable={!!dQqq} goldAvailable={!!goldView} size="md" />}
         </div>
         {tab === "normal" ? (
           <>
             <div className="flex items-center gap-1.5 flex-wrap shrink-0 mb-1">
               {isMulti ? <ClickLegend items={multiLegendItems(chartSources, sourceViews)} hidden={hidden} onToggle={toggle} />
-                : <ClickLegend items={[{ key: "price", label: "評価額", color: C.teal }, { key: "dd", label: "DD%", color: C.rust }]} hidden={hidden} onToggle={toggle} />}
+                : <ClickLegend items={[{ key: "price", label: "評価額", color: SERIES_COLORS[chartSource] ?? SERIES_COLORS.sp500 }, { key: "dd", label: "DD%", color: C.rust }]} hidden={hidden} onToggle={toggle} />}
               <DDMarkerToggle hidden={hidden} toggle={toggle} size="md" />
               <PeriodSelect value={period} onChange={setPeriod} size="md" />
               <button onClick={() => setStatsOpen((v) => !v)} className="text-[10px] ml-auto flex items-center gap-0.5" style={{ color: C.textDim, background: "transparent", border: "none", cursor: "pointer" }}>期間統計<ChevronRight size={11} style={{ transform: statsOpen ? "rotate(90deg)" : "none" }} /></button>
@@ -5574,7 +5577,7 @@ function MobileChartPage({ chartTab, setChartTab, chartSources, onToggleChartSou
                 <ResponsiveContainer width="100%" height="100%" key={`${period}-${chartSources.join("+")}`}>
                   {isMulti
                     ? <MultiPriceChartBody keys={chartSources} views={sourceViews} hidden={hidden} fontSize={9} compact />
-                    : <EvalDDChartBody chartData={isQqq ? qqqChartData : isGold ? goldView.chartData : chartData} rangeDays={isQqq ? qqqRangeDays : isGold ? goldView.rangeDays : rangeDays} d={activeD} hidden={hidden} periodStats={activeStats} showSpyListing={!isGold} fontSize={9} compact />}
+                    : <EvalDDChartBody chartData={isQqq ? qqqChartData : isGold ? goldView.chartData : chartData} rangeDays={isQqq ? qqqRangeDays : isGold ? goldView.rangeDays : rangeDays} d={activeD} hidden={hidden} periodStats={activeStats} showSpyListing={!isGold} fontSize={9} compact seriesKey={chartSource} />}
                 </ResponsiveContainer>
               )}
             </div>
@@ -7587,19 +7590,17 @@ export default function DDDashboard() {
             {/* top-left: chart */}
             <div style={{ minHeight: 0 }}>
               <Panel
-                title={(chartTab === "normal" || chartSource !== "sp500") ? chartSourceTitle(chartSource) : chartTab === "year" ? "年比較（VOO）" : "過去の暴落との比較（経過日数ベース）"}
+                title={chartTab === "normal" ? chartSourceTitle(chartSource) : chartTab === "year" ? "年比較（VOO）" : "過去の暴落との比較（経過日数ベース）"}
                 compactHeader
                 action={
                   <div className="flex items-center gap-2">
-                    {chartSource === "sp500" && (
-                      <div className="flex gap-0.5 mr-1">{[{ k: "normal", l: "通常" }, { k: "crash", l: "暴落" }, { k: "year", l: "年比較" }].map((t) => (<button key={t.k} onClick={() => setChartTab(t.k)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: chartTab === t.k ? C.bg : C.textMuted, background: chartTab === t.k ? C.amber : "transparent", fontWeight: chartTab === t.k ? 700 : 400 }}>{t.l}</button>))}</div>
-                    )}
-                    {(chartTab === "normal" || chartSource !== "sp500") ? (
+                    <div className="flex gap-0.5 mr-1">{[{ k: "normal", l: "通常" }, { k: "crash", l: "暴落" }, { k: "year", l: "年比較" }].map((t) => (<button key={t.k} onClick={() => setChartTab(t.k)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: chartTab === t.k ? C.bg : C.textMuted, background: chartTab === t.k ? C.amber : "transparent", fontWeight: chartTab === t.k ? 700 : 400 }}>{t.l}</button>))}</div>
+                    {chartTab === "normal" ? (
                       <>
                         {chartSource === "multi" ? (
                           <ClickLegend items={multiLegendItems(chartSources, sourceViews)} hidden={hidden} onToggle={toggle} />
                         ) : (
-                          <ClickLegend items={[{ key: "price", label: "評価額", color: C.teal }, { key: "dd", label: "DD%", color: C.rust }]} hidden={hidden} onToggle={toggle} />
+                          <ClickLegend items={[{ key: "price", label: "評価額", color: SERIES_COLORS[chartSource] ?? SERIES_COLORS.sp500 }, { key: "dd", label: "DD%", color: C.rust }]} hidden={hidden} onToggle={toggle} />
                         )}
                         <DDMarkerToggle hidden={hidden} toggle={toggle} />
                         <PeriodSelect value={period} onChange={setPeriod} />
@@ -7610,7 +7611,7 @@ export default function DDDashboard() {
                 }
                 className="h-full"
               >
-                {(chartTab === "normal" || chartSource !== "sp500") ? (
+                {chartTab === "normal" ? (
                   <div className="h-full flex flex-col cursor-zoom-in" title="クリックで拡大表示" onClick={() => setModal({ type: "ddChart" })}>
                     {chartSource === "multi" ? <MultiPeriodStatsBar keys={chartSources} views={sourceViews} /> : <PeriodStatsBar periodStats={chartSource === "qqq" ? qqqPeriodStats : chartSource === "gold" ? goldView?.periodStats : periodStats} />}
                     <div className="flex-1 min-h-0">
@@ -7621,9 +7622,9 @@ export default function DDDashboard() {
                           {chartSource === "multi"
                             ? <MultiPriceChartBody keys={chartSources} views={sourceViews} hidden={hidden} />
                             : chartSource === "qqq"
-                              ? <EvalDDChartBody chartData={qqqChartData} rangeDays={qqqRangeDays} d={dQqq} hidden={hidden} periodStats={qqqPeriodStats} />
+                              ? <EvalDDChartBody chartData={qqqChartData} rangeDays={qqqRangeDays} d={dQqq} hidden={hidden} periodStats={qqqPeriodStats} seriesKey="qqq" />
                               : chartSource === "gold"
-                              ? <EvalDDChartBody chartData={goldView.chartData} rangeDays={goldView.rangeDays} d={dGold} hidden={hidden} periodStats={goldView.periodStats} showSpyListing={false} />
+                              ? <EvalDDChartBody chartData={goldView.chartData} rangeDays={goldView.rangeDays} d={dGold} hidden={hidden} periodStats={goldView.periodStats} showSpyListing={false} seriesKey="gold" />
                               : <EvalDDChartBody chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} periodStats={periodStats} />}
                         </ResponsiveContainer>
                       )}
