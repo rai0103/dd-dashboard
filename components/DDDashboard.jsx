@@ -6082,7 +6082,7 @@ function TacticalStrategyModalContent({ result, proposal }) {
           <div className="flex flex-col"><span style={{ color: C.textDim }}>評価額との差（VOO100%比）</span><span className="mono text-xl font-bold" style={{ color: outColor }}>{result.outperformancePct > 0 ? "+" : ""}{result.outperformancePct.toFixed(1)}%<span className="text-[12px] ml-2">（{result.outperformanceAmount > 0 ? "+" : ""}${Math.round(result.outperformanceAmount).toLocaleString()}）</span></span></div>
           <div className="flex flex-col"><span style={{ color: C.textDim }}>最大下落率（MDD）</span><span className="mono">戦略 <b style={{ color: C.rust }}>{result.strategyMaxDD.toFixed(1)}%</b> ／ VOO100% <b style={{ color: C.rust }}>{result.vooMaxDD.toFixed(1)}%</b></span></div>
           <div className="flex flex-col"><span style={{ color: C.textDim }}>評価額（仮想元手${result.startCapital.toLocaleString()}）</span><span className="mono">戦略 ${Math.round(result.finalEquity).toLocaleString()} ／ VOO100% ${Math.round(result.finalVooHoldEquity).toLocaleString()}</span></div>
-          <div className="flex flex-col"><span style={{ color: C.textDim }}>シミュレーション期間</span><span className="mono">{fmtYMD(result.startDate)}〜{fmtYMD(result.endDate)}（全期間・VOO/QQQとも上場前の値を補正して延長）</span></div>
+          <div className="flex flex-col"><span style={{ color: C.textDim }}>シミュレーション期間</span><span className="mono">{fmtYMD(result.startDate)}〜{fmtYMD(result.endDate)}（全期間・VOOはSP500指数、QQQはNasdaq-100指数で上場前の値を補正して延長）</span></div>
         </div>
       </div>
 
