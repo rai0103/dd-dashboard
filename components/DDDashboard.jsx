@@ -7623,7 +7623,10 @@ export default function DDDashboard() {
   // VOO/QQQ自身の実績は期間が短いため、進行確率・速度別確率などのトラックレコード統計は最も長い実績があるSP500（d.trackRecord）を使う。
   // 現在のDD%・経過日数・速度計測（DD3→5%等）はVOO/QQQ自身の評価額の動きをそのまま使う（DD加速度アラートはVOO/QQQのユーザー選択に応じて切り替える仕様）。
   const dVoo = useMemo(() => (vooCalcSeries.length ? computeAll(vooCalcSeries, d.trackRecord) : null), [vooCalcSeries, d.trackRecord]);
-  const dQqq = useMemo(() => (qqqCalcSeries.length ? computeAll(qqqCalcSeries, d.trackRecord) : null), [qqqCalcSeries, d.trackRecord]);
+  // QQQ側は上場前補正込みのqqqSeries（1985年〜）を使う。ATH・現在DD%等「現在値」はQQQ上場後の実データが変わらない限り
+  // 不変（1985〜1999年の補正値が現在の最高値を更新することはないため）だが、QQQ増幅率の中央値（qqqAmplification、
+  // 動的配分モデルの入力）は対象エピソードが増える分、より多くの実績に基づいて算出されるようになる。
+  const dQqq = useMemo(() => (qqqSeries.length ? computeAll(qqqSeries, d.trackRecord) : null), [qqqSeries, d.trackRecord]);
   // 底値判定：SP500全履歴から統計テーブルと「現在のMDDが底値として確定しATH更新に至る確率」をキャッシュせず都度算出する。
   // rawSeriesが更新（日次終値の追加・CSV再取り込み）されるたびにd.FULLが作り直されるため、自動的に再計算される。
   const bottom = useMemo(() => {
