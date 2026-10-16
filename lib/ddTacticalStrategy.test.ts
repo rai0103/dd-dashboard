@@ -112,3 +112,51 @@ test("describeTacticalProposal: 次の指値（買い増し/現金積み増し�
   assert.ok(proposal.exitTrigger);
   assert.equal(proposal.exitTrigger!.price, 100);
 });
+
+function mkState(overrides) {
+  return { idx: 0, date: new Date(), currentDD: -1, daysSinceATH: 0, speedLevel: "normal", speedCategory: null, depthBucketIndex: -1, daysSinceDD3: null, ...overrides };
+}
+function mkResult(state, voo = 95) {
+  return { days: [{ idx: 0, date: state.date, voo, qqq: voo * 2, state, weights: { qqq: 0, voo: 1, cash: 0 }, equity: 10000, vooHoldEquity: 10000 }] };
+}
+
+test("describeTacticalProposal: 平常時はwatchアクションのみで、ポジション解消(exit)トリガーはない", () => {
+  const proposal = describeTacticalProposal(mkResult(mkState({ depthBucketIndex: -1, speedLevel: "normal" }), 99));
+  assert.equal(proposal.actions.length, 1);
+  assert.equal(proposal.actions[0].kind, "watch");
+  assert.equal(proposal.exitTrigger, null);
+});
+
+test("describeTacticalProposal: 速度未確定（pending5）は急落/緩慢の両分岐を同じ価格で提示する", () => {
+  const proposal = describeTacticalProposal(mkResult(mkState({ depthBucketIndex: 0, speedLevel: "pending5", speedCategory: null, daysSinceDD3: 2 }), 97));
+  const kinds = proposal.actions.map((a) => a.kind);
+  assert.ok(kinds.includes("pending_fast"));
+  assert.ok(kinds.includes("pending_slow"));
+  const fastAction = proposal.actions.find((a) => a.kind === "pending_fast");
+  const slowAction = proposal.actions.find((a) => a.kind === "pending_slow");
+  assert.equal(fastAction.price, slowAction.price); // 同じ-5%到達価格で分岐するだけ
+  assert.ok(fastAction.label.includes("あと3営業日")); // 5 - daysSinceDD3(2) = 3
+});
+
+test("describeTacticalProposal: 急落・警戒（fast）は現金積み増し(一時避難)アクション、上限到達後はcappedになる", () => {
+  const notCapped = describeTacticalProposal(mkResult(mkState({ depthBucketIndex: 1, speedLevel: "confirmed5", speedCategory: "fast" }), 93));
+  assert.ok(notCapped.actions.some((a) => a.kind === "cash_up"));
+
+  const capped = describeTacticalProposal(mkResult(mkState({ depthBucketIndex: 5, speedLevel: "confirmed5", speedCategory: "fast" }), 80));
+  assert.ok(capped.actions.some((a) => a.kind === "capped"));
+  assert.ok(!capped.actions.some((a) => a.kind === "cash_up"));
+});
+
+test("describeTacticalProposal: 緩慢・安心寄り（slow）はQQQナンピン買いアクション、上限到達後はcappedになる", () => {
+  const notCapped = describeTacticalProposal(mkResult(mkState({ depthBucketIndex: 1, speedLevel: "confirmed5", speedCategory: "slow" }), 93));
+  assert.ok(notCapped.actions.some((a) => a.kind === "qqq_buy"));
+
+  const capped = describeTacticalProposal(mkResult(mkState({ depthBucketIndex: 5, speedLevel: "confirmed5", speedCategory: "slow" }), 80));
+  assert.ok(capped.actions.some((a) => a.kind === "capped"));
+  assert.ok(!capped.actions.some((a) => a.kind === "qqq_buy"));
+});
+
+test("describeTacticalProposal: DD局面では必ずexit_voo100アクション（ATH復帰）が末尾に含まれる", () => {
+  const proposal = describeTacticalProposal(mkResult(mkState({ depthBucketIndex: 1, speedLevel: "confirmed5", speedCategory: "fast" }), 93));
+  assert.equal(proposal.actions[proposal.actions.length - 1].kind, "exit_voo100");
+});

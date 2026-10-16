@@ -5923,6 +5923,31 @@ function TacticalWeightBar({ weights, large = false }) {
     </div>
   );
 }
+// 次のアクション（指値・逆指値の目安）の種類ごとの色分け。
+// cash_up/pending_fast＝一時避難の現金化（守り）、qqq_buy/pending_slow＝QQQへのナンピン買い（攻め）、
+// exit_voo100＝ポジション解消（VOO100%復帰）、watch/capped＝情報表示のみ。
+const TACTICAL_ACTION_COLOR = {
+  watch: C.textMuted,
+  pending_fast: C.rust,
+  pending_slow: C.amber,
+  cash_up: C.rust,
+  qqq_buy: C.amber,
+  capped: C.textDim,
+  exit_voo100: C.teal,
+};
+function TacticalActionRow({ action, compact = false }) {
+  const color = TACTICAL_ACTION_COLOR[action.kind] || C.textDim;
+  return (
+    <div className="flex items-start gap-1.5">
+      <span style={{ width: 6, height: 6, borderRadius: 999, background: color, marginTop: compact ? 3 : 5, flexShrink: 0 }} />
+      <div className="min-w-0 leading-snug">
+        {!compact && action.orderType && <span className="mono font-bold mr-1" style={{ color }}>{action.orderType}</span>}
+        <span>{action.label}</span>
+        {action.price != null && <span className="mono font-bold ml-1" style={{ color: C.text }}>${action.price}</span>}
+      </div>
+    </div>
+  );
+}
 function TacticalStrategyPanelBody({ result, proposal, onOpen, large = false }) {
   if (!result || !proposal) {
     return <div className="h-full flex items-center justify-center text-[11px] text-center px-3" style={{ color: C.textDim }}>QQQのトラックレコードが未取り込みです。データ入力・出力画面からQQQのCSVを取り込んでください。</div>;
@@ -5940,10 +5965,10 @@ function TacticalStrategyPanelBody({ result, proposal, onOpen, large = false }) 
         <div className={`mono ${large ? "text-[22px]" : "text-[17px]"} font-bold`} style={{ color: outColor }}>{outPct > 0 ? "+" : ""}{outPct.toFixed(1)}%</div>
         <div className="text-[10px] text-center" style={{ color: C.textDim }}>VOO100%保有との差（{fmtYMD(result.startDate)}〜の全期間シミュレーション）</div>
       </div>
-      {(proposal.nextBuyTrigger || proposal.exitTrigger) && (
-        <div className="text-[9px] leading-tight pt-1 mono" style={{ borderTop: `1px solid ${C.borderSoft}`, color: C.textDim }}>
-          {proposal.nextBuyTrigger && <div>次の節目（最高値比{proposal.nextBuyTrigger.depthLabel}）：${proposal.nextBuyTrigger.price}</div>}
-          {proposal.exitTrigger && <div>{proposal.exitTrigger.label}：${proposal.exitTrigger.price}</div>}
+      {proposal.actions.length > 0 && (
+        <div className="text-[9px] leading-tight pt-1.5 flex flex-col gap-1" style={{ borderTop: `1px solid ${C.borderSoft}`, color: C.textMuted }}>
+          <div className="text-[8px]" style={{ color: C.textDim }}>次のアクション</div>
+          {proposal.actions.map((a, i) => <TacticalActionRow key={i} action={a} compact />)}
         </div>
       )}
     </div>
@@ -5980,8 +6005,12 @@ function TacticalStrategyModalContent({ result, proposal }) {
           <div className="text-xs mb-1" style={{ color: C.textDim }}>現在の目標配分</div>
           <TacticalWeightBar weights={proposal.weights} large />
           <div className="text-[11px] leading-relaxed" style={{ color: C.textMuted }}>{proposal.reason}</div>
-          {proposal.nextBuyTrigger && <div className="text-[11px] mono" style={{ color: C.textDim }}>次の節目（最高値比{proposal.nextBuyTrigger.depthLabel}）：<b style={{ color: C.text }}>${proposal.nextBuyTrigger.price}</b></div>}
-          {proposal.exitTrigger && <div className="text-[11px] mono" style={{ color: C.textDim }}>{proposal.exitTrigger.label}：<b style={{ color: C.text }}>${proposal.exitTrigger.price}</b></div>}
+          {proposal.actions.length > 0 && (
+            <div className="flex flex-col gap-1.5 text-[11px] pt-1 mt-1" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+              <div className="text-[10px]" style={{ color: C.textDim }}>次のアクション（指値・逆指値の目安）</div>
+              {proposal.actions.map((a, i) => <TacticalActionRow key={i} action={a} />)}
+            </div>
+          )}
         </div>
         <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-[12px] content-start">
           <div className="flex flex-col"><span style={{ color: C.textDim }}>評価額との差（VOO100%比）</span><span className="mono text-xl font-bold" style={{ color: outColor }}>{result.outperformancePct > 0 ? "+" : ""}{result.outperformancePct.toFixed(1)}%<span className="text-[12px] ml-2">（{result.outperformanceAmount > 0 ? "+" : ""}${Math.round(result.outperformanceAmount).toLocaleString()}）</span></span></div>
