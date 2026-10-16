@@ -1,11 +1,15 @@
 // 実行: npm test
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   classifySpeed35, depthBucketIndex, deriveTacticalStates, decideTargetWeights,
   mergeVooQqqForTactical, simulateTacticalStrategy, describeTacticalProposal, DEPTH_BUCKETS,
   computeQqqEdgeProbabilities, baseQqqWeightFromProbability, PROB_WINDOW_DAYS, BASE_QQQ_CAP,
   buildPracticePeriods, rebasePracticePeriod, PRACTICE_START_DATE,
+  buildProbabilitySnapshot, type ProbabilitySnapshot, RULE_VERSION,
+  CASH_OVERLAY_CAP, DIP_OVERLAY_CAP, DIP_QQQ_TOTAL_CAP, SNAPSHOT_INTERVAL_DAYS,
 } from "./ddTacticalStrategy.ts";
 
 test("classifySpeed35: 5日以下は急落、21日以上は緩慢、それ以外は中間", () => {
@@ -52,7 +56,7 @@ test("deriveTacticalStates: ゆっくり悪化するケースは緩慢(slow)に�
   assert.equal(dd5!.speedCategory, "slow");
 });
 
-test("decideTargetWeights: 平常時はVOO100%、急落時は現金、緩慢時はQQQ押し目買い", () => {
+test("decideTargetWeights: 平常時はVOO100%、急落時は現金、緩慢時はQQQ押し目買い（統計スナップショット無しは中立値扱い）", () => {
   const normal = decideTargetWeights({ idx: 0, date: new Date(), currentDD: -1, daysSinceATH: 0, speedLevel: "normal", speedCategory: null, depthBucketIndex: -1 });
   assert.deepEqual(normal.weights, { qqq: 0, voo: 1, cash: 0 });
 
@@ -63,10 +67,6 @@ test("decideTargetWeights: 平常時はVOO100%、急落時は現金、緩慢時�
   const slow = decideTargetWeights({ idx: 0, date: new Date(), currentDD: -6, daysSinceATH: 30, speedLevel: "confirmed5", speedCategory: "slow", depthBucketIndex: 1 });
   assert.equal(slow.weights.cash, 0);
   assert.ok(slow.weights.qqq > 0);
-
-  // 深度が深いほど守り/攻めが強まる
-  const fastDeep = decideTargetWeights({ idx: 0, date: new Date(), currentDD: -22, daysSinceATH: 60, speedLevel: "deep8", speedCategory: "fast", depthBucketIndex: 5 });
-  assert.ok(fastDeep.weights.cash > fast.weights.cash);
 });
 
 test("decideTargetWeights: 配分の合計は常に1", () => {
@@ -76,6 +76,74 @@ test("decideTargetWeights: 配分の合計は常に1", () => {
       assert.ok(Math.abs(w.qqq + w.voo + w.cash - 1) < 1e-9);
     }
   }
+});
+
+// テスト用に深度バケットbiの行だけ値を持つProbabilitySnapshotを組み立てる（他のバケットは中立＝データ無し扱い）。
+function mkSnapshotForBucket(bi: number, opts: { spP?: number; qqqP?: number; ampRatio?: number; ampN?: number } = {}): ProbabilitySnapshot {
+  const emptyRow = { from: 0, to: 0, reached: 0, progressed: 0, p: null as number | null, lowSample: true };
+  const spProgression = DEPTH_BUCKETS.map((_, i) => i === bi && opts.spP != null ? { ...emptyRow, reached: 100, progressed: opts.spP, p: opts.spP, lowSample: false } : emptyRow);
+  const qqqProgression = DEPTH_BUCKETS.map((_, i) => i === bi && opts.qqqP != null ? { ...emptyRow, reached: 100, progressed: opts.qqqP, p: opts.qqqP, lowSample: false } : emptyRow);
+  const crossAmp = DEPTH_BUCKETS.map((b, i) => i === bi && opts.ampRatio != null
+    ? { key: b.key, label: b.label, n: opts.ampN ?? 20, medianRatio: opts.ampRatio, lowSample: false }
+    : { key: b.key, label: b.label, n: 0, medianRatio: null, lowSample: true });
+  return { asOfIdx: 0, spProgression, qqqProgression, crossAmp };
+}
+
+test("decideTargetWeights: 過去にさらに深い節目まで進んだ割合（breakRisk）が高いほど現金化を強め、低いほど押し目買いを強める", () => {
+  const stateFast = { idx: 0, date: new Date(), currentDD: -6, daysSinceATH: 10, speedLevel: "confirmed5" as const, speedCategory: "fast" as const, depthBucketIndex: 1 };
+  const highRisk = decideTargetWeights(stateFast, 0.5, mkSnapshotForBucket(1, { spP: 85 }), -1);
+  const lowRisk = decideTargetWeights(stateFast, 0.5, mkSnapshotForBucket(1, { spP: 15 }), -1);
+  assert.ok(highRisk.weights.cash > lowRisk.weights.cash);
+
+  const stateSlow = { ...stateFast, speedCategory: "slow" as const };
+  const highConfDip = decideTargetWeights(stateSlow, 0.5, mkSnapshotForBucket(1, { spP: 15 }), -1); // breakRisk低い＝確信度高い
+  const lowConfDip = decideTargetWeights(stateSlow, 0.5, mkSnapshotForBucket(1, { spP: 85 }), -1);
+  assert.ok(highConfDip.weights.qqq > lowConfDip.weights.qqq);
+});
+
+test("decideTargetWeights: SP500自身とQQQ自身の統計は平均され、どちらか一方しか無ければそちらだけが使われる", () => {
+  const stateFast = { idx: 0, date: new Date(), currentDD: -6, daysSinceATH: 10, speedLevel: "confirmed5" as const, speedCategory: "fast" as const, depthBucketIndex: 1 };
+  const spOnly = decideTargetWeights(stateFast, 0.5, mkSnapshotForBucket(1, { spP: 80 }), -1); // QQQ自身はDD-3%未満（qqqBucketIndex=-1）
+  const spAndQqqAgree = decideTargetWeights(stateFast, 0.5, mkSnapshotForBucket(1, { spP: 80, qqqP: 80 }), 1);
+  // 両者が同じ値で一致する場合、平均も同じ値になるのでcashは一致する
+  assert.ok(Math.abs(spOnly.weights.cash - spAndQqqAgree.weights.cash) < 1e-6);
+  const spHighQqqLow = decideTargetWeights(stateFast, 0.5, mkSnapshotForBucket(1, { spP: 80, qqqP: 20 }), 1);
+  // QQQ自身は警戒度が低いので、平均を取った分、SP500単独より現金化が弱まる
+  assert.ok(spHighQqqLow.weights.cash < spOnly.weights.cash);
+});
+
+test("decideTargetWeights: SP500→QQQ増幅率（相関関係）が高いほど押し目買いを弱め・現金化を強める（強める方向にのみ働く）", () => {
+  const stateSlow = { idx: 0, date: new Date(), currentDD: -6, daysSinceATH: 30, speedLevel: "confirmed5" as const, speedCategory: "slow" as const, depthBucketIndex: 1 };
+  const lowAmp = decideTargetWeights(stateSlow, 0.5, mkSnapshotForBucket(1, { spP: 50, ampRatio: 1.0 }), -1);
+  const highAmp = decideTargetWeights(stateSlow, 0.5, mkSnapshotForBucket(1, { spP: 50, ampRatio: 1.8 }), -1);
+  assert.ok(highAmp.weights.qqq < lowAmp.weights.qqq); // 増幅率が高い→押し目買いは弱める
+
+  const stateFast = { ...stateSlow, speedCategory: "fast" as const };
+  const lowAmpCash = decideTargetWeights(stateFast, 0.5, mkSnapshotForBucket(1, { spP: 50, ampRatio: 1.0 }), -1);
+  const highAmpCash = decideTargetWeights(stateFast, 0.5, mkSnapshotForBucket(1, { spP: 50, ampRatio: 1.8 }), -1);
+  assert.ok(highAmpCash.weights.cash > lowAmpCash.weights.cash); // 増幅率が高い→現金化は強める
+
+  // サンプル不足（低いQQQ増幅率でも<1）では補正しない方向にのみ働く：ampRatio<1でも押し目買いを強めない
+  const lowAmpUnder1 = decideTargetWeights(stateSlow, 0.5, mkSnapshotForBucket(1, { spP: 50, ampRatio: 0.6 }), -1);
+  assert.ok(lowAmpUnder1.weights.qqq <= lowAmp.weights.qqq + 1e-9);
+});
+
+test("RULE_VERSION: v3（過去の実績統計に基づく全面刷新版）", () => {
+  assert.equal(RULE_VERSION, "v3");
+});
+
+test("buildProbabilitySnapshot: SP500の下落エピソードから節目間進行確率・QQQ増幅率を算出し、QQQデータが無ければqqqProgressionは空", () => {
+  // 100→80(-20%、バケット15-20%)→105で解消。途中-15%(idx4)を経由してから-20%(idx5)まで進む。
+  const vooPrefix = [100, 97, 95, 90, 85, 80, 90, 105].map((price, i) => ({ date: new Date(2020, 0, i + 1), price }));
+  const snapshot = buildProbabilitySnapshot(vooPrefix, []);
+  assert.equal(snapshot.qqqProgression.length, 0);
+  assert.ok(snapshot.spProgression.length > 0);
+  // -15%→-20%の遷移行（PROGRESSION_LEVELSの並びで該当する行）は、今回のエピソードで到達・進行の両方が起きている
+  const row1520 = snapshot.spProgression.find((r) => r.from === -15 && r.to === -20);
+  assert.ok(row1520);
+  assert.equal(row1520!.reached, 1);
+  assert.equal(row1520!.progressed, 1);
+  assert.ok(snapshot.crossAmp.every((a) => a.n === 0)); // QQQデータが無いので増幅率は算出不可
 });
 
 test("mergeVooQqqForTactical: 両方に値がある日付だけを残す", () => {
@@ -118,8 +186,8 @@ test("describeTacticalProposal: 次の指値（買い増し/現金積み増し�
 function mkState(overrides) {
   return { idx: 0, date: new Date(), currentDD: -1, daysSinceATH: 0, speedLevel: "normal", speedCategory: null, depthBucketIndex: -1, daysSinceDD3: null, ...overrides };
 }
-function mkResult(state, voo = 95) {
-  return { days: [{ idx: 0, date: state.date, voo, qqq: voo * 2, state, weights: { qqq: 0, voo: 1, cash: 0 }, reason: "test", equity: 10000, vooHoldEquity: 10000 }] };
+function mkResult(state, voo = 95, weights = { qqq: 0, voo: 1, cash: 0 }) {
+  return { days: [{ idx: 0, date: state.date, voo, qqq: voo * 2, state, weights, reason: "test", equity: 10000, vooHoldEquity: 10000 }] };
 }
 
 test("describeTacticalProposal: 平常時はwatchアクションのみで、ポジション解消(exit)トリガーはない", () => {
@@ -140,26 +208,26 @@ test("describeTacticalProposal: 速度未確定（pending5）は急落/緩慢の
   assert.ok(fastAction.label.includes("あと3営業日")); // 5 - daysSinceDD3(2) = 3
 });
 
-test("describeTacticalProposal: 急落・警戒（fast）は現金積み増し(一時避難)アクション、上限到達後はcappedになる", () => {
-  const notCapped = describeTacticalProposal(mkResult(mkState({ depthBucketIndex: 1, speedLevel: "confirmed5", speedCategory: "fast" }), 93));
+test("describeTacticalProposal: 急落・警戒（fast）は現金積み増し(一時避難)アクション、現金が上限に達した日はcappedになる", () => {
+  const notCapped = describeTacticalProposal(mkResult(mkState({ depthBucketIndex: 1, speedLevel: "confirmed5", speedCategory: "fast" }), 93, { qqq: 0, voo: 0.9, cash: 0.1 }));
   assert.ok(notCapped.actions.some((a) => a.kind === "cash_up"));
 
-  const capped = describeTacticalProposal(mkResult(mkState({ depthBucketIndex: 5, speedLevel: "confirmed5", speedCategory: "fast" }), 80));
+  const capped = describeTacticalProposal(mkResult(mkState({ depthBucketIndex: 5, speedLevel: "confirmed5", speedCategory: "fast" }), 80, { qqq: 0, voo: 1 - CASH_OVERLAY_CAP, cash: CASH_OVERLAY_CAP }));
   assert.ok(capped.actions.some((a) => a.kind === "capped"));
   assert.ok(!capped.actions.some((a) => a.kind === "cash_up"));
 });
 
-test("describeTacticalProposal: 緩慢・安心寄り（slow）はQQQナンピン買いアクション、上限到達後はcappedになる", () => {
-  const notCapped = describeTacticalProposal(mkResult(mkState({ depthBucketIndex: 1, speedLevel: "confirmed5", speedCategory: "slow" }), 93));
+test("describeTacticalProposal: 緩慢・安心寄り（slow）はQQQナンピン買いアクション、QQQ比率が上限に達した日はcappedになる", () => {
+  const notCapped = describeTacticalProposal(mkResult(mkState({ depthBucketIndex: 1, speedLevel: "confirmed5", speedCategory: "slow" }), 93, { qqq: 0.1, voo: 0.9, cash: 0 }));
   assert.ok(notCapped.actions.some((a) => a.kind === "qqq_buy"));
 
-  const capped = describeTacticalProposal(mkResult(mkState({ depthBucketIndex: 5, speedLevel: "confirmed5", speedCategory: "slow" }), 80));
+  const capped = describeTacticalProposal(mkResult(mkState({ depthBucketIndex: 5, speedLevel: "confirmed5", speedCategory: "slow" }), 80, { qqq: DIP_QQQ_TOTAL_CAP, voo: 1 - DIP_QQQ_TOTAL_CAP, cash: 0 }));
   assert.ok(capped.actions.some((a) => a.kind === "capped"));
   assert.ok(!capped.actions.some((a) => a.kind === "qqq_buy"));
 });
 
 test("describeTacticalProposal: DD局面では必ずexit_voo100アクション（ATH復帰）が末尾に含まれる", () => {
-  const proposal = describeTacticalProposal(mkResult(mkState({ depthBucketIndex: 1, speedLevel: "confirmed5", speedCategory: "fast" }), 93));
+  const proposal = describeTacticalProposal(mkResult(mkState({ depthBucketIndex: 1, speedLevel: "confirmed5", speedCategory: "fast" }), 93, { qqq: 0, voo: 0.9, cash: 0.1 }));
   assert.equal(proposal.actions[proposal.actions.length - 1].kind, "exit_voo100");
 });
 
@@ -215,6 +283,37 @@ test("simulateTacticalStrategy: DDが一度も起きない期間でも、QQQの�
   assert.equal(lastDay.state.depthBucketIndex, -1); // 平常時のまま
   assert.ok(lastDay.weights.qqq > 0.2); // 実績優位確率が積み上がり、ベースQQQ(上限30%近く)を保有している
   assert.ok(result.outperformancePct > 0); // その結果、VOO100%保有より上振れする
+});
+
+test("simulateTacticalStrategy: 実データ（SP500全履歴の直近部分＋合成QQQ）で、統計スナップショットを挟んでも妥当な時間で完走し、配分が常に正常範囲に収まる", () => {
+  const text = readFileSync(join(import.meta.dirname, "..", "sample-data", "S&P500.csv"), "utf8").replace(/^﻿/, "");
+  const rows = text.trim().split(/\r?\n/).slice(1).map((l) => { const [d, p] = l.split(","); return { date: new Date(d.replace(/\//g, "-")), price: parseFloat(p) }; })
+    .filter((r) => !isNaN(r.price) && !isNaN(r.date.getTime())).sort((a, b) => a.date.getTime() - b.date.getTime());
+  const recent = rows.slice(-4000); // 直近約16年分（2020年コロナショック・2022年ベア相場を含む）
+  // QQQは合成：SP500の約2倍の値動き＋独立したノイズを加えた系列（相関関係の算出が機能することを確認するため）。
+  let qqqPrice = 100;
+  const voo = recent.map((r, i) => ({ date: r.date, price: r.price }));
+  const qqq = recent.map((r, i) => {
+    if (i > 0) {
+      const retSp = r.price / recent[i - 1].price - 1;
+      qqqPrice *= 1 + retSp * 2 + (Math.sin(i * 0.37) * 0.001);
+    }
+    return { date: r.date, price: qqqPrice };
+  });
+  const merged = mergeVooQqqForTactical(voo, qqq);
+  const started = Date.now();
+  const result = simulateTacticalStrategy(merged, 10000);
+  const elapsedMs = Date.now() - started;
+  assert.ok(result);
+  assert.ok(elapsedMs < 30000, `simulateTacticalStrategy took too long: ${elapsedMs}ms`);
+  assert.equal(result.ruleVersion, RULE_VERSION);
+  for (const d of result.days) {
+    const { qqq: wq, voo: wv, cash: wc } = d.weights;
+    assert.ok(Math.abs(wq + wv + wc - 1) < 1e-6);
+    assert.ok(wc >= 0 && wc <= CASH_OVERLAY_CAP + 1e-6);
+    assert.ok(wq >= 0 && wq <= DIP_QQQ_TOTAL_CAP + 1e-6);
+    assert.ok(Number.isFinite(d.equity) && d.equity > 0);
+  }
 });
 
 test("buildPracticePeriods: 開始年は実践開始日〜年末、以降は暦年(1/1〜12/31)で区切られる", () => {
