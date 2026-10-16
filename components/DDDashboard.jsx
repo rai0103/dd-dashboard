@@ -24,6 +24,7 @@ import { BROKERS, brokerByKey, extractionToPreviewRows, previewRowsToHoldings, r
 import { importUserPrices, applyApiGold, resetPriceField, goldHistoryFetchStart } from "@/lib/priceSeries";
 import { buildStatsTable, computeMddHoldProbability, depthBucketIndex, LOW_SAMPLE_N } from "@/lib/bottomScore";
 import { mergeVooQqqForTactical, simulateTacticalStrategy, describeTacticalProposal, buildPracticePeriods, rebasePracticePeriod, PRACTICE_START_DATE } from "@/lib/ddTacticalStrategy";
+import { buildQqqEquivalentSeries, parseNdxPreQqqCsv } from "@/lib/qqqSynthetic";
 
 // Cloudflare Worker（当日のVOO/QQQ終値を返す。SP500はここでは扱わず引き続きCSV取り込み/直接入力で更新する）のエンドポイント。
 // デプロイ先のURLに置き換えてください。
@@ -78,6 +79,9 @@ function buildSeedSeries() {
   return pts;
 }
 const SEED_SERIES = buildSeedSeries();
+// QQQ ETF上場（1999年3月10日）より前のNasdaq-100指数データ（lib/ndxPreQqqData.ts、出所：Stooq）。
+// 起動のたびに毎回パースし直す必要はないため、モジュール読み込み時に一度だけ計算する。
+const NDX_PRE_QQQ_SERIES = parseNdxPreQqqCsv();
 
 /* ---------------- CSV parsing (Stooq: Date,Open,High,Low,Close,Volume) ---------------- */
 const BOM_RE = new RegExp("^" + String.fromCharCode(0xfeff)); // Excel等で保存されたUTF-8 CSV先頭のBOMを除去するため（コードポイント指定で明示、ソース上に不可視文字を埋め込まない）
@@ -4380,7 +4384,7 @@ function BrokerScreenshotImport({ holdings, virtualAggregateLabels, onRegister, 
   );
 }
 
-function DataInputModal({ onClose, synthetic = null, rawSeries, onReplace, onAppend, onReset, source, holdings, onUpdateHoldings, onResetAndImportHoldings, onResetHoldings, holdingsSource, overrides, categoryDefaultRanks, onCategoryDefaultRankChange, vooQqqSeries, onAppendVooQqq, onImportVooQqq, onApplyApiGold, onResetVooQqqField, virtualAggregateLabels, onRegisterBrokerHoldings, brokerSummaries }) {
+function DataInputModal({ onClose, synthetic = null, qqqSynthetic = null, rawSeries, onReplace, onAppend, onReset, source, holdings, onUpdateHoldings, onResetAndImportHoldings, onResetHoldings, holdingsSource, overrides, categoryDefaultRanks, onCategoryDefaultRankChange, vooQqqSeries, onAppendVooQqq, onImportVooQqq, onApplyApiGold, onResetVooQqqField, virtualAggregateLabels, onRegisterBrokerHoldings, brokerSummaries }) {
   const [dataset, setDataset] = useState("voo"); // "voo" | "holdings" | "broker"
   const [instrument, setInstrument] = useState("sp500"); // "sp500" | "voo" | "qqq" | "gold"（voo/qqq/goldのCSV/手動入力/削除の対象切り替え）
   const [tab, setTab] = useState("csv");
@@ -4475,17 +4479,33 @@ function DataInputModal({ onClose, synthetic = null, rawSeries, onReplace, onApp
   };
 
   // SP500指数の手動入力は終了済みのため列は出力しない（過去データはrawSeries/バックアップ側に残る）。
-  // 行はvooQqqSeries（VOO/QQQ/GOLD、各フィールドは取得できた日付のみ値が入る）の日付のみを対象にする。
+  // VOO・QQQはsynthetic/qqqSynthetic（上場前はそれぞれSP500指数・Nasdaq-100指数を実際の終値に接続する形で
+  // 補正した合成系列。lib/sp500Synthetic.ts・lib/qqqSynthetic.ts）から出力し、上場前の補正値には
+  // 「VOO備考」「QQQ備考」列で注釈を付ける（騰落率・DD率はスケール変換の影響を受けないため、補正値もそのまま使える）。
+  // GOLDはvooQqqSeries（実際に取得できた日のみ値が入る。上場前換算の対象外）から出力する。
   const handleExportCSV = () => {
-    const header = "Date,VOO,QQQ,GOLD";
-    const rows = [...vooQqqSeries]
-      .sort((a, b) => a.date - b.date)
-      .map((p) => [
-        p.date.toISOString().slice(0, 10),
-        p.voo != null ? p.voo : "",
-        p.qqq != null ? p.qqq : "",
-        p.gold != null ? p.gold : "",
-      ].join(","));
+    const header = "Date,VOO,QQQ,GOLD,VOO備考,QQQ備考";
+    const vooRows = synthetic ? synthetic.series : [];
+    const qqqRows = qqqSynthetic ? qqqSynthetic.series : [];
+    const vooByDate = new Map(vooRows.map((p) => [p.date.toISOString().slice(0, 10), p.price]));
+    const qqqByDate = new Map(qqqRows.map((p) => [p.date.toISOString().slice(0, 10), p.price]));
+    const goldByDate = new Map(vooQqqSeries.filter((p) => p.gold != null).map((p) => [p.date.toISOString().slice(0, 10), p.gold]));
+    const allDates = new Set([...vooByDate.keys(), ...qqqByDate.keys(), ...goldByDate.keys()]);
+    const vooJunction = synthetic?.junctionDate || null; // この日より前＝SP500指数を補正した値
+    const qqqJunction = qqqSynthetic?.junctionDate || null; // この日より前＝Nasdaq-100指数を補正した値
+    const rows = [...allDates].sort().map((dateStr) => {
+      const voo = vooByDate.get(dateStr), qqq = qqqByDate.get(dateStr), gold = goldByDate.get(dateStr);
+      const vooNote = voo != null && vooJunction && dateStr < vooJunction ? "SP500指数を補正" : "";
+      const qqqNote = qqq != null && qqqJunction && dateStr < qqqJunction ? "Nasdaq-100指数を補正" : "";
+      return [
+        dateStr,
+        voo != null ? voo.toFixed(2) : "",
+        qqq != null ? qqq.toFixed(2) : "",
+        gold != null ? gold : "",
+        vooNote,
+        qqqNote,
+      ].join(",");
+    });
     const csv = [header, ...rows].join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
@@ -6056,7 +6076,7 @@ function TacticalStrategyModalContent({ result, proposal }) {
           <div className="flex flex-col"><span style={{ color: C.textDim }}>評価額との差（VOO100%比）</span><span className="mono text-xl font-bold" style={{ color: outColor }}>{result.outperformancePct > 0 ? "+" : ""}{result.outperformancePct.toFixed(1)}%<span className="text-[12px] ml-2">（{result.outperformanceAmount > 0 ? "+" : ""}${Math.round(result.outperformanceAmount).toLocaleString()}）</span></span></div>
           <div className="flex flex-col"><span style={{ color: C.textDim }}>最大下落率（MDD）</span><span className="mono">戦略 <b style={{ color: C.rust }}>{result.strategyMaxDD.toFixed(1)}%</b> ／ VOO100% <b style={{ color: C.rust }}>{result.vooMaxDD.toFixed(1)}%</b></span></div>
           <div className="flex flex-col"><span style={{ color: C.textDim }}>評価額（仮想元手${result.startCapital.toLocaleString()}）</span><span className="mono">戦略 ${Math.round(result.finalEquity).toLocaleString()} ／ VOO100% ${Math.round(result.finalVooHoldEquity).toLocaleString()}</span></div>
-          <div className="flex flex-col"><span style={{ color: C.textDim }}>シミュレーション期間</span><span className="mono">{fmtYMD(result.startDate)}〜{fmtYMD(result.endDate)}（QQQ取り込み全期間）</span></div>
+          <div className="flex flex-col"><span style={{ color: C.textDim }}>シミュレーション期間</span><span className="mono">{fmtYMD(result.startDate)}〜{fmtYMD(result.endDate)}（全期間・VOO/QQQとも上場前の値を補正して延長）</span></div>
         </div>
       </div>
 
@@ -6098,7 +6118,7 @@ function TacticalStrategyModalContent({ result, proposal }) {
       </div>
 
       <div>
-        <div className="text-xs mb-2" style={{ color: C.textDim }}>評価額の推移（戦略 vs VOO100%保有・QQQ取り込み全期間）</div>
+        <div className="text-xs mb-2" style={{ color: C.textDim }}>評価額の推移（戦略 vs VOO100%保有・全期間）</div>
         <ResponsiveContainer width="100%" height={260}>
           <LineChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
             <CartesianGrid stroke={C.borderSoft} vertical={false} />
@@ -6131,7 +6151,8 @@ function TacticalStrategyModalContent({ result, proposal }) {
       </div>
 
       <div className="text-[11px] leading-relaxed" style={{ color: C.textDim }}>
-        このシミュレーションはQQQの取り込み全期間について、ルールを忠実に実行していたら実際の評価額がどう推移したかを日次で機械的に計算した結果であり、投資助言ではありません。過去の実績は将来を保証しません。
+        このシミュレーションは、ルールを忠実に実行していたら実際の評価額がどう推移したかを日次で機械的に計算した結果であり、投資助言ではありません。過去の実績は将来を保証しません。
+        ※VOOは上場（2010年）前はSP500指数を、QQQは上場（1999年）前はNasdaq-100指数を、それぞれ実際の終値に段差なく接続する形で補正した値を使っています（騰落率・DD率はスケール変換の影響を受けません）。
       </div>
     </div>
   );
@@ -7593,6 +7614,10 @@ export default function DDDashboard() {
   // 接続点（SP500とVOOの両方がある最も新しい日）より前＝SP500指数×補正係数、以降＝自動取得のVOO終値。初期バンドルデータ（seed）は接続に使わない。
   const sp500Synthetic = useMemo(() => buildVooEquivalentSeries(dataSource === "seed" ? [] : rawSeries, vooCalcSeries), [rawSeries, vooCalcSeries, dataSource]);
   const sp500Series = sp500Synthetic.series.length ? sp500Synthetic.series : rawSeries;
+  // QQQ本系列（DD戦略シミュレーション・CSV出力で使用）＝ QQQ換算の合成シリーズ（lib/qqqSynthetic.ts）。
+  // QQQ ETF上場（1999/3/10）より前＝Nasdaq-100指数（バンドル済みNDX_PRE_QQQ_SERIES、出所Stooq）×補正係数、以降＝自動取得のQQQ終値。
+  const qqqSynthetic = useMemo(() => buildQqqEquivalentSeries(NDX_PRE_QQQ_SERIES, qqqCalcSeries), [qqqCalcSeries]);
+  const qqqSeries = qqqSynthetic.series.length ? qqqSynthetic.series : qqqCalcSeries;
   const d = useMemo(() => computeAll(sp500Series), [sp500Series]);
   const goldSeries = useMemo(() => seriesFromVooQqq(vooQqqSeries, "gold"), [vooQqqSeries]); // ゴールド（XAUUSD）終値。暴落比較の重ね描き用（未取り込みなら空配列）
   // VOO/QQQ自身の実績は期間が短いため、進行確率・速度別確率などのトラックレコード統計は最も長い実績があるSP500（d.trackRecord）を使う。
@@ -7607,12 +7632,13 @@ export default function DDDashboard() {
     return { stats, hold: computeMddHoldProbability(prices, stats) };
   }, [d.FULL]);
   // DD戦略シミュレーション（VOOガチホに勝てるかの検証機能）：最高値比・経過日数・DD加速度アラートの3指標だけで
-  // VOO/QQQ/現金の目標配分を機械的に決め、QQQの取り込み開始日から終値ベースで約定したと仮定して評価額を都度シミュレーションする
-  // （lib/ddTacticalStrategy.ts）。QQQ未取り込み・2日未満の場合はnull。
+  // VOO/QQQ/現金の目標配分を機械的に決め、終値ベースで約定したと仮定して評価額を都度シミュレーションする（lib/ddTacticalStrategy.ts）。
+  // VOO側はsp500Series（SP500→VOO換算の合成系列）、QQQ側はqqqSeries（Nasdaq-100→QQQ換算の合成系列）を使うため、
+  // 両ETFの実上場日より前（VOOは2010年・QQQは1999年）も含めた全期間でバックテストできる。QQQ未取り込み・2日未満の場合はnull。
   const tacticalResult = useMemo(() => {
-    const merged = mergeVooQqqForTactical(vooCalcSeries, qqqCalcSeries);
+    const merged = mergeVooQqqForTactical(sp500Series, qqqSeries);
     return simulateTacticalStrategy(merged, 10000);
-  }, [vooCalcSeries, qqqCalcSeries]);
+  }, [sp500Series, qqqSeries]);
   const tacticalProposal = useMemo(() => (tacticalResult ? describeTacticalProposal(tacticalResult) : null), [tacticalResult]);
   const chartData = useMemo(() => sliceForPeriod(d.FULL, d.last, period), [d.FULL, d.last, period]);
   const rangeDays = useMemo(() => { const f = chartData[0].date, l = chartData[chartData.length - 1].date; return Math.round((l - f) / 86400000); }, [chartData]);
@@ -7756,7 +7782,7 @@ export default function DDDashboard() {
       {modal?.type === "rank" && <FullScreenModal title={`${modal.rank}ランクの保有銘柄`} onClose={() => setModal(null)}><RankHoldingsContent rank={modal.rank} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
       {modal?.type === "crash" && <FullScreenModal title={`${crashDisplayName(modal.crash)}（${modal.crash.start} 〜）と現状の比較`} onClose={() => setModal(null)}><CrashModalContent crash={modal.crash} daysSinceATH={d.daysSinceATH} currentDD={d.currentDD} currentEpisodeCurve={d.currentEpisodeCurve} qqqFull={dQqq?.FULL ?? null} goldFull={goldSeries} allCrashes={historicalCrashes} onJump={(c) => setModal({ type: "crash", crash: c })} /></FullScreenModal>}
       {modal?.type === "ddChart" && <FullScreenModal title={chartSourceTitle(chartSource)} onClose={() => setModal(null)}><DDChartModalContent initialTab={chartTab} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} sourceViews={sourceViews} chartSources={chartSources} onToggleChartSource={toggleChartSource} yearCompare={yearCompare} setYearCompare={setYearCompare} /></FullScreenModal>}
-      {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} synthetic={sp500Synthetic} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} vooQqqSeries={vooQqqSeries} onAppendVooQqq={handleAppendVooQqq} onImportVooQqq={handleImportVooQqq} onApplyApiGold={handleApplyApiGold} onResetVooQqqField={handleResetVooQqqField} virtualAggregateLabels={virtualAggregateLabels} onRegisterBrokerHoldings={handleRegisterBrokerHoldings} brokerSummaries={brokerSummaries} />}
+      {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} synthetic={sp500Synthetic} qqqSynthetic={qqqSynthetic} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} vooQqqSeries={vooQqqSeries} onAppendVooQqq={handleAppendVooQqq} onImportVooQqq={handleImportVooQqq} onApplyApiGold={handleApplyApiGold} onResetVooQqqField={handleResetVooQqqField} virtualAggregateLabels={virtualAggregateLabels} onRegisterBrokerHoldings={handleRegisterBrokerHoldings} brokerSummaries={brokerSummaries} />}
       {modal?.type === "checkpointSettings" && <FullScreenModal title="チェックポイント設定" onClose={() => setModal(null)}><CheckpointSettingsContent checkpoints={checkpoints} onCheckpointChange={handleCheckpointChange} holdings={holdings} /></FullScreenModal>}
       {modal?.type === "bottomScore" && <FullScreenModal title={bottom.hold.applicable ? `VOO底値判定：${bottomLabel(d.FULL, bottom.hold.state)} が底値として確定する確率（VOO実績から都度算出）` : "VOO底値判定（VOO実績から都度算出）"} onClose={() => setModal(null)}><BottomScoreModalContent bottom={bottom} FULL={d.FULL} /></FullScreenModal>}
       {modal?.type === "tacticalStrategy" && <FullScreenModal title={`DD戦略 vs VOOガチホ：${tacticalResult ? `${tacticalResult.outperformancePct > 0 ? "+" : ""}${tacticalResult.outperformancePct.toFixed(1)}%（${fmtYMD(tacticalResult.startDate)}〜の全期間シミュレーション）` : "QQQ未取り込み"}`} onClose={() => setModal(null)}><TacticalStrategyModalContent result={tacticalResult} proposal={tacticalProposal} /></FullScreenModal>}
