@@ -4473,22 +4473,18 @@ function DataInputModal({ onClose, synthetic = null, rawSeries, onReplace, onApp
     }
   };
 
+  // SP500指数の手動入力は終了済みのため列は出力しない（過去データはrawSeries/バックアップ側に残る）。
+  // 行はvooQqqSeries（VOO/QQQ/GOLD、各フィールドは取得できた日付のみ値が入る）の日付のみを対象にする。
   const handleExportCSV = () => {
-    const header = "Date,SP500,VOO,QQQ,GOLD";
-    const vooQqqByDate = new Map(vooQqqSeries.map((p) => [p.date.toISOString().slice(0, 10), p]));
-    const allDates = new Set([...rawSeries.map((p) => p.date.toISOString().slice(0, 10)), ...vooQqqByDate.keys()]);
-    const sp500ByDate = new Map(rawSeries.map((p) => [p.date.toISOString().slice(0, 10), p]));
-    const rows = Array.from(allDates).sort().map((dateStr) => {
-      const sp500 = sp500ByDate.get(dateStr);
-      const vooQqq = vooQqqByDate.get(dateStr);
-      return [
-        dateStr,
-        sp500 && sp500.price != null ? sp500.price : "",
-        vooQqq && vooQqq.voo != null ? vooQqq.voo : "",
-        vooQqq && vooQqq.qqq != null ? vooQqq.qqq : "",
-        vooQqq && vooQqq.gold != null ? vooQqq.gold : "",
-      ].join(",");
-    });
+    const header = "Date,VOO,QQQ,GOLD";
+    const rows = [...vooQqqSeries]
+      .sort((a, b) => a.date - b.date)
+      .map((p) => [
+        p.date.toISOString().slice(0, 10),
+        p.voo != null ? p.voo : "",
+        p.qqq != null ? p.qqq : "",
+        p.gold != null ? p.gold : "",
+      ].join(","));
     const csv = [header, ...rows].join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
@@ -4628,7 +4624,7 @@ function DataInputModal({ onClose, synthetic = null, rawSeries, onReplace, onApp
                 )}
               </div>
               <div>
-                <p className="text-sm mb-1 leading-relaxed" style={{ color: C.textMuted }}>下の「データ出力」で書き出したCSV（Date,SP500,VOO,QQQ,GOLD）を取り込むと、VOO・QQQ・GOLDの列を復元できます（SP500列は取り込みません）。</p>
+                <p className="text-sm mb-1 leading-relaxed" style={{ color: C.textMuted }}>下の「データ出力」で書き出したCSV（Date,VOO,QQQ,GOLD。旧形式のDate,SP500,VOO,QQQ,GOLDも可）を取り込むと、VOO・QQQ・GOLDの列を復元できます（SP500列は取り込みません）。</p>
                 <label className="inline-flex items-center gap-2 text-xs px-3 py-2 rounded mt-1" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.textMuted, cursor: "pointer" }}>
                   <Upload size={13} /> データ出力CSVを選択
                   <input type="file" accept=".csv,text/csv,text/comma-separated-values,application/csv,application/vnd.ms-excel,text/plain,application/octet-stream" onChange={handleFile} style={{ display: "none" }} />
