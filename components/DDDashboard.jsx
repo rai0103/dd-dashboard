@@ -23,7 +23,7 @@ import { OWNER_RAKUTEN_SAKI, OWNER_RAKUTEN_SHIN, OWNER_MOOMOO, OWNER_OPTIONS, RA
 import { BROKERS, brokerByKey, extractionToPreviewRows, previewRowsToHoldings, replaceBrokerHoldings, aggregateLabelsReplacedByBrokers, rowValue, reconcileWithAccountTotal, isPlausibleBrokerRate, guessBrokerRank, reconciliationTarget, sectionChecks, buildBrokerSummary, profitChecks, appendHoldingSnapshot, holdingChanges } from "@/lib/brokerImport";
 import { importUserPrices, applyApiGold, resetPriceField, goldHistoryFetchStart } from "@/lib/priceSeries";
 import { buildStatsTable, computeMddHoldProbability, depthBucketIndex, LOW_SAMPLE_N } from "@/lib/bottomScore";
-import { mergeVooQqqForTactical, simulateTacticalStrategy, describeTacticalProposal } from "@/lib/ddTacticalStrategy";
+import { mergeVooQqqForTactical, simulateTacticalStrategy, describeTacticalProposal, buildPracticePeriods, rebasePracticePeriod, PRACTICE_START_DATE } from "@/lib/ddTacticalStrategy";
 
 // Cloudflare Worker（当日のVOO/QQQ終値を返す。SP500はここでは扱わず引き続きCSV取り込み/直接入力で更新する）のエンドポイント。
 // デプロイ先のURLに置き換えてください。
@@ -5948,6 +5948,21 @@ function TacticalActionRow({ action, compact = false }) {
     </div>
   );
 }
+// 現金化・ナンピン買いなど「実際に発注する指値・逆指値」は、観察のみ(watch/capped/exit)より目立つ
+// バッジ型で大きく表示する（「次の指値を分かりやすく」の要望）。
+const TACTICAL_PRIMARY_ACTION_KINDS = new Set(["cash_up", "qqq_buy", "pending_fast", "pending_slow"]);
+function TacticalActionBadge({ action, compact = false }) {
+  const color = TACTICAL_ACTION_COLOR[action.kind] || C.textDim;
+  return (
+    <div className="rounded-md flex items-center justify-between gap-2" style={{ background: `${color}1a`, border: `1px solid ${color}66`, padding: compact ? "4px 7px" : "8px 12px" }}>
+      <div className="min-w-0">
+        {action.orderType && <div className={compact ? "text-[8px] font-bold" : "text-[11px] font-bold"} style={{ color }}>{action.orderType}</div>}
+        <div className={compact ? "text-[9px] leading-snug" : "text-[12px] leading-snug"} style={{ color: C.text }}>{action.label}</div>
+      </div>
+      {action.price != null && <div className={`mono font-bold shrink-0 ${compact ? "text-[14px]" : "text-[21px]"}`} style={{ color }}>${action.price}</div>}
+    </div>
+  );
+}
 function TacticalStrategyPanelBody({ result, proposal, onOpen, large = false }) {
   if (!result || !proposal) {
     return <div className="h-full flex items-center justify-center text-[11px] text-center px-3" style={{ color: C.textDim }}>QQQのトラックレコードが未取り込みです。データ入力・出力画面からQQQのCSVを取り込んでください。</div>;
@@ -5965,12 +5980,17 @@ function TacticalStrategyPanelBody({ result, proposal, onOpen, large = false }) 
         <div className={`mono ${large ? "text-[22px]" : "text-[17px]"} font-bold`} style={{ color: outColor }}>{outPct > 0 ? "+" : ""}{outPct.toFixed(1)}%</div>
         <div className="text-[10px] text-center" style={{ color: C.textDim }}>VOO100%保有との差（{fmtYMD(result.startDate)}〜の全期間シミュレーション）</div>
       </div>
-      {proposal.actions.length > 0 && (
-        <div className="text-[9px] leading-tight pt-1.5 flex flex-col gap-1" style={{ borderTop: `1px solid ${C.borderSoft}`, color: C.textMuted }}>
-          <div className="text-[8px]" style={{ color: C.textDim }}>次のアクション</div>
-          {proposal.actions.map((a, i) => <TacticalActionRow key={i} action={a} compact />)}
-        </div>
-      )}
+      {proposal.actions.length > 0 && (() => {
+        const primary = proposal.actions.filter((a) => TACTICAL_PRIMARY_ACTION_KINDS.has(a.kind));
+        const secondary = proposal.actions.filter((a) => !TACTICAL_PRIMARY_ACTION_KINDS.has(a.kind));
+        return (
+          <div className="pt-1.5 flex flex-col gap-1" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+            <div className="text-[8px]" style={{ color: C.textDim }}>次の指値・逆指値</div>
+            {primary.length > 0 && <div className="flex flex-col gap-1">{primary.map((a, i) => <TacticalActionBadge key={i} action={a} compact />)}</div>}
+            {secondary.length > 0 && <div className="text-[9px] leading-tight flex flex-col gap-1" style={{ color: C.textMuted }}>{secondary.map((a, i) => <TacticalActionRow key={i} action={a} compact />)}</div>}
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -5991,13 +6011,32 @@ function TacticalChartTooltip({ active, payload, label }) {
     </div>
   );
 }
+function TacticalPracticeChartTooltip({ active, payload, label }) {
+  if (!active || !payload || !payload.length) return null;
+  return (
+    <div className="rounded px-2 py-1.5 text-[11px] mono" style={{ background: C.panel, border: `1px solid ${C.border}`, color: C.text }}>
+      <div style={{ color: C.textDim }}>{fmtYMD(label)}</div>
+      {payload.map((p) => (<div key={p.dataKey} style={{ color: p.color }}>{p.name}：{p.value.toFixed(1)}</div>))}
+    </div>
+  );
+}
 function TacticalStrategyModalContent({ result, proposal }) {
+  const [periodIdx, setPeriodIdx] = useState(-1); // -1＝未選択（最新の期間を既定表示）
   if (!result || !proposal) return <div className="text-xs py-6 text-center" style={{ color: C.textDim }}>QQQのトラックレコードが未取り込みです。データ入力・出力画面からQQQのCSVを取り込んでください。</div>;
   const chartData = downsampleForChart(result.days).map((d) => ({ date: d.date, 戦略: Number(d.equity.toFixed(2)), VOO100: Number(d.vooHoldEquity.toFixed(2)) }));
   const rangeDays = Math.round((result.endDate - result.startDate) / 86400000);
   const outColor = result.outperformancePct > 0 ? C.teal : result.outperformancePct < 0 ? C.rust : C.textMuted;
   const recentTrades = [...result.trades].reverse().slice(0, 40);
   const th = "text-left font-normal py-1 px-2", td = "py-1 px-2";
+  // 実践検証：今日（実践開始日）を起点に、暦年単位で区切ってSP500(VOO)100%とDD戦略を同じ地点からスタートして比較する。
+  const practicePeriods = buildPracticePeriods(result.endDate);
+  const selectedPeriod = practicePeriods[periodIdx >= 0 && periodIdx < practicePeriods.length ? periodIdx : practicePeriods.length - 1];
+  const practiceChart = rebasePracticePeriod(result, selectedPeriod);
+  const practiceData = practiceChart ? practiceChart.points.map((p) => ({ date: p.date, 戦略: p.strategyIndex, SP500: p.vooIndex })) : [];
+  const practiceRangeDays = practiceChart ? Math.round((selectedPeriod.endDate - selectedPeriod.startDate) / 86400000) : 0;
+  const practiceOutColor = !practiceChart ? C.textMuted : practiceChart.outperformancePct > 0 ? C.teal : practiceChart.outperformancePct < 0 ? C.rust : C.textMuted;
+  const primaryActions = proposal.actions.filter((a) => TACTICAL_PRIMARY_ACTION_KINDS.has(a.kind));
+  const secondaryActions = proposal.actions.filter((a) => !TACTICAL_PRIMARY_ACTION_KINDS.has(a.kind));
   return (
     <div className="flex flex-col gap-7">
       <div className="grid gap-6" style={{ gridTemplateColumns: "minmax(0,260px) minmax(0,1fr)" }}>
@@ -6007,8 +6046,9 @@ function TacticalStrategyModalContent({ result, proposal }) {
           <div className="text-[11px] leading-relaxed" style={{ color: C.textMuted }}>{proposal.reason}</div>
           {proposal.actions.length > 0 && (
             <div className="flex flex-col gap-1.5 text-[11px] pt-1 mt-1" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
-              <div className="text-[10px]" style={{ color: C.textDim }}>次のアクション（指値・逆指値の目安）</div>
-              {proposal.actions.map((a, i) => <TacticalActionRow key={i} action={a} />)}
+              <div className="text-[10px]" style={{ color: C.textDim }}>次の指値・逆指値</div>
+              {primaryActions.length > 0 && <div className="flex flex-col gap-1.5">{primaryActions.map((a, i) => <TacticalActionBadge key={i} action={a} />)}</div>}
+              {secondaryActions.length > 0 && <div className="flex flex-col gap-1">{secondaryActions.map((a, i) => <TacticalActionRow key={i} action={a} />)}</div>}
             </div>
           )}
         </div>
@@ -6021,7 +6061,44 @@ function TacticalStrategyModalContent({ result, proposal }) {
       </div>
 
       <div>
-        <div className="text-xs mb-2" style={{ color: C.textDim }}>評価額の推移（戦略 vs VOO100%保有）</div>
+        <div className="flex items-center justify-between gap-3 mb-2 flex-wrap">
+          <div className="text-xs" style={{ color: C.textDim }}>実践検証：{selectedPeriod.label}（同じ地点からスタート）</div>
+          <div className="flex items-center gap-1">
+            {practicePeriods.map((p, i) => {
+              const active = selectedPeriod.key === p.key;
+              return (
+                <button key={p.key} onClick={() => setPeriodIdx(i)} className="text-[10px] px-2 py-0.5 rounded whitespace-nowrap" style={{ color: active ? C.bg : C.textMuted, background: active ? C.teal : "transparent", border: active ? "none" : `1px solid ${C.borderSoft}`, fontWeight: active ? 700 : 400 }}>{p.label}</button>
+              );
+            })}
+          </div>
+        </div>
+        {practiceChart ? (
+          <>
+            <div className="mb-2">
+              <span className="mono text-lg font-bold" style={{ color: practiceOutColor }}>{practiceChart.outperformancePct > 0 ? "+" : ""}{practiceChart.outperformancePct.toFixed(1)}pt</span>
+              <span className="text-[11px] ml-2" style={{ color: C.textDim }}>SP500(VOO)100%保有との差（この期間だけの指数ベース）</span>
+            </div>
+            <ResponsiveContainer width="100%" height={220}>
+              <LineChart data={practiceData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+                <CartesianGrid stroke={C.borderSoft} vertical={false} />
+                <XAxis dataKey="date" tickFormatter={(dt) => fmtAxisDate(dt, practiceRangeDays)} tick={{ fill: C.textDim, fontSize: 10 }} axisLine={{ stroke: C.border }} tickLine={false} minTickGap={50} />
+                <YAxis domain={["auto", "auto"]} tick={{ fill: C.textDim, fontSize: 10 }} axisLine={false} tickLine={false} width={40} />
+                <Tooltip content={<TacticalPracticeChartTooltip />} />
+                <Line type="linear" dataKey="SP500" name="SP500(VOO)100%" stroke={C.textDim} strokeWidth={1.4} dot={false} isAnimationActive={false} />
+                <Line type="linear" dataKey="戦略" name="DD戦略" stroke={C.teal} strokeWidth={1.8} dot={false} isAnimationActive={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          </>
+        ) : (
+          <div className="text-[11px] py-6 text-center" style={{ color: C.textDim }}>まだこの期間のデータがありません。期間が始まった後、日次データを取り込むと表示されます。</div>
+        )}
+        <div className="text-[10px] mt-1.5 leading-relaxed" style={{ color: C.textDim }}>
+          期間の開始日（{fmtYMD(selectedPeriod.startDate)}）の評価額をどちらも100として指数化し、同じ地点からスタートして比較しています。期間は実践開始日（{fmtYMD(PRACTICE_START_DATE)}）〜今年末、翌年以降は1/1〜12/31の暦年単位です。
+        </div>
+      </div>
+
+      <div>
+        <div className="text-xs mb-2" style={{ color: C.textDim }}>評価額の推移（戦略 vs VOO100%保有・QQQ取り込み全期間）</div>
         <ResponsiveContainer width="100%" height={260}>
           <LineChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
             <CartesianGrid stroke={C.borderSoft} vertical={false} />

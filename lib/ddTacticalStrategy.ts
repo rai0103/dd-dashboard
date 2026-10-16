@@ -303,3 +303,58 @@ export function describeTacticalProposal(result: TacticalBacktestResult): Tactic
     exitTrigger,
   };
 }
+
+/* ---------------- 5. 実践検証チャート：今日を起点に、SP500(VOO)100%とDD戦略を同じ地点からスタートして比較 ---------------- */
+// 過去の全期間バックテスト（simulateTacticalStrategyのresult.days）はQQQデータの取り込み開始日からの
+// 連続した1本のシミュレーションだが、実際に運用を始めた「今日」を起点に、以後の暦年単位（最初の期間だけは
+// 開始日〜その年の年末、以降は1/1〜12/31）で区切り、各期間の開始日の評価額をそれぞれ100として指数化した
+// 「同じ地点からスタートする折れ線グラフ」を作るための関数群。期間を切り出すだけで、戦略自体の計算
+// （weights・DD状態の遷移）は全期間バックテストのものをそのまま使う＝継続性は保たれる。
+
+// 実践を開始した日（この日を起点にSP500(VOO)100%とDD戦略を同じ基準でスタートする）。
+export const PRACTICE_START_DATE: Date = new Date(2026, 9, 16); // 2026-10-16
+
+export type PracticePeriod = { key: string; label: string; startDate: Date; endDate: Date };
+
+// 実践開始年は「開始日〜その年の年末」、以降は暦年（1/1〜12/31）ごとに期間を生成する。
+// 保有データの最終日（lastDataDate）のある年までを返す（データがまだ無い未来の期間は作らない）。
+export function buildPracticePeriods(lastDataDate: Date): PracticePeriod[] {
+  const startYear = PRACTICE_START_DATE.getFullYear();
+  const lastYear = Math.max(startYear, lastDataDate.getFullYear());
+  const periods: PracticePeriod[] = [];
+  for (let y = startYear; y <= lastYear; y++) {
+    const startDate = y === startYear ? PRACTICE_START_DATE : new Date(y, 0, 1);
+    const endDate = new Date(y, 11, 31);
+    periods.push({
+      key: String(y),
+      label: y === startYear ? `${y}年（実践開始〜年末）` : `${y}年`,
+      startDate, endDate,
+    });
+  }
+  return periods;
+}
+
+export type PracticeChartPoint = { date: Date; strategyIndex: number; vooIndex: number };
+export type PracticeChartResult = {
+  period: PracticePeriod;
+  points: PracticeChartPoint[];
+  outperformancePct: number; // 期間内の最新日時点で、戦略がSP500(VOO)100%に対して何%上（＋）か下（−）か
+} | null;
+
+// resultの全期間バックテストから指定期間だけを切り出し、期間開始日の評価額をどちらも100として指数化する。
+// 期間内にデータが1件もなければnull（まだ始まっていない将来の期間、またはデータ未取込）。
+export function rebasePracticePeriod(result: TacticalBacktestResult, period: PracticePeriod): PracticeChartResult {
+  const inRange = result.days.filter((d) => d.date.getTime() >= period.startDate.getTime() && d.date.getTime() <= period.endDate.getTime());
+  if (inRange.length === 0) return null;
+  const base = inRange[0];
+  const points: PracticeChartPoint[] = inRange.map((d) => ({
+    date: d.date,
+    strategyIndex: Number(((d.equity / base.equity) * 100).toFixed(3)),
+    vooIndex: Number(((d.vooHoldEquity / base.vooHoldEquity) * 100).toFixed(3)),
+  }));
+  const lastPoint = points[points.length - 1];
+  return {
+    period, points,
+    outperformancePct: Number((lastPoint.strategyIndex - lastPoint.vooIndex).toFixed(2)),
+  };
+}

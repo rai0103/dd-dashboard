@@ -5,6 +5,7 @@ import {
   classifySpeed35, depthBucketIndex, deriveTacticalStates, decideTargetWeights,
   mergeVooQqqForTactical, simulateTacticalStrategy, describeTacticalProposal, DEPTH_BUCKETS,
   computeQqqEdgeProbabilities, baseQqqWeightFromProbability, PROB_WINDOW_DAYS, BASE_QQQ_CAP,
+  buildPracticePeriods, rebasePracticePeriod, PRACTICE_START_DATE,
 } from "./ddTacticalStrategy.ts";
 
 test("classifySpeed35: 5日以下は急落、21日以上は緩慢、それ以外は中間", () => {
@@ -214,4 +215,59 @@ test("simulateTacticalStrategy: DDが一度も起きない期間でも、QQQの�
   assert.equal(lastDay.state.depthBucketIndex, -1); // 平常時のまま
   assert.ok(lastDay.weights.qqq > 0.2); // 実績優位確率が積み上がり、ベースQQQ(上限30%近く)を保有している
   assert.ok(result.outperformancePct > 0); // その結果、VOO100%保有より上振れする
+});
+
+test("buildPracticePeriods: 開始年は実践開始日〜年末、以降は暦年(1/1〜12/31)で区切られる", () => {
+  const periods = buildPracticePeriods(new Date(2028, 5, 1));
+  assert.equal(periods.length, 3); // 2026, 2027, 2028
+  assert.equal(periods[0].startDate.getTime(), PRACTICE_START_DATE.getTime());
+  assert.equal(periods[0].endDate.getFullYear(), 2026);
+  assert.equal(periods[0].endDate.getMonth(), 11);
+  assert.equal(periods[0].endDate.getDate(), 31);
+  assert.equal(periods[1].startDate.getTime(), new Date(2027, 0, 1).getTime());
+  assert.equal(periods[1].endDate.getTime(), new Date(2027, 11, 31).getTime());
+  assert.equal(periods[2].startDate.getTime(), new Date(2028, 0, 1).getTime());
+});
+
+test("buildPracticePeriods: 保有データが実践開始年より前でも、実践開始年の1期間だけを返す", () => {
+  const periods = buildPracticePeriods(new Date(2020, 0, 1));
+  assert.equal(periods.length, 1);
+  assert.equal(periods[0].startDate.getTime(), PRACTICE_START_DATE.getTime());
+});
+
+test("rebasePracticePeriod: 期間開始日の評価額をどちらも100として指数化し、以後の差がoutperformancePctになる", () => {
+  // QQQがVOOより速く伸び続ける系列。PRACTICE_START_DATEをまたぐように日付を作る。
+  const base = new Date(2026, 9, 1); // 2026-10-01（実践開始日より前から始める）
+  const n = 400;
+  const days = Array.from({ length: n }, (_, i) => {
+    const d = new Date(base);
+    d.setDate(d.getDate() + i);
+    return { date: d, voo: 100 * Math.pow(1.0004, i), qqq: 100 * Math.pow(1.001, i) };
+  });
+  const result = simulateTacticalStrategy(days, 10000);
+  assert.ok(result);
+  const periods = buildPracticePeriods(result.endDate);
+  const period2026 = periods.find((p) => p.key === "2026");
+  assert.ok(period2026);
+  const rebased = rebasePracticePeriod(result, period2026);
+  assert.ok(rebased);
+  assert.equal(rebased.points[0].strategyIndex, 100);
+  assert.equal(rebased.points[0].vooIndex, 100);
+  assert.equal(rebased.points[0].date.getTime(), PRACTICE_START_DATE.getTime()); // 実践開始日が起点
+  const last = rebased.points[rebased.points.length - 1];
+  assert.ok(last.strategyIndex !== 100 || last.vooIndex !== 100); // 期間内に変化がある
+  assert.equal(rebased.outperformancePct, Number((last.strategyIndex - last.vooIndex).toFixed(2)));
+});
+
+test("rebasePracticePeriod: 期間内にデータが無ければnull（まだ始まっていない将来の期間）", () => {
+  const base = new Date(2026, 9, 16);
+  const days = Array.from({ length: 10 }, (_, i) => {
+    const d = new Date(base);
+    d.setDate(d.getDate() + i);
+    return { date: d, voo: 100 + i, qqq: 100 + i * 2 };
+  });
+  const result = simulateTacticalStrategy(days, 10000);
+  assert.ok(result);
+  const future = { key: "2099", label: "2099年", startDate: new Date(2099, 0, 1), endDate: new Date(2099, 11, 31) };
+  assert.equal(rebasePracticePeriod(result, future), null);
 });
