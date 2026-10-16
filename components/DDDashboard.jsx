@@ -6065,7 +6065,7 @@ function TacticalStrategyModalContent({ result, proposal }) {
   const secondaryActions = proposal.actions.filter((a) => !TACTICAL_PRIMARY_ACTION_KINDS.has(a.kind));
   return (
     <div className="flex flex-col gap-7">
-      <div className="grid gap-6" style={{ gridTemplateColumns: "minmax(0,260px) minmax(0,1fr)" }}>
+      <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,260px)_minmax(0,1fr)] gap-6">
         <div className="flex flex-col gap-2">
           <div className="text-xs mb-1" style={{ color: C.textDim }}>現在の目標配分</div>
           <TacticalWeightBar weights={proposal.weights} large />
@@ -6078,7 +6078,7 @@ function TacticalStrategyModalContent({ result, proposal }) {
             </div>
           )}
         </div>
-        <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-[12px] content-start">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 text-[12px] content-start">
           <div className="flex flex-col"><span style={{ color: C.textDim }}>評価額との差（VOO100%比）</span><span className="mono text-xl font-bold" style={{ color: outColor }}>{result.outperformancePct > 0 ? "+" : ""}{result.outperformancePct.toFixed(1)}%<span className="text-[12px] ml-2">（{result.outperformanceAmount > 0 ? "+" : ""}${Math.round(result.outperformanceAmount).toLocaleString()}）</span></span></div>
           <div className="flex flex-col"><span style={{ color: C.textDim }}>最大下落率（MDD）</span><span className="mono">戦略 <b style={{ color: C.rust }}>{result.strategyMaxDD.toFixed(1)}%</b> ／ VOO100% <b style={{ color: C.rust }}>{result.vooMaxDD.toFixed(1)}%</b></span></div>
           <div className="flex flex-col"><span style={{ color: C.textDim }}>評価額（仮想元手${result.startCapital.toLocaleString()}）</span><span className="mono">戦略 ${Math.round(result.finalEquity).toLocaleString()} ／ VOO100% ${Math.round(result.finalVooHoldEquity).toLocaleString()}</span></div>
