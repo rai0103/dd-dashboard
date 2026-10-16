@@ -2345,31 +2345,36 @@ function MultiPriceChartBody({ keys, views, hidden, fontSize = 10, compact = fal
 }
 const MULTI_CHART_NOTE = "1つ目に選んだ銘柄を左軸、それ以外を右軸で表示しています（評価額のみ・DD%は表示しません）。マーカーは色が種別（緑=DD開始・オレンジ=大底・青=DD回復）、形が銘柄（●VOO・▲QQQ・▼GOLD、■は現在値）で、カーソルを合わせると銘柄名付きで詳細を表示します。凡例クリックで系列の表示/非表示を切り替えられます。";
 function multiLegendItems(keys, views) { return keys.filter((k) => views[k]).map((k) => ({ key: MULTI_SERIES[k].hiddenKey, label: MULTI_SERIES[k].name, color: MULTI_SERIES[k].color })); }
-// 年比較（SP500専用。lib/yearCompare.ts）：比較年（プリセットで選択）の1〜12月の値動きを薄い白線で重ね、今年（途中経過）を強調表示する。
+// 年比較（lib/yearCompare.ts）：比較年（プリセットで選択）の1〜12月の値動きを薄い白線で重ね、今年（途中経過）を強調表示する。
 // 評価額＝年初（前年最終値）=100の指数、DD＝年初来高値からの下落率。線（または下の年ボタン）にホバー／タップするとその年を強調して表示する。
+// VOO/QQQの切替に対応（qqqFULLが無い/空の場合はVOO固定）。切替時は比較年セット・一覧表・チェック状態も丸ごとその銘柄基準に切り替わる。
 const YEAR_MONTH_TICKS = [1, 32, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335]; // 各月1日の通算日（平年）
 const doyLabel = (doy) => { const d = new Date(Date.UTC(2025, 0, doy)); return `${d.getUTCMonth() + 1}月${d.getUTCDate()}日`; };
 // showTable：拡大表示ページだけ、チャートの下に年ごとのパフォーマンス一覧表（騰落率・MDD・ATH更新・DD-3%・イベント）を出す。
 // 一覧表の「年」をクリックすると、その年の線を太線で強調する（もう一度クリックで解除。年ボタンのクリック固定と同じ状態）。
 // state/setState：通常表示と拡大表示で同じ選択状態（評価額/DD・プリセット・入力年・チェックで非表示にした年）を共有するため、
 // 親（ダッシュボード本体）が持つ状態を渡す。渡されない場合はこのパネル内だけの状態で動く。
-const YEAR_COMPARE_INITIAL = { metric: "index", preset: "recent10", inputYear: "", hidden: { key: "", years: [] } };
+const YEAR_COMPARE_INITIAL = { metric: "index", preset: "recent10", inputYear: "", hidden: { key: "", years: [] }, source: "voo" };
 // onChartTap：指定時（スマホ縦画面のチャートタブ）はチャート本体のタップで拡大表示を開く。年の強調固定は下の年ボタンで行う。
-function YearComparePanel({ FULL, fontSize = 10, showTable = false, state: sharedState = null, setState: setSharedState = null, onChartTap = null }) {
+function YearComparePanel({ FULL, qqqFULL = [], fontSize = 10, showTable = false, state: sharedState = null, setState: setSharedState = null, onChartTap = null }) {
   const [localState, setLocalState] = useState(YEAR_COMPARE_INITIAL);
   const state = sharedState ?? localState;
   const setState = setSharedState ?? setLocalState;
-  const { metric, preset, inputYear } = state;
+  const { metric, preset, inputYear, source = "voo" } = state;
   const setMetric = (v) => setState((st) => ({ ...st, metric: v }));
   const setPreset = (v) => setState((st) => ({ ...st, preset: v }));
   const setInputYear = (v) => setState((st) => ({ ...st, inputYear: v }));
+  const hasQqq = Array.isArray(qqqFULL) && qqqFULL.length > 0;
+  const activeSource = source === "qqq" && hasQqq ? "qqq" : "voo"; // QQQ未取込ならVOOに自動フォールバック
+  const setSource = (v) => setState((st) => ({ ...st, source: v }));
+  const activeFULL = activeSource === "qqq" ? qqqFULL : FULL;
   const [hoverYearRaw, setHoverYear] = useState(null); // マウスが乗っている年（一時的）
   const [pinnedYear, setPinnedYear] = useState(null); // クリック／タップで固定した年（もう一度押すと解除）
   const hoverYear = hoverYearRaw ?? pinnedYear;
   const togglePin = (y) => setPinnedYear((v) => (v === y ? null : y));
   // 一覧表のチェックボックスで非表示にした年（既定は全年表示）。比較年セット（yearsKey）と組で保持し、セットが変わったら全表示に戻る
   // （拡大表示を開いたときなど、同じセットのままなら選択状態をそのまま引き継ぐ）。
-  const series = useMemo(() => buildYearSeries(FULL.map((pt) => ({ date: pt.date, price: pt.price }))), [FULL]);
+  const series = useMemo(() => buildYearSeries(activeFULL.map((pt) => ({ date: pt.date, price: pt.price }))), [activeFULL]);
   const currentYear = useMemo(() => Math.max(...series.keys()), [series]);
   const allYears = useMemo(() => completeYears(series, currentYear), [series, currentYear]);
   const presetDef = YEAR_PRESETS.find((x) => x.key === preset);
@@ -2407,7 +2412,7 @@ function YearComparePanel({ FULL, fontSize = 10, showTable = false, state: share
   // 年初来ATH更新回数の区切り：今年の最新データの月日（例 "10-06"）。過去の各年も1月1日〜この月日で数える
   const cutoffMD = series.get(currentYear)?.at(-1)?.date.slice(5) ?? null;
   const cutoffLabel = cutoffMD ? `${Number(cutoffMD.slice(0, 2))}/${Number(cutoffMD.slice(3))}` : "";
-  const yearStats = useMemo(() => (showTable ? computeYearStats(FULL, tableYears, cutoffMD) : null), [showTable, FULL, tableYears, cutoffMD]);
+  const yearStats = useMemo(() => (showTable ? computeYearStats(activeFULL, tableYears, cutoffMD) : null), [showTable, activeFULL, tableYears, cutoffMD]);
   const sel = { background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text, padding: "2px 6px", cursor: "pointer" };
   const curLast = series.get(currentYear)?.at(-1);
   const TooltipBody = ({ active, payload, label }) => {
@@ -2427,9 +2432,10 @@ function YearComparePanel({ FULL, fontSize = 10, showTable = false, state: share
     <div className={showTable ? "flex flex-col" : "h-full flex flex-col min-h-0"} onClick={(e) => e.stopPropagation()}>
       <div className="flex items-center gap-2 flex-wrap px-2 pt-1 pb-1 shrink-0 text-[11px]" style={{ color: C.textMuted }}>
         <div className="flex gap-0.5">{[{ k: "index", l: "評価額" }, { k: "dd", l: "DD" }].map((t) => (<button key={t.k} onClick={() => setMetric(t.k)} className="px-2 py-0.5 rounded" style={{ color: metric === t.k ? C.bg : C.textMuted, background: metric === t.k ? C.teal : "transparent", fontWeight: metric === t.k ? 700 : 400, border: `1px solid ${metric === t.k ? C.teal : C.borderSoft}`, cursor: "pointer" }}>{t.l}</button>))}</div>
+        <div className="flex gap-0.5">{[{ k: "voo", l: "VOO" }, { k: "qqq", l: "QQQ" }].map((t) => { const disabled = t.k === "qqq" && !hasQqq; return (<button key={t.k} onClick={() => !disabled && setSource(t.k)} disabled={disabled} title={disabled ? "QQQのトラックレコードが未取り込みです" : undefined} className="px-2 py-0.5 rounded" style={{ color: activeSource === t.k ? C.bg : disabled ? C.textDim : C.textMuted, background: activeSource === t.k ? C.violet : "transparent", fontWeight: activeSource === t.k ? 700 : 400, border: `1px solid ${activeSource === t.k ? C.violet : C.borderSoft}`, cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.5 : 1 }}>{t.l}</button>); })}</div>
         <select value={preset} onChange={(e) => setPreset(e.target.value)} className="rounded" style={sel}>{YEAR_PRESETS.map((x) => <option key={x.key} value={x.key}>{x.label}</option>)}</select>
         {presetDef?.needsYear && <input type="number" value={inputYear} onChange={(e) => setInputYear(e.target.value)} placeholder={`${allYears[0] ?? ""}〜${allYears.at(-1) ?? ""}`} min={allYears[0]} max={allYears.at(-1)} className="mono rounded" style={{ ...sel, width: 92 }} />}
-        <span className="text-[10px]" style={{ color: C.textDim }}>{metric === "index" ? "年初=100の指数" : "年初来高値からの下落率"}・比較{years.length}年{curLast ? `・今年 ${curLast[metric].toFixed(metric === "index" ? 1 : 1)}${unit}（${fmtDateSlash(curLast.date)}）` : ""}</span>
+        <span className="text-[10px]" style={{ color: C.textDim }}>{activeSource === "qqq" ? "QQQ基準" : "VOO基準"}・{metric === "index" ? "年初=100の指数" : "年初来高値からの下落率"}・比較{years.length}年{curLast ? `・今年 ${curLast[metric].toFixed(metric === "index" ? 1 : 1)}${unit}（${fmtDateSlash(curLast.date)}）` : ""}</span>
         {note && <span className="text-[10px]" style={{ color: C.amber }}>{note}</span>}
       </div>
       <div className={showTable ? "relative" : `flex-1 min-h-0 relative${onChartTap ? " cursor-zoom-in" : ""}`} style={showTable ? { height: "min(56vh, 520px)" } : undefined} onClick={onChartTap ?? undefined}>
@@ -2651,7 +2657,7 @@ function DDChartModalContent({ chartData, rangeDays, d, hidden, toggle, period, 
           <div className="mt-3 text-[10px]" style={{ color: C.textDim }}>{isMultiSource ? MULTI_CHART_NOTE : "下部のスクロールバーをドラッグして期間を絞り込み（ズーム）できます。グラフ上にカーソルを合わせるとツールチップが表示されます。"}</div>
         </>
       ) : chartTab === "year" ? (
-        <YearComparePanel FULL={d.FULL} fontSize={fontSize} showTable state={yearCompare} setState={setYearCompare} />
+        <YearComparePanel FULL={d.FULL} qqqFULL={dQqq?.FULL ?? []} fontSize={fontSize} showTable state={yearCompare} setState={setYearCompare} />
       ) : (
         <div style={{ height: "min(70vh, 640px)" }}>
           <ResponsiveContainer width="100%" height="100%">
@@ -5621,7 +5627,7 @@ function MobileChartPage({ chartTab, setChartTab, chartSources, onToggleChartSou
         ) : (
           <>
             <div className="flex-1 min-h-0 flex flex-col -mx-2">
-              <YearComparePanel FULL={d.FULL} fontSize={9} state={yearCompare} setState={setYearCompare} onChartTap={onZoom} />
+              <YearComparePanel FULL={d.FULL} qqqFULL={dQqq?.FULL ?? []} fontSize={9} state={yearCompare} setState={setYearCompare} onChartTap={onZoom} />
             </div>
             <div className="text-[9px] text-center shrink-0 pt-1" style={{ color: C.textDim }}>チャートをタップで拡大表示（パフォーマンス一覧つき）</div>
           </>
@@ -7872,7 +7878,7 @@ export default function DDDashboard() {
             {/* top-left: chart */}
             <div style={{ minHeight: 0 }}>
               <Panel
-                title={chartTab === "normal" ? chartSourceTitle(chartSource) : chartTab === "year" ? "年比較（VOO）" : "過去の暴落との比較（経過日数ベース）"}
+                title={chartTab === "normal" ? chartSourceTitle(chartSource) : chartTab === "year" ? `年比較（${yearCompare?.source === "qqq" ? "QQQ" : "VOO"}）` : "過去の暴落との比較（経過日数ベース）"}
                 compactHeader
                 action={
                   <div className="flex items-center gap-2">
@@ -7913,7 +7919,7 @@ export default function DDDashboard() {
                     </div>
                   </div>
                 ) : chartTab === "year" ? (
-                  <YearComparePanel FULL={d.FULL} state={yearCompare} setState={setYearCompare} />
+                  <YearComparePanel FULL={d.FULL} qqqFULL={dQqq?.FULL ?? []} state={yearCompare} setState={setYearCompare} />
                 ) : (
                   <div className="h-full flex flex-col">
                     <div className="flex items-center gap-2 px-2 pt-1 pb-1.5 flex-wrap shrink-0">
