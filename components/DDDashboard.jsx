@@ -23,6 +23,7 @@ import { OWNER_RAKUTEN_SAKI, OWNER_RAKUTEN_SHIN, OWNER_MOOMOO, OWNER_OPTIONS, RA
 import { BROKERS, brokerByKey, extractionToPreviewRows, previewRowsToHoldings, replaceBrokerHoldings, aggregateLabelsReplacedByBrokers, rowValue, reconcileWithAccountTotal, isPlausibleBrokerRate, guessBrokerRank, reconciliationTarget, sectionChecks, buildBrokerSummary, profitChecks, appendHoldingSnapshot, holdingChanges } from "@/lib/brokerImport";
 import { importUserPrices, applyApiGold, resetPriceField, goldHistoryFetchStart } from "@/lib/priceSeries";
 import { buildStatsTable, computeMddHoldProbability, depthBucketIndex, LOW_SAMPLE_N } from "@/lib/bottomScore";
+import { mergeVooQqqForTactical, simulateTacticalStrategy, describeTacticalProposal } from "@/lib/ddTacticalStrategy";
 
 // Cloudflare Worker（当日のVOO/QQQ終値を返す。SP500はここでは扱わず引き続きCSV取り込み/直接入力で更新する）のエンドポイント。
 // デプロイ先のURLに置き換えてください。
@@ -5895,15 +5896,154 @@ function BottomScoreModalContent({ bottom, FULL }) {
     </div>
   );
 }
-function MobileBottomScorePage({ bottom, FULL, onOpen }) {
+/* ---------------- DD戦略シミュレーション（VOOガチホに勝てるかの検証） ---------------- */
+// 最高値比・経過日数・DD加速度アラートの3指標だけでVOO/QQQ/現金の配分を機械的に決め、QQQの取り込み開始日から
+// 終値ベースで約定したと仮定して評価額を都度シミュレーションする（lib/ddTacticalStrategy.ts）。投資助言ではない。
+const TACTICAL_WEIGHT_COLOR = { qqq: C.amber, voo: C.teal, cash: C.textDim };
+function tacticalWeightSegments(weights) {
+  return [["qqq", "QQQ", weights.qqq], ["voo", "VOO", weights.voo], ["cash", "現金", weights.cash]].filter(([, , v]) => v > 0.0001);
+}
+function weightsLabel(w) {
+  const parts = [];
+  if (w.qqq > 0.0001) parts.push(`QQQ${Math.round(w.qqq * 100)}%`);
+  if (w.cash > 0.0001) parts.push(`現金${Math.round(w.cash * 100)}%`);
+  parts.push(`VOO${Math.round(w.voo * 100)}%`);
+  return parts.join(" / ");
+}
+function TacticalWeightBar({ weights, large = false }) {
+  const segs = tacticalWeightSegments(weights);
+  return (
+    <div className="w-full">
+      <div className="w-full rounded-full overflow-hidden flex" style={{ height: large ? 10 : 8, background: C.panel2 }}>
+        {segs.map(([k, label, v]) => (<div key={k} style={{ width: `${v * 100}%`, background: TACTICAL_WEIGHT_COLOR[k] }} title={`${label} ${Math.round(v * 100)}%`} />))}
+      </div>
+      <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1 text-[10px] mono" style={{ color: C.textMuted }}>
+        {segs.map(([k, label, v]) => (<span key={k} className="flex items-center gap-1"><span style={{ width: 7, height: 7, borderRadius: 2, background: TACTICAL_WEIGHT_COLOR[k], display: "inline-block" }} />{label} {Math.round(v * 100)}%</span>))}
+      </div>
+    </div>
+  );
+}
+function TacticalStrategyPanelBody({ result, proposal, onOpen, large = false }) {
+  if (!result || !proposal) {
+    return <div className="h-full flex items-center justify-center text-[11px] text-center px-3" style={{ color: C.textDim }}>QQQのトラックレコードが未取り込みです。データ入力・出力画面からQQQのCSVを取り込んでください。</div>;
+  }
+  const outPct = result.outperformancePct;
+  const outColor = outPct > 0 ? C.teal : outPct < 0 ? C.rust : C.textMuted;
+  return (
+    <div className="h-full flex flex-col p-2.5 gap-2 cursor-pointer" onClick={onOpen} title="クリックで詳細（評価額の推移・トレード履歴・ルール説明）">
+      <div>
+        <div className="text-[10px] mb-1" style={{ color: C.textDim }}>現在の目標配分</div>
+        <TacticalWeightBar weights={proposal.weights} large={large} />
+        <div className="text-[10px] mt-1 leading-snug" style={{ color: C.textMuted }}>{proposal.reason}</div>
+      </div>
+      <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-0.5">
+        <div className={`mono ${large ? "text-[22px]" : "text-[17px]"} font-bold`} style={{ color: outColor }}>{outPct > 0 ? "+" : ""}{outPct.toFixed(1)}%</div>
+        <div className="text-[10px] text-center" style={{ color: C.textDim }}>VOO100%保有との差（{fmtYMD(result.startDate)}〜の全期間シミュレーション）</div>
+      </div>
+      {(proposal.nextBuyTrigger || proposal.exitTrigger) && (
+        <div className="text-[9px] leading-tight pt-1 mono" style={{ borderTop: `1px solid ${C.borderSoft}`, color: C.textDim }}>
+          {proposal.nextBuyTrigger && <div>次の節目（最高値比{proposal.nextBuyTrigger.depthLabel}）：${proposal.nextBuyTrigger.price}</div>}
+          {proposal.exitTrigger && <div>{proposal.exitTrigger.label}：${proposal.exitTrigger.price}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+function downsampleForChart(days, maxPoints = 700) {
+  if (days.length <= maxPoints) return days;
+  const step = Math.ceil(days.length / maxPoints);
+  const out = [];
+  for (let i = 0; i < days.length; i += step) out.push(days[i]);
+  if (out[out.length - 1] !== days[days.length - 1]) out.push(days[days.length - 1]);
+  return out;
+}
+function TacticalChartTooltip({ active, payload, label }) {
+  if (!active || !payload || !payload.length) return null;
+  return (
+    <div className="rounded px-2 py-1.5 text-[11px] mono" style={{ background: C.panel, border: `1px solid ${C.border}`, color: C.text }}>
+      <div style={{ color: C.textDim }}>{fmtYMD(label)}</div>
+      {payload.map((p) => (<div key={p.dataKey} style={{ color: p.color }}>{p.name}：${Math.round(p.value).toLocaleString()}</div>))}
+    </div>
+  );
+}
+function TacticalStrategyModalContent({ result, proposal }) {
+  if (!result || !proposal) return <div className="text-xs py-6 text-center" style={{ color: C.textDim }}>QQQのトラックレコードが未取り込みです。データ入力・出力画面からQQQのCSVを取り込んでください。</div>;
+  const chartData = downsampleForChart(result.days).map((d) => ({ date: d.date, 戦略: Number(d.equity.toFixed(2)), VOO100: Number(d.vooHoldEquity.toFixed(2)) }));
+  const rangeDays = Math.round((result.endDate - result.startDate) / 86400000);
+  const outColor = result.outperformancePct > 0 ? C.teal : result.outperformancePct < 0 ? C.rust : C.textMuted;
+  const recentTrades = [...result.trades].reverse().slice(0, 40);
+  const th = "text-left font-normal py-1 px-2", td = "py-1 px-2";
+  return (
+    <div className="flex flex-col gap-7">
+      <div className="grid gap-6" style={{ gridTemplateColumns: "minmax(0,260px) minmax(0,1fr)" }}>
+        <div className="flex flex-col gap-2">
+          <div className="text-xs mb-1" style={{ color: C.textDim }}>現在の目標配分</div>
+          <TacticalWeightBar weights={proposal.weights} large />
+          <div className="text-[11px] leading-relaxed" style={{ color: C.textMuted }}>{proposal.reason}</div>
+          {proposal.nextBuyTrigger && <div className="text-[11px] mono" style={{ color: C.textDim }}>次の節目（最高値比{proposal.nextBuyTrigger.depthLabel}）：<b style={{ color: C.text }}>${proposal.nextBuyTrigger.price}</b></div>}
+          {proposal.exitTrigger && <div className="text-[11px] mono" style={{ color: C.textDim }}>{proposal.exitTrigger.label}：<b style={{ color: C.text }}>${proposal.exitTrigger.price}</b></div>}
+        </div>
+        <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-[12px] content-start">
+          <div className="flex flex-col"><span style={{ color: C.textDim }}>評価額との差（VOO100%比）</span><span className="mono text-xl font-bold" style={{ color: outColor }}>{result.outperformancePct > 0 ? "+" : ""}{result.outperformancePct.toFixed(1)}%<span className="text-[12px] ml-2">（{result.outperformanceAmount > 0 ? "+" : ""}${Math.round(result.outperformanceAmount).toLocaleString()}）</span></span></div>
+          <div className="flex flex-col"><span style={{ color: C.textDim }}>最大下落率（MDD）</span><span className="mono">戦略 <b style={{ color: C.rust }}>{result.strategyMaxDD.toFixed(1)}%</b> ／ VOO100% <b style={{ color: C.rust }}>{result.vooMaxDD.toFixed(1)}%</b></span></div>
+          <div className="flex flex-col"><span style={{ color: C.textDim }}>評価額（仮想元手${result.startCapital.toLocaleString()}）</span><span className="mono">戦略 ${Math.round(result.finalEquity).toLocaleString()} ／ VOO100% ${Math.round(result.finalVooHoldEquity).toLocaleString()}</span></div>
+          <div className="flex flex-col"><span style={{ color: C.textDim }}>シミュレーション期間</span><span className="mono">{fmtYMD(result.startDate)}〜{fmtYMD(result.endDate)}（QQQ取り込み全期間）</span></div>
+        </div>
+      </div>
+
+      <div>
+        <div className="text-xs mb-2" style={{ color: C.textDim }}>評価額の推移（戦略 vs VOO100%保有）</div>
+        <ResponsiveContainer width="100%" height={260}>
+          <LineChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+            <CartesianGrid stroke={C.borderSoft} vertical={false} />
+            <XAxis dataKey="date" tickFormatter={(dt) => fmtAxisDate(dt, rangeDays)} tick={{ fill: C.textDim, fontSize: 10 }} axisLine={{ stroke: C.border }} tickLine={false} minTickGap={50} />
+            <YAxis domain={["auto", "auto"]} tick={{ fill: C.textDim, fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} width={48} />
+            <Tooltip content={<TacticalChartTooltip />} />
+            <Line type="linear" dataKey="VOO100" name="VOO100%保有" stroke={C.textDim} strokeWidth={1.4} dot={false} isAnimationActive={false} />
+            <Line type="linear" dataKey="戦略" name="DD戦略" stroke={C.teal} strokeWidth={1.8} dot={false} isAnimationActive={false} />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div className="text-[11px] leading-relaxed" style={{ color: C.textMuted }}>
+        ルール（{result.ruleVersion}）：最高値比（VOOのATHからの下落率）が-3%未満の平常時はVOO100%（ガチホと同一）。-3%以降はDD加速度アラートの速度区分で分岐し、「急落・警戒（DD-3→5%到達が5営業日以内）」なら深度に応じて現金比率を最大20%まで上げて守りを固め（QQQは増やさない）、それ以外（緩慢・安心寄りまたは速度未確定）ならVOOの一部をQQQに振り替えて押し目買いする（最大24%）。直近ATHを更新するとVOO100%に戻る。取引コスト・税金・スリッページは考慮していない。
+      </div>
+
+      <div>
+        <div className="text-xs mb-2" style={{ color: C.textDim }}>配分変更の履歴（新しい順・最大40件）</div>
+        <div className="overflow-auto" style={{ maxHeight: 280 }}>
+          <table className="w-full text-xs mono"><thead><tr style={{ color: C.textDim }}><th className={th}>日付</th><th className={th}>変更後</th><th className={th}>理由</th></tr></thead>
+            <tbody>{recentTrades.map((t) => (
+              <tr key={t.idx} style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+                <td className={td}>{fmtYMD(t.date)}</td>
+                <td className={td}>{weightsLabel(t.to)}</td>
+                <td className={td} style={{ color: C.textMuted }}>{t.reason}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="text-[11px] leading-relaxed" style={{ color: C.textDim }}>
+        このシミュレーションはQQQの取り込み全期間について、ルールを忠実に実行していたら実際の評価額がどう推移したかを日次で機械的に計算した結果であり、投資助言ではありません。過去の実績は将来を保証しません。
+      </div>
+    </div>
+  );
+}
+
+function MobileBottomScorePage({ bottom, FULL, onOpen, onOpenTactical, tacticalResult, tacticalProposal, tab, setTab }) {
   return (
     <div className="p-3 h-full">
       <div className="rounded-lg h-full flex flex-col" style={{ background: C.panel, border: `1px solid ${C.border}` }}>
-        <div className="px-3 pt-2 text-[11px] shrink-0 flex items-baseline justify-between gap-2 whitespace-nowrap" style={{ color: C.textDim }}>
-          <span>VOO底値判定{bottom.hold.applicable && <> <span className="mono font-bold text-[12px]" style={{ color: depthColor(bottom.hold.state.mdd) }}>{bottomLabel(FULL, bottom.hold.state)}</span></>}</span>
-          <span className="text-[10px]">詳細 ›</span>
+        <div className="px-3 pt-2 shrink-0 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-0.5">
+            {[["score", "底値判定"], ["tactical", "DD戦略"]].map(([k, l]) => (<button key={k} onClick={() => setTab(k)} className="text-[11px] px-2 py-1 rounded whitespace-nowrap" style={{ color: tab === k ? C.bg : C.textMuted, background: tab === k ? C.teal : "transparent", fontWeight: tab === k ? 700 : 400 }}>{l}</button>))}
+          </div>
+          <span className="text-[10px] whitespace-nowrap" style={{ color: C.textDim }}>詳細 ›</span>
         </div>
-        <div className="flex-1 min-h-0"><BottomScorePanelBody bottom={bottom} FULL={FULL} onOpen={onOpen} large /></div>
+        {tab === "score"
+          ? <div className="flex-1 min-h-0"><BottomScorePanelBody bottom={bottom} FULL={FULL} onOpen={onOpen} large /></div>
+          : <div className="flex-1 min-h-0"><TacticalStrategyPanelBody result={tacticalResult} proposal={tacticalProposal} onOpen={onOpenTactical} large /></div>}
       </div>
     </div>
   );
@@ -6906,6 +7046,7 @@ export default function DDDashboard() {
   const [hidden, setHidden] = useState({});
   const [hiddenCrash, setHiddenCrash] = useState({});
   const [pieView, setPieView] = useState("rank");
+  const [bottomPanelTab, setBottomPanelTab] = useState("score"); // 底値判定パネルの表示切替："score"=VOO底値判定 / "tactical"=DD戦略シミュレーション（PC・スマホ共通）
   const [modelOverride, setModelOverride] = useState(null); // null = 自動（現在の評価額に応じて選択）
   const [chartTab, setChartTab] = useState("normal");
   // 評価額/DDチャートの対象（"sp500"＝VOO・"qqq"・"gold"の配列、複数選択可）。1つなら評価額/DD%チャート、複数なら評価額のみの比較チャート。
@@ -7359,6 +7500,14 @@ export default function DDDashboard() {
     const stats = buildStatsTable(prices, dates);
     return { stats, hold: computeMddHoldProbability(prices, stats) };
   }, [d.FULL]);
+  // DD戦略シミュレーション（VOOガチホに勝てるかの検証機能）：最高値比・経過日数・DD加速度アラートの3指標だけで
+  // VOO/QQQ/現金の目標配分を機械的に決め、QQQの取り込み開始日から終値ベースで約定したと仮定して評価額を都度シミュレーションする
+  // （lib/ddTacticalStrategy.ts）。QQQ未取り込み・2日未満の場合はnull。
+  const tacticalResult = useMemo(() => {
+    const merged = mergeVooQqqForTactical(vooCalcSeries, qqqCalcSeries);
+    return simulateTacticalStrategy(merged, 10000);
+  }, [vooCalcSeries, qqqCalcSeries]);
+  const tacticalProposal = useMemo(() => (tacticalResult ? describeTacticalProposal(tacticalResult) : null), [tacticalResult]);
   const chartData = useMemo(() => sliceForPeriod(d.FULL, d.last, period), [d.FULL, d.last, period]);
   const rangeDays = useMemo(() => { const f = chartData[0].date, l = chartData[chartData.length - 1].date; return Math.round((l - f) / 86400000); }, [chartData]);
   const periodRange = useMemo(() => periodDateRange(d.FULL, d.last, period), [d.FULL, d.last, period]);
@@ -7504,6 +7653,7 @@ export default function DDDashboard() {
       {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} synthetic={sp500Synthetic} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} vooQqqSeries={vooQqqSeries} onAppendVooQqq={handleAppendVooQqq} onImportVooQqq={handleImportVooQqq} onApplyApiGold={handleApplyApiGold} onResetVooQqqField={handleResetVooQqqField} virtualAggregateLabels={virtualAggregateLabels} onRegisterBrokerHoldings={handleRegisterBrokerHoldings} brokerSummaries={brokerSummaries} />}
       {modal?.type === "checkpointSettings" && <FullScreenModal title="チェックポイント設定" onClose={() => setModal(null)}><CheckpointSettingsContent checkpoints={checkpoints} onCheckpointChange={handleCheckpointChange} holdings={holdings} /></FullScreenModal>}
       {modal?.type === "bottomScore" && <FullScreenModal title={bottom.hold.applicable ? `VOO底値判定：${bottomLabel(d.FULL, bottom.hold.state)} が底値として確定する確率（VOO実績から都度算出）` : "VOO底値判定（VOO実績から都度算出）"} onClose={() => setModal(null)}><BottomScoreModalContent bottom={bottom} FULL={d.FULL} /></FullScreenModal>}
+      {modal?.type === "tacticalStrategy" && <FullScreenModal title={`DD戦略 vs VOOガチホ：${tacticalResult ? `${tacticalResult.outperformancePct > 0 ? "+" : ""}${tacticalResult.outperformancePct.toFixed(1)}%（${fmtYMD(tacticalResult.startDate)}〜の全期間シミュレーション）` : "QQQ未取り込み"}`} onClose={() => setModal(null)}><TacticalStrategyModalContent result={tacticalResult} proposal={tacticalProposal} /></FullScreenModal>}
       {modal?.type === "realHoldingsRanking" && <FullScreenModal title="実質保有銘柄ランキング" onClose={() => setModal(null)}><RealHoldingsRankingContent holdings={combinedHoldings} /></FullScreenModal>}
       {modal?.type === "summary" && <FullScreenModal title="詳細サマリー出力（AI相談用）" onClose={() => setModal(null)}><SummaryModalContent d={d} dVoo={dVoo} dQqq={dQqq} holdings={holdings} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} blocks={blocks} rankLabels={rankLabels} lifecycle={lifecycle} onLifecycleChange={handleLifecycleChange} fixedPositions={fixedPositions} onFixedPositionChange={handleFixedPositionChange} checkpoints={checkpoints} prevSnapshot={prevSnapshot} onSaveSnapshot={handleSaveSnapshot} /></FullScreenModal>}
       {modal?.type === "mobileChartZoom" && <MobileChartZoomModal onClose={() => setModal(null)} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} sourceViews={sourceViews} chartSources={chartSources} onToggleChartSource={toggleChartSource} yearCompare={yearCompare} setYearCompare={setYearCompare} initialTab={chartTab} isRealDevice={isMobileAuto} />}
@@ -7568,7 +7718,7 @@ export default function DDDashboard() {
               { key: "chart", label: "チャート", icon: Activity, content: <MobileChartPage chartTab={chartTab} setChartTab={setChartTab} chartSources={chartSources} onToggleChartSource={toggleChartSource} sourceViews={sourceViews} chartData={chartData} rangeDays={rangeDays} d={d} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} yearCompare={yearCompare} setYearCompare={setYearCompare} onZoom={() => setModal({ type: "mobileChartZoom" })} onOpenCrash={(c) => setModal({ type: "crash", crash: c })} /> },
               { key: "portfolio", label: "構成", icon: Layers, content: <MobilePortfolioPage pieView={pieView} setPieView={setPieView} holdings={combinedHoldings} ownerDates={ownerUpdatedDates} fxRates={fxRates} onOpen={() => setModal({ type: "portfolio" })} onOpenRealHoldingsRanking={() => setModal({ type: "realHoldingsRanking" })} dateLabel={holdingsDateLabel} /> },
               { key: "diff", label: "配分乖離", icon: ListChecks, content: <MobileDiffPage modelOverride={modelOverride} setModelOverride={setModelOverride} d={d} currentHoldingPct={currentHoldingPct} currentHoldingAmount={currentHoldingAmount} effectiveModelRow={effectiveModelRow} rankLabels={rankLabels} blocks={blocks} onOpenRank={(rank) => setModal({ type: "rank", rank })} onOpenDDTable={() => setModal({ type: "ddTable" })} dateLabel={holdingsDateLabel} /> },
-              { key: "bottom", label: "VOO底値判定", icon: Gauge, content: <MobileBottomScorePage bottom={bottom} FULL={d.FULL} onOpen={() => setModal({ type: "bottomScore" })} /> },
+              { key: "bottom", label: "VOO底値判定", icon: Gauge, content: <MobileBottomScorePage bottom={bottom} FULL={d.FULL} onOpen={() => setModal({ type: "bottomScore" })} onOpenTactical={() => setModal({ type: "tacticalStrategy" })} tacticalResult={tacticalResult} tacticalProposal={tacticalProposal} tab={bottomPanelTab} setTab={setBottomPanelTab} /> },
               { key: "analysis", label: "現状分析", icon: Info, content: <MobileAnalysisPage analysis={analysis} onNavigate={setModal} checkpointResults={checkpointResults} onOpenCheckpointSettings={() => setModal({ type: "checkpointSettings" })} /> },
             ]}
           />
@@ -7721,10 +7871,21 @@ export default function DDDashboard() {
               </Panel>
             </div>
 
-            {/* bottom-far-right: 底値判定スコア */}
+            {/* bottom-far-right: 底値判定スコア／DD戦略シミュレーション（タブ切替、同じ枠を共用） */}
             <div style={{ minHeight: 0 }}>
-              <Panel title={bottom.hold.applicable ? <>VOO底値判定 <span className="mono" style={{ color: depthColor(bottom.hold.state.mdd) }}>{bottomLabel(d.FULL, bottom.hold.state)}</span></> : "VOO底値判定"} action={<button onClick={() => setModal({ type: "bottomScore" })} title="条件別の確率・過去事例・統計テーブルを表示" style={{ background: "transparent", border: "none", cursor: "pointer" }}><Info size={14} style={{ color: C.textDim }} /></button>} className="h-full">
-                <BottomScorePanelBody bottom={bottom} FULL={d.FULL} onOpen={() => setModal({ type: "bottomScore" })} />
+              <Panel
+                title={bottomPanelTab === "score" ? (bottom.hold.applicable ? <>VOO底値判定 <span className="mono" style={{ color: depthColor(bottom.hold.state.mdd) }}>{bottomLabel(d.FULL, bottom.hold.state)}</span></> : "VOO底値判定") : "DD戦略 vs VOOガチホ"}
+                action={<div className="flex items-center gap-1">
+                  <div className="flex items-center gap-0.5">
+                    {[["score", "底値判定"], ["tactical", "DD戦略"]].map(([k, l]) => (<button key={k} onClick={() => setBottomPanelTab(k)} className="text-[10px] px-1 py-0.5 rounded whitespace-nowrap" style={{ color: bottomPanelTab === k ? C.bg : C.textMuted, background: bottomPanelTab === k ? C.teal : "transparent", fontWeight: bottomPanelTab === k ? 700 : 400 }}>{l}</button>))}
+                  </div>
+                  <button onClick={() => setModal({ type: bottomPanelTab === "score" ? "bottomScore" : "tacticalStrategy" })} title={bottomPanelTab === "score" ? "条件別の確率・過去事例・統計テーブルを表示" : "評価額の推移・トレード履歴・ルール説明を表示"} style={{ background: "transparent", border: "none", cursor: "pointer" }}><Info size={14} style={{ color: C.textDim }} /></button>
+                </div>}
+                className="h-full"
+              >
+                {bottomPanelTab === "score"
+                  ? <BottomScorePanelBody bottom={bottom} FULL={d.FULL} onOpen={() => setModal({ type: "bottomScore" })} />
+                  : <TacticalStrategyPanelBody result={tacticalResult} proposal={tacticalProposal} onOpen={() => setModal({ type: "tacticalStrategy" })} />}
               </Panel>
             </div>
           </div>
