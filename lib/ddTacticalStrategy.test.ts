@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   classifySpeed35, depthBucketIndex, deriveTacticalStates, decideTargetWeights,
   mergeVooQqqForTactical, simulateTacticalStrategy, describeTacticalProposal, DEPTH_BUCKETS,
+  computeQqqEdgeProbabilities, baseQqqWeightFromProbability, PROB_WINDOW_DAYS, BASE_QQQ_CAP,
 } from "./ddTacticalStrategy.ts";
 
 test("classifySpeed35: 5日以下は急落、21日以上は緩慢、それ以外は中間", () => {
@@ -117,7 +118,7 @@ function mkState(overrides) {
   return { idx: 0, date: new Date(), currentDD: -1, daysSinceATH: 0, speedLevel: "normal", speedCategory: null, depthBucketIndex: -1, daysSinceDD3: null, ...overrides };
 }
 function mkResult(state, voo = 95) {
-  return { days: [{ idx: 0, date: state.date, voo, qqq: voo * 2, state, weights: { qqq: 0, voo: 1, cash: 0 }, equity: 10000, vooHoldEquity: 10000 }] };
+  return { days: [{ idx: 0, date: state.date, voo, qqq: voo * 2, state, weights: { qqq: 0, voo: 1, cash: 0 }, reason: "test", equity: 10000, vooHoldEquity: 10000 }] };
 }
 
 test("describeTacticalProposal: 平常時はwatchアクションのみで、ポジション解消(exit)トリガーはない", () => {
@@ -159,4 +160,58 @@ test("describeTacticalProposal: 緩慢・安心寄り（slow）はQQQナンピ�
 test("describeTacticalProposal: DD局面では必ずexit_voo100アクション（ATH復帰）が末尾に含まれる", () => {
   const proposal = describeTacticalProposal(mkResult(mkState({ depthBucketIndex: 1, speedLevel: "confirmed5", speedCategory: "fast" }), 93));
   assert.equal(proposal.actions[proposal.actions.length - 1].kind, "exit_voo100");
+});
+
+test("computeQqqEdgeProbabilities: 完結した保有期間が無いうちはp=0.5、QQQが一貫して上回る系列ではp=1に収束する", () => {
+  const n = PROB_WINDOW_DAYS + 8;
+  const days = Array.from({ length: n }, (_, i) => ({ voo: 100 * Math.pow(1.0003, i), qqq: 100 * Math.pow(1.0006, i) }));
+  const probs = computeQqqEdgeProbabilities(days);
+  assert.equal(probs[0], 0.5);
+  assert.equal(probs[PROB_WINDOW_DAYS - 1], 0.5); // まだ1期も完結していない
+  assert.equal(probs[PROB_WINDOW_DAYS], 1); // ちょうど1期完結、QQQの勝ち
+  assert.equal(probs[n - 1], 1); // 以降も一貫してQQQが勝つので1のまま
+});
+
+test("baseQqqWeightFromProbability: p<=50%は0、p=100%でBASE_QQQ_CAP、線形に比例する", () => {
+  assert.equal(baseQqqWeightFromProbability(0.5), 0);
+  assert.equal(baseQqqWeightFromProbability(0.3), 0);
+  assert.equal(baseQqqWeightFromProbability(1), BASE_QQQ_CAP);
+  assert.equal(baseQqqWeightFromProbability(0.75), Number((BASE_QQQ_CAP * 0.5).toFixed(4)));
+});
+
+test("decideTargetWeights: 平常時でも実績優位確率が高ければベースQQQを持つ（消極的すぎる平常時VOO100%を解消）", () => {
+  const normalNoEdge = decideTargetWeights({ idx: 0, date: new Date(), currentDD: -1, daysSinceATH: 0, speedLevel: "normal", speedCategory: null, depthBucketIndex: -1 }, 0.5);
+  assert.deepEqual(normalNoEdge.weights, { qqq: 0, voo: 1, cash: 0 });
+
+  const normalWithEdge = decideTargetWeights({ idx: 0, date: new Date(), currentDD: -1, daysSinceATH: 0, speedLevel: "normal", speedCategory: null, depthBucketIndex: -1 }, 1);
+  assert.equal(normalWithEdge.weights.qqq, BASE_QQQ_CAP);
+  assert.ok(normalWithEdge.weights.qqq > 0);
+
+  // 急落時はベースQQQがあっても一旦解消して現金化する（近い将来の下落リスクを優先）
+  const fastWithEdge = decideTargetWeights({ idx: 0, date: new Date(), currentDD: -6, daysSinceATH: 10, speedLevel: "confirmed5", speedCategory: "fast", depthBucketIndex: 1 }, 1);
+  assert.equal(fastWithEdge.weights.qqq, 0);
+  assert.ok(fastWithEdge.weights.cash > 0);
+});
+
+test("decideTargetWeights: 配分の合計は、実績優位確率が高い場合も常に1", () => {
+  for (const bi of [-1, 0, 1, 2, 3, 4, 5, 6]) {
+    for (const cat of ["fast", "slow", null]) {
+      for (const p of [0.5, 0.75, 1]) {
+        const w = decideTargetWeights({ idx: 0, date: new Date(), currentDD: bi === -1 ? -1 : DEPTH_BUCKETS[bi].upper, daysSinceATH: 10, speedLevel: bi === -1 ? "normal" : "confirmed5", speedCategory: cat, depthBucketIndex: bi }, p).weights;
+        assert.ok(Math.abs(w.qqq + w.voo + w.cash - 1) < 1e-9);
+      }
+    }
+  }
+});
+
+test("simulateTacticalStrategy: DDが一度も起きない期間でも、QQQの実績優位が積み上がればベースQQQ比率を持つ", () => {
+  const n = PROB_WINDOW_DAYS + 50;
+  // 一本調子の上昇で、QQQがVOOよりわずかに速く伸び続ける（DD-3%は一度も発生しない）
+  const days = Array.from({ length: n }, (_, i) => ({ date: new Date(2000, 0, i + 1), voo: 100 * Math.pow(1.0003, i), qqq: 100 * Math.pow(1.0006, i) }));
+  const result = simulateTacticalStrategy(days, 10000);
+  assert.ok(result);
+  const lastDay = result.days[result.days.length - 1];
+  assert.equal(lastDay.state.depthBucketIndex, -1); // 平常時のまま
+  assert.ok(lastDay.weights.qqq > 0.2); // 実績優位確率が積み上がり、ベースQQQ(上限30%近く)を保有している
+  assert.ok(result.outperformancePct > 0); // その結果、VOO100%保有より上振れする
 });

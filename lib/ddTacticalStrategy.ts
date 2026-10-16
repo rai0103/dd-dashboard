@@ -1,9 +1,13 @@
 // DD戦略シミュレーション（VOOガチホに勝てるかの検証機能）。
-// 「最高値比（VOOのATHからの下落率）」「経過日数（直近ATH・DD-3%到達からの営業日数）」「DD加速度アラート（速度区分）」の
-// 3指標だけから、日次で機械的に目標配分（VOO/QQQ/現金）を決め、その日のVOO・QQQ終値で約定したと仮定して
-// 評価額を都度シミュレーションする。「このDD戦略を忠実に実行していたら、VOO100%保有より良い成績になるか」を
-// 検証するための機能であり、投資助言ではない。各日の判断はその日までのデータだけを使う（将来の情報は使わない＝
-// ルックアヘッドバイアス無し）。統計値・ルールは一切ハードコードした結果を保持せず、渡された価格系列から毎回算出する。
+// 平常時も含め常に、確率（QQQが過去にVOOをどれだけの割合で上回ってきたか＝実績優位確率）だけを根拠に
+// ベースのQQQ比率を持ち、それに加えて「最高値比（VOOのATHからの下落率）」「経過日数（直近ATH・DD-3%到達からの
+// 営業日数）」「DD加速度アラート（速度区分）」の3指標からDD局面での上乗せ（押し目買い）・縮小（現金化）を
+// 日次で機械的に決める。その日のVOO・QQQ終値で約定したと仮定して評価額を都度シミュレーションする。
+// 「このDD戦略を忠実に実行していたら、VOO100%保有より良い成績になるか」を検証するための機能であり、投資助言ではない。
+// 各日の判断はその日までのデータだけを使う（将来の情報は使わない＝ルックアヘッドバイアス無し。実績優位確率も
+// 「その日までに完結した期間」だけの拡大窓＝expanding windowで算出する）。統計値・ルールは一切ハードコードした
+// 結果を保持せず、渡された価格系列から毎回算出する。過去のチャートは「現時点のルールを全期間に適用し続けていたら
+// どうなっていたか」を表示するものであり、将来ルールを見直しても、見直し後のルールで全履歴を再計算する。
 // このファイルは外部importを持たない純粋関数のみで構成し、`node --test` から直接実行できるようにしている。
 
 export type TacticalDayInput = { date: Date; voo: number; qqq: number };
@@ -79,29 +83,69 @@ export function deriveTacticalStates(days: { date: Date; voo: number }[]): Tacti
   return out;
 }
 
-/* ---------------- 2. ルール（v1）：状態→目標配分 ---------------- */
-// 平常時（DD>-3%）はVOO100%＝VOOガチホと完全に一致させ、差（勝ち負け）はすべてDD局面での配分変更だけから生まれるようにする。
-// DD-3%以降は、DD加速度アラートが「急落・警戒（fast）なら守りを固めて現金比率を上げ（QQQは増やさない＝深追いしない）、
-// それ以外（緩慢・安心寄り／速度未確定）なら押し目買いとしてVOOの一部をQQQに振り替える（現金は使わない＝常にフル投資を維持）。
-export const RULE_VERSION = "v1";
+/* ---------------- 2. ルール（v2）：確率ベースのベースQQQ比率 + DD局面での上乗せ/縮小 ---------------- */
+// 平常時にVOO100%だけでは、QQQがVOOを上回ってきた分の上昇を一切取りに行けず消極的すぎる。そこで平常時も含め
+// 常に、「QQQがVOOをどれだけの割合で上回ってきたか」という実績優位確率pだけを根拠に、確率に応じたベースの
+// QQQ比率を持つ（p=50%＝互角ならQQQ0%、p=100%＝常にQQQが勝っていたならQQQ上限まで＝確率に比例したリスクを取る）。
+// pは「その日までに完結した保有期間（PROB_WINDOW_DAYS営業日）」だけを使う拡大窓統計で、ハードコードせず価格系列
+// から毎回算出し、将来の情報は使わない（ルックアヘッド無し）。
+// DD局面（最高値比-3%以降）では、このベースに対してDD加速度アラートで上乗せ・縮小する：
+// 「急落・警戒（fast）」ならベースのQQQもいったん解消して守りを固め現金比率を上げる（近い将来の下落リスクを
+// 優先）。「それ以外（緩慢・安心寄り／速度未確定）」ならベースに押し目買い分を上乗せする（優位確率が高いほど
+// 元々ベースが大きいため、合計のQQQ比率もその分大きくなる＝確率に応じたリスクを取る）。
+export const PROB_WINDOW_DAYS = 252; // 実績優位確率の算出に使う保有期間（営業日、約1年）
+export const BASE_QQQ_CAP = 0.3; // 確率ベースのベースQQQ比率の上限（p=100%のときの比率）
+export const DIP_QQQ_TOTAL_CAP = 0.5; // ベース＋押し目買いを合わせたQQQ比率の総上限（リスク管理のための頭打ち）
+
+// 各日時点で、「その日までに完結したPROB_WINDOW_DAYS保有期間のうち、QQQがVOOのトータルリターンを上回った割合」
+// を拡大窓（expanding window）で算出する。将来のデータは一切使わない。まだ1期分も完結していない期間はp=0.5
+// （優位性データ不足＝ベース比率0%）として扱う。
+export function computeQqqEdgeProbabilities(mergedDays: { voo: number; qqq: number }[]): number[] {
+  const n = mergedDays.length;
+  const probs: number[] = new Array(n).fill(0.5);
+  let wins = 0, total = 0;
+  for (let i = 0; i < n; i++) {
+    const startIdx = i - PROB_WINDOW_DAYS;
+    if (startIdx >= 0) {
+      const a = mergedDays[startIdx], b = mergedDays[i];
+      total++;
+      if (b.qqq / a.qqq > b.voo / a.voo) wins++;
+    }
+    probs[i] = total > 0 ? wins / total : 0.5;
+  }
+  return probs;
+}
+
+// 実績優位確率pから、確率に比例したベースQQQ比率を算出する（p<=50%は優位性なしとしてQQQ0%）。
+export function baseQqqWeightFromProbability(p: number): number {
+  const edge = Math.max(0, Math.min(1, (p - 0.5) * 2)); // p=0.5→0、p=1.0→1に線形写像
+  return Number((edge * BASE_QQQ_CAP).toFixed(4));
+}
+
+export const RULE_VERSION = "v2";
 export type TargetWeights = { qqq: number; voo: number; cash: number }; // 合計1
 
-export function decideTargetWeights(state: TacticalState): { weights: TargetWeights; reason: string } {
+// baseProbは当日時点の実績優位確率p（未指定時は0.5＝優位性なし扱いでベースQQQ0%、v1相当の挙動に一致）。
+export function decideTargetWeights(state: TacticalState, baseProb: number = 0.5): { weights: TargetWeights; reason: string } {
+  const baseQqq = baseQqqWeightFromProbability(baseProb);
+  const baseLabel = baseQqq > 0.0001 ? `ベースQQQ${Math.round(baseQqq * 100)}%（QQQ実績優位確率${Math.round(baseProb * 100)}%）` : "優位性データ不足/互角のためベースQQQ0%";
   if (state.depthBucketIndex === -1) {
-    return { weights: { qqq: 0, voo: 1, cash: 0 }, reason: "平常時（最高値比-3%未満）：VOO100%（ガチホと同一）" };
+    return { weights: { qqq: baseQqq, voo: 1 - baseQqq, cash: 0 }, reason: `平常時（最高値比-3%未満）：${baseLabel}` };
   }
   const bi = state.depthBucketIndex;
   const label = DEPTH_BUCKETS[bi].label;
   if (state.speedLevel === "pending5") {
-    return { weights: { qqq: 0.04, voo: 0.96, cash: 0 }, reason: `最高値比${label}・速度未確定：QQQ試し玉4%` };
+    const qqq = Math.min(DIP_QQQ_TOTAL_CAP, baseQqq + 0.04);
+    return { weights: { qqq, voo: 1 - qqq, cash: 0 }, reason: `最高値比${label}・速度未確定：${baseLabel}+試し玉4%＝QQQ${Math.round(qqq * 100)}%` };
   }
   if (state.speedCategory === "fast") {
     const cash = Math.min(0.2, bi * 0.04);
-    return { weights: { qqq: 0, voo: 1 - cash, cash }, reason: `最高値比${label}・DD加速度アラート「急落・警戒」：守りを固め現金${Math.round(cash * 100)}%` };
+    return { weights: { qqq: 0, voo: 1 - cash, cash }, reason: `最高値比${label}・DD加速度アラート「急落・警戒」：ベースQQQもいったん解消し守りを固め現金${Math.round(cash * 100)}%` };
   }
-  const qqq = Math.min(0.24, (bi + 1) * 0.04);
+  const dip = Math.min(0.24, (bi + 1) * 0.04);
+  const qqq = Math.min(DIP_QQQ_TOTAL_CAP, baseQqq + dip);
   const speedNote = state.speedCategory === "slow" ? "緩慢・安心寄り" : "速度中間/未確定（緩慢寄りとして扱う）";
-  return { weights: { qqq, voo: 1 - qqq, cash: 0 }, reason: `最高値比${label}・DD加速度アラート「${speedNote}」：押し目買いでQQQ${Math.round(qqq * 100)}%` };
+  return { weights: { qqq, voo: 1 - qqq, cash: 0 }, reason: `最高値比${label}・DD加速度アラート「${speedNote}」：${baseLabel}+押し目買い${Math.round(dip * 100)}%＝QQQ${Math.round(qqq * 100)}%` };
 }
 
 /* ---------------- 3. バックテスト・シミュレーション ---------------- */
@@ -109,7 +153,7 @@ export function decideTargetWeights(state: TacticalState): { weights: TargetWeig
 export type TacticalTrade = { idx: number; date: Date; from: TargetWeights; to: TargetWeights; reason: string };
 export type TacticalDayResult = {
   idx: number; date: Date; voo: number; qqq: number;
-  state: TacticalState; weights: TargetWeights;
+  state: TacticalState; weights: TargetWeights; reason: string;
   equity: number; vooHoldEquity: number;
 };
 export type TacticalBacktestResult = {
@@ -146,6 +190,7 @@ function maxDrawdown(values: number[]): number {
 export function simulateTacticalStrategy(mergedDays: TacticalDayInput[], startCapital = 10000): TacticalBacktestResult | null {
   if (mergedDays.length < 2) return null;
   const states = deriveTacticalStates(mergedDays.map((d) => ({ date: d.date, voo: d.voo })));
+  const probs = computeQqqEdgeProbabilities(mergedDays);
   const days: TacticalDayResult[] = [];
   const trades: TacticalTrade[] = [];
   let qqqShares = 0, vooShares = 0, cash = 0;
@@ -155,7 +200,7 @@ export function simulateTacticalStrategy(mergedDays: TacticalDayInput[], startCa
     const { voo, qqq, date } = mergedDays[i];
     const state = states[i];
     const equityMarked = i === 0 ? startCapital : qqqShares * qqq + vooShares * voo + cash;
-    const { weights, reason } = decideTargetWeights(state);
+    const { weights, reason } = decideTargetWeights(state, probs[i]);
     if (!prevWeights || prevWeights.qqq !== weights.qqq || prevWeights.cash !== weights.cash) {
       trades.push({ idx: i, date, from: prevWeights ?? weights, to: weights, reason });
     }
@@ -164,7 +209,7 @@ export function simulateTacticalStrategy(mergedDays: TacticalDayInput[], startCa
     cash = equityMarked * weights.cash;
     prevWeights = weights;
     const vooHoldEquity = startCapital * (voo / voo0);
-    days.push({ idx: i, date, voo, qqq, state, weights, equity: equityMarked, vooHoldEquity });
+    days.push({ idx: i, date, voo, qqq, state, weights, reason, equity: equityMarked, vooHoldEquity });
   }
   const last = days[days.length - 1];
   const finalEquity = last.equity, finalVooHoldEquity = last.vooHoldEquity;
@@ -214,18 +259,18 @@ export function describeTacticalProposal(result: TacticalBacktestResult): Tactic
   const last = result.days[result.days.length - 1];
   const state = last.state;
   const athPrice = last.voo / (1 + state.currentDD / 100);
-  const { weights, reason } = decideTargetWeights(state);
+  const { weights, reason } = last; // 当日のシミュレーション計算（実績優位確率を反映済み）をそのまま使う
   const bi = state.depthBucketIndex;
   const nextBucket = bi === -1 ? DEPTH_BUCKETS[0] : DEPTH_BUCKETS[bi + 1];
   const nextPrice = nextBucket ? Number((athPrice * (1 + nextBucket.upper / 100)).toFixed(2)) : null;
-  const exitTrigger = bi === -1 ? null : { label: "直近ATH更新でVOO100%に復帰", price: Number(athPrice.toFixed(2)) };
+  const exitTrigger = bi === -1 ? null : { label: "直近ATH更新で平常時のベース比率に復帰", price: Number(athPrice.toFixed(2)) };
   const atCap = bi >= 5; // 現金20%・QQQ24%の上限に到達済み（depthBucketIndex=5以降は深掘りしても増えない）
 
   const actions: TacticalNextAction[] = [];
 
   if (bi === -1) {
     if (nextPrice != null) {
-      actions.push({ kind: "watch", orderType: "警戒ライン", label: "最高値比-3%（DD戦略の作動開始ライン）", price: nextPrice });
+      actions.push({ kind: "watch", orderType: "警戒ライン", label: "最高値比-3%（押し目買い/現金化の判定が始まるライン）", price: nextPrice });
     }
   } else if (state.speedLevel === "pending5") {
     const remainDays = state.daysSinceDD3 != null ? Math.max(0, 5 - state.daysSinceDD3) : null;
@@ -242,7 +287,7 @@ export function describeTacticalProposal(result: TacticalBacktestResult): Tactic
     }
   } else {
     if (atCap) {
-      actions.push({ kind: "capped", orderType: null, label: "QQQ比率はすでに上限24%。これ以上深掘りしても増やしません", price: null });
+      actions.push({ kind: "capped", orderType: null, label: "押し目買い分（ベースQQQを除く）はすでに上限24%。これ以上深掘りしても増やしません", price: null });
     } else if (nextPrice != null && nextBucket) {
       actions.push({ kind: "qqq_buy", orderType: "指値（ナンピン買い）", label: `次の節目 最高値比${nextBucket.label}でQQQを買い増し`, price: nextPrice });
     }
