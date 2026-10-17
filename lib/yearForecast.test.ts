@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   buildAnnualReturns, recentNYearAverage, similarPriorYearFollowing, presidentialCycleAverage,
   monthEndAnalogForecast, computeYearForecast, yearForecastTrajectory,
+  seasonalMonthlyAverages, seasonalRemainingForecast, yearEndProjectionPath, computeNextYearForecast,
 } from "./yearForecast.ts";
 
 // 年ごとの年間騰落率annualReturn（小数、例0.08=+8%）から、月末12点の{date,price}系列を作る。
@@ -128,4 +129,132 @@ test("ルックアヘッド無し：対象年のasOfMonthより後のデータ�
   assert.equal(trajectory.length, 6);
   assert.equal(trajectory[5].month, 6);
   assert.ok(Math.abs(trajectory[5].blendedForecastPct! - a.blendedForecastPct!) < 1e-9);
+});
+
+// 年ごとの「月ごとの単月リターン（%、12個）」から、月末12点の{date,price}系列を作る。
+// seasonalMonthlyAverages／seasonalRemainingForecast／yearEndProjectionPathの検証用に、
+// 月次の形を完全に指定できるようにしたヘルパー（monthlySeriesは年間リターンからの線形補間のため使えない）。
+function monthlySeriesFromMonthlyReturns(yearReturns: { year: number; monthlyReturns: number[] }[]): { date: string; price: number }[] {
+  const pts: { date: string; price: number }[] = [];
+  let base = 100;
+  for (const { year, monthlyReturns } of yearReturns) {
+    let cur = base;
+    for (let m = 1; m <= 12; m++) {
+      cur = cur * (1 + monthlyReturns[m - 1] / 100);
+      pts.push({ date: `${year}-${String(m).padStart(2, "0")}-28`, price: cur });
+    }
+    base = cur;
+  }
+  return pts;
+}
+
+function compound(monthlyReturnsPct: number[]): number {
+  return monthlyReturnsPct.reduce((acc, r) => acc * (1 + r / 100), 1);
+}
+
+// 選挙年（大統領サイクル区分4）同士で完全に同じ月次パターンPを共有させ、季節性指標の平均値・複利適用値を
+// 誤差なく厳密に予測できるようにした合成データ。1999年は連鎖の基準を作るためだけの年（検証対象外、
+// サイクル区分3なので選挙年の参照集合にも混ざらない）。2000・2004・2008・2012が選挙年の参照年、
+// 2016が予測対象年（同じく選挙年、Pと同じ月次パターンを1〜12月分持つ）。それ以外の年は季節性指標の
+// 計算には使われないので内容は任意（0%固定）。
+const P = [2, -1, 3, 0, -2, 1, 4, -3, 2, 1, -1, 5];
+const seasonalYearReturns: { year: number; monthlyReturns: number[] }[] = [];
+seasonalYearReturns.push({ year: 1999, monthlyReturns: new Array(12).fill(0) });
+for (let y = 2000; y <= 2016; y++) {
+  const isElectionYear = y === 2000 || y === 2004 || y === 2008 || y === 2012 || y === 2016;
+  seasonalYearReturns.push({ year: y, monthlyReturns: isElectionYear ? P : new Array(12).fill(0) });
+}
+const SEASONAL_FULL = monthlySeriesFromMonthlyReturns(seasonalYearReturns);
+
+test("seasonalMonthlyAverages：同じ大統領サイクル区分の過去年だけの月次リターン平均を返す（他区分は混在しない）", () => {
+  const result = seasonalMonthlyAverages(SEASONAL_FULL, 2016, 6);
+  assert.ok(result);
+  assert.equal(result!.length, 6); // asOfMonth=6なので7〜12月分
+  for (const { month, avgReturnPct, n } of result!) {
+    assert.ok(Math.abs(avgReturnPct - P[month - 1]) < 1e-9); // 2000/2004/2008/2012が全て同一パターンPなので平均=P自身
+    assert.equal(n, 4);
+  }
+  assert.deepEqual(result!.map((r) => r.month), [7, 8, 9, 10, 11, 12]);
+  assert.equal(seasonalMonthlyAverages(SEASONAL_FULL, 2001, 6), null); // 参照年（選挙年）が3年未満
+});
+
+test("seasonalRemainingForecast：現在のYTDに季節パターンを複利適用して年末値を予測する", () => {
+  const r = seasonalRemainingForecast(SEASONAL_FULL, 2016, 6);
+  assert.ok(r);
+  // 2016年自身も1〜12月が全てPに従う（1〜6月分で6月末YTDになり、7〜12月分の平均季節パターン＝P自身を
+  // 複利適用すると、結局P全体を複利適用した値と一致するはず）。
+  const expectedForecastPct = (compound(P) - 1) * 100;
+  assert.ok(Math.abs(r!.forecastPct - expectedForecastPct) < 1e-6);
+  // 参照年（2000/2004/2008/2012）はいずれも6月末YTD・年末値ともに2016と全く同じ値になるため、
+  // 「6月末から年末までのリターン」も全参照年で同一・同じ符号になるはず。
+  assert.equal(r!.refYears.length, 4);
+  const remainingReturns = r!.refYears.map((x) => x.return);
+  for (const rr of remainingReturns) assert.ok(Math.abs(rr - remainingReturns[0]) < 1e-9);
+  assert.equal(r!.probability, remainingReturns[0] > 0 ? 1 : 0);
+  assert.equal(seasonalRemainingForecast(SEASONAL_FULL, 2001, 6), null);
+});
+
+test("yearEndProjectionPath：季節性の形（折れ線）を保ちつつ、終点は与えた総合予測値に一致する", () => {
+  const raw = seasonalRemainingForecast(SEASONAL_FULL, 2016, 6)!.forecastPct;
+  const target = raw + 10; // 総合予測値（アンサンブル）は季節性単体の値とは別の値になるのでズラして検証
+  const path = yearEndProjectionPath(SEASONAL_FULL, 2016, 6, target);
+  assert.ok(path);
+  assert.equal(path!.length, 6);
+  assert.deepEqual(path!.map((p) => p.month), [7, 8, 9, 10, 11, 12]);
+  // 終点（12月）はtargetに一致する
+  assert.ok(Math.abs(path![5].indexValue - 100 - target) < 1e-6);
+  // 月を追うごとにdoy（年内通算日）は単調増加
+  for (let i = 1; i < path!.length; i++) assert.ok(path![i].doy > path![i - 1].doy);
+  // 折れ線になっている（各月の増分が一定ではない＝直線ではない）こと
+  const deltas = path!.map((p, i) => p.indexValue - (i === 0 ? 100 + (ytdOf(SEASONAL_FULL, 2016, 6)) : path![i - 1].indexValue));
+  const allEqual = deltas.every((d) => Math.abs(d - deltas[0]) < 1e-9);
+  assert.ok(!allEqual);
+  assert.equal(yearEndProjectionPath(SEASONAL_FULL, 2016, 6, null), null);
+});
+
+// yearEndProjectionPathのテスト内で使う、2016年6月末までのYTD（%）を独立に計算する小ヘルパー。
+function ytdOf(FULL: { date: string; price: number }[], year: number, asOfMonth: number): number {
+  const ret = seasonalRemainingForecast(FULL, year, asOfMonth)!;
+  // seasonalRemainingForecastのforecastPctから逆算するのではなく、Pそのものから直接計算する。
+  return (compound(P.slice(0, asOfMonth)) - 1) * 100;
+}
+
+test("computeNextYearForecast：今年の予測値を実績の代わりに使って翌年を計算し、月末時点類似年（指標4）は含まれない", () => {
+  const years = [];
+  for (let y = 2001; y <= 2016; y++) years.push({ year: y, annualReturn: Math.round((10 * Math.sin((y - 2001) * 0.7) + 2) * 100) / 10000 });
+  const FULL = monthlySeries(years);
+  const current = computeYearForecast(FULL, 2016, 12);
+  assert.ok(current.blendedForecastPct != null);
+
+  const next = computeNextYearForecast(FULL, 2016, 12);
+  assert.ok(next);
+  assert.equal(next!.year, 2017);
+  assert.equal(next!.asOfMonth, 0);
+  assert.equal(next!.basedOnForecastYear, 2016);
+  assert.ok(Math.abs(next!.basedOnForecastPct - current.blendedForecastPct!) < 1e-9);
+  assert.ok(!next!.factors.some((f) => f.key === "monthEnd"));
+  assert.equal(next!.factors.length, 4);
+
+  // 重みは正規化されて合計1になる
+  const weightSum = next!.factors.reduce((s, f) => s + f.weight, 0);
+  assert.ok(Math.abs(weightSum - 1) < 1e-9);
+
+  // 「今年の予測値を実績として使っている」ことの直接確認：指標1（直近10年平均）の参照年リストに
+  // 2016年が含まれ、その値が今年の予測値（blendedForecastPct）そのものであること。
+  const recent10 = next!.factors.find((f) => f.key === "recent10");
+  assert.ok(recent10?.result);
+  const included2016 = recent10!.result!.refYears.find((r) => r.year === 2016);
+  assert.ok(included2016);
+  assert.ok(Math.abs(included2016!.return - current.blendedForecastPct!) < 1e-9);
+});
+
+test("recentNYearAverage：翌年の予測に、注入した「今年の予測値」が実績扱いで反映される（computeNextYearForecastの土台となる挙動）", () => {
+  const returns = new Map<number, number>();
+  for (let y = 2006; y <= 2015; y++) returns.set(y, 1); // 直近10年、すべて+1%の実績
+  const extended = new Map(returns);
+  extended.set(2016, 999); // 2016年（まだ実績ではない）の予測値を極端な値で仮置き
+  const forecastFor2017 = recentNYearAverage(extended, 2017, 10);
+  assert.ok(forecastFor2017);
+  assert.ok(forecastFor2017!.refYears.some((r) => r.year === 2016 && r.return === 999));
+  assert.ok(forecastFor2017!.forecastPct > 90); // 999が混ざるため平均が大きく跳ね上がる
 });

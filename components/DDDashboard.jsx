@@ -23,7 +23,7 @@ import { OWNER_RAKUTEN_SAKI, OWNER_RAKUTEN_SHIN, OWNER_MOOMOO, OWNER_OPTIONS, RA
 import { BROKERS, brokerByKey, extractionToPreviewRows, previewRowsToHoldings, replaceBrokerHoldings, aggregateLabelsReplacedByBrokers, rowValue, reconcileWithAccountTotal, isPlausibleBrokerRate, guessBrokerRank, reconciliationTarget, sectionChecks, buildBrokerSummary, profitChecks, appendHoldingSnapshot, holdingChanges } from "@/lib/brokerImport";
 import { importUserPrices, applyApiGold, resetPriceField, goldHistoryFetchStart } from "@/lib/priceSeries";
 import { buildStatsTable, computeMddHoldProbability, depthBucketIndex, LOW_SAMPLE_N } from "@/lib/bottomScore";
-import { computeYearForecast, yearForecastTrajectory } from "@/lib/yearForecast";
+import { computeYearForecast, yearForecastTrajectory, yearEndProjectionPath, computeNextYearForecast } from "@/lib/yearForecast";
 import { buildQqqEquivalentSeries, parseNdxPreQqqCsv } from "@/lib/qqqSynthetic";
 
 // Cloudflare Worker（当日のVOO/QQQ終値を返す。SP500はここでは扱わず引き続きCSV取り込み/直接入力で更新する）のエンドポイント。
@@ -5922,21 +5922,27 @@ function BottomScoreModalContent({ bottom, FULL }) {
     </div>
   );
 }
-/* ---------------- 年騰落率予測（直近10年平均・前年類似年の翌年平均・大統領サイクル平均・当年月末時点類似年） ---------------- */
-// 4つの実績統計（lib/yearForecast.ts）から年末までの騰落率を予想する。各指標の重みは、過去の確定年でその指標が
+/* ---------------- 年騰落率予測（直近10年平均・前年類似年の翌年平均・大統領サイクル平均・大統領サイクル別季節性（月次）・当年月末時点類似年） ---------------- */
+// 5つの実績統計（lib/yearForecast.ts）から年末までの騰落率を予想する。各指標の重みは、過去の確定年でその指標が
 // 方向（上昇/下落）をどれだけ当てていたか（符号一致率）に基づく加重平均であり、単純平均ではない。投資助言ではない。
-const FORECAST_FACTOR_COLOR = { recent10: C.teal, similarPrior: C.amber, cycle: C.violet, monthEnd: C.rust };
+const FORECAST_FACTOR_COLOR = { recent10: C.teal, similarPrior: C.amber, cycle: C.violet, seasonality: C.blue, monthEnd: C.rust };
 function forecastIsLeapYear(y) { return (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0; }
-function YearForecastChart({ forecast, yearPoints, forecastYear, height = 160, fontSize = 10 }) {
+function YearForecastChart({ forecast, yearPoints, forecastYear, projectionPath, height = 160, fontSize = 10 }) {
   const chartData = useMemo(() => {
     const rows = (yearPoints ?? []).map((p) => ({ doy: p.doy, actual: Number((p.index - 100).toFixed(2)) }));
-    if (rows.length && forecast?.blendedForecastPct != null) {
+    if (rows.length && projectionPath?.length) {
+      // 大統領サイクル別季節性（月次）の形を保った、年末までの折れ線（直線ではない）予測。
+      const last = rows[rows.length - 1];
+      rows[rows.length - 1] = { ...last, forecast: last.actual };
+      for (const { doy, indexValue } of projectionPath) rows.push({ doy, forecast: Number((indexValue - 100).toFixed(2)) });
+    } else if (rows.length && forecast?.blendedForecastPct != null) {
+      // 季節性データが不足している場合のフォールバック：年末の1点までの直線
       const last = rows[rows.length - 1];
       rows[rows.length - 1] = { ...last, forecast: last.actual };
       rows.push({ doy: forecastIsLeapYear(forecastYear) ? 366 : 365, forecast: Number(forecast.blendedForecastPct.toFixed(2)) });
     }
     return rows;
-  }, [yearPoints, forecast, forecastYear]);
+  }, [yearPoints, forecast, forecastYear, projectionPath]);
   if (!chartData.length) return null;
   const ForecastTooltip = ({ active, payload, label }) => {
     if (!active || !payload?.length) return null;
@@ -5962,19 +5968,19 @@ function YearForecastChart({ forecast, yearPoints, forecastYear, height = 160, f
     </ResponsiveContainer>
   );
 }
-function YearForecastPanelBody({ forecast, yearPoints, forecastYear, onOpen, large = false }) {
+function YearForecastPanelBody({ forecast, yearPoints, forecastYear, projectionPath, onOpen, large = false }) {
   if (!forecast || forecast.blendedForecastPct == null) {
     return <div className="h-full flex items-center justify-center text-[11px] text-center px-3" style={{ color: C.textDim }}>データが不足しているため予測できません。</div>;
   }
   const v = forecast.blendedForecastPct;
   return (
-    <div className="h-full flex flex-col p-2.5 gap-1.5 cursor-pointer" onClick={onOpen} title="クリックで詳細（4指標の予測値・確率・根拠、予測軌跡）">
+    <div className="h-full flex flex-col p-2.5 gap-1.5 cursor-pointer" onClick={onOpen} title="クリックで詳細（5指標の予測値・確率・根拠、予測軌跡）">
       <div className="flex items-baseline justify-between">
         <div className="text-[11px]" style={{ color: C.textMuted }}>{forecastYear}年 年末想定（総合）</div>
         <div className="mono font-bold" style={{ color: pctColor(v), fontSize: large ? 22 : 18 }}>{v > 0 ? "+" : ""}{v.toFixed(1)}%</div>
       </div>
-      <div className="flex-1 min-h-0"><YearForecastChart forecast={forecast} yearPoints={yearPoints} forecastYear={forecastYear} height={large ? 220 : 130} /></div>
-      <div className="text-[9px] leading-tight" style={{ color: C.textDim }}>実線＝年初来の実績、点線＝年末までの予測（4指標の過去の予測精度に応じた加重平均）。投資助言ではありません。</div>
+      <div className="flex-1 min-h-0"><YearForecastChart forecast={forecast} yearPoints={yearPoints} forecastYear={forecastYear} projectionPath={projectionPath} height={large ? 220 : 130} /></div>
+      <div className="text-[9px] leading-tight" style={{ color: C.textDim }}>実線＝年初来の実績、点線＝年末までの予測（5指標の過去の予測精度に応じた加重平均・大統領サイクル別季節性を反映した折れ線）。投資助言ではありません。</div>
     </div>
   );
 }
@@ -6035,9 +6041,10 @@ function YearForecastFactorCard({ f }) {
     </div>
   );
 }
-function YearForecastModalContent({ forecast, trajectory, yearPoints }) {
+function YearForecastModalContent({ forecast, trajectory, yearPoints, nextYearForecast }) {
   if (!forecast) return <div className="text-xs py-6 text-center" style={{ color: C.textDim }}>データが不足しています。</div>;
   const v = forecast.blendedForecastPct;
+  const nv = nextYearForecast?.blendedForecastPct;
   return (
     <div className="flex flex-col gap-6">
       <div className="flex items-center gap-8 flex-wrap">
@@ -6049,11 +6056,11 @@ function YearForecastModalContent({ forecast, trajectory, yearPoints }) {
           <div className="text-[11px]" style={{ color: C.textMuted }}>上昇確率（総合・加重平均）</div>
           <div className="mono font-bold text-xl">{forecast.blendedProbability == null ? "—" : `${Math.round(forecast.blendedProbability * 100)}%`}</div>
         </div>
-        <div className="text-[11px] leading-relaxed max-w-md" style={{ color: C.textDim }}>4指標を、各指標の過去の予測精度（符号一致率）で重み付けして統合した値です。単純平均ではありません。</div>
+        <div className="text-[11px] leading-relaxed max-w-md" style={{ color: C.textDim }}>5指標を、各指標の過去の予測精度（符号一致率）で重み付けして統合した値です。単純平均ではありません。</div>
       </div>
 
       <div>
-        <div className="text-xs mb-2" style={{ color: C.textDim }}>4つの予測要素（それぞれの予測値・確率・根拠）</div>
+        <div className="text-xs mb-2" style={{ color: C.textDim }}>5つの予測要素（それぞれの予測値・確率・根拠）</div>
         <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))" }}>
           {forecast.factors.map((f) => <YearForecastFactorCard key={f.key} f={f} />)}
         </div>
@@ -6064,14 +6071,30 @@ function YearForecastModalContent({ forecast, trajectory, yearPoints }) {
         <YearForecastTrajectoryChart trajectory={trajectory} yearPoints={yearPoints} height={200} />
       </div>
 
+      {nextYearForecast && (
+        <div>
+          <div className="flex items-baseline gap-3 mb-1 flex-wrap">
+            <div className="text-xs" style={{ color: C.textDim }}>来年（{nextYearForecast.year}年）の予測</div>
+            <div className="mono font-bold text-xl" style={{ color: pctColor(nv) }}>{nv == null ? "—" : `${nv > 0 ? "+" : ""}${nv.toFixed(1)}%`}</div>
+            <div className="text-[11px]" style={{ color: C.textMuted }}>上昇確率 {nextYearForecast.blendedProbability == null ? "—" : `${Math.round(nextYearForecast.blendedProbability * 100)}%`}</div>
+          </div>
+          <div className="text-[10px] mb-2" style={{ color: C.textDim }}>
+            {nextYearForecast.basedOnForecastYear}年の年末予測（{nextYearForecast.basedOnForecastPct > 0 ? "+" : ""}{nextYearForecast.basedOnForecastPct.toFixed(1)}%）を実績の代わりに使い、直近10年平均・前年類似年の翌年平均を算出しています（当年月末時点類似年は、来年がまだ始まっていないため対象外の4指標構成）。予測の予測となるため、今年の予測より不確実性が大きくなります。
+          </div>
+          <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))" }}>
+            {nextYearForecast.factors.map((f) => <YearForecastFactorCard key={f.key} f={f} />)}
+          </div>
+        </div>
+      )}
+
       <div className="text-[11px] leading-relaxed" style={{ color: C.textDim }}>
-        この予測は、直近10年平均・前年類似年の翌年平均・大統領サイクル平均・当年月末時点類似年、という4つの実績統計（VOO・上場前はSP500指数換算）から機械的に算出した参考値であり、投資助言ではありません。各指標の重みは、その指標が過去の確定年で方向（上昇／下落）をどれだけ当てていたか（符号一致率）に基づく加重平均で、単純平均ではありません。いずれの指標も予測対象の年より前のデータだけを使っており、将来の情報は使っていません（ルックアヘッド無し）。過去の実績は将来を保証しません。
+        この予測は、直近10年平均・前年類似年の翌年平均・大統領サイクル平均・大統領サイクル別季節性（月次）・当年月末時点類似年、という5つの実績統計（VOO・上場前はSP500指数換算）から機械的に算出した参考値であり、投資助言ではありません。各指標の重みは、その指標が過去の確定年で方向（上昇／下落）をどれだけ当てていたか（符号一致率）に基づく加重平均で、単純平均ではありません。いずれの指標も予測対象の年より前のデータだけを使っており、将来の情報は使っていません（ルックアヘッド無し）。過去の実績は将来を保証しません。
       </div>
     </div>
   );
 }
 
-function MobileBottomScorePage({ bottom, FULL, onOpen, onOpenForecast, forecast, forecastYear, yearPoints, tab, setTab }) {
+function MobileBottomScorePage({ bottom, FULL, onOpen, onOpenForecast, forecast, forecastYear, yearPoints, projectionPath, tab, setTab }) {
   return (
     <div className="p-3 h-full">
       <div className="rounded-lg h-full flex flex-col" style={{ background: C.panel, border: `1px solid ${C.border}` }}>
@@ -6083,7 +6106,7 @@ function MobileBottomScorePage({ bottom, FULL, onOpen, onOpenForecast, forecast,
         </div>
         {tab === "score"
           ? <div className="flex-1 min-h-0"><BottomScorePanelBody bottom={bottom} FULL={FULL} onOpen={onOpen} large /></div>
-          : <div className="flex-1 min-h-0"><YearForecastPanelBody forecast={forecast} forecastYear={forecastYear} yearPoints={yearPoints} onOpen={onOpenForecast} large /></div>}
+          : <div className="flex-1 min-h-0"><YearForecastPanelBody forecast={forecast} forecastYear={forecastYear} yearPoints={yearPoints} projectionPath={projectionPath} onOpen={onOpenForecast} large /></div>}
       </div>
     </div>
   );
@@ -7562,6 +7585,10 @@ export default function DDDashboard() {
   const forecastLatestMonth = useMemo(() => (forecastYearPoints.length ? Number(forecastYearPoints[forecastYearPoints.length - 1].date.slice(5, 7)) : 1), [forecastYearPoints]);
   const yearForecast = useMemo(() => computeYearForecast(d.FULL, forecastYear, forecastLatestMonth), [d.FULL, forecastYear, forecastLatestMonth]);
   const yearForecastTrajectoryData = useMemo(() => yearForecastTrajectory(d.FULL, forecastYear, forecastLatestMonth), [d.FULL, forecastYear, forecastLatestMonth]);
+  // 大統領サイクル別季節性（月次）の形を保ちつつ終点を総合予測値に一致させた、年末までの折れ線プロジェクション（ダッシュボードのチャート用）。
+  const yearForecastProjectionPath = useMemo(() => yearEndProjectionPath(d.FULL, forecastYear, forecastLatestMonth, yearForecast?.blendedForecastPct ?? null), [d.FULL, forecastYear, forecastLatestMonth, yearForecast]);
+  // 今年の年末予測を実績の代わりに使って算出する、来年の予測（拡大画面のみで表示）。
+  const nextYearForecast = useMemo(() => computeNextYearForecast(d.FULL, forecastYear, forecastLatestMonth), [d.FULL, forecastYear, forecastLatestMonth]);
   const chartData = useMemo(() => sliceForPeriod(d.FULL, d.last, period), [d.FULL, d.last, period]);
   const rangeDays = useMemo(() => { const f = chartData[0].date, l = chartData[chartData.length - 1].date; return Math.round((l - f) / 86400000); }, [chartData]);
   const periodRange = useMemo(() => periodDateRange(d.FULL, d.last, period), [d.FULL, d.last, period]);
@@ -7707,7 +7734,7 @@ export default function DDDashboard() {
       {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} synthetic={sp500Synthetic} qqqSynthetic={qqqSynthetic} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} vooQqqSeries={vooQqqSeries} onAppendVooQqq={handleAppendVooQqq} onImportVooQqq={handleImportVooQqq} onApplyApiGold={handleApplyApiGold} onResetVooQqqField={handleResetVooQqqField} virtualAggregateLabels={virtualAggregateLabels} onRegisterBrokerHoldings={handleRegisterBrokerHoldings} brokerSummaries={brokerSummaries} />}
       {modal?.type === "checkpointSettings" && <FullScreenModal title="チェックポイント設定" onClose={() => setModal(null)}><CheckpointSettingsContent checkpoints={checkpoints} onCheckpointChange={handleCheckpointChange} holdings={holdings} /></FullScreenModal>}
       {modal?.type === "bottomScore" && <FullScreenModal title={bottom.hold.applicable ? `VOO底値判定：${bottomLabel(d.FULL, bottom.hold.state)} が底値として確定する確率（VOO実績から都度算出）` : "VOO底値判定（VOO実績から都度算出）"} onClose={() => setModal(null)}><BottomScoreModalContent bottom={bottom} FULL={d.FULL} /></FullScreenModal>}
-      {modal?.type === "yearForecast" && <FullScreenModal title={`${forecastYear}年 年騰落率予測${yearForecast?.blendedForecastPct != null ? `（総合：${yearForecast.blendedForecastPct > 0 ? "+" : ""}${yearForecast.blendedForecastPct.toFixed(1)}%）` : ""}`} onClose={() => setModal(null)}><YearForecastModalContent forecast={yearForecast} trajectory={yearForecastTrajectoryData} yearPoints={forecastYearPoints} /></FullScreenModal>}
+      {modal?.type === "yearForecast" && <FullScreenModal title={`${forecastYear}年 年騰落率予測${yearForecast?.blendedForecastPct != null ? `（総合：${yearForecast.blendedForecastPct > 0 ? "+" : ""}${yearForecast.blendedForecastPct.toFixed(1)}%）` : ""}`} onClose={() => setModal(null)}><YearForecastModalContent forecast={yearForecast} trajectory={yearForecastTrajectoryData} yearPoints={forecastYearPoints} nextYearForecast={nextYearForecast} /></FullScreenModal>}
       {modal?.type === "realHoldingsRanking" && <FullScreenModal title="実質保有銘柄ランキング" onClose={() => setModal(null)}><RealHoldingsRankingContent holdings={combinedHoldings} /></FullScreenModal>}
       {modal?.type === "summary" && <FullScreenModal title="詳細サマリー出力（AI相談用）" onClose={() => setModal(null)}><SummaryModalContent d={d} dVoo={dVoo} dQqq={dQqq} holdings={holdings} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} blocks={blocks} rankLabels={rankLabels} lifecycle={lifecycle} onLifecycleChange={handleLifecycleChange} fixedPositions={fixedPositions} onFixedPositionChange={handleFixedPositionChange} checkpoints={checkpoints} prevSnapshot={prevSnapshot} onSaveSnapshot={handleSaveSnapshot} /></FullScreenModal>}
       {modal?.type === "mobileChartZoom" && <MobileChartZoomModal onClose={() => setModal(null)} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} sourceViews={sourceViews} chartSources={chartSources} onToggleChartSource={toggleChartSource} yearCompare={yearCompare} setYearCompare={setYearCompare} initialTab={chartTab} isRealDevice={isMobileAuto} />}
@@ -7772,7 +7799,7 @@ export default function DDDashboard() {
               { key: "chart", label: "チャート", icon: Activity, content: <MobileChartPage chartTab={chartTab} setChartTab={setChartTab} chartSources={chartSources} onToggleChartSource={toggleChartSource} sourceViews={sourceViews} chartData={chartData} rangeDays={rangeDays} d={d} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} yearCompare={yearCompare} setYearCompare={setYearCompare} onZoom={() => setModal({ type: "mobileChartZoom" })} onOpenCrash={(c) => setModal({ type: "crash", crash: c })} /> },
               { key: "portfolio", label: "構成", icon: Layers, content: <MobilePortfolioPage pieView={pieView} setPieView={setPieView} holdings={combinedHoldings} ownerDates={ownerUpdatedDates} fxRates={fxRates} onOpen={() => setModal({ type: "portfolio" })} onOpenRealHoldingsRanking={() => setModal({ type: "realHoldingsRanking" })} dateLabel={holdingsDateLabel} /> },
               { key: "diff", label: "配分乖離", icon: ListChecks, content: <MobileDiffPage modelOverride={modelOverride} setModelOverride={setModelOverride} d={d} currentHoldingPct={currentHoldingPct} currentHoldingAmount={currentHoldingAmount} effectiveModelRow={effectiveModelRow} rankLabels={rankLabels} blocks={blocks} onOpenRank={(rank) => setModal({ type: "rank", rank })} onOpenDDTable={() => setModal({ type: "ddTable" })} dateLabel={holdingsDateLabel} /> },
-              { key: "bottom", label: "VOO底値判定", icon: Gauge, content: <MobileBottomScorePage bottom={bottom} FULL={d.FULL} onOpen={() => setModal({ type: "bottomScore" })} onOpenForecast={() => setModal({ type: "yearForecast" })} forecast={yearForecast} forecastYear={forecastYear} yearPoints={forecastYearPoints} tab={bottomPanelTab} setTab={setBottomPanelTab} /> },
+              { key: "bottom", label: "VOO底値判定", icon: Gauge, content: <MobileBottomScorePage bottom={bottom} FULL={d.FULL} onOpen={() => setModal({ type: "bottomScore" })} onOpenForecast={() => setModal({ type: "yearForecast" })} forecast={yearForecast} forecastYear={forecastYear} yearPoints={forecastYearPoints} projectionPath={yearForecastProjectionPath} tab={bottomPanelTab} setTab={setBottomPanelTab} /> },
               { key: "analysis", label: "現状分析", icon: Info, content: <MobileAnalysisPage analysis={analysis} onNavigate={setModal} checkpointResults={checkpointResults} onOpenCheckpointSettings={() => setModal({ type: "checkpointSettings" })} /> },
             ]}
           />
@@ -7939,7 +7966,7 @@ export default function DDDashboard() {
               >
                 {bottomPanelTab === "score"
                   ? <BottomScorePanelBody bottom={bottom} FULL={d.FULL} onOpen={() => setModal({ type: "bottomScore" })} />
-                  : <YearForecastPanelBody forecast={yearForecast} forecastYear={forecastYear} yearPoints={forecastYearPoints} onOpen={() => setModal({ type: "yearForecast" })} />}
+                  : <YearForecastPanelBody forecast={yearForecast} forecastYear={forecastYear} yearPoints={forecastYearPoints} projectionPath={yearForecastProjectionPath} onOpen={() => setModal({ type: "yearForecast" })} />}
               </Panel>
             </div>
           </div>

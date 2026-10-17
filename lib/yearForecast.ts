@@ -1,12 +1,13 @@
-// 年騰落率予測：直近10年平均・前年類似年の翌年平均・大統領サイクル平均・当年月末時点類似年、の4つの実績統計から
-// 今年の年末までの騰落率を予想する。各指標は「ある年Yの予測」を、Y年より前のデータだけを使って計算できる関数として実装し
-// （ルックアヘッド無し）、過去の確定年に遡って「その指標が過去にどれだけ当たっていたか（符号一致率）」を検証し、
-// その一致率を指標ごとの重みとして使う加重平均で総合予測値を出す（単純平均ではない）。月末時点類似年（4番目の指標）は
-// 月が進むほど一致率が上がる傾向があるため、同じ仕組み（指標ごとの符号一致率バックテスト）が自然に月ごとの精度差を
-// 重みに反映する。
+// 年騰落率予測：直近10年平均・前年類似年の翌年平均・大統領サイクル平均・大統領サイクル別季節性（月次）・
+// 当年月末時点類似年、の5つの実績統計から今年の年末までの騰落率を予想する。各指標は「ある年Yの予測」を、
+// Y年より前のデータだけを使って計算できる関数として実装し（ルックアヘッド無し）、過去の確定年に遡って
+// 「その指標が過去にどれだけ当たっていたか（符号一致率）」を検証し、その一致率を指標ごとの重みとして使う
+// 加重平均で総合予測値を出す（単純平均ではない）。月末時点類似年・季節性の2指標は月が進むほど一致率が
+// 上がる傾向があるため、同じ仕組み（指標ごとの符号一致率バックテスト）が自然に月ごとの精度差を重みに反映する。
+// 今年の年末予測値を実績の代わりに使うことで、翌年の予測（computeNextYearForecast）も算出できる。
 // このファイルはlib/yearCompare.ts（外部importを持たない純粋関数のみで構成）だけをimportし、
 // `node --test`から直接実行できるようにしている。
-import { buildYearSeries, presidentialTermYear, type YearSeries } from "./yearCompare.ts";
+import { buildYearSeries, presidentialTermYear, type YearSeries, type YearPoint } from "./yearCompare.ts";
 
 export interface FactorResult {
   forecastPct: number; // 予測値（年間騰落率、%。例: 9.2）
@@ -24,7 +25,7 @@ function toResult(refYears: { year: number; return: number }[]): FactorResult {
 
 // 年ごとの年間騰落率（%）。前年末終値=100とした指数（buildYearSeriesのindex）の、その年最終時点の値-100。
 // 前年データが無い年（履歴の最初の年等）は年初の最初の終値=100を基準にする（buildYearSeriesの仕様通り）。
-// 進行中の年（今年）も最新時点までの「現時点のYTD」としてそのまま含まれるが、以下の4指標はいずれも
+// 進行中の年（今年）も最新時点までの「現時点のYTD」としてそのまま含まれるが、以下の指標はいずれも
 // 予測対象の年より前の年だけを参照年として使うため、進行中の年の値が参照年として誤用されることはない。
 export function buildAnnualReturns(FULL: { date: string; price: number }[]): Map<number, number> {
   const series = buildYearSeries(FULL.map((p) => ({ date: p.date, price: p.price })));
@@ -112,12 +113,111 @@ export function monthEndAnalogForecast(FULL: { date: string; price: number }[], 
   return toResult(refYears);
 }
 
-export type FactorKey = "recent10" | "similarPrior" | "cycle" | "monthEnd";
+// ある年の月ごとの単月リターン（%）。年初(index=100)→1月末、1月末→2月末、…と連鎖して算出する。
+// その月のデータが無い月（進行中の年の未到達月等）はスキップする。
+function monthlyReturnsForYear(pts: YearPoint[]): Map<number, number> {
+  const out = new Map<number, number>();
+  let prevIndex = 100;
+  for (let m = 1; m <= 12; m++) {
+    const inMonth = pts.filter((p) => Number(p.date.slice(5, 7)) === m);
+    if (!inMonth.length) continue;
+    const idx = inMonth[inMonth.length - 1].index;
+    out.set(m, (idx / prevIndex - 1) * 100);
+    prevIndex = idx;
+  }
+  return out;
+}
+
+// yearと同じ大統領サイクル区分の、yearより前の確定年について、asOfMonth+1〜12月の各月の単月リターン平均
+// （季節パターン）を返す。十分な参照年（3年以上）が無ければnull。
+export function seasonalMonthlyAverages(FULL: { date: string; price: number }[], year: number, asOfMonth: number): { month: number; avgReturnPct: number; n: number }[] | null {
+  const series = buildYearSeries(FULL.map((p) => ({ date: p.date, price: p.price })));
+  const pos = presidentialTermYear(year);
+  const sameCycleYears = [...series.keys()].filter((z) => z < year && presidentialTermYear(z) === pos);
+  if (sameCycleYears.length < 3) return null;
+  const monthlyByYear = new Map(sameCycleYears.map((z) => [z, monthlyReturnsForYear(series.get(z) ?? [])]));
+  const out: { month: number; avgReturnPct: number; n: number }[] = [];
+  for (let m = asOfMonth + 1; m <= 12; m++) {
+    const vals: number[] = [];
+    for (const z of sameCycleYears) {
+      const mr = monthlyByYear.get(z)!.get(m);
+      if (mr != null) vals.push(mr);
+    }
+    if (vals.length) out.push({ month: m, avgReturnPct: avg(vals), n: vals.length });
+  }
+  return out.length ? out : null;
+}
+
+// 5. 大統領サイクル別季節性（月次）：同サイクル区分の過去年の「月ごとの単月リターン平均」を、現在値から年末まで
+//    複利適用して予測値とする。他の指標は年間リターンの単一値しか見ないが、この指標は月次の形（季節性）を反映する。
+export function seasonalRemainingForecast(FULL: { date: string; price: number }[], year: number, asOfMonth: number): FactorResult | null {
+  const series = buildYearSeries(FULL.map((p) => ({ date: p.date, price: p.price })));
+  const currentYtd = asOfMonth > 0 ? ytdAtMonthEnd(series, year, asOfMonth) : 0;
+  if (currentYtd == null) return null;
+  const pattern = seasonalMonthlyAverages(FULL, year, asOfMonth);
+  if (!pattern) return null;
+
+  let idx = 100 + currentYtd;
+  for (const { avgReturnPct } of pattern) idx = idx * (1 + avgReturnPct / 100);
+  const forecastPct = idx - 100;
+
+  const pos = presidentialTermYear(year);
+  const refYears: { year: number; return: number }[] = [];
+  for (const [z, pts] of series) {
+    if (z >= year || !pts.length || presidentialTermYear(z) !== pos) continue;
+    const zYtd = asOfMonth > 0 ? ytdAtMonthEnd(series, z, asOfMonth) : 0;
+    if (zYtd == null) continue;
+    const zFull = pts[pts.length - 1].index - 100;
+    const remainingReturn = ((100 + zFull) / (100 + zYtd) - 1) * 100; // 同じasOfMonth時点から年末までのリターン
+    refYears.push({ year: z, return: remainingReturn });
+  }
+  if (refYears.length < 3) return null;
+  refYears.sort((a, b) => a.year - b.year);
+  return { forecastPct, probability: posShare(refYears.map((r) => r.return)), refYears };
+}
+
+function monthEndDayOfYear(year: number, month: number): number {
+  return Math.round((Date.UTC(year, month, 0) - Date.UTC(year, 0, 1)) / 86400000) + 1;
+}
+
+// 現在値(100+YTD)から、季節パターン（seasonalMonthlyAverages）の形（月ごとの上下）を保ったまま、
+// 総合予測値(targetForecastPct)に終点を一致させた月末ごとの推移を返す（コンパクト表示の折れ線チャート用）。
+// 季節パターンが無い、または総合予測値が無い場合はnull。
+export function yearEndProjectionPath(FULL: { date: string; price: number }[], year: number, asOfMonth: number, targetForecastPct: number | null): { month: number; doy: number; indexValue: number }[] | null {
+  if (targetForecastPct == null) return null;
+  const pattern = seasonalMonthlyAverages(FULL, year, asOfMonth);
+  if (!pattern) return null;
+  const series = buildYearSeries(FULL.map((p) => ({ date: p.date, price: p.price })));
+  const currentYtd = (asOfMonth > 0 ? ytdAtMonthEnd(series, year, asOfMonth) : 0) ?? 0;
+  const startIndex = 100 + currentYtd;
+  const targetIndex = 100 + targetForecastPct;
+
+  let raw = startIndex;
+  const rawPath = pattern.map(({ month, avgReturnPct }) => {
+    raw = raw * (1 + avgReturnPct / 100);
+    return { month, raw };
+  });
+  const rawFinal = rawPath.length ? rawPath[rawPath.length - 1].raw : startIndex;
+  const rawGrowth = rawFinal - startIndex;
+  const targetGrowth = targetIndex - startIndex;
+  const totalRemainingMonths = 12 - asOfMonth;
+
+  return rawPath.map(({ month, raw: r }) => {
+    const rawGrowthSoFar = r - startIndex;
+    const scaledGrowth = Math.abs(rawGrowth) > 1e-9
+      ? rawGrowthSoFar * (targetGrowth / rawGrowth)
+      : targetGrowth * ((month - asOfMonth) / totalRemainingMonths);
+    return { month, doy: monthEndDayOfYear(year, month), indexValue: startIndex + scaledGrowth };
+  });
+}
+
+export type FactorKey = "recent10" | "similarPrior" | "cycle" | "seasonality" | "monthEnd";
 
 const FACTOR_LABELS: Record<FactorKey, string> = {
   recent10: "直近10年平均",
   similarPrior: "前年類似年の翌年平均",
   cycle: "大統領サイクル平均",
+  seasonality: "大統領サイクル別季節性（月次）",
   monthEnd: "当年月末時点類似年",
 };
 
@@ -143,7 +243,7 @@ export interface YearForecastFactor {
   label: string;
   result: FactorResult | null;
   accuracy: { hitRate: number; n: number }; // 過去の予測精度（符号一致率）＝重みの根拠
-  weight: number; // 正規化後のアンサンブル重み（0〜1、4指標の合計が1）
+  weight: number; // 正規化後のアンサンブル重み（0〜1、有効な指標の合計が1）
 }
 
 export interface YearForecast {
@@ -154,7 +254,18 @@ export interface YearForecast {
   blendedProbability: number | null; // 各指標の確率（probability）を同じ重みで加重平均したもの（0〜1）
 }
 
-// ある時点（year年のasOfMonth月末まで確定しているデータ）での4指標＋重み付き総合予測を計算する。
+// 各指標の予測精度（accuracy.hitRate）を重みとして正規化し、総合予測値・総合確率を算出する（factorsにweightを書き込む）。
+function blendFactors(factors: YearForecastFactor[]): { blendedForecastPct: number | null; blendedProbability: number | null } {
+  const withResult = factors.filter((f) => f.result);
+  const weightSum = withResult.reduce((s, f) => s + f.accuracy.hitRate, 0);
+  for (const f of factors) f.weight = f.result && weightSum > 0 ? f.accuracy.hitRate / weightSum : 0;
+  return {
+    blendedForecastPct: withResult.length ? withResult.reduce((s, f) => s + (f.result as FactorResult).forecastPct * f.weight, 0) : null,
+    blendedProbability: withResult.length ? withResult.reduce((s, f) => s + (f.result as FactorResult).probability * f.weight, 0) : null,
+  };
+}
+
+// ある時点（year年のasOfMonth月末まで確定しているデータ）での5指標＋重み付き総合予測を計算する。
 export function computeYearForecast(FULL: { date: string; price: number }[], year: number, asOfMonth: number): YearForecast {
   const returns = buildAnnualReturns(FULL);
   const allYears = [...returns.keys()].filter((y) => y < year).sort((a, b) => a - b);
@@ -163,6 +274,7 @@ export function computeYearForecast(FULL: { date: string; price: number }[], yea
     { key: "recent10", compute: (y) => recentNYearAverage(returns, y, 10) },
     { key: "similarPrior", compute: (y) => similarPriorYearFollowing(returns, y) },
     { key: "cycle", compute: (y) => presidentialCycleAverage(returns, y) },
+    { key: "seasonality", compute: (y) => seasonalRemainingForecast(FULL, y, asOfMonth) },
     { key: "monthEnd", compute: (y) => monthEndAnalogForecast(FULL, y, asOfMonth) },
   ];
 
@@ -174,22 +286,51 @@ export function computeYearForecast(FULL: { date: string; price: number }[], yea
     weight: 0,
   }));
 
-  const withResult = factors.filter((f) => f.result);
-  const weightSum = withResult.reduce((s, f) => s + f.accuracy.hitRate, 0);
-  for (const f of factors) f.weight = f.result && weightSum > 0 ? f.accuracy.hitRate / weightSum : 0;
-
-  const blendedForecastPct = withResult.length
-    ? withResult.reduce((s, f) => s + (f.result as FactorResult).forecastPct * f.weight, 0)
-    : null;
-  const blendedProbability = withResult.length
-    ? withResult.reduce((s, f) => s + (f.result as FactorResult).probability * f.weight, 0)
-    : null;
-
+  const { blendedForecastPct, blendedProbability } = blendFactors(factors);
   return { year, asOfMonth, factors, blendedForecastPct, blendedProbability };
 }
 
+export interface NextYearForecast extends YearForecast {
+  basedOnForecastYear: number; // 予測のベースにした年（今年）
+  basedOnForecastPct: number; // その年の年末予測値（実績の代わりに使った値）
+}
+
+// 今年の年末予測値（computeYearForecastのblendedForecastPct）を実績の代わりに使い、翌年の予測を算出する。
+// 指標1・2（直近10年平均・前年類似年）は、今年を「予測値を実績とみなした年」として含めた拡張Mapで計算する。
+// 指標3（大統領サイクル平均）・指標5（季節性）は実績のみを使う（指標5はasOfMonth=0で呼ぶ＝年がまだ始まっていない
+// ため残り12ヶ月すべてが対象になり、通年の季節性予測として機能する）。指標4（当年月末時点類似年）は、年が
+// 始まっていない翌年には意味を持たないため含めない。重みは、asOfMonthに依存しない指標1・2・3は今年の予測で
+// 使った精度をそのまま再利用し、季節性だけasOfMonth=0用に再バックテストする。
+export function computeNextYearForecast(FULL: { date: string; price: number }[], year: number, asOfMonth: number): NextYearForecast | null {
+  const current = computeYearForecast(FULL, year, asOfMonth);
+  if (current.blendedForecastPct == null) return null;
+
+  const extendedReturns = buildAnnualReturns(FULL);
+  extendedReturns.set(year, current.blendedForecastPct); // 今年は年末予測値で実績の代わりとする
+
+  const trueReturns = buildAnnualReturns(FULL);
+  const nextYear = year + 1;
+  const allYears = [...trueReturns.keys()].filter((y) => y < nextYear).sort((a, b) => a - b);
+
+  const defs: { key: FactorKey; compute: (y: number) => FactorResult | null }[] = [
+    { key: "recent10", compute: (y) => recentNYearAverage(extendedReturns, y, 10) },
+    { key: "similarPrior", compute: (y) => similarPriorYearFollowing(extendedReturns, y) },
+    { key: "cycle", compute: (y) => presidentialCycleAverage(extendedReturns, y) },
+    { key: "seasonality", compute: (y) => seasonalRemainingForecast(FULL, y, 0) },
+  ];
+
+  const factors: YearForecastFactor[] = defs.map(({ key, compute }) => {
+    const reused = key !== "seasonality" ? current.factors.find((f) => f.key === key) : undefined;
+    const accuracy = reused ? reused.accuracy : backtestAccuracy((y) => seasonalRemainingForecast(FULL, y, 0), trueReturns, allYears);
+    return { key, label: FACTOR_LABELS[key], result: compute(nextYear), accuracy, weight: 0 };
+  });
+
+  const { blendedForecastPct, blendedProbability } = blendFactors(factors);
+  return { year: nextYear, asOfMonth: 0, factors, blendedForecastPct, blendedProbability, basedOnForecastYear: year, basedOnForecastPct: current.blendedForecastPct };
+}
+
 // 今年の1月末〜latestMonth月末まで、各月末時点で遡及的にcomputeYearForecastを呼び出し、総合予測値の変遷を返す。
-// （月が進むほど当年月末時点類似年＝指標4の実績カバー率が増え、一致率・重みも変わるため、推定が年末の実績へ
+// （月が進むほど月末時点類似年・季節性＝実績カバー率が増える指標の一致率・重みも変わるため、推定が年末の実績へ
 // 収束していく形になる。各時点の値はその時点までのデータだけで決まり、後の月のデータでは変化しない＝ルックアヘッド無し）
 export function yearForecastTrajectory(FULL: { date: string; price: number }[], year: number, latestMonth: number): { month: number; blendedForecastPct: number | null }[] {
   const out: { month: number; blendedForecastPct: number | null }[] = [];
