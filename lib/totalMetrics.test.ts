@@ -1,7 +1,7 @@
 // 実行: npm test
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseTotalMetricsSheet, formatPct, toIsoDate, calendarYearPrincipalChanges, calendarYearPriceTwr, type SheetRows, type TotalMetricsPoint } from "./totalMetrics.ts";
+import { parseTotalMetricsSheet, formatPct, toIsoDate, calendarYearPrincipalChanges, calendarYearPriceTwr, calendarYearTwrMdd, type SheetRows, type TotalMetricsPoint } from "./totalMetrics.ts";
 
 // 実ファイル（TOTAL指標シート）と同じ並び・ラベルの架空データ。値は検算しやすい小さな数。
 function sampleRows(): SheetRows {
@@ -125,4 +125,16 @@ test("暦年のVOO TWR：前年末終値→年末終値。endIsoで最新年を�
   assert.ok(Math.abs((m.get(2020) as number) - 0.2) < 1e-12);
   assert.ok(Math.abs((m.get(2021) as number) - 0.25) < 1e-12);
   assert.ok(Math.abs((calendarYearPriceTwr(prices, [2021]).get(2021) as number) - 0.1) < 1e-12);
+});
+
+test("暦年のMDD：年初来高値基準（年またぎでリセット）、年の最初の時点は0、データの無い年はnull", () => {
+  const pt = (date: string, twrIndex: number | null) => ({ date, twrIndex }) as TotalMetricsPoint;
+  const series = [
+    pt("2022-01-03", 1.0), pt("2022-06-30", 0.7), pt("2022-09-30", 0.85), pt("2022-12-30", 0.9),
+    pt("2023-01-04", 0.95), pt("2023-12-29", 1.9),
+  ];
+  const m = calendarYearTwrMdd(series, [2021, 2022, 2023]);
+  assert.equal(m.get(2021), null);
+  assert.ok(Math.abs((m.get(2022) as number) - -0.3) < 1e-12); // 1.0→0.7＝-30%（年初来高値1.0基準）
+  assert.equal(m.get(2023), 0); // 年をまたいで高値はリセットされ、2023年は右肩上がりなので下落なし
 });

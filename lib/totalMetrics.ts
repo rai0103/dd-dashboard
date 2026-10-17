@@ -206,3 +206,24 @@ export function calendarYearPriceTwr(prices: { date: Date; price: number }[], ye
   }
   return out;
 }
+
+// 暦年ごとのMDD＝その年単独・年初来高値基準（年をまたいでリセット）で、TWR指数（twrIndex。入出金の影響を除いた運用指数）の
+// 最大下落率。年初の最初の時点を高値の起点とするため、その年の最初の時点のMDDは必ず0。マイナスの小数で返す（-0.123＝-12.3%）。
+// その年にtwrIndexのある時点が1つも無ければnull。
+export function calendarYearTwrMdd(series: TotalMetricsPoint[], years: number[]): Map<number, number | null> {
+  const pts = series.filter((p) => p.twrIndex != null).sort((a, b) => a.date.localeCompare(b.date));
+  const out = new Map<number, number | null>();
+  for (const y of years) {
+    const yearPts = pts.filter((p) => Number(p.date.slice(0, 4)) === y);
+    if (!yearPts.length) { out.set(y, null); continue; }
+    let high = -Infinity, mdd = 0;
+    for (const p of yearPts) {
+      const v = p.twrIndex as number;
+      if (v > high) high = v;
+      const dd = v / high - 1;
+      if (dd < mdd) mdd = dd;
+    }
+    out.set(y, mdd);
+  }
+  return out;
+}
