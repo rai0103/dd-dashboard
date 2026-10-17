@@ -23,7 +23,7 @@ import { OWNER_RAKUTEN_SAKI, OWNER_RAKUTEN_SHIN, OWNER_MOOMOO, OWNER_OPTIONS, RA
 import { BROKERS, brokerByKey, extractionToPreviewRows, previewRowsToHoldings, replaceBrokerHoldings, aggregateLabelsReplacedByBrokers, rowValue, reconcileWithAccountTotal, isPlausibleBrokerRate, guessBrokerRank, reconciliationTarget, sectionChecks, buildBrokerSummary, profitChecks, appendHoldingSnapshot, holdingChanges } from "@/lib/brokerImport";
 import { importUserPrices, applyApiGold, resetPriceField, goldHistoryFetchStart } from "@/lib/priceSeries";
 import { buildStatsTable, computeMddHoldProbability, depthBucketIndex, LOW_SAMPLE_N } from "@/lib/bottomScore";
-import { mergeVooQqqForTactical, simulateTacticalStrategy, describeTacticalProposal, buildPracticePeriods, rebasePracticePeriod, PRACTICE_START_DATE } from "@/lib/ddTacticalStrategy";
+import { computeYearForecast, yearForecastTrajectory } from "@/lib/yearForecast";
 import { buildQqqEquivalentSeries, parseNdxPreQqqCsv } from "@/lib/qqqSynthetic";
 
 // Cloudflare Worker（当日のVOO/QQQ終値を返す。SP500はここでは扱わず引き続きCSV取り込み/直接入力で更新する）のエンドポイント。
@@ -5922,262 +5922,168 @@ function BottomScoreModalContent({ bottom, FULL }) {
     </div>
   );
 }
-/* ---------------- DD戦略シミュレーション（VOOガチホに勝てるかの検証） ---------------- */
-// 最高値比・経過日数・DD加速度アラートの3指標だけでVOO/QQQ/現金の配分を機械的に決め、QQQの取り込み開始日から
-// 終値ベースで約定したと仮定して評価額を都度シミュレーションする（lib/ddTacticalStrategy.ts）。投資助言ではない。
-const TACTICAL_WEIGHT_COLOR = { qqq: C.amber, voo: C.teal, cash: C.textDim };
-function tacticalWeightSegments(weights) {
-  return [["qqq", "QQQ", weights.qqq], ["voo", "VOO", weights.voo], ["cash", "現金", weights.cash]].filter(([, , v]) => v > 0.0001);
-}
-function weightsLabel(w) {
-  const parts = [];
-  if (w.qqq > 0.0001) parts.push(`QQQ${Math.round(w.qqq * 100)}%`);
-  if (w.cash > 0.0001) parts.push(`現金${Math.round(w.cash * 100)}%`);
-  parts.push(`VOO${Math.round(w.voo * 100)}%`);
-  return parts.join(" / ");
-}
-function TacticalWeightBar({ weights, large = false }) {
-  const segs = tacticalWeightSegments(weights);
+/* ---------------- 年騰落率予測（直近10年平均・前年類似年の翌年平均・大統領サイクル平均・当年月末時点類似年） ---------------- */
+// 4つの実績統計（lib/yearForecast.ts）から年末までの騰落率を予想する。各指標の重みは、過去の確定年でその指標が
+// 方向（上昇/下落）をどれだけ当てていたか（符号一致率）に基づく加重平均であり、単純平均ではない。投資助言ではない。
+const FORECAST_FACTOR_COLOR = { recent10: C.teal, similarPrior: C.amber, cycle: C.violet, monthEnd: C.rust };
+function forecastIsLeapYear(y) { return (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0; }
+function YearForecastChart({ forecast, yearPoints, forecastYear, height = 160, fontSize = 10 }) {
+  const chartData = useMemo(() => {
+    const rows = (yearPoints ?? []).map((p) => ({ doy: p.doy, actual: Number((p.index - 100).toFixed(2)) }));
+    if (rows.length && forecast?.blendedForecastPct != null) {
+      const last = rows[rows.length - 1];
+      rows[rows.length - 1] = { ...last, forecast: last.actual };
+      rows.push({ doy: forecastIsLeapYear(forecastYear) ? 366 : 365, forecast: Number(forecast.blendedForecastPct.toFixed(2)) });
+    }
+    return rows;
+  }, [yearPoints, forecast, forecastYear]);
+  if (!chartData.length) return null;
+  const ForecastTooltip = ({ active, payload, label }) => {
+    if (!active || !payload?.length) return null;
+    const row = payload[0]?.payload;
+    return (
+      <div className="text-[10px] rounded px-2 py-1" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
+        <div style={{ color: C.textDim }}>{doyLabel(label)}</div>
+        {row.actual != null && <div style={{ color: C.teal }}>実績：{row.actual > 0 ? "+" : ""}{row.actual}%</div>}
+        {row.forecast != null && <div style={{ color: C.textMuted }}>予測：{row.forecast > 0 ? "+" : ""}{row.forecast}%</div>}
+      </div>
+    );
+  };
   return (
-    <div className="w-full">
-      <div className="w-full rounded-full overflow-hidden flex" style={{ height: large ? 10 : 8, background: C.panel2 }}>
-        {segs.map(([k, label, v]) => (<div key={k} style={{ width: `${v * 100}%`, background: TACTICAL_WEIGHT_COLOR[k] }} title={`${label} ${Math.round(v * 100)}%`} />))}
-      </div>
-      <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1 text-[10px] mono" style={{ color: C.textMuted }}>
-        {segs.map(([k, label, v]) => (<span key={k} className="flex items-center gap-1"><span style={{ width: 7, height: 7, borderRadius: 2, background: TACTICAL_WEIGHT_COLOR[k], display: "inline-block" }} />{label} {Math.round(v * 100)}%</span>))}
-      </div>
-    </div>
+    <ResponsiveContainer width="100%" height={height}>
+      <LineChart data={chartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+        <CartesianGrid stroke={C.borderSoft} vertical={false} />
+        <XAxis dataKey="doy" type="number" domain={[1, 366]} ticks={YEAR_MONTH_TICKS} tickFormatter={doyLabel} tick={{ fill: C.textDim, fontSize }} axisLine={{ stroke: C.border }} tickLine={false} />
+        <YAxis tick={{ fill: C.textDim, fontSize }} axisLine={false} tickLine={false} width={34} tickFormatter={(v) => `${v}%`} />
+        <Tooltip content={<ForecastTooltip />} />
+        <Line type="linear" dataKey="actual" stroke={C.teal} strokeWidth={2} dot={false} isAnimationActive={false} />
+        <Line type="linear" dataKey="forecast" stroke={C.teal} strokeWidth={2} strokeDasharray="4 3" dot={false} connectNulls isAnimationActive={false} />
+      </LineChart>
+    </ResponsiveContainer>
   );
 }
-// 次のアクション（指値・逆指値の目安）の種類ごとの色分け。
-// cash_up/pending_fast＝一時避難の現金化（守り）、qqq_buy/pending_slow＝QQQへのナンピン買い（攻め）、
-// exit_voo100＝ポジション解消（VOO100%復帰）、watch/capped＝情報表示のみ。
-const TACTICAL_ACTION_COLOR = {
-  watch: C.textMuted,
-  pending_fast: C.rust,
-  pending_slow: C.amber,
-  cash_up: C.rust,
-  qqq_buy: C.amber,
-  capped: C.textDim,
-  exit_voo100: C.teal,
-};
-function TacticalActionRow({ action, compact = false }) {
-  const color = TACTICAL_ACTION_COLOR[action.kind] || C.textDim;
-  return (
-    <div className="flex items-start gap-1.5">
-      <span style={{ width: 6, height: 6, borderRadius: 999, background: color, marginTop: compact ? 3 : 5, flexShrink: 0 }} />
-      <div className="min-w-0 leading-snug">
-        {!compact && action.orderType && <span className="mono font-bold mr-1" style={{ color }}>{action.orderType}</span>}
-        <span>{action.label}</span>
-        {action.price != null && <span className="mono font-bold ml-1" style={{ color: C.text }}>${action.price}</span>}
-      </div>
-    </div>
-  );
-}
-// 現金化・ナンピン買いなど「実際に発注する指値・逆指値」は、観察のみ(watch/capped/exit)より目立つ
-// バッジ型で大きく表示する（「次の指値を分かりやすく」の要望）。
-const TACTICAL_PRIMARY_ACTION_KINDS = new Set(["cash_up", "qqq_buy", "pending_fast", "pending_slow"]);
-function TacticalActionBadge({ action, compact = false }) {
-  const color = TACTICAL_ACTION_COLOR[action.kind] || C.textDim;
-  return (
-    <div className="rounded-md flex items-center justify-between gap-2" style={{ background: `${color}1a`, border: `1px solid ${color}66`, padding: compact ? "4px 7px" : "8px 12px" }}>
-      <div className="min-w-0">
-        {action.orderType && <div className={compact ? "text-[8px] font-bold" : "text-[11px] font-bold"} style={{ color }}>{action.orderType}</div>}
-        <div className={compact ? "text-[9px] leading-snug" : "text-[12px] leading-snug"} style={{ color: C.text }}>{action.label}</div>
-      </div>
-      {action.price != null && <div className={`mono font-bold shrink-0 ${compact ? "text-[14px]" : "text-[21px]"}`} style={{ color }}>${action.price}</div>}
-    </div>
-  );
-}
-function TacticalStrategyPanelBody({ result, proposal, onOpen, large = false }) {
-  if (!result || !proposal) {
-    return <div className="h-full flex items-center justify-center text-[11px] text-center px-3" style={{ color: C.textDim }}>QQQのトラックレコードが未取り込みです。データ入力・出力画面からQQQのCSVを取り込んでください。</div>;
+function YearForecastPanelBody({ forecast, yearPoints, forecastYear, onOpen, large = false }) {
+  if (!forecast || forecast.blendedForecastPct == null) {
+    return <div className="h-full flex items-center justify-center text-[11px] text-center px-3" style={{ color: C.textDim }}>データが不足しているため予測できません。</div>;
   }
-  const outPct = result.outperformancePct;
-  const outColor = outPct > 0 ? C.teal : outPct < 0 ? C.rust : C.textMuted;
+  const v = forecast.blendedForecastPct;
   return (
-    <div className="h-full flex flex-col p-2.5 gap-2 cursor-pointer" onClick={onOpen} title="クリックで詳細（評価額の推移・トレード履歴・ルール説明）">
-      <div>
-        <div className="text-[10px] mb-1" style={{ color: C.textDim }}>現在の目標配分</div>
-        <TacticalWeightBar weights={proposal.weights} large={large} />
-        <div className="text-[10px] mt-1 leading-snug" style={{ color: C.textMuted }}>{proposal.reason}</div>
+    <div className="h-full flex flex-col p-2.5 gap-1.5 cursor-pointer" onClick={onOpen} title="クリックで詳細（4指標の予測値・確率・根拠、予測軌跡）">
+      <div className="flex items-baseline justify-between">
+        <div className="text-[11px]" style={{ color: C.textMuted }}>{forecastYear}年 年末想定（総合）</div>
+        <div className="mono font-bold" style={{ color: pctColor(v), fontSize: large ? 22 : 18 }}>{v > 0 ? "+" : ""}{v.toFixed(1)}%</div>
       </div>
-      <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-0.5">
-        <div className={`mono ${large ? "text-[22px]" : "text-[17px]"} font-bold`} style={{ color: outColor }}>{outPct > 0 ? "+" : ""}{outPct.toFixed(1)}%</div>
-        <div className="text-[10px] text-center" style={{ color: C.textDim }}>VOO100%保有との差（{fmtYMD(result.startDate)}〜の全期間シミュレーション）</div>
+      <div className="flex-1 min-h-0"><YearForecastChart forecast={forecast} yearPoints={yearPoints} forecastYear={forecastYear} height={large ? 220 : 130} /></div>
+      <div className="text-[9px] leading-tight" style={{ color: C.textDim }}>実線＝年初来の実績、点線＝年末までの予測（4指標の過去の予測精度に応じた加重平均）。投資助言ではありません。</div>
+    </div>
+  );
+}
+function YearForecastTrajectoryChart({ trajectory, yearPoints, height = 180, fontSize = 10 }) {
+  const data = useMemo(() => (trajectory ?? []).map(({ month, blendedForecastPct }) => {
+    const inRange = (yearPoints ?? []).filter((p) => Number(p.date.slice(5, 7)) <= month);
+    const actual = inRange.length ? Number((inRange[inRange.length - 1].index - 100).toFixed(2)) : null;
+    return { month, forecast: blendedForecastPct != null ? Number(blendedForecastPct.toFixed(2)) : null, actual };
+  }), [trajectory, yearPoints]);
+  if (!data.length) return null;
+  const TrajTooltip = ({ active, payload, label }) => {
+    if (!active || !payload?.length) return null;
+    const row = payload[0]?.payload;
+    return (
+      <div className="text-[10px] rounded px-2 py-1" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
+        <div style={{ color: C.textDim }}>{label}月末</div>
+        {row.forecast != null && <div style={{ color: C.amber }}>その時点の総合予測：{row.forecast > 0 ? "+" : ""}{row.forecast}%</div>}
+        {row.actual != null && <div style={{ color: C.teal }}>その時点の実績YTD：{row.actual > 0 ? "+" : ""}{row.actual}%</div>}
       </div>
-      {proposal.actions.length > 0 && (() => {
-        const primary = proposal.actions.filter((a) => TACTICAL_PRIMARY_ACTION_KINDS.has(a.kind));
-        const secondary = proposal.actions.filter((a) => !TACTICAL_PRIMARY_ACTION_KINDS.has(a.kind));
-        return (
-          <div className="pt-1.5 flex flex-col gap-1" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
-            <div className="text-[8px]" style={{ color: C.textDim }}>次の指値・逆指値</div>
-            {primary.length > 0 && <div className="flex flex-col gap-1">{primary.map((a, i) => <TacticalActionBadge key={i} action={a} compact />)}</div>}
-            {secondary.length > 0 && <div className="text-[9px] leading-tight flex flex-col gap-1" style={{ color: C.textMuted }}>{secondary.map((a, i) => <TacticalActionRow key={i} action={a} compact />)}</div>}
+    );
+  };
+  return (
+    <ResponsiveContainer width="100%" height={height}>
+      <LineChart data={data} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+        <CartesianGrid stroke={C.borderSoft} vertical={false} />
+        <XAxis dataKey="month" type="number" domain={[1, 12]} ticks={[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]} tickFormatter={(m) => `${m}月`} tick={{ fill: C.textDim, fontSize }} axisLine={{ stroke: C.border }} tickLine={false} />
+        <YAxis tick={{ fill: C.textDim, fontSize }} axisLine={false} tickLine={false} width={34} tickFormatter={(v) => `${v}%`} />
+        <Tooltip content={<TrajTooltip />} />
+        <Line type="linear" dataKey="actual" name="実績YTD" stroke={C.teal} strokeWidth={2} dot={false} isAnimationActive={false} connectNulls />
+        <Line type="linear" dataKey="forecast" name="その時点の総合予測" stroke={C.amber} strokeWidth={2} strokeDasharray="4 3" dot={{ r: 2 }} isAnimationActive={false} connectNulls />
+      </LineChart>
+    </ResponsiveContainer>
+  );
+}
+function YearForecastFactorCard({ f }) {
+  const color = FORECAST_FACTOR_COLOR[f.key] ?? C.text;
+  return (
+    <div className="rounded-lg p-3" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
+      <div className="flex items-center justify-between mb-1.5">
+        <div className="text-[12px] font-bold" style={{ color }}>{f.label}</div>
+        <div className="text-[10px] mono" style={{ color: C.textDim }}>重み {Math.round(f.weight * 100)}%</div>
+      </div>
+      {f.result ? (
+        <>
+          <div className="flex items-baseline gap-3 mb-1.5 flex-wrap">
+            <div className="mono font-bold text-lg" style={{ color: pctColor(f.result.forecastPct) }}>{f.result.forecastPct > 0 ? "+" : ""}{f.result.forecastPct.toFixed(1)}%</div>
+            <div className="text-[11px]" style={{ color: C.textMuted }}>確率（参照年のうち上昇した割合）{Math.round(f.result.probability * 100)}%（{f.result.refYears.filter((r) => r.return > 0).length}/{f.result.refYears.length}年）</div>
           </div>
-        );
-      })()}
-    </div>
-  );
-}
-function downsampleForChart(days, maxPoints = 700) {
-  if (days.length <= maxPoints) return days;
-  const step = Math.ceil(days.length / maxPoints);
-  const out = [];
-  for (let i = 0; i < days.length; i += step) out.push(days[i]);
-  if (out[out.length - 1] !== days[days.length - 1]) out.push(days[days.length - 1]);
-  return out;
-}
-function TacticalChartTooltip({ active, payload, label }) {
-  if (!active || !payload || !payload.length) return null;
-  return (
-    <div className="rounded px-2 py-1.5 text-[11px] mono" style={{ background: C.panel, border: `1px solid ${C.border}`, color: C.text }}>
-      <div style={{ color: C.textDim }}>{fmtYMD(label)}</div>
-      {payload.map((p) => (<div key={p.dataKey} style={{ color: p.color }}>{p.name}：${Math.round(p.value).toLocaleString()}</div>))}
-    </div>
-  );
-}
-function TacticalPracticeChartTooltip({ active, payload, label }) {
-  if (!active || !payload || !payload.length) return null;
-  return (
-    <div className="rounded px-2 py-1.5 text-[11px] mono" style={{ background: C.panel, border: `1px solid ${C.border}`, color: C.text }}>
-      <div style={{ color: C.textDim }}>{fmtYMD(label)}</div>
-      {payload.map((p) => (<div key={p.dataKey} style={{ color: p.color }}>{p.name}：{p.value.toFixed(1)}</div>))}
-    </div>
-  );
-}
-function TacticalStrategyModalContent({ result, proposal }) {
-  const [periodIdx, setPeriodIdx] = useState(-1); // -1＝未選択（最新の期間を既定表示）
-  if (!result || !proposal) return <div className="text-xs py-6 text-center" style={{ color: C.textDim }}>QQQのトラックレコードが未取り込みです。データ入力・出力画面からQQQのCSVを取り込んでください。</div>;
-  const chartData = downsampleForChart(result.days).map((d) => ({ date: d.date, 戦略: Number(d.equity.toFixed(2)), VOO100: Number(d.vooHoldEquity.toFixed(2)) }));
-  const rangeDays = Math.round((result.endDate - result.startDate) / 86400000);
-  const outColor = result.outperformancePct > 0 ? C.teal : result.outperformancePct < 0 ? C.rust : C.textMuted;
-  const recentTrades = [...result.trades].reverse().slice(0, 40);
-  const th = "text-left font-normal py-1 px-2", td = "py-1 px-2";
-  // 実践検証：今日（実践開始日）を起点に、暦年単位で区切ってSP500(VOO)100%とDD戦略を同じ地点からスタートして比較する。
-  const practicePeriods = buildPracticePeriods(result.endDate);
-  const selectedPeriod = practicePeriods[periodIdx >= 0 && periodIdx < practicePeriods.length ? periodIdx : practicePeriods.length - 1];
-  const practiceChart = rebasePracticePeriod(result, selectedPeriod);
-  const practiceData = practiceChart ? practiceChart.points.map((p) => ({ date: p.date, 戦略: p.strategyIndex, SP500: p.vooIndex })) : [];
-  const practiceRangeDays = practiceChart ? Math.round((selectedPeriod.endDate - selectedPeriod.startDate) / 86400000) : 0;
-  const practiceOutColor = !practiceChart ? C.textMuted : practiceChart.outperformancePct > 0 ? C.teal : practiceChart.outperformancePct < 0 ? C.rust : C.textMuted;
-  const primaryActions = proposal.actions.filter((a) => TACTICAL_PRIMARY_ACTION_KINDS.has(a.kind));
-  const secondaryActions = proposal.actions.filter((a) => !TACTICAL_PRIMARY_ACTION_KINDS.has(a.kind));
-  return (
-    <div className="flex flex-col gap-7">
-      <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,260px)_minmax(0,1fr)] gap-6">
-        <div className="flex flex-col gap-2">
-          <div className="text-xs mb-1" style={{ color: C.textDim }}>現在の目標配分</div>
-          <TacticalWeightBar weights={proposal.weights} large />
-          <div className="text-[11px] leading-relaxed" style={{ color: C.textMuted }}>{proposal.reason}</div>
-          {proposal.actions.length > 0 && (
-            <div className="flex flex-col gap-1.5 text-[11px] pt-1 mt-1" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
-              <div className="text-[10px]" style={{ color: C.textDim }}>次の指値・逆指値</div>
-              {primaryActions.length > 0 && <div className="flex flex-col gap-1.5">{primaryActions.map((a, i) => <TacticalActionBadge key={i} action={a} />)}</div>}
-              {secondaryActions.length > 0 && <div className="flex flex-col gap-1">{secondaryActions.map((a, i) => <TacticalActionRow key={i} action={a} />)}</div>}
-            </div>
-          )}
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 text-[12px] content-start">
-          <div className="flex flex-col"><span style={{ color: C.textDim }}>評価額との差（VOO100%比）</span><span className="mono text-xl font-bold" style={{ color: outColor }}>{result.outperformancePct > 0 ? "+" : ""}{result.outperformancePct.toFixed(1)}%<span className="text-[12px] ml-2">（{result.outperformanceAmount > 0 ? "+" : ""}${Math.round(result.outperformanceAmount).toLocaleString()}）</span></span></div>
-          <div className="flex flex-col"><span style={{ color: C.textDim }}>最大下落率（MDD）</span><span className="mono">戦略 <b style={{ color: C.rust }}>{result.strategyMaxDD.toFixed(1)}%</b> ／ VOO100% <b style={{ color: C.rust }}>{result.vooMaxDD.toFixed(1)}%</b></span></div>
-          <div className="flex flex-col"><span style={{ color: C.textDim }}>評価額（仮想元手${result.startCapital.toLocaleString()}）</span><span className="mono">戦略 ${Math.round(result.finalEquity).toLocaleString()} ／ VOO100% ${Math.round(result.finalVooHoldEquity).toLocaleString()}</span></div>
-          <div className="flex flex-col"><span style={{ color: C.textDim }}>シミュレーション期間</span><span className="mono">{fmtYMD(result.startDate)}〜{fmtYMD(result.endDate)}（全期間・VOOはSP500指数、QQQはNasdaq-100指数で上場前の値を補正して延長）</span></div>
-        </div>
-      </div>
-
-      <div>
-        <div className="flex items-center justify-between gap-3 mb-2 flex-wrap">
-          <div className="text-xs" style={{ color: C.textDim }}>実践検証：{selectedPeriod.label}（同じ地点からスタート）</div>
-          <div className="flex items-center gap-1">
-            {practicePeriods.map((p, i) => {
-              const active = selectedPeriod.key === p.key;
-              return (
-                <button key={p.key} onClick={() => setPeriodIdx(i)} className="text-[10px] px-2 py-0.5 rounded whitespace-nowrap" style={{ color: active ? C.bg : C.textMuted, background: active ? C.teal : "transparent", border: active ? "none" : `1px solid ${C.borderSoft}`, fontWeight: active ? 700 : 400 }}>{p.label}</button>
-              );
-            })}
+          <div className="text-[10px] mb-1.5" style={{ color: C.textDim }}>過去の予測精度（符号一致率・この重みの根拠）：{f.accuracy.n > 0 ? `${Math.round(f.accuracy.hitRate * 100)}%（過去${f.accuracy.n}年で検証）` : "検証不可"}</div>
+          <div className="text-[9px] mb-1" style={{ color: C.textDim }}>根拠（参照年の騰落率）</div>
+          <div className="flex flex-wrap gap-1">
+            {f.result.refYears.map((r) => (
+              <span key={r.year} className="text-[9px] mono px-1 rounded" style={{ color: r.return >= 0 ? C.teal : C.rust, background: C.panel, border: `1px solid ${C.borderSoft}` }}>{r.year}：{r.return > 0 ? "+" : ""}{r.return.toFixed(1)}%</span>
+            ))}
           </div>
+        </>
+      ) : (<div className="text-[11px]" style={{ color: C.textDim }}>十分な過去データが無く算出できません。</div>)}
+    </div>
+  );
+}
+function YearForecastModalContent({ forecast, trajectory, yearPoints }) {
+  if (!forecast) return <div className="text-xs py-6 text-center" style={{ color: C.textDim }}>データが不足しています。</div>;
+  const v = forecast.blendedForecastPct;
+  return (
+    <div className="flex flex-col gap-6">
+      <div className="flex items-center gap-8 flex-wrap">
+        <div>
+          <div className="text-[11px]" style={{ color: C.textMuted }}>{forecast.year}年 年末想定騰落率（総合・加重平均）</div>
+          <div className="mono font-bold text-3xl" style={{ color: pctColor(v) }}>{v == null ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(1)}%`}</div>
         </div>
-        {practiceChart ? (
-          <>
-            <div className="mb-2">
-              <span className="mono text-lg font-bold" style={{ color: practiceOutColor }}>{practiceChart.outperformancePct > 0 ? "+" : ""}{practiceChart.outperformancePct.toFixed(1)}pt</span>
-              <span className="text-[11px] ml-2" style={{ color: C.textDim }}>SP500(VOO)100%保有との差（この期間だけの指数ベース）</span>
-            </div>
-            <ResponsiveContainer width="100%" height={220}>
-              <LineChart data={practiceData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
-                <CartesianGrid stroke={C.borderSoft} vertical={false} />
-                <XAxis dataKey="date" tickFormatter={(dt) => fmtAxisDate(dt, practiceRangeDays)} tick={{ fill: C.textDim, fontSize: 10 }} axisLine={{ stroke: C.border }} tickLine={false} minTickGap={50} />
-                <YAxis domain={["auto", "auto"]} tick={{ fill: C.textDim, fontSize: 10 }} axisLine={false} tickLine={false} width={40} />
-                <Tooltip content={<TacticalPracticeChartTooltip />} />
-                <Line type="linear" dataKey="SP500" name="SP500(VOO)100%" stroke={C.textDim} strokeWidth={1.4} dot={false} isAnimationActive={false} />
-                <Line type="linear" dataKey="戦略" name="DD戦略" stroke={C.teal} strokeWidth={1.8} dot={false} isAnimationActive={false} />
-              </LineChart>
-            </ResponsiveContainer>
-          </>
-        ) : (
-          <div className="text-[11px] py-6 text-center" style={{ color: C.textDim }}>まだこの期間のデータがありません。期間が始まった後、日次データを取り込むと表示されます。</div>
-        )}
-        <div className="text-[10px] mt-1.5 leading-relaxed" style={{ color: C.textDim }}>
-          期間の開始日（{fmtYMD(selectedPeriod.startDate)}）の評価額をどちらも100として指数化し、同じ地点からスタートして比較しています。期間は実践開始日（{fmtYMD(PRACTICE_START_DATE)}）〜今年末、翌年以降は1/1〜12/31の暦年単位です。
+        <div>
+          <div className="text-[11px]" style={{ color: C.textMuted }}>上昇確率（総合・加重平均）</div>
+          <div className="mono font-bold text-xl">{forecast.blendedProbability == null ? "—" : `${Math.round(forecast.blendedProbability * 100)}%`}</div>
+        </div>
+        <div className="text-[11px] leading-relaxed max-w-md" style={{ color: C.textDim }}>4指標を、各指標の過去の予測精度（符号一致率）で重み付けして統合した値です。単純平均ではありません。</div>
+      </div>
+
+      <div>
+        <div className="text-xs mb-2" style={{ color: C.textDim }}>4つの予測要素（それぞれの予測値・確率・根拠）</div>
+        <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))" }}>
+          {forecast.factors.map((f) => <YearForecastFactorCard key={f.key} f={f} />)}
         </div>
       </div>
 
       <div>
-        <div className="text-xs mb-2" style={{ color: C.textDim }}>評価額の推移（戦略 vs VOO100%保有・全期間）</div>
-        <ResponsiveContainer width="100%" height={260}>
-          <LineChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
-            <CartesianGrid stroke={C.borderSoft} vertical={false} />
-            <XAxis dataKey="date" tickFormatter={(dt) => fmtAxisDate(dt, rangeDays)} tick={{ fill: C.textDim, fontSize: 10 }} axisLine={{ stroke: C.border }} tickLine={false} minTickGap={50} />
-            <YAxis domain={["auto", "auto"]} tick={{ fill: C.textDim, fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} width={48} />
-            <Tooltip content={<TacticalChartTooltip />} />
-            <Line type="linear" dataKey="VOO100" name="VOO100%保有" stroke={C.textDim} strokeWidth={1.4} dot={false} isAnimationActive={false} />
-            <Line type="linear" dataKey="戦略" name="DD戦略" stroke={C.teal} strokeWidth={1.8} dot={false} isAnimationActive={false} />
-          </LineChart>
-        </ResponsiveContainer>
-      </div>
-
-      <div className="text-[11px] leading-relaxed" style={{ color: C.textMuted }}>
-        ルール（{result.ruleVersion}）：平常時も含め常に、「QQQが過去にVOOをどれだけの割合で上回ってきたか」という実績優位確率（直近に完結した約1年保有期間だけの拡大窓統計、将来のデータは使わない）だけを根拠に、確率に比例したベースのQQQ比率を持つ（優位確率50%＝互角ならQQQ0%、優位確率100%ならベースQQQ上限30%）。最高値比（VOOのATHからの下落率）が-3%以降はDD加速度アラートの速度区分でこのベースに上乗せ・縮小し、「急落・警戒（DD-3→5%到達が5営業日以内）」ならベースのQQQもいったん解消し深度に応じて現金比率を最大20%まで上げて守りを固め、それ以外（緩慢・安心寄りまたは速度未確定）ならベースに押し目買い分を上乗せする（QQQ合計で最大50%）。直近ATHを更新すると通常のベース比率（VOO100%とは限らない）に戻る。取引コスト・税金・スリッページは考慮していない。
-      </div>
-
-      <div>
-        <div className="text-xs mb-2" style={{ color: C.textDim }}>配分変更の履歴（新しい順・最大40件）</div>
-        <div className="overflow-auto" style={{ maxHeight: 280 }}>
-          <table className="w-full text-xs mono"><thead><tr style={{ color: C.textDim }}><th className={th}>日付</th><th className={th}>変更後</th><th className={th}>理由</th></tr></thead>
-            <tbody>{recentTrades.map((t) => (
-              <tr key={t.idx} style={{ borderTop: `1px solid ${C.borderSoft}` }}>
-                <td className={td}>{fmtYMD(t.date)}</td>
-                <td className={td}>{weightsLabel(t.to)}</td>
-                <td className={td} style={{ color: C.textMuted }}>{t.reason}</td>
-              </tr>
-            ))}</tbody>
-          </table>
-        </div>
+        <div className="text-xs mb-2" style={{ color: C.textDim }}>予測の軌跡（今年の各月末時点で、その時点までのデータだけを使って算出していたら総合予測はいくつだったか）</div>
+        <YearForecastTrajectoryChart trajectory={trajectory} yearPoints={yearPoints} height={200} />
       </div>
 
       <div className="text-[11px] leading-relaxed" style={{ color: C.textDim }}>
-        このシミュレーションは、ルールを忠実に実行していたら実際の評価額がどう推移したかを日次で機械的に計算した結果であり、投資助言ではありません。過去の実績は将来を保証しません。
-        ※VOOは上場（2010年）前はSP500指数を、QQQは上場（1999年）前はNasdaq-100指数を、それぞれ実際の終値に段差なく接続する形で補正した値を使っています（騰落率・DD率はスケール変換の影響を受けません）。
-        ※押し目買い・現金化の量は固定の計算式ではなく、SP500(VOO)自身とQQQ自身それぞれの過去の実績（この水準からさらに深い節目まで過去に進んだ割合）と、SP500の深度別のQQQ増幅率（SP500とQQQの相関関係）から、約1ヶ月おきに更新する統計スナップショットを使って都度算出しています（詳細は各アクションの根拠文言を参照）。
+        この予測は、直近10年平均・前年類似年の翌年平均・大統領サイクル平均・当年月末時点類似年、という4つの実績統計（VOO・上場前はSP500指数換算）から機械的に算出した参考値であり、投資助言ではありません。各指標の重みは、その指標が過去の確定年で方向（上昇／下落）をどれだけ当てていたか（符号一致率）に基づく加重平均で、単純平均ではありません。いずれの指標も予測対象の年より前のデータだけを使っており、将来の情報は使っていません（ルックアヘッド無し）。過去の実績は将来を保証しません。
       </div>
     </div>
   );
 }
 
-function MobileBottomScorePage({ bottom, FULL, onOpen, onOpenTactical, tacticalResult, tacticalProposal, tab, setTab }) {
+function MobileBottomScorePage({ bottom, FULL, onOpen, onOpenForecast, forecast, forecastYear, yearPoints, tab, setTab }) {
   return (
     <div className="p-3 h-full">
       <div className="rounded-lg h-full flex flex-col" style={{ background: C.panel, border: `1px solid ${C.border}` }}>
         <div className="px-3 pt-2 shrink-0 flex items-center justify-between gap-2">
           <div className="flex items-center gap-0.5">
-            {[["score", "底値判定"], ["tactical", "DD戦略"]].map(([k, l]) => (<button key={k} onClick={() => setTab(k)} className="text-[11px] px-2 py-1 rounded whitespace-nowrap" style={{ color: tab === k ? C.bg : C.textMuted, background: tab === k ? C.teal : "transparent", fontWeight: tab === k ? 700 : 400 }}>{l}</button>))}
+            {[["score", "底値判定"], ["forecast", "年間予測"]].map(([k, l]) => (<button key={k} onClick={() => setTab(k)} className="text-[11px] px-2 py-1 rounded whitespace-nowrap" style={{ color: tab === k ? C.bg : C.textMuted, background: tab === k ? C.teal : "transparent", fontWeight: tab === k ? 700 : 400 }}>{l}</button>))}
           </div>
           <span className="text-[10px] whitespace-nowrap" style={{ color: C.textDim }}>詳細 ›</span>
         </div>
         {tab === "score"
           ? <div className="flex-1 min-h-0"><BottomScorePanelBody bottom={bottom} FULL={FULL} onOpen={onOpen} large /></div>
-          : <div className="flex-1 min-h-0"><TacticalStrategyPanelBody result={tacticalResult} proposal={tacticalProposal} onOpen={onOpenTactical} large /></div>}
+          : <div className="flex-1 min-h-0"><YearForecastPanelBody forecast={forecast} forecastYear={forecastYear} yearPoints={yearPoints} onOpen={onOpenForecast} large /></div>}
       </div>
     </div>
   );
@@ -7186,7 +7092,7 @@ export default function DDDashboard() {
   const [hidden, setHidden] = useState({});
   const [hiddenCrash, setHiddenCrash] = useState({});
   const [pieView, setPieView] = useState("rank");
-  const [bottomPanelTab, setBottomPanelTab] = useState("score"); // 底値判定パネルの表示切替："score"=VOO底値判定 / "tactical"=DD戦略シミュレーション（PC・スマホ共通）
+  const [bottomPanelTab, setBottomPanelTab] = useState("score"); // 底値判定パネルの表示切替："score"=VOO底値判定 / "forecast"=年騰落率予測（PC・スマホ共通）
   const [modelOverride, setModelOverride] = useState(null); // null = 自動（現在の評価額に応じて選択）
   const [chartTab, setChartTab] = useState("normal");
   // 評価額/DDチャートの対象（"sp500"＝VOO・"qqq"・"gold"の配列、複数選択可）。1つなら評価額/DD%チャート、複数なら評価額のみの比較チャート。
@@ -7647,15 +7553,15 @@ export default function DDDashboard() {
     const stats = buildStatsTable(prices, dates);
     return { stats, hold: computeMddHoldProbability(prices, stats) };
   }, [d.FULL]);
-  // DD戦略シミュレーション（VOOガチホに勝てるかの検証機能）：最高値比・経過日数・DD加速度アラートの3指標だけで
-  // VOO/QQQ/現金の目標配分を機械的に決め、終値ベースで約定したと仮定して評価額を都度シミュレーションする（lib/ddTacticalStrategy.ts）。
-  // VOO側はsp500Series（SP500→VOO換算の合成系列）、QQQ側はqqqSeries（Nasdaq-100→QQQ換算の合成系列）を使うため、
-  // 両ETFの実上場日より前（VOOは2010年・QQQは1999年）も含めた全期間でバックテストできる。QQQ未取り込み・2日未満の場合はnull。
-  const tacticalResult = useMemo(() => {
-    const merged = mergeVooQqqForTactical(sp500Series, qqqSeries);
-    return simulateTacticalStrategy(merged, 10000);
-  }, [sp500Series, qqqSeries]);
-  const tacticalProposal = useMemo(() => (tacticalResult ? describeTacticalProposal(tacticalResult) : null), [tacticalResult]);
+  // 年騰落率予測：底値判定と同じくSP500全履歴（d.FULL）を使う（lib/yearForecast.ts）。直近10年平均・前年類似年の
+  // 翌年平均・大統領サイクル平均・当年月末時点類似年、の4指標を、各指標の過去の予測精度（符号一致率）で重み付けして
+  // 統合する。rawSeriesが更新されるたびにd.FULLが作り直されるため、自動的に再計算される。
+  const forecastYearSeries = useMemo(() => buildYearSeries(d.FULL.map((p) => ({ date: p.date, price: p.price }))), [d.FULL]);
+  const forecastYear = useMemo(() => Math.max(...forecastYearSeries.keys()), [forecastYearSeries]);
+  const forecastYearPoints = useMemo(() => forecastYearSeries.get(forecastYear) ?? [], [forecastYearSeries, forecastYear]);
+  const forecastLatestMonth = useMemo(() => (forecastYearPoints.length ? Number(forecastYearPoints[forecastYearPoints.length - 1].date.slice(5, 7)) : 1), [forecastYearPoints]);
+  const yearForecast = useMemo(() => computeYearForecast(d.FULL, forecastYear, forecastLatestMonth), [d.FULL, forecastYear, forecastLatestMonth]);
+  const yearForecastTrajectoryData = useMemo(() => yearForecastTrajectory(d.FULL, forecastYear, forecastLatestMonth), [d.FULL, forecastYear, forecastLatestMonth]);
   const chartData = useMemo(() => sliceForPeriod(d.FULL, d.last, period), [d.FULL, d.last, period]);
   const rangeDays = useMemo(() => { const f = chartData[0].date, l = chartData[chartData.length - 1].date; return Math.round((l - f) / 86400000); }, [chartData]);
   const periodRange = useMemo(() => periodDateRange(d.FULL, d.last, period), [d.FULL, d.last, period]);
@@ -7801,7 +7707,7 @@ export default function DDDashboard() {
       {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} synthetic={sp500Synthetic} qqqSynthetic={qqqSynthetic} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} vooQqqSeries={vooQqqSeries} onAppendVooQqq={handleAppendVooQqq} onImportVooQqq={handleImportVooQqq} onApplyApiGold={handleApplyApiGold} onResetVooQqqField={handleResetVooQqqField} virtualAggregateLabels={virtualAggregateLabels} onRegisterBrokerHoldings={handleRegisterBrokerHoldings} brokerSummaries={brokerSummaries} />}
       {modal?.type === "checkpointSettings" && <FullScreenModal title="チェックポイント設定" onClose={() => setModal(null)}><CheckpointSettingsContent checkpoints={checkpoints} onCheckpointChange={handleCheckpointChange} holdings={holdings} /></FullScreenModal>}
       {modal?.type === "bottomScore" && <FullScreenModal title={bottom.hold.applicable ? `VOO底値判定：${bottomLabel(d.FULL, bottom.hold.state)} が底値として確定する確率（VOO実績から都度算出）` : "VOO底値判定（VOO実績から都度算出）"} onClose={() => setModal(null)}><BottomScoreModalContent bottom={bottom} FULL={d.FULL} /></FullScreenModal>}
-      {modal?.type === "tacticalStrategy" && <FullScreenModal title={`DD戦略 vs VOOガチホ：${tacticalResult ? `${tacticalResult.outperformancePct > 0 ? "+" : ""}${tacticalResult.outperformancePct.toFixed(1)}%（${fmtYMD(tacticalResult.startDate)}〜の全期間シミュレーション）` : "QQQ未取り込み"}`} onClose={() => setModal(null)}><TacticalStrategyModalContent result={tacticalResult} proposal={tacticalProposal} /></FullScreenModal>}
+      {modal?.type === "yearForecast" && <FullScreenModal title={`${forecastYear}年 年騰落率予測${yearForecast?.blendedForecastPct != null ? `（総合：${yearForecast.blendedForecastPct > 0 ? "+" : ""}${yearForecast.blendedForecastPct.toFixed(1)}%）` : ""}`} onClose={() => setModal(null)}><YearForecastModalContent forecast={yearForecast} trajectory={yearForecastTrajectoryData} yearPoints={forecastYearPoints} /></FullScreenModal>}
       {modal?.type === "realHoldingsRanking" && <FullScreenModal title="実質保有銘柄ランキング" onClose={() => setModal(null)}><RealHoldingsRankingContent holdings={combinedHoldings} /></FullScreenModal>}
       {modal?.type === "summary" && <FullScreenModal title="詳細サマリー出力（AI相談用）" onClose={() => setModal(null)}><SummaryModalContent d={d} dVoo={dVoo} dQqq={dQqq} holdings={holdings} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} blocks={blocks} rankLabels={rankLabels} lifecycle={lifecycle} onLifecycleChange={handleLifecycleChange} fixedPositions={fixedPositions} onFixedPositionChange={handleFixedPositionChange} checkpoints={checkpoints} prevSnapshot={prevSnapshot} onSaveSnapshot={handleSaveSnapshot} /></FullScreenModal>}
       {modal?.type === "mobileChartZoom" && <MobileChartZoomModal onClose={() => setModal(null)} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} sourceViews={sourceViews} chartSources={chartSources} onToggleChartSource={toggleChartSource} yearCompare={yearCompare} setYearCompare={setYearCompare} initialTab={chartTab} isRealDevice={isMobileAuto} />}
@@ -7866,7 +7772,7 @@ export default function DDDashboard() {
               { key: "chart", label: "チャート", icon: Activity, content: <MobileChartPage chartTab={chartTab} setChartTab={setChartTab} chartSources={chartSources} onToggleChartSource={toggleChartSource} sourceViews={sourceViews} chartData={chartData} rangeDays={rangeDays} d={d} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} yearCompare={yearCompare} setYearCompare={setYearCompare} onZoom={() => setModal({ type: "mobileChartZoom" })} onOpenCrash={(c) => setModal({ type: "crash", crash: c })} /> },
               { key: "portfolio", label: "構成", icon: Layers, content: <MobilePortfolioPage pieView={pieView} setPieView={setPieView} holdings={combinedHoldings} ownerDates={ownerUpdatedDates} fxRates={fxRates} onOpen={() => setModal({ type: "portfolio" })} onOpenRealHoldingsRanking={() => setModal({ type: "realHoldingsRanking" })} dateLabel={holdingsDateLabel} /> },
               { key: "diff", label: "配分乖離", icon: ListChecks, content: <MobileDiffPage modelOverride={modelOverride} setModelOverride={setModelOverride} d={d} currentHoldingPct={currentHoldingPct} currentHoldingAmount={currentHoldingAmount} effectiveModelRow={effectiveModelRow} rankLabels={rankLabels} blocks={blocks} onOpenRank={(rank) => setModal({ type: "rank", rank })} onOpenDDTable={() => setModal({ type: "ddTable" })} dateLabel={holdingsDateLabel} /> },
-              { key: "bottom", label: "VOO底値判定", icon: Gauge, content: <MobileBottomScorePage bottom={bottom} FULL={d.FULL} onOpen={() => setModal({ type: "bottomScore" })} onOpenTactical={() => setModal({ type: "tacticalStrategy" })} tacticalResult={tacticalResult} tacticalProposal={tacticalProposal} tab={bottomPanelTab} setTab={setBottomPanelTab} /> },
+              { key: "bottom", label: "VOO底値判定", icon: Gauge, content: <MobileBottomScorePage bottom={bottom} FULL={d.FULL} onOpen={() => setModal({ type: "bottomScore" })} onOpenForecast={() => setModal({ type: "yearForecast" })} forecast={yearForecast} forecastYear={forecastYear} yearPoints={forecastYearPoints} tab={bottomPanelTab} setTab={setBottomPanelTab} /> },
               { key: "analysis", label: "現状分析", icon: Info, content: <MobileAnalysisPage analysis={analysis} onNavigate={setModal} checkpointResults={checkpointResults} onOpenCheckpointSettings={() => setModal({ type: "checkpointSettings" })} /> },
             ]}
           />
@@ -8019,21 +7925,21 @@ export default function DDDashboard() {
               </Panel>
             </div>
 
-            {/* bottom-far-right: 底値判定スコア／DD戦略シミュレーション（タブ切替、同じ枠を共用） */}
+            {/* bottom-far-right: 底値判定スコア／年騰落率予測（タブ切替、同じ枠を共用） */}
             <div style={{ minHeight: 0 }}>
               <Panel
-                title={bottomPanelTab === "score" ? (bottom.hold.applicable ? <>VOO底値判定 <span className="mono" style={{ color: depthColor(bottom.hold.state.mdd) }}>{bottomLabel(d.FULL, bottom.hold.state)}</span></> : "VOO底値判定") : "DD戦略 vs VOOガチホ"}
+                title={bottomPanelTab === "score" ? (bottom.hold.applicable ? <>VOO底値判定 <span className="mono" style={{ color: depthColor(bottom.hold.state.mdd) }}>{bottomLabel(d.FULL, bottom.hold.state)}</span></> : "VOO底値判定") : `${forecastYear}年 年間予測`}
                 action={<div className="flex items-center gap-1">
                   <div className="flex items-center gap-0.5">
-                    {[["score", "底値判定"], ["tactical", "DD戦略"]].map(([k, l]) => (<button key={k} onClick={() => setBottomPanelTab(k)} className="text-[10px] px-1 py-0.5 rounded whitespace-nowrap" style={{ color: bottomPanelTab === k ? C.bg : C.textMuted, background: bottomPanelTab === k ? C.teal : "transparent", fontWeight: bottomPanelTab === k ? 700 : 400 }}>{l}</button>))}
+                    {[["score", "底値判定"], ["forecast", "年間予測"]].map(([k, l]) => (<button key={k} onClick={() => setBottomPanelTab(k)} className="text-[10px] px-1 py-0.5 rounded whitespace-nowrap" style={{ color: bottomPanelTab === k ? C.bg : C.textMuted, background: bottomPanelTab === k ? C.teal : "transparent", fontWeight: bottomPanelTab === k ? 700 : 400 }}>{l}</button>))}
                   </div>
-                  <button onClick={() => setModal({ type: bottomPanelTab === "score" ? "bottomScore" : "tacticalStrategy" })} title={bottomPanelTab === "score" ? "条件別の確率・過去事例・統計テーブルを表示" : "評価額の推移・トレード履歴・ルール説明を表示"} style={{ background: "transparent", border: "none", cursor: "pointer" }}><Info size={14} style={{ color: C.textDim }} /></button>
+                  <button onClick={() => setModal({ type: bottomPanelTab === "score" ? "bottomScore" : "yearForecast" })} title={bottomPanelTab === "score" ? "条件別の確率・過去事例・統計テーブルを表示" : "4指標の予測値・確率・根拠、予測軌跡を表示"} style={{ background: "transparent", border: "none", cursor: "pointer" }}><Info size={14} style={{ color: C.textDim }} /></button>
                 </div>}
                 className="h-full"
               >
                 {bottomPanelTab === "score"
                   ? <BottomScorePanelBody bottom={bottom} FULL={d.FULL} onOpen={() => setModal({ type: "bottomScore" })} />
-                  : <TacticalStrategyPanelBody result={tacticalResult} proposal={tacticalProposal} onOpen={() => setModal({ type: "tacticalStrategy" })} />}
+                  : <YearForecastPanelBody forecast={yearForecast} forecastYear={forecastYear} yearPoints={forecastYearPoints} onOpen={() => setModal({ type: "yearForecast" })} />}
               </Panel>
             </div>
           </div>
