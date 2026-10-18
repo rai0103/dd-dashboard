@@ -9,6 +9,21 @@
 // `node --test`から直接実行できるようにしている。
 import { buildYearSeries, presidentialTermYear, type YearSeries, type YearPoint } from "./yearCompare.ts";
 
+// buildYearSeries(FULL全体を年別に再集計する処理)は入力が同じFULL配列（参照が同じ）であれば結果も必ず同じになる。
+// backtestAccuracy等で同じFULLに対して指標関数を何十回も呼ぶため、素朴にbuildYearSeriesを呼び直すと
+// 「過去全年×複数指標×月次トラジェクトリ」で何百回も重複して全期間を再集計することになり、実データ規模
+// （数千営業日）では数秒〜十数秒かかって画面がフリーズする。FULL配列の参照をキーにしたWeakMapでキャッシュし、
+// 同一FULLに対しては1回だけ計算する（FULLが更新され新しい配列になれば自動的に再計算される。外部からは
+// 従来通り毎回buildYearSeriesを呼んでいるのと同じ結果になる純粋なキャッシュで、挙動は変えない）。
+const yearSeriesCache = new WeakMap<object, YearSeries>();
+function cachedYearSeries(FULL: { date: string; price: number }[]): YearSeries {
+  const cached = yearSeriesCache.get(FULL);
+  if (cached) return cached;
+  const series = buildYearSeries(FULL.map((p) => ({ date: p.date, price: p.price })));
+  yearSeriesCache.set(FULL, series);
+  return series;
+}
+
 export interface FactorResult {
   forecastPct: number; // 予測値（年間騰落率、%。例: 9.2）
   probability: number; // 参照年のうち上昇した年の割合（0〜1）
@@ -28,7 +43,7 @@ function toResult(refYears: { year: number; return: number }[]): FactorResult {
 // 進行中の年（今年）も最新時点までの「現時点のYTD」としてそのまま含まれるが、以下の指標はいずれも
 // 予測対象の年より前の年だけを参照年として使うため、進行中の年の値が参照年として誤用されることはない。
 export function buildAnnualReturns(FULL: { date: string; price: number }[]): Map<number, number> {
-  const series = buildYearSeries(FULL.map((p) => ({ date: p.date, price: p.price })));
+  const series = cachedYearSeries(FULL);
   const out = new Map<number, number>();
   for (const [year, pts] of series) {
     if (!pts.length) continue;
@@ -96,7 +111,7 @@ function ytdAtMonthEnd(series: YearSeries, year: number, asOfMonth: number): num
 // 4. 当年月末時点類似年：yearのasOfMonth月末時点のYTD騰落率に近い過去の確定年（yearより前）を最大k件選び、
 //    それらの年間騰落率の平均を予測値とする。
 export function monthEndAnalogForecast(FULL: { date: string; price: number }[], year: number, asOfMonth: number, k = 8, minK = 5): FactorResult | null {
-  const series = buildYearSeries(FULL.map((p) => ({ date: p.date, price: p.price })));
+  const series = cachedYearSeries(FULL);
   const currentYtd = ytdAtMonthEnd(series, year, asOfMonth);
   if (currentYtd == null) return null;
   const candidates: { z: number; dist: number; fullReturn: number }[] = [];
@@ -131,7 +146,7 @@ function monthlyReturnsForYear(pts: YearPoint[]): Map<number, number> {
 // yearと同じ大統領サイクル区分の、yearより前の確定年について、asOfMonth+1〜12月の各月の単月リターン平均
 // （季節パターン）を返す。十分な参照年（3年以上）が無ければnull。
 export function seasonalMonthlyAverages(FULL: { date: string; price: number }[], year: number, asOfMonth: number): { month: number; avgReturnPct: number; n: number }[] | null {
-  const series = buildYearSeries(FULL.map((p) => ({ date: p.date, price: p.price })));
+  const series = cachedYearSeries(FULL);
   const pos = presidentialTermYear(year);
   const sameCycleYears = [...series.keys()].filter((z) => z < year && presidentialTermYear(z) === pos);
   if (sameCycleYears.length < 3) return null;
@@ -151,7 +166,7 @@ export function seasonalMonthlyAverages(FULL: { date: string; price: number }[],
 // 5. 大統領サイクル別季節性（月次）：同サイクル区分の過去年の「月ごとの単月リターン平均」を、現在値から年末まで
 //    複利適用して予測値とする。他の指標は年間リターンの単一値しか見ないが、この指標は月次の形（季節性）を反映する。
 export function seasonalRemainingForecast(FULL: { date: string; price: number }[], year: number, asOfMonth: number): FactorResult | null {
-  const series = buildYearSeries(FULL.map((p) => ({ date: p.date, price: p.price })));
+  const series = cachedYearSeries(FULL);
   const currentYtd = asOfMonth > 0 ? ytdAtMonthEnd(series, year, asOfMonth) : 0;
   if (currentYtd == null) return null;
   const pattern = seasonalMonthlyAverages(FULL, year, asOfMonth);
@@ -187,7 +202,7 @@ export function yearEndProjectionPath(FULL: { date: string; price: number }[], y
   if (targetForecastPct == null) return null;
   const pattern = seasonalMonthlyAverages(FULL, year, asOfMonth);
   if (!pattern) return null;
-  const series = buildYearSeries(FULL.map((p) => ({ date: p.date, price: p.price })));
+  const series = cachedYearSeries(FULL);
   const currentYtd = (asOfMonth > 0 ? ytdAtMonthEnd(series, year, asOfMonth) : 0) ?? 0;
   const startIndex = 100 + currentYtd;
   const targetIndex = 100 + targetForecastPct;
