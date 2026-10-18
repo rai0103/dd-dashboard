@@ -5951,7 +5951,7 @@ function YearForecastChart({ history, forecastPath, height = 160, fontSize = 10 
       <div className="text-[10px] rounded px-2 py-1" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
         <div style={{ color: C.textDim }}>{fmtYMD(new Date(label))}</div>
         {row.actual != null && <div style={{ color: C.teal }}>実績：${Math.round(row.actual).toLocaleString()}</div>}
-        {row.forecast != null && <div style={{ color: C.textMuted }}>予測：${Math.round(row.forecast).toLocaleString()}</div>}
+        {row.forecast != null && <div style={{ color: C.amber }}>予測：${Math.round(row.forecast).toLocaleString()}</div>}
       </div>
     );
   };
@@ -5963,7 +5963,7 @@ function YearForecastChart({ history, forecastPath, height = 160, fontSize = 10 
         <YAxis domain={["auto", "auto"]} tick={{ fill: C.textDim, fontSize }} axisLine={false} tickLine={false} width={44} tickFormatter={(v) => `$${Math.round(v).toLocaleString()}`} />
         <Tooltip content={<ForecastTooltip />} />
         <Line type="linear" dataKey="actual" stroke={C.teal} strokeWidth={2} dot={false} isAnimationActive={false} />
-        <Line type="linear" dataKey="forecast" stroke={C.teal} strokeWidth={2} strokeDasharray="4 3" dot={false} connectNulls isAnimationActive={false} />
+        <Line type="linear" dataKey="forecast" stroke={C.amber} strokeWidth={2} strokeDasharray="4 3" dot={false} connectNulls isAnimationActive={false} />
       </LineChart>
     </ResponsiveContainer>
   );
@@ -6045,7 +6045,7 @@ function YearForecastFactorCard({ f, basePrice }) {
     </div>
   );
 }
-function YearForecastModalContent({ forecast, trajectory, yearPoints, nextYearForecast, thisYearStartPrice, thisYearEndApproxPrice }) {
+function YearForecastModalContent({ forecast, trajectory, yearPoints, nextYearForecast, thisYearStartPrice, thisYearEndApproxPrice, history, forecastPath }) {
   if (!forecast) return <div className="text-xs py-6 text-center" style={{ color: C.textDim }}>データが不足しています。</div>;
   const v = forecast.blendedForecastPct;
   const nv = nextYearForecast?.blendedForecastPct;
@@ -6064,6 +6064,11 @@ function YearForecastModalContent({ forecast, trajectory, yearPoints, nextYearFo
           <div className="mono font-bold text-xl">{forecast.blendedProbability == null ? "—" : `${Math.round(forecast.blendedProbability * 100)}%`}</div>
         </div>
         <div className="text-[11px] leading-relaxed max-w-md" style={{ color: C.textDim }}>5指標を、各指標の過去の予測精度（符号一致率）で重み付けして統合した値です。単純平均ではありません。</div>
+      </div>
+
+      <div>
+        <div className="text-xs mb-2" style={{ color: C.textDim }}>過去10年の実績＋今年末までの予測＋来年末までの予測（点線）</div>
+        <YearForecastChart history={history} forecastPath={forecastPath} height={260} fontSize={11} />
       </div>
 
       <div>
@@ -7770,7 +7775,7 @@ export default function DDDashboard() {
       {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} synthetic={sp500Synthetic} qqqSynthetic={qqqSynthetic} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} vooQqqSeries={vooQqqSeries} onAppendVooQqq={handleAppendVooQqq} onImportVooQqq={handleImportVooQqq} onApplyApiGold={handleApplyApiGold} onResetVooQqqField={handleResetVooQqqField} virtualAggregateLabels={virtualAggregateLabels} onRegisterBrokerHoldings={handleRegisterBrokerHoldings} brokerSummaries={brokerSummaries} />}
       {modal?.type === "checkpointSettings" && <FullScreenModal title="チェックポイント設定" onClose={() => setModal(null)}><CheckpointSettingsContent checkpoints={checkpoints} onCheckpointChange={handleCheckpointChange} holdings={holdings} /></FullScreenModal>}
       {modal?.type === "bottomScore" && <FullScreenModal title={bottom.hold.applicable ? `VOO底値判定：${bottomLabel(d.FULL, bottom.hold.state)} が底値として確定する確率（VOO実績から都度算出）` : "VOO底値判定（VOO実績から都度算出）"} onClose={() => setModal(null)}><BottomScoreModalContent bottom={bottom} FULL={d.FULL} /></FullScreenModal>}
-      {modal?.type === "yearForecast" && <FullScreenModal title={`${forecastYear}年 年騰落率予測${yearForecast?.blendedForecastPct != null ? `（総合：${yearForecast.blendedForecastPct > 0 ? "+" : ""}${yearForecast.blendedForecastPct.toFixed(1)}%）` : ""}`} onClose={() => setModal(null)}><YearForecastModalContent forecast={yearForecast} trajectory={yearForecastTrajectoryData} yearPoints={forecastYearPoints} nextYearForecast={nextYearForecast} thisYearStartPrice={thisYearStartPrice} thisYearEndApproxPrice={thisYearEndApproxPrice} /></FullScreenModal>}
+      {modal?.type === "yearForecast" && <FullScreenModal title={`${forecastYear}年 年騰落率予測${yearForecast?.blendedForecastPct != null ? `（総合：${yearForecast.blendedForecastPct > 0 ? "+" : ""}${yearForecast.blendedForecastPct.toFixed(1)}%）` : ""}`} onClose={() => setModal(null)}><YearForecastModalContent forecast={yearForecast} trajectory={yearForecastTrajectoryData} yearPoints={forecastYearPoints} nextYearForecast={nextYearForecast} thisYearStartPrice={thisYearStartPrice} thisYearEndApproxPrice={thisYearEndApproxPrice} history={yearForecastHistory} forecastPath={yearForecastChartPath} /></FullScreenModal>}
       {modal?.type === "realHoldingsRanking" && <FullScreenModal title="実質保有銘柄ランキング" onClose={() => setModal(null)}><RealHoldingsRankingContent holdings={combinedHoldings} /></FullScreenModal>}
       {modal?.type === "summary" && <FullScreenModal title="詳細サマリー出力（AI相談用）" onClose={() => setModal(null)}><SummaryModalContent d={d} dVoo={dVoo} dQqq={dQqq} holdings={holdings} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} blocks={blocks} rankLabels={rankLabels} lifecycle={lifecycle} onLifecycleChange={handleLifecycleChange} fixedPositions={fixedPositions} onFixedPositionChange={handleFixedPositionChange} checkpoints={checkpoints} prevSnapshot={prevSnapshot} onSaveSnapshot={handleSaveSnapshot} /></FullScreenModal>}
       {modal?.type === "mobileChartZoom" && <MobileChartZoomModal onClose={() => setModal(null)} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} sourceViews={sourceViews} chartSources={chartSources} onToggleChartSource={toggleChartSource} yearCompare={yearCompare} setYearCompare={setYearCompare} initialTab={chartTab} isRealDevice={isMobileAuto} />}
