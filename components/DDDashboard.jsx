@@ -3172,13 +3172,13 @@ function FullScreenModal({ title, onClose, children }) {
 }
 
 // stacked=true（スマホ）：節目間の進行確率と最終到達確率を横並びではなく上下に並べる。
-function TrackRecordContent({ currentT, trackRecord, stacked = false }) {
+function TrackRecordContent({ currentT, trackRecord, instrumentLabel = "VOO", stacked = false }) {
   const tr = trackRecord;
   const pct = (v, hits, n) => v === null ? "—" : `${v}%${(hits !== undefined && n !== undefined) ? `（${hits}/${n}）` : ""}`;
   return (
     <div className={`grid ${stacked ? "grid-cols-1" : "grid-cols-2"} gap-x-8 gap-y-6`}>
       <div>
-        <div className="text-xs mb-3" style={{ color: C.textDim }}>節目間の進行確率<span className="ml-1" style={{ color: C.textDim }}>（VOO実績 n={tr.n}局面）</span></div>
+        <div className="text-xs mb-3" style={{ color: C.textDim }}>節目間の進行確率<span className="ml-1" style={{ color: C.textDim }}>（{instrumentLabel}実績 n={tr.n}局面）</span></div>
         {tr.progression.map((row) => (
           <div key={row.from} className="grid items-center gap-2 mb-1.5" style={{ gridTemplateColumns: stacked ? "84px 1fr 98px 36px" : "92px 1fr 76px 44px" }}>
             <span className="mono text-xs" style={{ color: row.from === currentT ? C.text : C.textMuted }}>{row.label ?? `${row.from}%→${row.to}%`}</span>
@@ -3189,7 +3189,7 @@ function TrackRecordContent({ currentT, trackRecord, stacked = false }) {
         ))}
       </div>
       <div>
-        <div className="text-xs mb-3" style={{ color: C.textDim }}>DD-3%到達からの最終到達確率<span className="ml-1" style={{ color: C.textDim }}>（VOO実績 n={tr.n}局面）</span></div>
+        <div className="text-xs mb-3" style={{ color: C.textDim }}>DD-3%到達からの最終到達確率<span className="ml-1" style={{ color: C.textDim }}>（{instrumentLabel}実績 n={tr.n}局面）</span></div>
         {tr.finalReach.map((r) => (
           <div key={r.label} className="grid items-center gap-2 mb-1.5" style={{ gridTemplateColumns: "56px 1fr 76px 76px" }}>
             <span className="mono text-xs" style={{ color: C.textMuted }}>{r.label}</span>
@@ -3198,10 +3198,10 @@ function TrackRecordContent({ currentT, trackRecord, stacked = false }) {
             <span className="text-[10px] text-right" style={{ color: C.textDim }}>{r.p !== null ? freqLabelFromP(r.p, tr.ddFreqPerYear) : "—"}</span>
           </div>
         ))}
-        <div className="text-[9px] mt-2" style={{ color: C.textDim }}>発生頻度は、VOO（換算込み）の実績データ全体でDD3%級の押し目が年{tr.ddFreqPerYear !== null ? tr.ddFreqPerYear.toFixed(1) : "—"}回発生している実績に基づく換算値です。</div>
+        <div className="text-[9px] mt-2" style={{ color: C.textDim }}>発生頻度は、{instrumentLabel}（換算込み）の実績データ全体でDD3%級の押し目が年{tr.ddFreqPerYear !== null ? tr.ddFreqPerYear.toFixed(1) : "—"}回発生している実績に基づく換算値です。</div>
       </div>
       <div className="col-span-full">
-        <div className="text-xs mb-3" style={{ color: C.textDim }}>速度条件付き確率（DD3→5%区間の日数別・VOO実績 DD5%到達{tr.reachedD5Count}局面）</div>
+        <div className="text-xs mb-3" style={{ color: C.textDim }}>速度条件付き確率（DD3→5%区間の日数別・{instrumentLabel}実績 DD5%到達{tr.reachedD5Count}局面）</div>
         <table className="w-full text-xs mono"><thead><tr style={{ color: C.textDim }}><th className="text-left font-normal py-1">区分</th><th>→8%</th><th>→10%</th><th>→15%</th><th>→20%</th></tr></thead>
           <tbody>
             <tr style={{ borderTop: `1px solid ${C.borderSoft}` }}><td className="py-1" style={{ color: C.textMuted }}>急落（5日以内）</td><td className="text-center">{pct(tr.speedTable.fast["-8"])}</td><td className="text-center">{pct(tr.speedTable.fast["-10"])}</td><td className="text-center">{pct(tr.speedTable.fast["-15"])}</td><td className="text-center">{pct(tr.speedTable.fast["-20"])}</td></tr>
@@ -3209,7 +3209,7 @@ function TrackRecordContent({ currentT, trackRecord, stacked = false }) {
           </tbody>
         </table>
       </div>
-      <div className="col-span-full text-[11px] leading-relaxed" style={{ color: C.textDim }}>これらはVOO（上場前はSP500指数をVOO換算した長期履歴）のトラックレコード（約{tr.totalYears.toFixed(0)}年・DD3%到達{tr.n}局面）から都度算出した実績値です。データをアップロード・更新すると自動的に再計算されます。過去確率は将来を保証しません。</div>
+      <div className="col-span-full text-[11px] leading-relaxed" style={{ color: C.textDim }}>これらは{instrumentLabel}（上場前は{instrumentLabel === "QQQ" ? "NDX指数をQQQ" : "SP500指数をVOO"}換算した長期履歴）のトラックレコード（約{tr.totalYears.toFixed(0)}年・DD3%到達{tr.n}局面）から都度算出した実績値です。データをアップロード・更新すると自動的に再計算されます。過去確率は将来を保証しません。</div>
     </div>
   );
 }
@@ -3354,7 +3354,7 @@ function SpeedAlertModalContent({ d, instrumentLabel = "VOO", vooSeries = null, 
       )}
 
       <div>
-        <div className="text-xs mb-2" style={{ color: C.textDim }}>バックテスト：DD3→5%の速度別・大暴落率（最終DD到達水準別）（VOO（上場前はSP500指数をVOO換算した長期履歴）のデータ 約{d.trackRecord.totalYears.toFixed(0)}年・DD5%到達{d.trackRecord.reachedD5Count}局面）</div>
+        <div className="text-xs mb-2" style={{ color: C.textDim }}>バックテスト：DD3→5%の速度別・大暴落率（最終DD到達水準別）（{instrumentLabel}（上場前は{instrumentLabel === "QQQ" ? "NDX指数をQQQ" : "SP500指数をVOO"}換算した長期履歴）のデータ 約{d.trackRecord.totalYears.toFixed(0)}年・DD5%到達{d.trackRecord.reachedD5Count}局面）</div>
         <div className="overflow-x-auto">
           <table className="w-full text-xs mono" style={{ minWidth: 560 }}>
             <thead><tr style={{ color: C.textDim }}>
@@ -3384,14 +3384,14 @@ function SpeedAlertModalContent({ d, instrumentLabel = "VOO", vooSeries = null, 
         </div>
       </div>
 
-      <TrackRecordContent currentT={d.episode.currentT} trackRecord={d.trackRecord} stacked={isMobile} />
+      <TrackRecordContent currentT={d.episode.currentT} trackRecord={d.trackRecord} instrumentLabel={instrumentLabel} stacked={isMobile} />
 
       <div className="text-[11px] leading-relaxed rounded px-3 py-2" style={{ color: C.textDim, background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
         <div className="font-semibold mb-1" style={{ color: C.textMuted }}>重要な限界（必ずお読みください）</div>
         ・急落警報（5日以内）は{d.trackRecord.fastMissRate !== null ? `${d.trackRecord.fastMissRate}%` : "多くの場合"}が空振り（浅く終わる）です。「確信」ではなく「警戒レベルを上げる」材料として使ってください。<br />
         ・緩やかに始まる大暴落もあります（2007年金融危機はspeed_3to5=13日で最終DD-57%でした）。緩慢でも油断しないでください。<br />
         ・DD8%突破後は速度の予測力が落ち、節目の進行確率（上表）が判断の主役になります。<br />
-        ・現在のDD%・速度計測はVOOの評価額、確率・バックテストはVOO（上場前はSP500指数をVOO換算した長期履歴）のトラックレコード（約{d.trackRecord.totalYears.toFixed(0)}年・DD3%到達{d.trackRecord.n}局面）から都度算出した傾向であり、確定予測ではありません。データをアップロード・更新すると自動的に再計算されます。DD深度・金の動き・自己の判断と併用する補助指標です。本ツールは投資助言ではなく判断補助です。
+        ・現在のDD%・速度計測は{instrumentLabel}の評価額、確率・バックテストは{instrumentLabel}（上場前は{instrumentLabel === "QQQ" ? "NDX指数をQQQ" : "SP500指数をVOO"}換算した長期履歴）のトラックレコード（約{d.trackRecord.totalYears.toFixed(0)}年・DD3%到達{d.trackRecord.n}局面）から都度算出した傾向であり、確定予測ではありません。データをアップロード・更新すると自動的に再計算されます。DD深度・金の動き・自己の判断と併用する補助指標です。本ツールは投資助言ではなく判断補助です。
       </div>
     </div>
   );
@@ -7592,7 +7592,11 @@ export default function DDDashboard() {
   // QQQ側は上場前補正込みのqqqSeries（1985年〜）を使う。ATH・現在DD%等「現在値」はQQQ上場後の実データが変わらない限り
   // 不変（1985〜1999年の補正値が現在の最高値を更新することはないため）だが、QQQ増幅率の中央値（qqqAmplification、
   // 動的配分モデルの入力）は対象エピソードが増える分、より多くの実績に基づいて算出されるようになる。
-  const dQqq = useMemo(() => (qqqSeries.length ? computeAll(qqqSeries, d.trackRecord) : null), [qqqSeries, d.trackRecord]);
+  // DD加速度アラート用のトラックレコード（節目間の進行確率・速度別バックテスト等）はQQQ自身の拡張履歴（qqqSeries、
+  // 上場前補正込みで1985年〜）から独自に算出する（VOOの画面と同じ仕様：各銘柄自身の長期履歴から都度算出）。
+  // 動的配分モデル（買い増し額の抑制等）はd.trackRecord（SP500）のみを参照しており、dQqq.trackRecordは表示専用のため、
+  // ここを変更してもモデルの計算結果には影響しない。
+  const dQqq = useMemo(() => (qqqSeries.length ? computeAll(qqqSeries) : null), [qqqSeries]);
   // 底値判定：SP500全履歴から統計テーブルと「現在のMDDが底値として確定しATH更新に至る確率」をキャッシュせず都度算出する。
   // rawSeriesが更新（日次終値の追加・CSV再取り込み）されるたびにd.FULLが作り直されるため、自動的に再計算される。
   const bottom = useMemo(() => {
