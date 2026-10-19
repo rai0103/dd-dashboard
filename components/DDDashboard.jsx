@@ -23,7 +23,7 @@ import { OWNER_RAKUTEN_SAKI, OWNER_RAKUTEN_SHIN, OWNER_MOOMOO, OWNER_OPTIONS, RA
 import { BROKERS, brokerByKey, extractionToPreviewRows, previewRowsToHoldings, replaceBrokerHoldings, aggregateLabelsReplacedByBrokers, rowValue, reconcileWithAccountTotal, isPlausibleBrokerRate, guessBrokerRank, reconciliationTarget, sectionChecks, buildBrokerSummary, profitChecks, appendHoldingSnapshot, holdingChanges } from "@/lib/brokerImport";
 import { importUserPrices, applyApiGold, resetPriceField, goldHistoryFetchStart } from "@/lib/priceSeries";
 import { buildStatsTable, computeMddHoldProbability, depthBucketIndex, LOW_SAMPLE_N } from "@/lib/bottomScore";
-import { computeYearForecast, yearForecastTrajectory, yearEndProjectionPath, computeNextYearForecast } from "@/lib/yearForecast";
+import { computeYearForecast, yearForecastTrajectory, yearEndProjectionPath, computeNextYearForecast, computeQqqSpxCorrelation } from "@/lib/yearForecast";
 import { buildQqqEquivalentSeries, parseNdxPreQqqCsv } from "@/lib/qqqSynthetic";
 
 // Cloudflare Worker（当日のVOO/QQQ終値を返す。SP500はここでは扱わず引き続きCSV取り込み/直接入力で更新する）のエンドポイント。
@@ -5922,10 +5922,12 @@ function BottomScoreModalContent({ bottom, FULL, instrumentLabel = "VOO" }) {
     </div>
   );
 }
-/* ---------------- 年騰落率予測（直近10年平均・前年類似年の翌年平均・大統領サイクル平均・大統領サイクル別季節性（月次）・当年月末時点類似年） ---------------- */
-// 5つの実績統計（lib/yearForecast.ts）から年末までの騰落率を予想する。各指標の重みは、過去の確定年でその指標が
+/* ---------------- 年騰落率予測（直近10年平均・前年類似年の翌年平均・大統領サイクル平均・大統領サイクル別季節性（月次）・当年月末時点類似年・類似年の残り期間実績平均） ---------------- */
+// 6つの実績統計（lib/yearForecast.ts）から年末までの騰落率を予想する。各指標の重みは、過去の確定年でその指標が
 // 方向（上昇/下落）をどれだけ当てていたか（符号一致率）に基づく加重平均であり、単純平均ではない。投資助言ではない。
-const FORECAST_FACTOR_COLOR = { recent10: C.teal, similarPrior: C.amber, cycle: C.violet, seasonality: C.blue, monthEnd: C.rust };
+// このほか、QQQ・SP500の年間騰落率の相関係数・ベータ等（lib/yearForecast.tsのcomputeQqqSpxCorrelation）を
+// 参考統計として表示する（こちらは6指標の加重平均予測には組み込まれない）。
+const FORECAST_FACTOR_COLOR = { recent10: C.teal, similarPrior: C.amber, cycle: C.violet, seasonality: C.blue, monthEnd: C.rust, monthEndRemaining: C.gold };
 // 予測値（%、年初＝100基準の指数）を、現在のVOO実価格から逆算した基準価格に当てはめて概算のVOO価格（$）に変換する。
 // 来年の予測は「今年の年末予測＝100」基準になるため、来年側のカードにはbasePriceとして今年の年末概算価格
 // （thisYearEndApproxPrice）を渡す。
@@ -5974,7 +5976,7 @@ function YearForecastPanelBody({ forecast, forecastYear, history, forecastPath, 
   }
   const v = forecast.blendedForecastPct;
   return (
-    <div className="h-full flex flex-col p-2.5 gap-1.5 cursor-pointer" onClick={onOpen} title="クリックで詳細（5指標の予測値・確率・根拠、予測軌跡）">
+    <div className="h-full flex flex-col p-2.5 gap-1.5 cursor-pointer" onClick={onOpen} title="クリックで詳細（6指標の予測値・確率・根拠、予測軌跡）">
       <div className="flex items-baseline justify-between">
         <div className="text-[11px]" style={{ color: C.textMuted }}>{forecastYear}年 年末想定（総合）</div>
         <div className="flex items-baseline gap-1">
@@ -6051,7 +6053,55 @@ function YearForecastFactorCard({ f, basePrice }) {
     </div>
   );
 }
-function YearForecastModalContent({ forecast, trajectory, yearPoints, forecastYear, forwardPath, nextYearForecast, thisYearStartPrice, thisYearEndApproxPrice, history, forecastPath }) {
+// QQQ・SP500の相関参考統計（computeQqqSpxCorrelation）の表示カード。年騰落率予測の加重平均モデルには含まれない、
+// あくまで参考データであることをカード内にも明記する。
+function QqqCorrelationCard({ stats }) {
+  if (!stats) {
+    return (
+      <div className="rounded-lg p-3 text-[11px]" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.textDim }}>
+        QQQデータ未取り込み、または十分な実績年数（5年以上）が無いため算出できません。
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-lg p-3" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
+      <div className="flex items-start gap-5 flex-wrap mb-2">
+        <div>
+          <div className="text-[10px] mb-0.5" style={{ color: C.textDim }}>相関係数</div>
+          <div className="mono font-bold text-lg">{stats.correlation == null ? "—" : stats.correlation.toFixed(2)}</div>
+        </div>
+        <div>
+          <div className="text-[10px] mb-0.5" style={{ color: C.textDim }}>ベータ（SP500の動きに対するQQQの増幅率）</div>
+          <div className="mono font-bold text-lg">{stats.beta == null ? "—" : `${stats.beta.toFixed(2)}倍`}</div>
+        </div>
+        <div>
+          <div className="text-[10px] mb-0.5" style={{ color: C.textDim }}>SP500上昇年のQQQ平均</div>
+          <div className="mono font-bold text-lg" style={{ color: pctColor(stats.avgQqqWhenSpxUp) }}>{stats.avgQqqWhenSpxUp == null ? "—" : `${stats.avgQqqWhenSpxUp > 0 ? "+" : ""}${stats.avgQqqWhenSpxUp.toFixed(1)}%`}</div>
+        </div>
+        <div>
+          <div className="text-[10px] mb-0.5" style={{ color: C.textDim }}>SP500下落年のQQQ平均</div>
+          <div className="mono font-bold text-lg" style={{ color: pctColor(stats.avgQqqWhenSpxDown) }}>{stats.avgQqqWhenSpxDown == null ? "—" : `${stats.avgQqqWhenSpxDown > 0 ? "+" : ""}${stats.avgQqqWhenSpxDown.toFixed(1)}%`}</div>
+        </div>
+        <div>
+          <div className="text-[10px] mb-0.5" style={{ color: C.textDim }}>方向一致率（SP500上昇年のうちQQQも上昇）</div>
+          <div className="mono font-bold text-lg">{stats.upShareQqqAlsoUp == null ? "—" : `${Math.round(stats.upShareQqqAlsoUp * 100)}%`}</div>
+        </div>
+      </div>
+      <div className="text-[9px] mb-1" style={{ color: C.textDim }}>年別の騰落率（SP500／QQQ、n={stats.n}年）</div>
+      <div className="flex flex-wrap gap-1">
+        {stats.years.map((y) => (
+          <span key={y.year} className="text-[9px] mono px-1 rounded" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}` }}>
+            {y.year}：<span style={{ color: y.spxReturn >= 0 ? C.teal : C.rust }}>{y.spxReturn > 0 ? "+" : ""}{y.spxReturn.toFixed(1)}%</span>
+            {" / "}
+            <span style={{ color: y.qqqReturn >= 0 ? C.violet : C.rust }}>{y.qqqReturn > 0 ? "+" : ""}{y.qqqReturn.toFixed(1)}%</span>
+          </span>
+        ))}
+      </div>
+      <div className="text-[9px] mt-1.5" style={{ color: C.textDim }}>参考統計であり、上記の年騰落率予測（加重平均）には組み込まれていません。過去の実績は将来を保証しません。</div>
+    </div>
+  );
+}
+function YearForecastModalContent({ forecast, trajectory, yearPoints, forecastYear, forwardPath, nextYearForecast, thisYearStartPrice, thisYearEndApproxPrice, history, forecastPath, qqqCorrelation }) {
   if (!forecast) return <div className="text-xs py-6 text-center" style={{ color: C.textDim }}>データが不足しています。</div>;
   const v = forecast.blendedForecastPct;
   const nv = nextYearForecast?.blendedForecastPct;
@@ -6069,7 +6119,7 @@ function YearForecastModalContent({ forecast, trajectory, yearPoints, forecastYe
           <div className="text-[11px]" style={{ color: C.textMuted }}>上昇確率（総合・加重平均）</div>
           <div className="mono font-bold text-xl">{forecast.blendedProbability == null ? "—" : `${Math.round(forecast.blendedProbability * 100)}%`}</div>
         </div>
-        <div className="text-[11px] leading-relaxed max-w-md" style={{ color: C.textDim }}>5指標を、各指標の過去の予測精度（符号一致率）で重み付けして統合した値です。単純平均ではありません。</div>
+        <div className="text-[11px] leading-relaxed max-w-md" style={{ color: C.textDim }}>6指標を、各指標の過去の予測精度（符号一致率）で重み付けして統合した値です。単純平均ではありません。</div>
       </div>
 
       <div>
@@ -6078,10 +6128,15 @@ function YearForecastModalContent({ forecast, trajectory, yearPoints, forecastYe
       </div>
 
       <div>
-        <div className="text-xs mb-2" style={{ color: C.textDim }}>5つの予測要素（それぞれの予測値・確率・根拠）</div>
+        <div className="text-xs mb-2" style={{ color: C.textDim }}>6つの予測要素（それぞれの予測値・確率・根拠）</div>
         <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))" }}>
           {forecast.factors.map((f) => <YearForecastFactorCard key={f.key} f={f} basePrice={thisYearStartPrice} />)}
         </div>
+      </div>
+
+      <div>
+        <div className="text-xs mb-2" style={{ color: C.textDim }}>QQQとSP500の相関（参考統計。上記の予測要素・加重平均には含まれません）</div>
+        <QqqCorrelationCard stats={qqqCorrelation} />
       </div>
 
       <div>
@@ -6098,7 +6153,7 @@ function YearForecastModalContent({ forecast, trajectory, yearPoints, forecastYe
             <div className="text-[11px]" style={{ color: C.textMuted }}>上昇確率 {nextYearForecast.blendedProbability == null ? "—" : `${Math.round(nextYearForecast.blendedProbability * 100)}%`}</div>
           </div>
           <div className="text-[10px] mb-2" style={{ color: C.textDim }}>
-            {nextYearForecast.basedOnForecastYear}年の年末予測（{nextYearForecast.basedOnForecastPct > 0 ? "+" : ""}{nextYearForecast.basedOnForecastPct.toFixed(1)}%）を実績の代わりに使い、直近10年平均・前年類似年の翌年平均を算出しています（当年月末時点類似年は、来年がまだ始まっていないため対象外の4指標構成）。予測の予測となるため、今年の予測より不確実性が大きくなります。
+            {nextYearForecast.basedOnForecastYear}年の年末予測（{nextYearForecast.basedOnForecastPct > 0 ? "+" : ""}{nextYearForecast.basedOnForecastPct.toFixed(1)}%）を実績の代わりに使い、直近10年平均・前年類似年の翌年平均を算出しています（当年月末時点類似年・類似年の残り期間実績平均は、来年がまだ始まっていないため対象外の4指標構成）。予測の予測となるため、今年の予測より不確実性が大きくなります。
           </div>
           <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))" }}>
             {nextYearForecast.factors.map((f) => <YearForecastFactorCard key={f.key} f={f} basePrice={thisYearEndApproxPrice} />)}
@@ -6107,7 +6162,7 @@ function YearForecastModalContent({ forecast, trajectory, yearPoints, forecastYe
       )}
 
       <div className="text-[11px] leading-relaxed" style={{ color: C.textDim }}>
-        この予測は、直近10年平均・前年類似年の翌年平均・大統領サイクル平均・大統領サイクル別季節性（月次）・当年月末時点類似年、という5つの実績統計（VOO・上場前はSP500指数換算）から機械的に算出した参考値であり、投資助言ではありません。各指標の重みは、その指標が過去の確定年で方向（上昇／下落）をどれだけ当てていたか（符号一致率）に基づく加重平均で、単純平均ではありません。いずれの指標も予測対象の年より前のデータだけを使っており、将来の情報は使っていません（ルックアヘッド無し）。過去の実績は将来を保証しません。
+        この予測は、直近10年平均・前年類似年の翌年平均・大統領サイクル平均・大統領サイクル別季節性（月次）・当年月末時点類似年・類似年の残り期間実績平均、という6つの実績統計（VOO・上場前はSP500指数換算）から機械的に算出した参考値であり、投資助言ではありません。各指標の重みは、その指標が過去の確定年で方向（上昇／下落）をどれだけ当てていたか（符号一致率）に基づく加重平均で、単純平均ではありません。いずれの指標も予測対象の年より前のデータだけを使っており、将来の情報は使っていません（ルックアヘッド無し）。過去の実績は将来を保証しません。QQQとSP500の相関統計は参考データであり、この加重平均予測には組み込まれていません。
       </div>
     </div>
   );
@@ -7630,6 +7685,9 @@ export default function DDDashboard() {
   const yearForecastProjectionPath = useMemo(() => yearEndProjectionPath(d.FULL, forecastYear, forecastLatestMonth, yearForecast?.blendedForecastPct ?? null), [d.FULL, forecastYear, forecastLatestMonth, yearForecast]);
   // 今年の年末予測を実績の代わりに使って算出する、来年の予測（拡大画面のみで表示）。
   const nextYearForecast = useMemo(() => computeNextYearForecast(d.FULL, forecastYear, forecastLatestMonth), [d.FULL, forecastYear, forecastLatestMonth]);
+  // QQQ・SP500の年間騰落率の相関係数・ベータ（参考統計。年騰落率予測の6指標の加重平均には組み込まない）。
+  // 進行中の今年（forecastYear）は実績未確定のため候補から除外する。
+  const qqqSpxCorrelation = useMemo(() => (dQqq ? computeQqqSpxCorrelation(d.FULL, dQqq.FULL, forecastYear) : null), [d.FULL, dQqq, forecastYear]);
   // 予測値（年初＝100基準の指数、%）からVOOの概算価格（$）を逆算するための基準価格。現在のVOO実価格（d.currentPrice）と
   // 当年の現在YTD指数（forecastYearPointsの最終値）から、年初時点の基準価格を逆算する。来年の予測は「今年の年末予測＝100」
   // 基準になるため、来年側の概算価格はthisYearStartPriceではなくthisYearEndApproxPriceを使う。
@@ -7821,7 +7879,7 @@ export default function DDDashboard() {
       {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} synthetic={sp500Synthetic} qqqSynthetic={qqqSynthetic} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} vooQqqSeries={vooQqqSeries} onAppendVooQqq={handleAppendVooQqq} onImportVooQqq={handleImportVooQqq} onApplyApiGold={handleApplyApiGold} onResetVooQqqField={handleResetVooQqqField} virtualAggregateLabels={virtualAggregateLabels} onRegisterBrokerHoldings={handleRegisterBrokerHoldings} brokerSummaries={brokerSummaries} />}
       {modal?.type === "checkpointSettings" && <FullScreenModal title="チェックポイント設定" onClose={() => setModal(null)}><CheckpointSettingsContent checkpoints={checkpoints} onCheckpointChange={handleCheckpointChange} holdings={holdings} /></FullScreenModal>}
       {modal?.type === "bottomScore" && <FullScreenModal title={activeBottom.hold.applicable ? `${activeBottomLabel}底値判定：${bottomLabel(activeBottomFull, activeBottom.hold.state)} が底値として確定する確率（${activeBottomLabel}実績から都度算出）` : `${activeBottomLabel}底値判定（${activeBottomLabel}実績から都度算出）`} onClose={() => setModal(null)}><BottomScoreModalContent bottom={activeBottom} FULL={activeBottomFull} instrumentLabel={activeBottomLabel} /></FullScreenModal>}
-      {modal?.type === "yearForecast" && <FullScreenModal title={`${forecastYear}年 年騰落率予測${yearForecast?.blendedForecastPct != null ? `（総合：${yearForecast.blendedForecastPct > 0 ? "+" : ""}${yearForecast.blendedForecastPct.toFixed(1)}%）` : ""}`} onClose={() => setModal(null)}><YearForecastModalContent forecast={yearForecast} trajectory={yearForecastTrajectoryData} yearPoints={forecastYearPoints} forecastYear={forecastYear} forwardPath={yearForecastTrajectoryForwardPath} nextYearForecast={nextYearForecast} thisYearStartPrice={thisYearStartPrice} thisYearEndApproxPrice={thisYearEndApproxPrice} history={yearForecastHistory} forecastPath={yearForecastChartPath} /></FullScreenModal>}
+      {modal?.type === "yearForecast" && <FullScreenModal title={`${forecastYear}年 年騰落率予測${yearForecast?.blendedForecastPct != null ? `（総合：${yearForecast.blendedForecastPct > 0 ? "+" : ""}${yearForecast.blendedForecastPct.toFixed(1)}%）` : ""}`} onClose={() => setModal(null)}><YearForecastModalContent forecast={yearForecast} trajectory={yearForecastTrajectoryData} yearPoints={forecastYearPoints} forecastYear={forecastYear} forwardPath={yearForecastTrajectoryForwardPath} nextYearForecast={nextYearForecast} thisYearStartPrice={thisYearStartPrice} thisYearEndApproxPrice={thisYearEndApproxPrice} history={yearForecastHistory} forecastPath={yearForecastChartPath} qqqCorrelation={qqqSpxCorrelation} /></FullScreenModal>}
       {modal?.type === "realHoldingsRanking" && <FullScreenModal title="実質保有銘柄ランキング" onClose={() => setModal(null)}><RealHoldingsRankingContent holdings={combinedHoldings} /></FullScreenModal>}
       {modal?.type === "summary" && <FullScreenModal title="詳細サマリー出力（AI相談用）" onClose={() => setModal(null)}><SummaryModalContent d={d} dVoo={dVoo} dQqq={dQqq} holdings={holdings} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} blocks={blocks} rankLabels={rankLabels} lifecycle={lifecycle} onLifecycleChange={handleLifecycleChange} fixedPositions={fixedPositions} onFixedPositionChange={handleFixedPositionChange} checkpoints={checkpoints} prevSnapshot={prevSnapshot} onSaveSnapshot={handleSaveSnapshot} /></FullScreenModal>}
       {modal?.type === "mobileChartZoom" && <MobileChartZoomModal onClose={() => setModal(null)} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} sourceViews={sourceViews} chartSources={chartSources} onToggleChartSource={toggleChartSource} yearCompare={yearCompare} setYearCompare={setYearCompare} initialTab={chartTab} isRealDevice={isMobileAuto} />}

@@ -3,8 +3,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   buildAnnualReturns, recentNYearAverage, similarPriorYearFollowing, presidentialCycleAverage,
-  monthEndAnalogForecast, computeYearForecast, yearForecastTrajectory,
+  monthEndAnalogForecast, monthEndAnalogRemainingForecast, computeYearForecast, yearForecastTrajectory,
   seasonalMonthlyAverages, seasonalRemainingForecast, yearEndProjectionPath, computeNextYearForecast,
+  computeQqqSpxCorrelation,
 } from "./yearForecast.ts";
 
 // 年ごとの年間騰落率annualReturn（小数、例0.08=+8%）から、月末12点の{date,price}系列を作る。
@@ -99,11 +100,39 @@ test("monthEndAnalogForecast：当年の月末時点YTDに近い過去年を選�
   assert.equal(r!.probability, 1);
 });
 
+test("monthEndAnalogRemainingForecast：指標4と同じ候補年を選ぶが、全年リターンではなく「残り期間のリターン」を現在のYTDに複利適用する", () => {
+  const FULL = monthlySeries([
+    { year: 2001, annualReturn: 0.5 },
+    { year: 2002, annualReturn: 0.08 }, // 6月末YTD=4.0、残り期間(7〜12月)リターン=108/104-1
+    { year: 2003, annualReturn: 0.08 }, // 同上
+    { year: 2004, annualReturn: -0.02 },
+    { year: 2005, annualReturn: 0.12 }, // 対象年。6月末YTD=6.0
+  ]);
+  const r4 = monthEndAnalogForecast(FULL, 2005, 6, 2, 1);
+  const r6 = monthEndAnalogRemainingForecast(FULL, 2005, 6, 2, 1);
+  assert.ok(r4);
+  assert.ok(r6);
+  // 選ばれる候補年（YTDが近い2002・2003）は指標4と同じ
+  const refYearNums = r6!.refYears.map((x) => x.year).sort((a, b) => a - b);
+  assert.deepEqual(refYearNums, [2002, 2003]);
+  // 根拠データ（refYears.return）は「残り期間のリターン」であり、指標4の「全年リターン（8.0%）」とは異なる
+  const remainingExpected = (108 / 104 - 1) * 100;
+  for (const ry of r6!.refYears) assert.ok(Math.abs(ry.return - remainingExpected) < 1e-6);
+  assert.ok(Math.abs(r6!.refYears[0].return - r4!.refYears[0].return) > 1); // 全年リターン(8.0%)とは明確に異なる
+  // forecastPctは「現在のYTD(6.0%)に残り期間リターンの平均を複利適用」した値で、指標4のforecastPct(8.0%)とは異なる
+  const expectedForecastPct = 106 * (1 + remainingExpected / 100) - 100;
+  assert.ok(Math.abs(r6!.forecastPct - expectedForecastPct) < 1e-6);
+  assert.ok(Math.abs(r6!.forecastPct - r4!.forecastPct) > 1);
+  assert.equal(r6!.probability, 1);
+  assert.equal(monthEndAnalogRemainingForecast([], 2005, 6), null);
+});
+
 test("computeYearForecast：重みの合計が1に正規化され、総合予測値が各指標の予測値の範囲内に収まる", () => {
   const years = [];
   for (let y = 2001; y <= 2016; y++) years.push({ year: y, annualReturn: Math.round((10 * Math.sin((y - 2001) * 0.7) + 2) * 100) / 10000 });
   const FULL = monthlySeries(years);
   const forecast = computeYearForecast(FULL, 2016, 12);
+  assert.equal(forecast.factors.length, 6); // 6指標構成
   const withResult = forecast.factors.filter((f) => f.result);
   assert.ok(withResult.length >= 2); // 十分な履歴があるので複数指標が有効なはず
   const weightSum = forecast.factors.reduce((s, f) => s + f.weight, 0);
@@ -233,6 +262,7 @@ test("computeNextYearForecast：今年の予測値を実績の代わりに使っ
   assert.equal(next!.basedOnForecastYear, 2016);
   assert.ok(Math.abs(next!.basedOnForecastPct - current.blendedForecastPct!) < 1e-9);
   assert.ok(!next!.factors.some((f) => f.key === "monthEnd"));
+  assert.ok(!next!.factors.some((f) => f.key === "monthEndRemaining"));
   assert.equal(next!.factors.length, 4);
 
   // 重みは正規化されて合計1になる
@@ -257,4 +287,33 @@ test("recentNYearAverage：翌年の予測に、注入した「今年の予測�
   assert.ok(forecastFor2017);
   assert.ok(forecastFor2017!.refYears.some((r) => r.year === 2016 && r.return === 999));
   assert.ok(forecastFor2017!.forecastPct > 90); // 999が混ざるため平均が大きく跳ね上がる
+});
+
+test("computeQqqSpxCorrelation：SP500とQQQの年間騰落率の相関係数・ベータを算出する（合成データで検証）", () => {
+  const spxYears: { year: number; annualReturn: number }[] = [];
+  const qqqYears: { year: number; annualReturn: number }[] = [];
+  for (let y = 2001; y <= 2015; y++) {
+    const spxReturn = Math.round((10 * Math.sin((y - 2001) * 0.7) + 2) * 100) / 10000;
+    spxYears.push({ year: y, annualReturn: spxReturn });
+    qqqYears.push({ year: y, annualReturn: spxReturn * 1.5 }); // QQQはSP500の1.5倍で完全連動する合成データ
+  }
+  const spxFULL = monthlySeries(spxYears);
+  const qqqFULL = monthlySeries(qqqYears);
+
+  const stats = computeQqqSpxCorrelation(spxFULL, qqqFULL);
+  assert.ok(stats);
+  assert.ok(stats!.n >= 10);
+  assert.ok(Math.abs(stats!.correlation! - 1) < 1e-6); // 完全に線形連動するため相関係数はほぼ1
+  assert.ok(Math.abs(stats!.beta! - 1.5) < 1e-3); // ベータはほぼ1.5倍（最初の年はbuildYearSeriesの基準が特殊なため、厳密に1e-6ではなく1e-3で許容）
+  assert.equal(stats!.upShareQqqAlsoUp, 1); // 1.5倍（正の係数）で連動するため、SP500上昇年は必ずQQQも上昇
+
+  // データ不足（5年未満）ではnull
+  const tinySpx = monthlySeries(spxYears.slice(0, 3));
+  const tinyQqq = monthlySeries(qqqYears.slice(0, 3));
+  assert.equal(computeQqqSpxCorrelation(tinySpx, tinyQqq), null);
+
+  // excludeYearで進行中年（実績未確定）を候補から除外できる
+  const statsExcluded = computeQqqSpxCorrelation(spxFULL, qqqFULL, 2010);
+  assert.ok(statsExcluded);
+  assert.ok(statsExcluded!.years.every((p) => p.year < 2010));
 });

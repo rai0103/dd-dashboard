@@ -1,10 +1,12 @@
 // 年騰落率予測：直近10年平均・前年類似年の翌年平均・大統領サイクル平均・大統領サイクル別季節性（月次）・
-// 当年月末時点類似年、の5つの実績統計から今年の年末までの騰落率を予想する。各指標は「ある年Yの予測」を、
-// Y年より前のデータだけを使って計算できる関数として実装し（ルックアヘッド無し）、過去の確定年に遡って
-// 「その指標が過去にどれだけ当たっていたか（符号一致率）」を検証し、その一致率を指標ごとの重みとして使う
-// 加重平均で総合予測値を出す（単純平均ではない）。月末時点類似年・季節性の2指標は月が進むほど一致率が
+// 当年月末時点類似年・類似年の残り期間実績平均、の6つの実績統計から今年の年末までの騰落率を予想する。各指標は
+// 「ある年Yの予測」を、Y年より前のデータだけを使って計算できる関数として実装し（ルックアヘッド無し）、過去の
+// 確定年に遡って「その指標が過去にどれだけ当たっていたか（符号一致率）」を検証し、その一致率を指標ごとの重み
+// として使う加重平均で総合予測値を出す（単純平均ではない）。月末時点類似年・季節性の2指標は月が進むほど一致率が
 // 上がる傾向があるため、同じ仕組み（指標ごとの符号一致率バックテスト）が自然に月ごとの精度差を重みに反映する。
 // 今年の年末予測値を実績の代わりに使うことで、翌年の予測（computeNextYearForecast）も算出できる。
+// このファイルはこの他に、QQQとSP500の年間騰落率の相関係数・ベータ等を算出するcomputeQqqSpxCorrelationも
+// 公開している（こちらは参考統計であり、上記6指標の加重平均予測には組み込まない）。
 // このファイルはlib/yearCompare.ts（外部importを持たない純粋関数のみで構成）だけをimportし、
 // `node --test`から直接実行できるようにしている。
 import { buildYearSeries, presidentialTermYear, type YearSeries, type YearPoint } from "./yearCompare.ts";
@@ -128,6 +130,34 @@ export function monthEndAnalogForecast(FULL: { date: string; price: number }[], 
   return toResult(refYears);
 }
 
+// 6. 類似年の残り期間実績平均：指標4（当年月末時点類似年）と同じ方法でyearのasOfMonth月末時点のYTD騰落率に
+//    近い過去の確定年を最大k件選ぶが、各候補年の「全年リターン」ではなく「asOfMonth時点から年末までの残り
+//    期間のリターン」（下のseasonalRemainingForecastのremainingReturnと同じ考え方）を根拠データとして使う。
+//    forecastPctは、選んだ年の残り期間リターンの平均を現在のYTDに複利適用した値（他の指標と同じ「年末までの
+//    騰落率」という単位に揃える）。指標4は「似たYTDの年はその年自体の最終着地も似る」という仮定だが、本指標は
+//    「似たYTDの年の“その後の値動き”を、今年の現在値に上乗せする」という仮定に基づく、独立した6つ目の指標。
+export function monthEndAnalogRemainingForecast(FULL: { date: string; price: number }[], year: number, asOfMonth: number, k = 8, minK = 5): FactorResult | null {
+  const series = cachedYearSeries(FULL);
+  const currentYtd = ytdAtMonthEnd(series, year, asOfMonth);
+  if (currentYtd == null) return null;
+  const candidates: { z: number; dist: number; remainingReturn: number }[] = [];
+  for (const [z, pts] of series) {
+    if (z >= year || !pts.length) continue;
+    const zYtd = ytdAtMonthEnd(series, z, asOfMonth);
+    if (zYtd == null) continue;
+    const zFull = pts[pts.length - 1].index - 100;
+    const remainingReturn = ((100 + zFull) / (100 + zYtd) - 1) * 100; // asOfMonth時点から年末までのリターン
+    candidates.push({ z, dist: Math.abs(zYtd - currentYtd), remainingReturn });
+  }
+  if (candidates.length < Math.min(minK, 3)) return null;
+  candidates.sort((a, b) => a.dist - b.dist);
+  const chosen = candidates.slice(0, Math.max(Math.min(minK, candidates.length), Math.min(k, candidates.length)));
+  const remainingReturns = chosen.map((c) => c.remainingReturn);
+  const forecastPct = (100 + currentYtd) * (1 + avg(remainingReturns) / 100) - 100;
+  const refYears = chosen.map((c) => ({ year: c.z, return: c.remainingReturn })).sort((a, b) => a.year - b.year);
+  return { forecastPct, probability: posShare(remainingReturns), refYears };
+}
+
 // ある年の月ごとの単月リターン（%）。年初(index=100)→1月末、1月末→2月末、…と連鎖して算出する。
 // その月のデータが無い月（進行中の年の未到達月等）はスキップする。
 function monthlyReturnsForYear(pts: YearPoint[]): Map<number, number> {
@@ -226,7 +256,7 @@ export function yearEndProjectionPath(FULL: { date: string; price: number }[], y
   });
 }
 
-export type FactorKey = "recent10" | "similarPrior" | "cycle" | "seasonality" | "monthEnd";
+export type FactorKey = "recent10" | "similarPrior" | "cycle" | "seasonality" | "monthEnd" | "monthEndRemaining";
 
 const FACTOR_LABELS: Record<FactorKey, string> = {
   recent10: "直近10年平均",
@@ -234,6 +264,7 @@ const FACTOR_LABELS: Record<FactorKey, string> = {
   cycle: "大統領サイクル平均",
   seasonality: "大統領サイクル別季節性（月次）",
   monthEnd: "当年月末時点類似年",
+  monthEndRemaining: "類似年の残り期間実績平均",
 };
 
 // 各指標の予測精度（符号一致率）をバックテストする。十分なデータがある全ての過去確定年Yについて、
@@ -291,6 +322,7 @@ export function computeYearForecast(FULL: { date: string; price: number }[], yea
     { key: "cycle", compute: (y) => presidentialCycleAverage(returns, y) },
     { key: "seasonality", compute: (y) => seasonalRemainingForecast(FULL, y, asOfMonth) },
     { key: "monthEnd", compute: (y) => monthEndAnalogForecast(FULL, y, asOfMonth) },
+    { key: "monthEndRemaining", compute: (y) => monthEndAnalogRemainingForecast(FULL, y, asOfMonth) },
   ];
 
   const factors: YearForecastFactor[] = defs.map(({ key, compute }) => ({
@@ -313,9 +345,10 @@ export interface NextYearForecast extends YearForecast {
 // 今年の年末予測値（computeYearForecastのblendedForecastPct）を実績の代わりに使い、翌年の予測を算出する。
 // 指標1・2（直近10年平均・前年類似年）は、今年を「予測値を実績とみなした年」として含めた拡張Mapで計算する。
 // 指標3（大統領サイクル平均）・指標5（季節性）は実績のみを使う（指標5はasOfMonth=0で呼ぶ＝年がまだ始まっていない
-// ため残り12ヶ月すべてが対象になり、通年の季節性予測として機能する）。指標4（当年月末時点類似年）は、年が
-// 始まっていない翌年には意味を持たないため含めない。重みは、asOfMonthに依存しない指標1・2・3は今年の予測で
-// 使った精度をそのまま再利用し、季節性だけasOfMonth=0用に再バックテストする。
+// ため残り12ヶ月すべてが対象になり、通年の季節性予測として機能する）。指標4（当年月末時点類似年）・指標6（類似年
+// の残り期間実績平均）は、いずれも「今年のasOfMonth月末時点のYTD」を起点にする指標で、年が始まっていない翌年には
+// 意味を持たないため含めない（4指標構成）。重みは、asOfMonthに依存しない指標1・2・3は今年の予測で使った精度を
+// そのまま再利用し、季節性だけasOfMonth=0用に再バックテストする。
 export function computeNextYearForecast(FULL: { date: string; price: number }[], year: number, asOfMonth: number): NextYearForecast | null {
   const current = computeYearForecast(FULL, year, asOfMonth);
   if (current.blendedForecastPct == null) return null;
@@ -354,3 +387,62 @@ export function yearForecastTrajectory(FULL: { date: string; price: number }[], 
   }
   return out;
 }
+
+
+/* ---------------- QQQ/SP500相関統計（参考データ。上記6指標の加重平均予測には組み込まない） ---------------- */
+
+export interface QqqSpxCorrelationStats {
+  n: number; // 相関算出に使った年数（SP500・QQQ両方の実績が揃う確定年のみ）
+  years: { year: number; spxReturn: number; qqqReturn: number }[];
+  correlation: number | null; // 年間騰落率同士のピアソン相関係数
+  beta: number | null; // SP500の年間騰落率に対するQQQの増幅率（回帰直線の傾き。cov(spx,qqq)/var(spx)）
+  avgQqqWhenSpxUp: number | null; // SP500が上昇した年のQQQ平均騰落率
+  avgQqqWhenSpxDown: number | null; // SP500が下落した年のQQQ平均騰落率
+  upShareQqqAlsoUp: number | null; // SP500上昇年のうち、QQQも上昇した年の割合（方向一致率）
+}
+
+// components/DDDashboard.jsxのpearsonCorrelationと同じ式。このファイルは外部import無しの純粋関数集として
+// `node --test`から直接実行できるようにしているため（ファイル冒頭コメント参照）、あえて小さく複製している。
+function pearsonCorr(xs: number[], ys: number[]): number | null {
+  const n = xs.length;
+  const mx = avg(xs), my = avg(ys);
+  let num = 0, dx2 = 0, dy2 = 0;
+  for (let i = 0; i < n; i++) { const dx = xs[i] - mx, dy = ys[i] - my; num += dx * dy; dx2 += dx * dx; dy2 += dy * dy; }
+  const denom = Math.sqrt(dx2 * dy2);
+  return denom === 0 ? null : num / denom;
+}
+
+// SP500（spxFULL、通常はd.FULL＝VOO・上場前はSP500換算）とQQQ（qqqFULL）の、年ごとの年間騰落率を比較する。
+// excludeYearを渡すと、その年以降（進行中で実績未確定の今年等）を候補から除外する（ルックアヘッド的な混入防止）。
+// 5年未満のペアしか無ければnull（相関・ベータという統計量の性質上、他の指標のminK=3より厳しめにしている）。
+export function computeQqqSpxCorrelation(
+  spxFULL: { date: string; price: number }[],
+  qqqFULL: { date: string; price: number }[],
+  excludeYear?: number
+): QqqSpxCorrelationStats | null {
+  const spxReturns = buildAnnualReturns(spxFULL);
+  const qqqReturns = buildAnnualReturns(qqqFULL);
+  const years = [...spxReturns.keys()]
+    .filter((y) => qqqReturns.has(y) && (excludeYear == null || y < excludeYear))
+    .sort((a, b) => a - b);
+  if (years.length < 5) return null;
+
+  const pairs = years.map((y) => ({ year: y, spxReturn: spxReturns.get(y)!, qqqReturn: qqqReturns.get(y)! }));
+  const spxVals = pairs.map((p) => p.spxReturn);
+  const qqqVals = pairs.map((p) => p.qqqReturn);
+  const correlation = pearsonCorr(spxVals, qqqVals);
+
+  const mSpx = avg(spxVals), mQqq = avg(qqqVals);
+  const cov = avg(spxVals.map((v, i) => (v - mSpx) * (qqqVals[i] - mQqq)));
+  const varSpx = avg(spxVals.map((v) => (v - mSpx) ** 2));
+  const beta = varSpx > 0 ? cov / varSpx : null;
+
+  const upYears = pairs.filter((p) => p.spxReturn > 0);
+  const downYears = pairs.filter((p) => p.spxReturn < 0);
+  const avgQqqWhenSpxUp = upYears.length ? avg(upYears.map((p) => p.qqqReturn)) : null;
+  const avgQqqWhenSpxDown = downYears.length ? avg(downYears.map((p) => p.qqqReturn)) : null;
+  const upShareQqqAlsoUp = upYears.length ? upYears.filter((p) => p.qqqReturn > 0).length / upYears.length : null;
+
+  return { n: pairs.length, years: pairs, correlation, beta, avgQqqWhenSpxUp, avgQqqWhenSpxDown, upShareQqqAlsoUp };
+}
+
