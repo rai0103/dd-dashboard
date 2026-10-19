@@ -5810,7 +5810,7 @@ function HoldSplitLine({ tier, large = false }) {
 }
 function fmtIdxDate(FULL, idx) { return FULL[idx] ? fmtYMD(FULL[idx].date) : "—"; }
 function bottomLabel(FULL, state) { return `${fmtIdxDate(FULL, state.trough_idx)}（${state.mdd.toFixed(2)}%）`; }
-function BottomScorePanelBody({ bottom, FULL, onOpen, large = false }) {
+function BottomScorePanelBody({ bottom, FULL, instrumentLabel = "VOO", onOpen, large = false }) {
   const h = bottom.hold;
   return (
     <div className="h-full flex flex-col p-2.5 gap-1.5 cursor-pointer" onClick={onOpen} title="クリックで詳細（条件別の確率・過去事例・統計テーブル）">
@@ -5825,11 +5825,11 @@ function BottomScorePanelBody({ bottom, FULL, onOpen, large = false }) {
       ) : (
         <div className="flex-1 flex items-center justify-center text-[11px] text-center px-3" style={{ color: C.textDim }}>{h.reason}</div>
       )}
-      <div className="text-[9px] leading-tight" style={{ color: C.textDim }}>VOO（換算込み）{bottom.stats.n.toLocaleString()}営業日の実績から都度算出。投資助言ではありません。</div>
+      <div className="text-[9px] leading-tight" style={{ color: C.textDim }}>{instrumentLabel}（換算込み）{bottom.stats.n.toLocaleString()}営業日の実績から都度算出。投資助言ではありません。</div>
     </div>
   );
 }
-function BottomScoreModalContent({ bottom, FULL }) {
+function BottomScoreModalContent({ bottom, FULL, instrumentLabel = "VOO" }) {
   const { stats, hold: h } = bottom;
   const th = "text-left font-normal py-1 px-2", td = "py-1 px-2";
   const pctCell = (p) => (p === null ? "—" : `${p}%`);
@@ -5917,7 +5917,7 @@ function BottomScoreModalContent({ bottom, FULL }) {
       </div>
 
       <div className="text-[11px] leading-relaxed" style={{ color: C.textDim }}>
-        底値＝DD-3%を越えた下落局面の、その時点までのMDD。過去の解消済み局面を日次でたどり、「MDDが同じ深度帯」「底値から同じ割合以上戻している」「底値から同じ日数以上経過」した時点を底値ごとに1件として集計し、その底値を終値で割る前にATHを更新したかで判定しています。統計はすべて、VOO（上場前はSP500指数をVOO換算）の日次終値（{stats.n.toLocaleString()}営業日）から毎回再計算しており、日次終値を追加すると自動的に反映されます。n&lt;{LOW_SAMPLE_N}は参考値です。過去の統計は将来を保証しません。
+        底値＝DD-3%を越えた下落局面の、その時点までのMDD。過去の解消済み局面を日次でたどり、「MDDが同じ深度帯」「底値から同じ割合以上戻している」「底値から同じ日数以上経過」した時点を底値ごとに1件として集計し、その底値を終値で割る前にATHを更新したかで判定しています。統計はすべて、{instrumentLabel}（上場前は{instrumentLabel === "QQQ" ? "NDX指数をQQQ" : "SP500指数をVOO"}換算）の日次終値（{stats.n.toLocaleString()}営業日）から毎回再計算しており、日次終値を追加すると自動的に反映されます。n&lt;{LOW_SAMPLE_N}は参考値です。過去の統計は将来を保証しません。
       </div>
     </div>
   );
@@ -6113,7 +6113,7 @@ function YearForecastModalContent({ forecast, trajectory, yearPoints, forecastYe
   );
 }
 
-function MobileBottomScorePage({ bottom, FULL, onOpen, onOpenForecast, forecast, forecastYear, history, forecastPath, basePrice, tab, setTab }) {
+function MobileBottomScorePage({ bottom, FULL, instrumentLabel = "VOO", bottomInstrument, setBottomInstrument, qqqAvailable = false, onOpen, onOpenForecast, forecast, forecastYear, history, forecastPath, basePrice, tab, setTab }) {
   return (
     <div className="p-3 h-full">
       <div className="rounded-lg h-full flex flex-col" style={{ background: C.panel, border: `1px solid ${C.border}` }}>
@@ -6121,10 +6121,14 @@ function MobileBottomScorePage({ bottom, FULL, onOpen, onOpenForecast, forecast,
           <div className="flex items-center gap-0.5">
             {[["score", "底値判定"], ["forecast", "年間予測"]].map(([k, l]) => (<button key={k} onClick={() => setTab(k)} className="text-[11px] px-2 py-1 rounded whitespace-nowrap" style={{ color: tab === k ? C.bg : C.textMuted, background: tab === k ? C.teal : "transparent", fontWeight: tab === k ? 700 : 400 }}>{l}</button>))}
           </div>
-          <span className="text-[10px] whitespace-nowrap" style={{ color: C.textDim }}>詳細 ›</span>
+          {tab === "score"
+            ? <div className="flex items-center gap-0.5">
+                {[["voo", "VOO"], ["qqq", "QQQ"]].map(([k, l]) => (<button key={k} disabled={k === "qqq" && !qqqAvailable} onClick={() => setBottomInstrument(k)} className="text-[10px] px-1.5 py-0.5 rounded whitespace-nowrap" style={{ color: bottomInstrument === k ? C.bg : C.textMuted, background: bottomInstrument === k ? C.violet : "transparent", fontWeight: bottomInstrument === k ? 700 : 400, opacity: k === "qqq" && !qqqAvailable ? 0.35 : 1, border: "none" }}>{l}</button>))}
+              </div>
+            : <span className="text-[10px] whitespace-nowrap" style={{ color: C.textDim }}>詳細 ›</span>}
         </div>
         {tab === "score"
-          ? <div className="flex-1 min-h-0"><BottomScorePanelBody bottom={bottom} FULL={FULL} onOpen={onOpen} large /></div>
+          ? <div className="flex-1 min-h-0"><BottomScorePanelBody bottom={bottom} FULL={FULL} instrumentLabel={instrumentLabel} onOpen={onOpen} large /></div>
           : <div className="flex-1 min-h-0"><YearForecastPanelBody forecast={forecast} forecastYear={forecastYear} history={history} forecastPath={forecastPath} basePrice={basePrice} onOpen={onOpenForecast} large /></div>}
       </div>
     </div>
@@ -7167,6 +7171,7 @@ export default function DDDashboard() {
   const [prevSnapshot, setPrevSnapshot] = useState(null); // 詳細サマリー出力の前回スナップショット（差分表示用）
   const [vooQqqSeries, setVooQqqSeries] = useState([]); // 「データ更新」で取得したVOO/QQQ終値（S&P500のDD計算には使わない、CSV出力専用の補助データ）
   const [speedAlertInstrument, setSpeedAlertInstrument] = useState("voo"); // DD加速度アラート詳細モーダルをVOO/QQQどちらの銘柄で開くか（PC上部パネル・スマホの行タップで設定）
+  const [bottomScoreInstrument, setBottomScoreInstrument] = useState("voo"); // VOO底値判定パネル・モーダルをVOO/QQQどちらの銘柄で見るか
   const [tradeHistory, setTradeHistory] = useState(null); // 楽天証券の取引履歴CSVから取り込んだ取引（実績パフォーマンス⑧。lib/tradeHistory.ts）
   const [investmentPerformance, setInvestmentPerformance] = useState(null); // 投資収支Excelのパース結果（既存のSP500/QQQトラックレコードとは独立したデータソース）
   const [lastSyncedLabel, setLastSyncedLabel] = useState(() => getLastSyncedAt());
@@ -7595,6 +7600,19 @@ export default function DDDashboard() {
     const stats = buildStatsTable(prices, dates);
     return { stats, hold: computeMddHoldProbability(prices, stats) };
   }, [d.FULL]);
+  // 底値判定のQQQ版：VOO版（bottom）と全く同じロジック（lib/bottomScore.ts、価格配列のみに依存する汎用関数）を
+  // dQqq.FULL（QQQ、上場前はNDX指数をQQQ換算した拡張履歴）に適用するだけ。QQQ未取込（dQqq=null）ならnull。
+  const bottomQqq = useMemo(() => {
+    if (!dQqq) return null;
+    const prices = dQqq.FULL.map((p) => p.price), dates = dQqq.FULL.map((p) => p.date);
+    const stats = buildStatsTable(prices, dates);
+    return { stats, hold: computeMddHoldProbability(prices, stats) };
+  }, [dQqq]);
+  // VOO底値判定パネル・モーダルで実際に表示する側（QQQ未取込時はVOOに自動フォールバック）。
+  const activeBottomInstrument = bottomScoreInstrument === "qqq" && bottomQqq ? "qqq" : "voo";
+  const activeBottom = activeBottomInstrument === "qqq" ? bottomQqq : bottom;
+  const activeBottomFull = activeBottomInstrument === "qqq" ? dQqq.FULL : d.FULL;
+  const activeBottomLabel = activeBottomInstrument === "qqq" ? "QQQ" : "VOO";
   // 年騰落率予測：底値判定と同じくSP500全履歴（d.FULL）を使う（lib/yearForecast.ts）。直近10年平均・前年類似年の
   // 翌年平均・大統領サイクル平均・当年月末時点類似年、の4指標を、各指標の過去の予測精度（符号一致率）で重み付けして
   // 統合する。rawSeriesが更新されるたびにd.FULLが作り直されるため、自動的に再計算される。
@@ -7798,7 +7816,7 @@ export default function DDDashboard() {
       {modal?.type === "ddChart" && <FullScreenModal title={chartSourceTitle(chartSource)} onClose={() => setModal(null)}><DDChartModalContent initialTab={chartTab} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} sourceViews={sourceViews} chartSources={chartSources} onToggleChartSource={toggleChartSource} yearCompare={yearCompare} setYearCompare={setYearCompare} /></FullScreenModal>}
       {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} synthetic={sp500Synthetic} qqqSynthetic={qqqSynthetic} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} vooQqqSeries={vooQqqSeries} onAppendVooQqq={handleAppendVooQqq} onImportVooQqq={handleImportVooQqq} onApplyApiGold={handleApplyApiGold} onResetVooQqqField={handleResetVooQqqField} virtualAggregateLabels={virtualAggregateLabels} onRegisterBrokerHoldings={handleRegisterBrokerHoldings} brokerSummaries={brokerSummaries} />}
       {modal?.type === "checkpointSettings" && <FullScreenModal title="チェックポイント設定" onClose={() => setModal(null)}><CheckpointSettingsContent checkpoints={checkpoints} onCheckpointChange={handleCheckpointChange} holdings={holdings} /></FullScreenModal>}
-      {modal?.type === "bottomScore" && <FullScreenModal title={bottom.hold.applicable ? `VOO底値判定：${bottomLabel(d.FULL, bottom.hold.state)} が底値として確定する確率（VOO実績から都度算出）` : "VOO底値判定（VOO実績から都度算出）"} onClose={() => setModal(null)}><BottomScoreModalContent bottom={bottom} FULL={d.FULL} /></FullScreenModal>}
+      {modal?.type === "bottomScore" && <FullScreenModal title={activeBottom.hold.applicable ? `${activeBottomLabel}底値判定：${bottomLabel(activeBottomFull, activeBottom.hold.state)} が底値として確定する確率（${activeBottomLabel}実績から都度算出）` : `${activeBottomLabel}底値判定（${activeBottomLabel}実績から都度算出）`} onClose={() => setModal(null)}><BottomScoreModalContent bottom={activeBottom} FULL={activeBottomFull} instrumentLabel={activeBottomLabel} /></FullScreenModal>}
       {modal?.type === "yearForecast" && <FullScreenModal title={`${forecastYear}年 年騰落率予測${yearForecast?.blendedForecastPct != null ? `（総合：${yearForecast.blendedForecastPct > 0 ? "+" : ""}${yearForecast.blendedForecastPct.toFixed(1)}%）` : ""}`} onClose={() => setModal(null)}><YearForecastModalContent forecast={yearForecast} trajectory={yearForecastTrajectoryData} yearPoints={forecastYearPoints} forecastYear={forecastYear} forwardPath={yearForecastTrajectoryForwardPath} nextYearForecast={nextYearForecast} thisYearStartPrice={thisYearStartPrice} thisYearEndApproxPrice={thisYearEndApproxPrice} history={yearForecastHistory} forecastPath={yearForecastChartPath} /></FullScreenModal>}
       {modal?.type === "realHoldingsRanking" && <FullScreenModal title="実質保有銘柄ランキング" onClose={() => setModal(null)}><RealHoldingsRankingContent holdings={combinedHoldings} /></FullScreenModal>}
       {modal?.type === "summary" && <FullScreenModal title="詳細サマリー出力（AI相談用）" onClose={() => setModal(null)}><SummaryModalContent d={d} dVoo={dVoo} dQqq={dQqq} holdings={holdings} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} blocks={blocks} rankLabels={rankLabels} lifecycle={lifecycle} onLifecycleChange={handleLifecycleChange} fixedPositions={fixedPositions} onFixedPositionChange={handleFixedPositionChange} checkpoints={checkpoints} prevSnapshot={prevSnapshot} onSaveSnapshot={handleSaveSnapshot} /></FullScreenModal>}
@@ -7864,7 +7882,7 @@ export default function DDDashboard() {
               { key: "chart", label: "チャート", icon: Activity, content: <MobileChartPage chartTab={chartTab} setChartTab={setChartTab} chartSources={chartSources} onToggleChartSource={toggleChartSource} sourceViews={sourceViews} chartData={chartData} rangeDays={rangeDays} d={d} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} yearCompare={yearCompare} setYearCompare={setYearCompare} onZoom={() => setModal({ type: "mobileChartZoom" })} onOpenCrash={(c) => setModal({ type: "crash", crash: c })} /> },
               { key: "portfolio", label: "構成", icon: Layers, content: <MobilePortfolioPage pieView={pieView} setPieView={setPieView} holdings={combinedHoldings} ownerDates={ownerUpdatedDates} fxRates={fxRates} onOpen={() => setModal({ type: "portfolio" })} onOpenRealHoldingsRanking={() => setModal({ type: "realHoldingsRanking" })} dateLabel={holdingsDateLabel} /> },
               { key: "diff", label: "配分乖離", icon: ListChecks, content: <MobileDiffPage modelOverride={modelOverride} setModelOverride={setModelOverride} d={d} currentHoldingPct={currentHoldingPct} currentHoldingAmount={currentHoldingAmount} effectiveModelRow={effectiveModelRow} rankLabels={rankLabels} blocks={blocks} onOpenRank={(rank) => setModal({ type: "rank", rank })} onOpenDDTable={() => setModal({ type: "ddTable" })} dateLabel={holdingsDateLabel} /> },
-              { key: "bottom", label: "VOO底値判定", icon: Gauge, content: <MobileBottomScorePage bottom={bottom} FULL={d.FULL} onOpen={() => setModal({ type: "bottomScore" })} onOpenForecast={() => setModal({ type: "yearForecast" })} forecast={yearForecast} forecastYear={forecastYear} history={yearForecastHistory} forecastPath={yearForecastChartPath} basePrice={thisYearStartPrice} tab={bottomPanelTab} setTab={setBottomPanelTab} /> },
+              { key: "bottom", label: "VOO底値判定", icon: Gauge, content: <MobileBottomScorePage bottom={activeBottom} FULL={activeBottomFull} instrumentLabel={activeBottomLabel} bottomInstrument={bottomScoreInstrument} setBottomInstrument={setBottomScoreInstrument} qqqAvailable={!!dQqq} onOpen={() => setModal({ type: "bottomScore" })} onOpenForecast={() => setModal({ type: "yearForecast" })} forecast={yearForecast} forecastYear={forecastYear} history={yearForecastHistory} forecastPath={yearForecastChartPath} basePrice={thisYearStartPrice} tab={bottomPanelTab} setTab={setBottomPanelTab} /> },
               { key: "analysis", label: "現状分析", icon: Info, content: <MobileAnalysisPage analysis={analysis} onNavigate={setModal} checkpointResults={checkpointResults} onOpenCheckpointSettings={() => setModal({ type: "checkpointSettings" })} /> },
             ]}
           />
@@ -8020,17 +8038,20 @@ export default function DDDashboard() {
             {/* bottom-far-right: 底値判定スコア／年騰落率予測（タブ切替、同じ枠を共用） */}
             <div style={{ minHeight: 0 }}>
               <Panel
-                title={bottomPanelTab === "score" ? (bottom.hold.applicable ? <>VOO底値判定 <span className="mono" style={{ color: depthColor(bottom.hold.state.mdd) }}>{bottomLabel(d.FULL, bottom.hold.state)}</span></> : "VOO底値判定") : `${forecastYear}年 年間予測`}
+                title={bottomPanelTab === "score" ? (activeBottom.hold.applicable ? <>{activeBottomLabel}底値判定 <span className="mono" style={{ color: depthColor(activeBottom.hold.state.mdd) }}>{bottomLabel(activeBottomFull, activeBottom.hold.state)}</span></> : `${activeBottomLabel}底値判定`) : `${forecastYear}年 年間予測`}
                 action={<div className="flex items-center gap-1">
                   <div className="flex items-center gap-0.5">
                     {[["score", "底値判定"], ["forecast", "年間予測"]].map(([k, l]) => (<button key={k} onClick={() => setBottomPanelTab(k)} className="text-[10px] px-1 py-0.5 rounded whitespace-nowrap" style={{ color: bottomPanelTab === k ? C.bg : C.textMuted, background: bottomPanelTab === k ? C.teal : "transparent", fontWeight: bottomPanelTab === k ? 700 : 400 }}>{l}</button>))}
                   </div>
+                  {bottomPanelTab === "score" && <div className="flex items-center gap-0.5">
+                    {[["voo", "VOO"], ["qqq", "QQQ"]].map(([k, l]) => (<button key={k} disabled={k === "qqq" && !dQqq} onClick={() => setBottomScoreInstrument(k)} className="text-[10px] px-1 py-0.5 rounded whitespace-nowrap" style={{ color: bottomScoreInstrument === k ? C.bg : C.textMuted, background: bottomScoreInstrument === k ? C.violet : "transparent", fontWeight: bottomScoreInstrument === k ? 700 : 400, opacity: k === "qqq" && !dQqq ? 0.35 : 1, border: "none", cursor: k === "qqq" && !dQqq ? "default" : "pointer" }} title={k === "qqq" && !dQqq ? "QQQのトラックレコードが未取り込みです" : undefined}>{l}</button>))}
+                  </div>}
                   <button onClick={() => setModal({ type: bottomPanelTab === "score" ? "bottomScore" : "yearForecast" })} title={bottomPanelTab === "score" ? "条件別の確率・過去事例・統計テーブルを表示" : "4指標の予測値・確率・根拠、予測軌跡を表示"} style={{ background: "transparent", border: "none", cursor: "pointer" }}><Info size={14} style={{ color: C.textDim }} /></button>
                 </div>}
                 className="h-full"
               >
                 {bottomPanelTab === "score"
-                  ? <BottomScorePanelBody bottom={bottom} FULL={d.FULL} onOpen={() => setModal({ type: "bottomScore" })} />
+                  ? <BottomScorePanelBody bottom={activeBottom} FULL={activeBottomFull} instrumentLabel={activeBottomLabel} onOpen={() => setModal({ type: "bottomScore" })} />
                   : <YearForecastPanelBody forecast={yearForecast} forecastYear={forecastYear} history={yearForecastHistory} forecastPath={yearForecastChartPath} basePrice={thisYearStartPrice} onOpen={() => setModal({ type: "yearForecast" })} />}
               </Panel>
             </div>
