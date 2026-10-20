@@ -10,7 +10,7 @@
 // このファイルはlib/yearCompare.ts（外部importを持たない純粋関数のみで構成）だけをimportし、
 // `node --test`から直接実行できるようにしている。lib/bottomScore.ts（底値判定・節目回復統計）はimportせず、
 // 7指標目（当年DD局面類似年）に必要な最小限のATH/DD計算をpearsonCorrと同様にこのファイル内に複製している。
-import { buildYearSeries, presidentialTermYear, type YearSeries, type YearPoint } from "./yearCompare.ts";
+import { buildYearSeries, presidentialTermYear, toIso, type YearSeries, type YearPoint } from "./yearCompare.ts";
 
 // buildYearSeries(FULL全体を年別に再集計する処理)は入力が同じFULL配列（参照が同じ）であれば結果も必ず同じになる。
 // backtestAccuracy等で同じFULLに対して指標関数を何十回も呼ぶため、素朴にbuildYearSeriesを呼び直すと
@@ -48,7 +48,9 @@ function cachedMonthEndIdx(FULL: { date: string; price: number }[]): Map<number,
   if (cached) return cached;
   const out = new Map<number, (number | null)[]>();
   for (let i = 0; i < FULL.length; i++) {
-    const d = FULL[i].date;
+    // FULL[i].dateはDateオブジェクトの場合もある（buildYearSeriesが受け付けるのと同じ型）ため、
+    // lib/yearCompare.tsのtoIsoで文字列(YYYY-MM-DD)に正規化してから月・年を取り出す。
+    const d = toIso(FULL[i].date);
     const y = Number(d.slice(0, 4)), mo = Number(d.slice(5, 7));
     let arr = out.get(y);
     if (!arr) { arr = new Array(12).fill(null); out.set(y, arr); }

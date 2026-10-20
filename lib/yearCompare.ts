@@ -13,7 +13,7 @@ const dayOfYear = (iso: string) => {
   const [y, m, d] = iso.split("-").map(Number);
   return Math.round((Date.UTC(y, m - 1, d) - Date.UTC(y, 0, 1)) / 86400000) + 1;
 };
-const toIso = (d: Date | string) => (d instanceof Date ? d.toISOString().slice(0, 10) : String(d).slice(0, 10));
+export const toIso = (d: Date | string) => (d instanceof Date ? d.toISOString().slice(0, 10) : String(d).slice(0, 10));
 
 export function buildYearSeries(points: { date: Date | string; price: number }[]): YearSeries {
   const byDate = new Map<string, number>();
