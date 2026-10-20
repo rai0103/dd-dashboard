@@ -5025,7 +5025,10 @@ function fmtDateTimeJST(date) {
   } catch (e) { return date.toISOString(); }
 }
 function buildSummaryMarkdown(ctx) {
-  const { d, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, fixedPositions, checkpoints, recentStats, exposure, diff, consultQuestion, hideAmounts, generatedAt, crashFrequency } = ctx;
+  const { d, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, fixedPositions, checkpoints, recentStats, exposure, diff, consultQuestion, hideAmounts, generatedAt, crashFrequency, scope } = ctx;
+  const includeAsset = scope !== "sp500";
+  const includeSp500 = scope !== "asset";
+  const scopeLabel = scope === "asset" ? "資産状況" : scope === "sp500" ? "SP500情報" : "資産状況＋SP500情報";
   const total = holdingsTotal(holdings);
   const cashHoldings = holdings.filter((h) => h.category === "現金");
   const cash = cashHoldings.reduce((s, h) => s + h.amount, 0);
@@ -5037,128 +5040,137 @@ function buildSummaryMarkdown(ctx) {
   const amt = (v) => hideAmounts ? `${((v / (total || 1)) * 100).toFixed(1)}%` : yen(v);
 
   const L = [];
-  L.push("【DD戦略ダッシュボード 詳細サマリー】");
+  L.push(`【DD戦略ダッシュボード 詳細サマリー（${scopeLabel}）】`);
   L.push(`生成: ${fmtDateTimeJST(generatedAt)} / データ最終日: ${fmtYMD(d.last.date)}（米国時間）`);
-  L.push(`世帯総資産: ${amt(total)}（うち現金${amt(cash)}）`);
-  L.push(`ライフステージ: ${lifecycle.spouseWorking ? "配偶者就労中" : "配偶者非就労"}（フェーズ${lifecycle.phase}）/ 取り崩し年${amt(lifecycle.annualWithdrawal)}`);
-  L.push("");
-  L.push("■ VOO 状況");
-  L.push(`現在値 $${d.currentPrice.toFixed(2)} / ATH $${d.currentATH.toFixed(2)}（${fmtYMD(d.athDate)}） / DD ${d.currentDD.toFixed(1)}%`);
-  L.push(`モード: ${d.mode}${d.isDrawdown ? `（DD開始＝ATH翌日から${d.daysSinceATH}営業日経過）` : ""}`);
-  const sa = d.speedAlert;
-  if (sa.level === "normal") L.push("DD加速度: 待機中（DD3%未到達）");
-  else if (sa.level === "pending5") L.push(`DD加速度: DD3%到達（${sa.d3Date ? fmtYMD(sa.d3Date) : "—"}）後${sa.daysSinceDD3}営業日経過、DD5%未達${sa.hint ? `（${sa.hint}）` : ""}`);
-  else if (sa.level === "confirmed5") L.push(`DD加速度: DD3%到達${sa.d3Date ? fmtYMD(sa.d3Date) : "—"} / DD5%到達${sa.d5Date ? fmtYMD(sa.d5Date) : "—"} / 3→5%速度${sa.speed35}営業日 → 警戒度「${sa.warnLabel}」（この先DD15%到達確率${sa.deepProb["-15"] ?? "—"}%）`);
-  else if (sa.level === "deep8") L.push(`DD加速度: 警戒度「${sa.warnLabel}」（3→8%速度${sa.speed38 ?? "—"}営業日・${sa.speed38Category ?? "—"}）`);
-  L.push("");
-  L.push("【直近の値動き】");
-  if (recentStats) {
-    L.push(`直近10営業日リターン: ${recentStats.last10Returns.map((r) => (r >= 0 ? `+${r}` : `${r}`)).join(", ")}%`);
-    L.push(`直近20営業日レンジ: $${recentStats.low20}〜$${recentStats.high20}`);
-    L.push(`20日ボラティリティ: ${recentStats.vol20 ?? "—"}%（${recentStats.volLabel}）`);
-    L.push(`MA20 $${recentStats.ma20 ?? "—"}（現在値比${recentStats.ma20Diff !== null ? (recentStats.ma20Diff >= 0 ? "+" : "") + recentStats.ma20Diff + "%" : "—"}） / MA50 $${recentStats.ma50 ?? "—"}（現在値比${recentStats.ma50Diff !== null ? (recentStats.ma50Diff >= 0 ? "+" : "") + recentStats.ma50Diff + "%" : "—"}）`);
-    L.push(`YTD ${recentStats.ytdReturn >= 0 ? "+" : ""}${recentStats.ytdReturn}% / 直近1年 ${recentStats.oneYearReturn >= 0 ? "+" : ""}${recentStats.oneYearReturn}%`);
-  } else {
-    L.push("データ不足のため算出できません。");
+  if (includeAsset) {
+    L.push(`世帯総資産: ${amt(total)}（うち現金${amt(cash)}）`);
+    L.push(`ライフステージ: ${lifecycle.spouseWorking ? "配偶者就労中" : "配偶者非就労"}（フェーズ${lifecycle.phase}）/ 取り崩し年${amt(lifecycle.annualWithdrawal)}`);
   }
   L.push("");
-  L.push("【トラックレコード要約】");
-  L.push(`読み込み済みトラックレコード: 約${d.trackRecord.totalYears.toFixed(0)}年・DD3%到達${d.trackRecord.n}局面（DD3%は年${d.trackRecord.ddFreqPerYear !== null ? d.trackRecord.ddFreqPerYear.toFixed(1) : "—"}回のペース）`);
-  L.push("");
 
-  if (crashFrequency && crashFrequency.length) {
-    L.push("■ 暴落発生確率（SP500実績ベース、下落エピソードが各節目を超えた頻度から算出）");
-    L.push("節目 | 発生回数 | 平均間隔 | 前回発生 | 今後1年以内の確率 | 前年平均騰落率 | 前年プラス率");
-    for (const r of crashFrequency) {
-      L.push(`DD${r.threshold}%超 | ${r.count}件${r.lowSample ? "（参考値）" : ""} | ${r.avgIntervalYears != null ? `${r.avgIntervalYears}年に1度` : "—"} | ${r.lastOccurrence ? `${r.lastOccurrence.year}年（${r.yearsSinceLast}年経過）` : "発生なし"} | ${r.nextYearProbability != null ? `${r.nextYearProbability}%` : "—"} | ${r.priorYearAvg != null ? `${r.priorYearAvg > 0 ? "+" : ""}${r.priorYearAvg}%` : "—"} | ${r.priorYearPositiveShare != null ? `${r.priorYearPositiveShare}%` : "—"}`);
+  if (includeSp500) {
+    L.push("■ VOO 状況");
+    L.push(`現在値 $${d.currentPrice.toFixed(2)} / ATH $${d.currentATH.toFixed(2)}（${fmtYMD(d.athDate)}） / DD ${d.currentDD.toFixed(1)}%`);
+    L.push(`モード: ${d.mode}${d.isDrawdown ? `（DD開始＝ATH翌日から${d.daysSinceATH}営業日経過）` : ""}`);
+    const sa = d.speedAlert;
+    if (sa.level === "normal") L.push("DD加速度: 待機中（DD3%未到達）");
+    else if (sa.level === "pending5") L.push(`DD加速度: DD3%到達（${sa.d3Date ? fmtYMD(sa.d3Date) : "—"}）後${sa.daysSinceDD3}営業日経過、DD5%未達${sa.hint ? `（${sa.hint}）` : ""}`);
+    else if (sa.level === "confirmed5") L.push(`DD加速度: DD3%到達${sa.d3Date ? fmtYMD(sa.d3Date) : "—"} / DD5%到達${sa.d5Date ? fmtYMD(sa.d5Date) : "—"} / 3→5%速度${sa.speed35}営業日 → 警戒度「${sa.warnLabel}」（この先DD15%到達確率${sa.deepProb["-15"] ?? "—"}%）`);
+    else if (sa.level === "deep8") L.push(`DD加速度: 警戒度「${sa.warnLabel}」（3→8%速度${sa.speed38 ?? "—"}営業日・${sa.speed38Category ?? "—"}）`);
+    L.push("");
+    L.push("【直近の値動き】");
+    if (recentStats) {
+      L.push(`直近10営業日リターン: ${recentStats.last10Returns.map((r) => (r >= 0 ? `+${r}` : `${r}`)).join(", ")}%`);
+      L.push(`直近20営業日レンジ: $${recentStats.low20}〜$${recentStats.high20}`);
+      L.push(`20日ボラティリティ: ${recentStats.vol20 ?? "—"}%（${recentStats.volLabel}）`);
+      L.push(`MA20 $${recentStats.ma20 ?? "—"}（現在値比${recentStats.ma20Diff !== null ? (recentStats.ma20Diff >= 0 ? "+" : "") + recentStats.ma20Diff + "%" : "—"}） / MA50 $${recentStats.ma50 ?? "—"}（現在値比${recentStats.ma50Diff !== null ? (recentStats.ma50Diff >= 0 ? "+" : "") + recentStats.ma50Diff + "%" : "—"}）`);
+      L.push(`YTD ${recentStats.ytdReturn >= 0 ? "+" : ""}${recentStats.ytdReturn}% / 直近1年 ${recentStats.oneYearReturn >= 0 ? "+" : ""}${recentStats.oneYearReturn}%`);
+    } else {
+      L.push("データ不足のため算出できません。");
     }
-    L.push("過去の発生年（節目別）:");
-    for (const r of crashFrequency) L.push(`  DD${r.threshold}%超: ${r.occurrences.length ? r.occurrences.map((o) => o.year).join(", ") : "該当なし"}`);
     L.push("");
-  }
+    L.push("【トラックレコード要約】");
+    L.push(`読み込み済みトラックレコード: 約${d.trackRecord.totalYears.toFixed(0)}年・DD3%到達${d.trackRecord.n}局面（DD3%は年${d.trackRecord.ddFreqPerYear !== null ? d.trackRecord.ddFreqPerYear.toFixed(1) : "—"}回のペース）`);
+    L.push("");
 
-  L.push(`■ A〜E リスク分類（モデル: ${effectiveModelRow.label}）`);
-  for (const cat of CATS) {
-    const cur = currentHoldingPct[cat];
-    const tgt = effectiveModelRow[cat];
-    const diffPt = Number((cur - tgt).toFixed(1));
-    L.push(`${cat}（${rankLabels[cat]}）: 現状${cur.toFixed(1)}%（目標${tgt}%）${diffPt >= 0 ? "+" : ""}${diffPt}pt`);
-  }
-  L.push(`ブロック: A+B ${blocks.AB.cur.toFixed(1)}%（目標${blocks.AB.tgt}%） / C ${blocks.Cb.cur.toFixed(1)}%（目標${blocks.Cb.tgt}%） / D+E ${blocks.DE.cur.toFixed(1)}%（目標${blocks.DE.tgt}%）`);
-  L.push("");
-  L.push("■ DD戦略モデル：全節目（+15%〜DD-50%）のA〜E目標配分と現状比較（DD-5〜DD-30%は効率カーブに基づく動的配分）");
-  L.push("節目 | A | B | C | D | E （各セルは 現状%→目標%(差pt) ）");
-  for (const row of d.trackRecord.dynamicModelRows) {
-    const cells = CATS.map((cat) => { const cur = currentHoldingPct[cat]; const diffPt = Number((cur - row[cat]).toFixed(1)); return `${cat} ${cur.toFixed(1)}→${row[cat]}(${diffPt >= 0 ? "+" : ""}${diffPt})`; });
-    L.push(`${row.label}${row.label === effectiveModelRow.label ? "（現在地）" : ""}: ${cells.join(" / ")}`);
-  }
-  L.push("");
-  L.push("■ 過去のDD局面一覧（読み込み済み全期間・DD3%以上・全件）");
-  if (!d.episodes.length) L.push("該当局面なし");
-  for (const ep of d.episodes) {
-    L.push(`${fmtYMD(ep.athDate)} ATH$${ep.athPrice.toFixed(2)} → 底値${fmtYMD(ep.troughDate)} $${ep.troughPrice.toFixed(2)}（DD${ep.troughDD.toFixed(1)}%） → ${ep.isOngoing ? "未回復（進行中）" : `回復${fmtYMD(ep.recoveryDate)} $${ep.recoveryPrice.toFixed(2)}`}`);
-  }
-  L.push("");
-  const fixedNames = Object.keys(fixedPositions);
-  if (fixedNames.length) {
-    L.push("【固定ポジション（調整対象外）】");
-    for (const name of fixedNames) {
-      const amount = holdings.filter((h) => h.name === name).reduce((s, h) => s + h.amount, 0);
-      L.push(`${name}: ${amt(amount)}${fixedPositions[name] ? `（${fixedPositions[name]}）` : ""}`);
+    if (crashFrequency && crashFrequency.length) {
+      L.push("■ 暴落発生確率（SP500実績ベース、下落エピソードが各節目を超えた頻度から算出）");
+      L.push("節目 | 発生回数 | 平均間隔 | 前回発生 | 今後1年以内の確率 | 前年平均騰落率 | 前年プラス率");
+      for (const r of crashFrequency) {
+        L.push(`DD${r.threshold}%超 | ${r.count}件${r.lowSample ? "（参考値）" : ""} | ${r.avgIntervalYears != null ? `${r.avgIntervalYears}年に1度` : "—"} | ${r.lastOccurrence ? `${r.lastOccurrence.year}年（${r.yearsSinceLast}年経過）` : "発生なし"} | ${r.nextYearProbability != null ? `${r.nextYearProbability}%` : "—"} | ${r.priorYearAvg != null ? `${r.priorYearAvg > 0 ? "+" : ""}${r.priorYearAvg}%` : "—"} | ${r.priorYearPositiveShare != null ? `${r.priorYearPositiveShare}%` : "—"}`);
+      }
+      L.push("過去の発生年（節目別）:");
+      for (const r of crashFrequency) L.push(`  DD${r.threshold}%超: ${r.occurrences.length ? r.occurrences.map((o) => o.year).join(", ") : "該当なし"}`);
+      L.push("");
     }
-  }
-  L.push("");
 
-  const dd3Plan = computeRebalancePlan(holdings, currentHoldingPct, fixedPositions, checkpoints, MODEL_ROWS.find((r) => r.label === "DD-3%"));
-  L.push(d.currentDD <= -3 ? "⚠ 現在DD-3%以下です。以下は今すぐ実行を検討できる提案です。" : "（現在DD-3%未到達のため、以下はDD-3%到達時点を想定したシミュレーションです）");
-  for (const line of buildDD3RebalanceLines(dd3Plan, amt)) L.push(line);
-  L.push("");
-
-  L.push("■ 保有資産（評価額上位20件）");
-  const sorted = [...holdings].sort((a, b) => b.amount - a.amount).slice(0, 20);
-  for (const h of sorted) L.push(`${h.name} / ${h.account} / ${amt(h.amount)} / ${h.rank}${fixedPositions[h.name] !== undefined ? " / 固定" : ""}`);
-  if (diff) {
+    L.push("■ 過去のDD局面一覧（読み込み済み全期間・DD3%以上・全件）");
+    if (!d.episodes.length) L.push("該当局面なし");
+    for (const ep of d.episodes) {
+      L.push(`${fmtYMD(ep.athDate)} ATH$${ep.athPrice.toFixed(2)} → 底値${fmtYMD(ep.troughDate)} $${ep.troughPrice.toFixed(2)}（DD${ep.troughDD.toFixed(1)}%） → ${ep.isOngoing ? "未回復（進行中）" : `回復${fmtYMD(ep.recoveryDate)} $${ep.recoveryPrice.toFixed(2)}`}`);
+    }
     L.push("");
-    L.push(`【前回サマリー（${fmtDateTimeJST(new Date(diff.prevDate))}）からの変更点】`);
-    if (!diff.sold.length && !diff.bought.length && !diff.changed.length) L.push("変更なし");
-    for (const s of diff.sold) L.push(`売却: ${s.name}（${amt(s.amount)}）`);
-    for (const b of diff.bought) L.push(`購入: ${b.name}（${amt(b.amount)}）`);
-    for (const c of diff.changed) L.push(`変更: ${c.name} ${amt(c.from)}→${amt(c.to)}`);
-  } else {
-    L.push("");
-    L.push("（前回サマリーの記録がないため、変更点は次回から表示されます）");
   }
-  if (exposure.length) {
+
+  if (includeAsset) {
+    L.push(`■ A〜E リスク分類（モデル: ${effectiveModelRow.label}）`);
+    for (const cat of CATS) {
+      const cur = currentHoldingPct[cat];
+      const tgt = effectiveModelRow[cat];
+      const diffPt = Number((cur - tgt).toFixed(1));
+      L.push(`${cat}（${rankLabels[cat]}）: 現状${cur.toFixed(1)}%（目標${tgt}%）${diffPt >= 0 ? "+" : ""}${diffPt}pt`);
+    }
+    L.push(`ブロック: A+B ${blocks.AB.cur.toFixed(1)}%（目標${blocks.AB.tgt}%） / C ${blocks.Cb.cur.toFixed(1)}%（目標${blocks.Cb.tgt}%） / D+E ${blocks.DE.cur.toFixed(1)}%（目標${blocks.DE.tgt}%）`);
     L.push("");
-    L.push("【実質エクスポージャー（概算・指数組入比率は目安値）】");
-    for (const e of exposure.slice(0, 8)) L.push(`${e.ticker}: 実質${amt(e.total)}（直接${amt(e.direct)} + 指数経由${amt(e.viaIndex)}、世帯${e.pct}%）`);
+    L.push("■ DD戦略モデル：全節目（+15%〜DD-50%）のA〜E目標配分と現状比較（DD-5〜DD-30%は効率カーブに基づく動的配分）");
+    L.push("節目 | A | B | C | D | E （各セルは 現状%→目標%(差pt) ）");
+    for (const row of d.trackRecord.dynamicModelRows) {
+      const cells = CATS.map((cat) => { const cur = currentHoldingPct[cat]; const diffPt = Number((cur - row[cat]).toFixed(1)); return `${cat} ${cur.toFixed(1)}→${row[cat]}(${diffPt >= 0 ? "+" : ""}${diffPt})`; });
+      L.push(`${row.label}${row.label === effectiveModelRow.label ? "（現在地）" : ""}: ${cells.join(" / ")}`);
+    }
+    L.push("");
+
+    const fixedNames = Object.keys(fixedPositions);
+    if (fixedNames.length) {
+      L.push("【固定ポジション（調整対象外）】");
+      for (const name of fixedNames) {
+        const amount = holdings.filter((h) => h.name === name).reduce((s, h) => s + h.amount, 0);
+        L.push(`${name}: ${amt(amount)}${fixedPositions[name] ? `（${fixedPositions[name]}）` : ""}`);
+      }
+    }
+    L.push("");
+
+    const dd3Plan = computeRebalancePlan(holdings, currentHoldingPct, fixedPositions, checkpoints, MODEL_ROWS.find((r) => r.label === "DD-3%"));
+    L.push(d.currentDD <= -3 ? "⚠ 現在DD-3%以下です。以下は今すぐ実行を検討できる提案です。" : "（現在DD-3%未到達のため、以下はDD-3%到達時点を想定したシミュレーションです）");
+    for (const line of buildDD3RebalanceLines(dd3Plan, amt)) L.push(line);
+    L.push("");
+
+    L.push("■ 保有資産（評価額上位20件）");
+    const sorted = [...holdings].sort((a, b) => b.amount - a.amount).slice(0, 20);
+    for (const h of sorted) L.push(`${h.name} / ${h.account} / ${amt(h.amount)} / ${h.rank}${fixedPositions[h.name] !== undefined ? " / 固定" : ""}`);
+    if (diff) {
+      L.push("");
+      L.push(`【前回サマリー（${fmtDateTimeJST(new Date(diff.prevDate))}）からの変更点】`);
+      if (!diff.sold.length && !diff.bought.length && !diff.changed.length) L.push("変更なし");
+      for (const s of diff.sold) L.push(`売却: ${s.name}（${amt(s.amount)}）`);
+      for (const b of diff.bought) L.push(`購入: ${b.name}（${amt(b.amount)}）`);
+      for (const c of diff.changed) L.push(`変更: ${c.name} ${amt(c.from)}→${amt(c.to)}`);
+    } else {
+      L.push("");
+      L.push("（前回サマリーの記録がないため、変更点は次回から表示されます）");
+    }
+    if (exposure.length) {
+      L.push("");
+      L.push("【実質エクスポージャー（概算・指数組入比率は目安値）】");
+      for (const e of exposure.slice(0, 8)) L.push(`${e.ticker}: 実質${amt(e.total)}（直接${amt(e.direct)} + 指数経由${amt(e.viaIndex)}、世帯${e.pct}%）`);
+    }
+    L.push("");
+
+    L.push("■ カテゴリー / 通貨");
+    const catGroups = sortGroupedForView(groupByField(holdings, "category"), "category");
+    L.push(catGroups.map((g) => `${g.name} ${((g.value / (total || 1)) * 100).toFixed(1)}%`).join(" / "));
+    const ccyGroups = groupByField(holdings, "fxExposure");
+    L.push(ccyGroups.map((g) => `${g.name} ${((g.value / (total || 1)) * 100).toFixed(1)}%`).join(" / "));
+    L.push("");
+
+    L.push("■ 現金・取り崩し・ライフステージ");
+    L.push(`現金: ${amt(cash)}（円${amt(cashJPY)} / 外貨${amt(cashForeign)}）= 生活費${cashYears}年分`);
+    L.push(`年間取り崩し額: ${amt(lifecycle.annualWithdrawal)}`);
+    L.push(`${lifecycle.spouseWorking ? "配偶者就労中" : "配偶者非就労"} / フェーズ${lifecycle.phase}（${lifecycle.phase === 1 ? "攻めOK" : "守り厚く"}）`);
+    L.push("");
+
+    L.push("■ リターン目標");
+    const requiredCagr = lifecycle.returnTargetYears > 0 ? (Math.pow(lifecycle.returnTargetMultiple, 1 / lifecycle.returnTargetYears) - 1) * 100 : null;
+    L.push(`目標: ${lifecycle.returnTargetYears}年で${lifecycle.returnTargetMultiple}倍（必要CAGR ${requiredCagr !== null ? requiredCagr.toFixed(1) : "—"}%）`);
+    L.push("");
+
+    L.push("■ 相談したいこと");
+    L.push(consultQuestion?.trim() || "（空欄）");
+    L.push("");
+
+    for (const line of buildHoldingsDetailLines(holdings, amt)) L.push(line);
+    L.push("");
   }
-  L.push("");
-
-  L.push("■ カテゴリー / 通貨");
-  const catGroups = sortGroupedForView(groupByField(holdings, "category"), "category");
-  L.push(catGroups.map((g) => `${g.name} ${((g.value / (total || 1)) * 100).toFixed(1)}%`).join(" / "));
-  const ccyGroups = groupByField(holdings, "fxExposure");
-  L.push(ccyGroups.map((g) => `${g.name} ${((g.value / (total || 1)) * 100).toFixed(1)}%`).join(" / "));
-  L.push("");
-
-  L.push("■ 現金・取り崩し・ライフステージ");
-  L.push(`現金: ${amt(cash)}（円${amt(cashJPY)} / 外貨${amt(cashForeign)}）= 生活費${cashYears}年分`);
-  L.push(`年間取り崩し額: ${amt(lifecycle.annualWithdrawal)}`);
-  L.push(`${lifecycle.spouseWorking ? "配偶者就労中" : "配偶者非就労"} / フェーズ${lifecycle.phase}（${lifecycle.phase === 1 ? "攻めOK" : "守り厚く"}）`);
-  L.push("");
-
-  L.push("■ リターン目標");
-  const requiredCagr = lifecycle.returnTargetYears > 0 ? (Math.pow(lifecycle.returnTargetMultiple, 1 / lifecycle.returnTargetYears) - 1) * 100 : null;
-  L.push(`目標: ${lifecycle.returnTargetYears}年で${lifecycle.returnTargetMultiple}倍（必要CAGR ${requiredCagr !== null ? requiredCagr.toFixed(1) : "—"}%）`);
-  L.push("");
-
-  L.push("■ 相談したいこと");
-  L.push(consultQuestion?.trim() || "（空欄）");
-  L.push("");
-
-  for (const line of buildHoldingsDetailLines(holdings, amt)) L.push(line);
-  L.push("");
   L.push("---");
   L.push("※本サマリーは判断補助であり投資助言ではありません。過去確率・トラックレコードは傾向であり将来を保証しません。最終判断はご自身で行ってください。");
   return L.join("\n");
@@ -5175,7 +5187,9 @@ function summarizeSeriesForJSON(dObj) {
   };
 }
 function buildSummaryJSON(ctx) {
-  const { d, dVoo, dQqq, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, fixedPositions, checkpoints, recentStats, exposure, diff, consultQuestion, hideAmounts, generatedAt, crashFrequency } = ctx;
+  const { d, dVoo, dQqq, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, fixedPositions, checkpoints, recentStats, exposure, diff, consultQuestion, hideAmounts, generatedAt, crashFrequency, scope } = ctx;
+  const includeAsset = scope !== "sp500";
+  const includeSp500 = scope !== "asset";
   const total = holdingsTotal(holdings);
   const cashHoldings = holdings.filter((h) => h.category === "現金");
   const cash = cashHoldings.reduce((s, h) => s + h.amount, 0);
@@ -5183,12 +5197,8 @@ function buildSummaryJSON(ctx) {
   const val = (v) => hideAmounts ? null : Math.round(v);
   // バックテスト用の生の日次価格系列（[日付, 終値]の配列。長期データを取り込むほど件数が増える＝これが本サマリーの主目的）。
   const seriesToPairs = (dObj) => dObj.FULL.map((p) => [p.date.toISOString().slice(0, 10), p.price]);
-  return {
-    generated_at: generatedAt.toISOString(),
-    data_last_date: d.last.date.toISOString().slice(0, 10),
-    amounts_hidden: hideAmounts,
-    household_total: val(total),
-    lifecycle: { spouse_working: lifecycle.spouseWorking, phase: lifecycle.phase, annual_withdrawal: val(lifecycle.annualWithdrawal) },
+
+  const sp500Part = !includeSp500 ? {} : {
     sp500: { ...summarizeSeriesForJSON(d), recent: recentStats },
     crash_risk: {
       note: "SP500の下落エピソードが各節目（5%刻み、-10%〜-45%）を超えた頻度・直近の発生年・今後1年以内の発生確率の目安（ポアソン過程近似）。前年の傾向は各発生年の前年（暦年）騰落率の集計。過去の実績は将来を保証しません。",
@@ -5215,6 +5225,11 @@ function buildSummaryJSON(ctx) {
       voo: dVoo ? seriesToPairs(dVoo) : null,
       qqq: dQqq ? seriesToPairs(dQqq) : null,
     },
+  };
+
+  const assetPart = !includeAsset ? {} : {
+    household_total: val(total),
+    lifecycle: { spouse_working: lifecycle.spouseWorking, phase: lifecycle.phase, annual_withdrawal: val(lifecycle.annualWithdrawal) },
     dd_strategy: {
       note: "DD戦略：VOOがATHから-3%以上下落する節目ごとにA〜E配分をこのモデルに沿って調整する。値は目標構成比(%)。DD-5〜DD-30%はDD到達水準別フォワードリターン効率カーブに基づき、読み込み済みトラックレコードから動的に再配分される（allocation_model_staticは比較用の固定モデル）。",
       milestones_pct: MILESTONES,
@@ -5272,6 +5287,15 @@ function buildSummaryJSON(ctx) {
     cash: { total: val(cash), jpy: val(cashByCcy.find((c) => c.name === "円")?.value ?? 0), foreign: val(cashByCcy.find((c) => c.name === "ドル")?.value ?? 0), years_buffer: lifecycle.annualWithdrawal > 0 ? Number((cash / lifecycle.annualWithdrawal).toFixed(1)) : null },
     return_target: { years: lifecycle.returnTargetYears, multiple: lifecycle.returnTargetMultiple, required_cagr_pct: lifecycle.returnTargetYears > 0 ? Number(((Math.pow(lifecycle.returnTargetMultiple, 1 / lifecycle.returnTargetYears) - 1) * 100).toFixed(1)) : null },
     user_question: consultQuestion?.trim() || "",
+  };
+
+  return {
+    scope,
+    generated_at: generatedAt.toISOString(),
+    data_last_date: d.last.date.toISOString().slice(0, 10),
+    amounts_hidden: hideAmounts,
+    ...assetPart,
+    ...sp500Part,
     disclaimer: "本サマリーは判断補助であり投資助言ではありません。過去確率・トラックレコードは将来を保証しません。最終判断はご自身で行ってください。",
   };
 }
@@ -5296,6 +5320,7 @@ async function verifyClipboardWrite(expected) {
 /* ---------------- 詳細サマリー出力モーダル ---------------- */
 function SummaryModalContent({ d, dVoo, dQqq, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, onLifecycleChange, fixedPositions, onFixedPositionChange, checkpoints, prevSnapshot, onSaveSnapshot, crashFrequency }) {
   const [format, setFormat] = useState("json");
+  const [scope, setScope] = useState("all");
   const [hideAmounts, setHideAmounts] = useState(false);
   const [consultQuestion, setConsultQuestion] = useState("");
   const [copied, setCopied] = useState(false);
@@ -5315,8 +5340,8 @@ function SummaryModalContent({ d, dVoo, dQqq, holdings, currentHoldingPct, effec
   // このサマリーを閉じた時点の保有内容を「次回比較用」のスナップショットとして保存する（開いている間は前回分との差分を表示し続ける）。
   useEffect(() => () => onSaveSnapshot(holdings, generatedAt), []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const ctx = useMemo(() => ({ d, dVoo, dQqq, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, fixedPositions, checkpoints, recentStats, exposure, diff, consultQuestion, hideAmounts, generatedAt, crashFrequency }),
-    [d, dVoo, dQqq, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, fixedPositions, checkpoints, recentStats, exposure, diff, consultQuestion, hideAmounts, generatedAt, crashFrequency]);
+  const ctx = useMemo(() => ({ d, dVoo, dQqq, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, fixedPositions, checkpoints, recentStats, exposure, diff, consultQuestion, hideAmounts, generatedAt, crashFrequency, scope }),
+    [d, dVoo, dQqq, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, fixedPositions, checkpoints, recentStats, exposure, diff, consultQuestion, hideAmounts, generatedAt, crashFrequency, scope]);
   // 出力生成中に例外が起きても空文字/undefinedのままコピーされてしまわないよう、失敗時はエラー内容そのものを出力する。
   const output = useMemo(() => {
     try { return format === "md" ? buildSummaryMarkdown(ctx) : JSON.stringify(buildSummaryJSON(ctx), null, 2); }
@@ -5357,7 +5382,7 @@ function SummaryModalContent({ d, dVoo, dQqq, holdings, currentHoldingPct, effec
     const a = document.createElement("a");
     const stamp = generatedAt.toISOString().slice(0, 19).replace(/[:T]/g, "").replace(/-/g, "");
     a.href = url;
-    a.download = `dd_dashboard_summary_${stamp}.${ext}`;
+    a.download = `dd_dashboard_summary_${scope}_${stamp}.${ext}`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -5369,21 +5394,35 @@ function SummaryModalContent({ d, dVoo, dQqq, holdings, currentHoldingPct, effec
   return (
     <div className="flex flex-col">
       <p className="text-xs mb-3 leading-relaxed" style={{ color: C.textDim }}>
-        ポートフォリオ・VOO/QQQの日次価格系列（バックテスト用の全履歴）・DD戦略モデル（全節目のA〜E目標配分と現状差異）・過去の全DD局面など、AIによる投資判断・分析に必要な情報をできる限り詳細に書き出します。人が読みやすい必要はないため、JSON形式が最も網羅的です。そのままチャットに貼り付けて相談できます。
+        {scope === "asset" && "保有資産・A〜E配分・リバランス提案・ライフステージ等、世帯の資産状況のみを書き出します（VOO/QQQ/SP500の市場データは含みません）。"}
+        {scope === "sp500" && "VOO/QQQ/SP500の日次価格系列（バックテスト用の全履歴）・DD戦略モデル・過去の全DD局面・暴落発生確率など、資産状況を含まない市場データのみを書き出します。動画制作・外部分析など、資産情報を含めずに市場データだけを渡したい場合にご利用ください。"}
+        {scope === "all" && "ポートフォリオ・VOO/QQQの日次価格系列（バックテスト用の全履歴）・DD戦略モデル（全節目のA〜E目標配分と現状差異）・過去の全DD局面など、AIによる投資判断・分析に必要な情報をできる限り詳細に書き出します。"}
+        {" "}人が読みやすい必要はないため、JSON形式が最も網羅的です。そのままチャットに貼り付けて相談できます。
       </p>
+      <div className="flex items-center gap-2 mb-2 flex-wrap">
+        <div className="flex gap-0.5">
+          {[{ k: "all", l: "資産状況＋SP500（全体）" }, { k: "asset", l: "資産状況のみ" }, { k: "sp500", l: "SP500情報のみ" }].map((t) => (
+            <button key={t.k} onClick={() => setScope(t.k)} className="text-[11px] px-2 py-1 rounded" style={{ color: scope === t.k ? C.bg : C.textMuted, background: scope === t.k ? C.amber : "transparent", fontWeight: scope === t.k ? 700 : 400, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>{t.l}</button>
+          ))}
+        </div>
+      </div>
       <div className="flex items-center gap-2 mb-3 flex-wrap">
         <div className="flex gap-0.5">
           {[{ k: "md", l: "人間可読（Markdown）" }, { k: "json", l: "JSON" }].map((t) => (
             <button key={t.k} onClick={() => setFormat(t.k)} className="text-[11px] px-2 py-1 rounded" style={{ color: format === t.k ? C.bg : C.textMuted, background: format === t.k ? C.teal : "transparent", fontWeight: format === t.k ? 700 : 400, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>{t.l}</button>
           ))}
         </div>
-        <label className="flex items-center gap-1.5 text-xs" style={{ color: C.textMuted, cursor: "pointer" }}>
-          <input type="checkbox" checked={hideAmounts} onChange={(e) => setHideAmounts(e.target.checked)} />金額を非表示（%のみ）
-        </label>
-        <button onClick={() => setShowSettings((s) => !s)} className="text-xs underline ml-auto" style={{ color: C.textDim, background: "transparent", border: "none", cursor: "pointer" }}>{showSettings ? "設定を閉じる" : "ライフステージ・固定ポジション設定"}</button>
+        {scope !== "sp500" && (
+          <label className="flex items-center gap-1.5 text-xs" style={{ color: C.textMuted, cursor: "pointer" }}>
+            <input type="checkbox" checked={hideAmounts} onChange={(e) => setHideAmounts(e.target.checked)} />金額を非表示（%のみ）
+          </label>
+        )}
+        {scope !== "sp500" && (
+          <button onClick={() => setShowSettings((s) => !s)} className="text-xs underline ml-auto" style={{ color: C.textDim, background: "transparent", border: "none", cursor: "pointer" }}>{showSettings ? "設定を閉じる" : "ライフステージ・固定ポジション設定"}</button>
+        )}
       </div>
 
-      {showSettings && (
+      {scope !== "sp500" && showSettings && (
         <div className="rounded p-3 mb-3" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
           <div className="flex flex-wrap items-center gap-4 mb-3">
             <label className="flex items-center gap-1.5 text-xs" style={{ color: C.textMuted, cursor: "pointer" }}>
@@ -5441,19 +5480,21 @@ function SummaryModalContent({ d, dVoo, dQqq, holdings, currentHoldingPct, effec
         </div>
       )}
 
-      <div className="mb-3">
-        <label className="text-[10px] block mb-1" style={{ color: C.textDim }}>相談したいこと（任意・空欄でも可）</label>
-        <textarea value={consultQuestion} onChange={(e) => setConsultQuestion(e.target.value)} rows={2} className="w-full text-xs rounded p-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }} placeholder="例：Cクラスの不足をどう埋めるべきか" />
-      </div>
+      {scope !== "sp500" && (
+        <div className="mb-3">
+          <label className="text-[10px] block mb-1" style={{ color: C.textDim }}>相談したいこと（任意・空欄でも可）</label>
+          <textarea value={consultQuestion} onChange={(e) => setConsultQuestion(e.target.value)} rows={2} className="w-full text-xs rounded p-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }} placeholder="例：Cクラスの不足をどう埋めるべきか" />
+        </div>
+      )}
 
-      {d.currentDD <= -3 && (
+      {scope !== "sp500" && d.currentDD <= -3 && (
         <div className="text-xs mb-3 px-3 py-2 rounded" style={{ background: C.rustSoft, border: `1px solid ${C.rust}`, color: C.rust, fontWeight: 700 }}>
           ⚠ 現在DD{d.currentDD.toFixed(1)}%（DD-3%以下）です。出力内の【DD-3%リバランス提案】は今すぐ実行を検討できる内容です。
         </div>
       )}
 
       <div className="flex items-center justify-between mb-1">
-        <span className="text-[10px]" style={{ color: C.textDim }}>出力（{format === "md" ? "Markdown" : "JSON"}）・{output.length.toLocaleString()}文字・クリックで全選択</span>
+        <span className="text-[10px]" style={{ color: C.textDim }}>出力（{format === "md" ? "Markdown" : "JSON"}・{scope === "asset" ? "資産状況のみ" : scope === "sp500" ? "SP500情報のみ" : "資産状況＋SP500"}）・{output.length.toLocaleString()}文字・クリックで全選択</span>
         <div className="flex items-center gap-1.5">
           <button onClick={handleDownload} className="text-xs px-3 py-1 rounded flex items-center gap-1.5" style={{ background: C.panel2, color: C.textMuted, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}><Download size={12} />ダウンロード</button>
           <button onClick={handleCopy} className="text-xs px-3 py-1 rounded flex items-center gap-1.5" style={{ background: copied ? C.teal : copyError ? C.rustSoft : C.panel2, color: copied ? C.bg : copyError ? C.rust : C.textMuted, border: `1px solid ${copyError ? C.rust : C.borderSoft}`, fontWeight: copied || copyError ? 700 : 400, cursor: "pointer" }}><Copy size={12} />{copied ? "コピーしました" : copyError ? "コピー失敗（下の欄を選択してCtrl+C）" : "コピー"}</button>
