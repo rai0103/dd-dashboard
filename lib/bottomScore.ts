@@ -220,6 +220,7 @@ export type StatsTable = {
   reboundTable: ReboundRow[];
   transitionDays: TransitionDays[];
   recoveryMatrix: RecoveryMatrixCell[];
+  crashFrequency: CrashFrequencyRow[];
   depthBucket: (dd: number) => DepthStat | null;
 };
 
@@ -234,6 +235,7 @@ export function buildStatsTable(prices: number[], dates?: (Date | string)[]): St
     reboundTable: computeReboundProgression(prices, undefined, undefined, episodes),
     transitionDays: TRANSITION_PAIRS.map(([f, t]) => computeLevelTransitionDays(prices, f, t, episodes)),
     recoveryMatrix: computeRecoveryMatrix(prices, undefined, episodes),
+    crashFrequency: computeCrashFrequency(prices, dates ?? [], undefined, episodes),
     depthBucket: (dd) => { const i = depthBucketIndex(dd); return i === -1 ? null : depthStats[i]; },
   };
 }
@@ -443,4 +445,101 @@ export function computeMddHoldProbability(prices: number[], stats: StatsTable, s
     medianDaysToBreak: med(broken.map((s) => s.days_to_break!)),
     breakDistribution: DEPTH_BUCKETS.map((bk, i) => ({ label: bk.label, count: broken.filter((s) => depthBucketIndex(s.final_mdd) === i).length })),
   };
+}
+
+/* ---------------- 6. 暴落発生確率（カレンダー年ベース、頻度分析） ---------------- */
+// 暴落＝下落エピソード（Episode）のmin_ddが閾値以下に達したもの。発生日は、そのエピソード内で閾値に
+// 最初に到達した日（最終的な底値＝troughの日ではなく、その深さまで下落が進んだ最初の時点）とする。
+// 同一エピソードは複数の閾値（浅い方から深い方まですべて）に対して1件ずつカウントされる
+// （例：最終MDD-35%の局面は、-10%〜-35%のすべての閾値で1件とカウントされる）。
+// 発生頻度は「データ期間（年）÷発生件数＝平均X年に1度」、今後1年以内の発生確率は年あたり発生率λ＝件数/期間年数を
+// 使ったポアソン過程の近似（1-e^-λ、どれだけλが大きくても100%を超えない）で算出する。「前年の傾向」は、
+// 各発生年の前年（暦年）の騰落率を集計したもの。ハードコードは一切せず、価格・日付系列から毎回再計算する。
+
+export const CRASH_RISK_THRESHOLDS = PROGRESSION_LEVELS.slice(1); // -10%〜-45%（-5%は「暴落」と呼ぶには浅すぎるため除外。RECOVERY_LEVELSと同じ切り出し方）
+
+export type CrashOccurrence = { threshold: number; year: number; date: Date | null; min_dd: number; episode: Episode };
+
+// エピソード内で dd が threshold に最初に到達したインデックス（到達しなければnull）。
+function reachIndex(dd: number[], e: Episode, threshold: number): number | null {
+  for (let k = e.start_idx; k <= e.trough_idx; k++) if (dd[k] <= threshold) return k;
+  return null;
+}
+
+// 価格・日付系列全体から、min_dd<=thresholdのエピソードについて「発生日（閾値到達日）」を集めたもの（古い順）。
+export function collectCrashOccurrences(prices: number[], dates: (Date | string)[], threshold: number, episodes?: Episode[]): CrashOccurrence[] {
+  const eps = (episodes ?? detectEpisodes(prices, dates)).filter((e) => e.min_dd <= threshold);
+  const { dd } = computeDrawdowns(prices);
+  const out: CrashOccurrence[] = [];
+  for (const e of eps) {
+    const idx = reachIndex(dd, e, threshold);
+    if (idx === null) continue;
+    const date = toDate(dates[idx]);
+    out.push({ threshold, year: date ? date.getFullYear() : NaN, date, min_dd: e.min_dd, episode: e });
+  }
+  return out;
+}
+
+// 年末（その年最後の取引日）の価格を年ごとに引けるルックアップ表。datesは日付昇順前提（既存の全関数と同じ前提）。
+function yearEndPriceMap(prices: number[], dates: (Date | string)[]): Map<number, number> {
+  const out = new Map<number, number>();
+  for (let i = 0; i < prices.length; i++) {
+    const d = toDate(dates[i]);
+    if (!d) continue;
+    out.set(d.getFullYear(), prices[i]); // 同じ年内で後に出てきた値で上書き＝その年の最終営業日が残る
+  }
+  return out;
+}
+
+// year年の年間騰落率（%）。year年末価格 / (year-1)年末価格 - 1。どちらかが無ければnull。
+function annualReturnForYear(yearEnd: Map<number, number>, year: number): number | null {
+  const cur = yearEnd.get(year), prev = yearEnd.get(year - 1);
+  return cur != null && prev != null ? (cur / prev - 1) * 100 : null;
+}
+
+const CRASH_LOW_SAMPLE_N = 5; // 暴落のように稀な事象では、他の統計のLOW_SAMPLE_N=15基準だとほぼ全閾値が低サンプル扱いになるため専用の閾値を使う
+
+export type CrashFrequencyRow = {
+  threshold: number;
+  occurrences: CrashOccurrence[]; // 古い順
+  count: number;
+  coverageYears: number; // データ期間（年、小数）
+  avgIntervalYears: number | null; // coverageYears / count ＝「平均X年に1度」
+  lastOccurrence: CrashOccurrence | null;
+  yearsSinceLast: number | null; // データ終端時点からの経過年数
+  nextYearProbability: number | null; // 今後1年以内に発生する確率の目安（%）。ポアソン過程近似：1-e^-λ（λ=count/coverageYears）
+  priorYearReturns: { year: number; return: number }[]; // 各発生年の前年（暦年）騰落率（データがある分のみ）
+  priorYearAvg: number | null;
+  priorYearPositiveShare: number | null; // 前年がプラスだった発生の割合（%）
+  lowSample: boolean;
+};
+
+// 閾値ごとの暴落発生頻度・前年傾向を一括算出する。thresholds省略時はCRASH_RISK_THRESHOLDS（-10%〜-45%）全件。
+export function computeCrashFrequency(prices: number[], dates: (Date | string)[], thresholds: number[] = CRASH_RISK_THRESHOLDS, episodes?: Episode[]): CrashFrequencyRow[] {
+  if (!dates.length || !prices.length) return [];
+  const eps = episodes ?? detectEpisodes(prices, dates);
+  const firstDate = toDate(dates[0]), lastDate = toDate(dates[dates.length - 1]);
+  const coverageYears = firstDate && lastDate ? (lastDate.getTime() - firstDate.getTime()) / (365.25 * 86400000) : 0;
+  const yearEnd = yearEndPriceMap(prices, dates);
+  return thresholds.map((threshold) => {
+    const occurrences = collectCrashOccurrences(prices, dates, threshold, eps);
+    const count = occurrences.length;
+    const last = count ? occurrences[occurrences.length - 1] : null;
+    const yearsSinceLast = last?.date && lastDate ? (lastDate.getTime() - last.date.getTime()) / (365.25 * 86400000) : null;
+    const lambda = coverageYears > 0 ? count / coverageYears : null;
+    const priorYearReturns = occurrences
+      .map((o) => ({ year: o.year - 1, return: annualReturnForYear(yearEnd, o.year - 1) }))
+      .filter((r): r is { year: number; return: number } => r.return !== null);
+    const priorRets = priorYearReturns.map((r) => r.return);
+    return {
+      threshold, occurrences, count, coverageYears: round1(coverageYears),
+      avgIntervalYears: count > 0 && coverageYears > 0 ? round1(coverageYears / count) : null,
+      lastOccurrence: last,
+      yearsSinceLast: yearsSinceLast !== null ? round1(yearsSinceLast) : null,
+      nextYearProbability: lambda !== null ? round1((1 - Math.exp(-lambda)) * 100) : null,
+      priorYearReturns, priorYearAvg: priorRets.length ? round1(mean(priorRets)) : null,
+      priorYearPositiveShare: priorRets.length ? round1((priorRets.filter((r) => r > 0).length / priorRets.length) * 100) : null,
+      lowSample: count < CRASH_LOW_SAMPLE_N,
+    };
+  });
 }

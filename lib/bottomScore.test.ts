@@ -7,6 +7,7 @@ import {
   detectEpisodes, countFakeRalliesInRange, isCleanRecovery, computeDepthStats, computeLevelProgression,
   computeReboundProgression, computeLevelTransitionDays, buildStatsTable, deriveCurrentState, depthBucketIndex,
   collectHoldSamples, computeMddHoldProbability, collectRecoverySamples, computeRecoveryMatrix,
+  collectCrashOccurrences, computeCrashFrequency, CRASH_RISK_THRESHOLDS,
 } from "./bottomScore.ts";
 
 function loadSp500(): { prices: number[]; dates: Date[] } {
@@ -84,6 +85,12 @@ test("SP500全履歴: 統計テーブルが全データから算出され、日�
   // 節目回復統計：fromLevel(-10〜-45、8段)×steps(1〜段位index)の全マス目＝1+2+...+8=36件。データ量に関わらず固定。
   assert.equal(stats.recoveryMatrix.length, 36);
   assert.ok(stats.recoveryMatrix.some((c) => c.occurrences > 0 && c.p !== null));
+  // 暴落発生確率：閾値ごとに1行、浅い閾値ほど発生件数が多い（単調減少）
+  assert.equal(stats.crashFrequency.length, CRASH_RISK_THRESHOLDS.length);
+  for (let i = 1; i < stats.crashFrequency.length; i++) assert.ok(stats.crashFrequency[i].count <= stats.crashFrequency[i - 1].count);
+  const cf10 = stats.crashFrequency.find((r) => r.threshold === -10)!;
+  assert.ok(cf10.count > 5 && cf10.nextYearProbability! > 0 && cf10.nextYearProbability! < 100);
+  assert.ok(cf10.lastOccurrence !== null && cf10.yearsSinceLast !== null && cf10.yearsSinceLast >= 0);
 
   // --- 日次データ追加による自動更新 ---
   // (a) 新ATH→-12%下落→新ATH回復 の合成日次データを追加すると、エピソードが1件増え各テーブルに反映される
@@ -208,4 +215,68 @@ test("computeMddHoldProbability: 節目回復統計が底値確定確率の判�
   const h2 = computeMddHoldProbability(pricesNoRecovery, buildStatsTable(pricesNoRecovery));
   assert.equal(h2.applicable, true);
   if (h2.applicable) assert.equal(h2.tiers.length, 3);
+});
+
+test("collectCrashOccurrences / computeCrashFrequency: 発生件数・発生日・頻度統計を手計算と一致させる", () => {
+  // 年末マーカー（前年騰落率の算出用）を含む合成データ：
+  // エピソードE: 1998/6に-12%（節目-10%のみ到達、-15%には届かない）→1999/3に新ATHで解消
+  // エピソードD: 2000/6に-25%まで直接下落（節目-10/-15/-20/-25到達）→2000/12に-20%まで一時回復（まだ解消せず）
+  //              →2001/3に-40%まで再下落（節目-30/-35/-40到達、-45には届かない）→2001/8に新ATHで解消
+  const dates = [
+    "1996-12-31", "1997-12-31", "1998-06-01", "1999-03-01", "1999-12-31",
+    "2000-06-01", "2000-12-31", "2001-03-01", "2001-08-01", "2001-12-31",
+  ].map((s) => new Date(s));
+  const prices = [100, 105, 92.4, 110, 120, 90, 96, 72, 125, 130];
+
+  // 節目-10%：エピソードE（1998年・単独で-10%のみ到達）とエピソードD（2000年、他の節目と同時到達）の2件
+  const occ10 = collectCrashOccurrences(prices, dates, -10);
+  assert.deepEqual(occ10.map((o) => [o.year, o.date!.toISOString().slice(0, 10)]), [[1998, "1998-06-01"], [2000, "2000-06-01"]]);
+  // 節目-15%〜-25%：エピソードDのみ（エピソードEの最終MDDは-12%なので到達しない）、到達日はすべて2000/6/1（下落開始日に一気に到達）
+  for (const th of [-15, -20, -25]) {
+    const occ = collectCrashOccurrences(prices, dates, th);
+    assert.deepEqual(occ.map((o) => [o.year, o.date!.toISOString().slice(0, 10)]), [[2000, "2000-06-01"]]);
+  }
+  // 節目-30%〜-40%：エピソードDのみだが、到達日は2001/3/1（2000/12の一時回復をはさんで再下落した後）
+  for (const th of [-30, -35, -40]) {
+    const occ = collectCrashOccurrences(prices, dates, th);
+    assert.deepEqual(occ.map((o) => [o.year, o.date!.toISOString().slice(0, 10)]), [[2001, "2001-03-01"]]);
+  }
+  // 節目-45%：どちらのエピソードも到達しない（0件）
+  assert.equal(collectCrashOccurrences(prices, dates, -45).length, 0);
+
+  const rows = computeCrashFrequency(prices, dates, [-10, -15, -30, -45]);
+  const r10 = rows.find((r) => r.threshold === -10)!;
+  assert.equal(r10.count, 2);
+  // 前年騰落率：1998年発生分の前年(1997)=105/100-1=+5%、2000年発生分の前年(1999)=120/92.4-1
+  const expectedPrior1999 = (120 / 92.4 - 1) * 100;
+  assert.deepEqual(r10.priorYearReturns.map((p) => p.year), [1997, 1999]);
+  assert.ok(Math.abs(r10.priorYearReturns[0].return - 5) < 1e-9);
+  assert.ok(Math.abs(r10.priorYearReturns[1].return - expectedPrior1999) < 1e-9);
+  assert.ok(Math.abs(r10.priorYearAvg! - (5 + expectedPrior1999) / 2) < 0.1); // priorYearAvgは小数1桁に丸められる
+  assert.equal(r10.priorYearPositiveShare, 100); // 両方ともプラス
+
+  const r15 = rows.find((r) => r.threshold === -15)!;
+  assert.equal(r15.count, 1);
+  assert.deepEqual(r15.priorYearReturns, [{ year: 1999, return: expectedPrior1999 }]);
+
+  const r30 = rows.find((r) => r.threshold === -30)!;
+  assert.equal(r30.count, 1);
+  // 2001年発生分の前年(2000)=96/120-1=-20%ちょうど
+  assert.deepEqual(r30.priorYearReturns.map((p) => [p.year, Math.round(p.return * 10) / 10]), [[2000, -20]]);
+  assert.equal(r30.priorYearPositiveShare, 0); // マイナスだった
+
+  // 発生ゼロの閾値：count=0・lastOccurrence=null・平均間隔null・前年傾向も空。ポアソン近似は発生率0→確率0%（nullではない）
+  const r45 = rows.find((r) => r.threshold === -45)!;
+  assert.deepEqual([r45.count, r45.lastOccurrence, r45.avgIntervalYears, r45.yearsSinceLast, r45.priorYearAvg, r45.priorYearPositiveShare], [0, null, null, null, null, null]);
+  assert.equal(r45.nextYearProbability, 0);
+  assert.equal(r45.lowSample, true);
+
+  // 頻度統計の内部整合性：平均間隔×発生件数＝データ期間、今後1年以内確率＝1-e^(-件数/データ期間)（ポアソン過程近似）
+  for (const r of rows) {
+    if (r.count > 0) {
+      assert.ok(Math.abs(r.avgIntervalYears! * r.count - r.coverageYears) < 0.05);
+      assert.ok(Math.abs(r.nextYearProbability! - (1 - Math.exp(-r.count / r.coverageYears)) * 100) < 0.1);
+    }
+    assert.equal(r.lastOccurrence, r.occurrences.length ? r.occurrences[r.occurrences.length - 1] : null);
+  }
 });

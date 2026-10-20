@@ -5025,7 +5025,7 @@ function fmtDateTimeJST(date) {
   } catch (e) { return date.toISOString(); }
 }
 function buildSummaryMarkdown(ctx) {
-  const { d, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, fixedPositions, checkpoints, recentStats, exposure, diff, consultQuestion, hideAmounts, generatedAt } = ctx;
+  const { d, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, fixedPositions, checkpoints, recentStats, exposure, diff, consultQuestion, hideAmounts, generatedAt, crashFrequency } = ctx;
   const total = holdingsTotal(holdings);
   const cashHoldings = holdings.filter((h) => h.category === "現金");
   const cash = cashHoldings.reduce((s, h) => s + h.amount, 0);
@@ -5065,6 +5065,17 @@ function buildSummaryMarkdown(ctx) {
   L.push("【トラックレコード要約】");
   L.push(`読み込み済みトラックレコード: 約${d.trackRecord.totalYears.toFixed(0)}年・DD3%到達${d.trackRecord.n}局面（DD3%は年${d.trackRecord.ddFreqPerYear !== null ? d.trackRecord.ddFreqPerYear.toFixed(1) : "—"}回のペース）`);
   L.push("");
+
+  if (crashFrequency && crashFrequency.length) {
+    L.push("■ 暴落発生確率（SP500実績ベース、下落エピソードが各節目を超えた頻度から算出）");
+    L.push("節目 | 発生回数 | 平均間隔 | 前回発生 | 今後1年以内の確率 | 前年平均騰落率 | 前年プラス率");
+    for (const r of crashFrequency) {
+      L.push(`DD${r.threshold}%超 | ${r.count}件${r.lowSample ? "（参考値）" : ""} | ${r.avgIntervalYears != null ? `${r.avgIntervalYears}年に1度` : "—"} | ${r.lastOccurrence ? `${r.lastOccurrence.year}年（${r.yearsSinceLast}年経過）` : "発生なし"} | ${r.nextYearProbability != null ? `${r.nextYearProbability}%` : "—"} | ${r.priorYearAvg != null ? `${r.priorYearAvg > 0 ? "+" : ""}${r.priorYearAvg}%` : "—"} | ${r.priorYearPositiveShare != null ? `${r.priorYearPositiveShare}%` : "—"}`);
+    }
+    L.push("過去の発生年（節目別）:");
+    for (const r of crashFrequency) L.push(`  DD${r.threshold}%超: ${r.occurrences.length ? r.occurrences.map((o) => o.year).join(", ") : "該当なし"}`);
+    L.push("");
+  }
 
   L.push(`■ A〜E リスク分類（モデル: ${effectiveModelRow.label}）`);
   for (const cat of CATS) {
@@ -5164,7 +5175,7 @@ function summarizeSeriesForJSON(dObj) {
   };
 }
 function buildSummaryJSON(ctx) {
-  const { d, dVoo, dQqq, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, fixedPositions, checkpoints, recentStats, exposure, diff, consultQuestion, hideAmounts, generatedAt } = ctx;
+  const { d, dVoo, dQqq, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, fixedPositions, checkpoints, recentStats, exposure, diff, consultQuestion, hideAmounts, generatedAt, crashFrequency } = ctx;
   const total = holdingsTotal(holdings);
   const cashHoldings = holdings.filter((h) => h.category === "現金");
   const cash = cashHoldings.reduce((s, h) => s + h.amount, 0);
@@ -5179,6 +5190,23 @@ function buildSummaryJSON(ctx) {
     household_total: val(total),
     lifecycle: { spouse_working: lifecycle.spouseWorking, phase: lifecycle.phase, annual_withdrawal: val(lifecycle.annualWithdrawal) },
     sp500: { ...summarizeSeriesForJSON(d), recent: recentStats },
+    crash_risk: {
+      note: "SP500の下落エピソードが各節目（5%刻み、-10%〜-45%）を超えた頻度・直近の発生年・今後1年以内の発生確率の目安（ポアソン過程近似）。前年の傾向は各発生年の前年（暦年）騰落率の集計。過去の実績は将来を保証しません。",
+      thresholds: (crashFrequency || []).map((r) => ({
+        threshold_pct: r.threshold,
+        occurrence_count: r.count,
+        coverage_years: r.coverageYears,
+        avg_interval_years: r.avgIntervalYears,
+        last_occurrence_year: r.lastOccurrence?.year ?? null,
+        last_occurrence_date: r.lastOccurrence?.date ? r.lastOccurrence.date.toISOString().slice(0, 10) : null,
+        years_since_last: r.yearsSinceLast,
+        next_year_probability_pct: r.nextYearProbability,
+        prior_year_avg_return_pct: r.priorYearAvg,
+        prior_year_positive_share_pct: r.priorYearPositiveShare,
+        low_sample: r.lowSample,
+        occurrences: r.occurrences.map((o) => ({ year: o.year, date: o.date ? o.date.toISOString().slice(0, 10) : null, episode_min_dd_pct: Number(o.min_dd.toFixed(1)) })),
+      })),
+    },
     voo: dVoo ? summarizeSeriesForJSON(dVoo) : null,
     qqq: dQqq ? summarizeSeriesForJSON(dQqq) : null,
     price_series: {
@@ -5266,7 +5294,7 @@ async function verifyClipboardWrite(expected) {
   } catch (e) { return null; }
 }
 /* ---------------- 詳細サマリー出力モーダル ---------------- */
-function SummaryModalContent({ d, dVoo, dQqq, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, onLifecycleChange, fixedPositions, onFixedPositionChange, checkpoints, prevSnapshot, onSaveSnapshot }) {
+function SummaryModalContent({ d, dVoo, dQqq, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, onLifecycleChange, fixedPositions, onFixedPositionChange, checkpoints, prevSnapshot, onSaveSnapshot, crashFrequency }) {
   const [format, setFormat] = useState("json");
   const [hideAmounts, setHideAmounts] = useState(false);
   const [consultQuestion, setConsultQuestion] = useState("");
@@ -5287,8 +5315,8 @@ function SummaryModalContent({ d, dVoo, dQqq, holdings, currentHoldingPct, effec
   // このサマリーを閉じた時点の保有内容を「次回比較用」のスナップショットとして保存する（開いている間は前回分との差分を表示し続ける）。
   useEffect(() => () => onSaveSnapshot(holdings, generatedAt), []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const ctx = useMemo(() => ({ d, dVoo, dQqq, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, fixedPositions, checkpoints, recentStats, exposure, diff, consultQuestion, hideAmounts, generatedAt }),
-    [d, dVoo, dQqq, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, fixedPositions, checkpoints, recentStats, exposure, diff, consultQuestion, hideAmounts, generatedAt]);
+  const ctx = useMemo(() => ({ d, dVoo, dQqq, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, fixedPositions, checkpoints, recentStats, exposure, diff, consultQuestion, hideAmounts, generatedAt, crashFrequency }),
+    [d, dVoo, dQqq, holdings, currentHoldingPct, effectiveModelRow, blocks, rankLabels, lifecycle, fixedPositions, checkpoints, recentStats, exposure, diff, consultQuestion, hideAmounts, generatedAt, crashFrequency]);
   // 出力生成中に例外が起きても空文字/undefinedのままコピーされてしまわないよう、失敗時はエラー内容そのものを出力する。
   const output = useMemo(() => {
     try { return format === "md" ? buildSummaryMarkdown(ctx) : JSON.stringify(buildSummaryJSON(ctx), null, 2); }
@@ -6188,7 +6216,67 @@ function QqqCorrelationCard({ stats }) {
     </div>
   );
 }
-function YearForecastModalContent({ forecast, trajectory, yearPoints, forecastYear, forwardPath, nextYearForecast, thisYearStartPrice, thisYearEndApproxPrice, history, forecastPath, qqqCorrelation }) {
+// 暴落発生確率：下落エピソードのMDDが閾値（5%刻み、-10%〜-45%）に達した頻度から、今後1年以内に少なくとも1回
+// 発生する確率の目安をVOO実績から算出したもの（lib/bottomScore.ts computeCrashFrequency）。年末予測モーダルで、
+// 7指標の加重平均（騰落率そのものの予測）とは別の「参考統計」として、ヘッドラインのすぐ下に表示する
+// （加重平均の計算には組み込まない）。色はrecoveryLevelColorと同じteal→amber→rustのグラデーション（浅い閾値ほど
+// 発生確率が高いことが多いため、暴落比較・節目回復統計と視覚的に一貫させる）。
+function crashRiskColor(idx, total) {
+  const t = idx / Math.max(1, total - 1);
+  return t <= 0.5 ? lerpColor(C.teal, C.amber, t / 0.5) : lerpColor(C.amber, C.rust, (t - 0.5) / 0.5);
+}
+function CrashRiskTooltip({ active, payload }) {
+  if (!active || !payload?.length) return null;
+  const r = payload[0].payload;
+  return (
+    <div className="text-[11px] rounded px-2 py-1.5 leading-relaxed" style={{ background: C.panel2, border: `1px solid ${C.border}` }}>
+      <div className="font-bold mb-1" style={{ color: crashRiskColor(r.idx, r.total) }}>DD{r.threshold}%超</div>
+      <div>今後1年以内の発生確率：<b>{r.nextYearProbability ?? "—"}%</b></div>
+      <div>発生回数：{r.count}件{r.lowSample ? "（参考値・サンプル少）" : ""}</div>
+      <div>平均間隔：{r.avgIntervalYears != null ? `${r.avgIntervalYears}年に1度` : "—"}</div>
+      <div>前回発生：{r.lastOccurrence ? `${r.lastOccurrence.year}年（${r.yearsSinceLast}年経過）` : "発生なし"}</div>
+      <div>前年の傾向：{r.priorYearAvg != null ? `平均${r.priorYearAvg > 0 ? "+" : ""}${r.priorYearAvg}%・プラスの年${r.priorYearPositiveShare}%` : "—"}</div>
+    </div>
+  );
+}
+function CrashRiskChart({ rows }) {
+  const data = rows.map((r, i) => ({ ...r, idx: i, total: rows.length, label: `${r.threshold}%` }));
+  return (
+    <div style={{ width: "100%", height: 220 }}>
+      <ResponsiveContainer>
+        <ComposedChart data={data} margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke={C.borderSoft} />
+          <XAxis dataKey="label" tick={{ fill: C.textMuted, fontSize: 11 }} />
+          <YAxis tick={{ fill: C.textMuted, fontSize: 11 }} unit="%" width={44} />
+          <Tooltip content={<CrashRiskTooltip />} cursor={{ fill: C.borderSoft, opacity: 0.3 }} />
+          <Bar dataKey="nextYearProbability" isAnimationActive={false}>
+            {data.map((r, i) => (<Cell key={r.threshold} fill={crashRiskColor(i, data.length)} />))}
+          </Bar>
+        </ComposedChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+function CrashRiskTable({ rows }) {
+  const th = "text-left font-normal py-1 px-2", td = "py-1 px-2";
+  return (
+    <div className="overflow-x-auto"><table className="w-full text-xs mono"><thead><tr style={{ color: C.textDim }}>
+      <th className={th}>節目</th><th className={th}>発生回数</th><th className={th}>平均間隔</th><th className={th}>前回発生</th><th className={th}>今後1年以内</th><th className={th}>前年平均</th><th className={th}>前年プラス率</th>
+    </tr></thead>
+      <tbody>{rows.map((r, i) => (
+        <tr key={r.threshold} style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+          <td className={td} style={{ color: crashRiskColor(i, rows.length) }}>{r.threshold}%</td>
+          <td className={td}>{r.count}件{r.lowSample && <span className="text-[9px] ml-0.5" style={{ color: C.textDim }}>参考値</span>}</td>
+          <td className={td}>{r.avgIntervalYears != null ? `${r.avgIntervalYears}年に1度` : "—"}</td>
+          <td className={td}>{r.lastOccurrence ? `${r.lastOccurrence.year}年（${r.yearsSinceLast}年経過）` : "—"}</td>
+          <td className={td} style={{ color: C.text }}>{r.nextYearProbability != null ? `${r.nextYearProbability}%` : "—"}</td>
+          <td className={td} style={{ color: r.priorYearAvg == null ? C.textDim : pctColor(r.priorYearAvg) }}>{r.priorYearAvg != null ? `${r.priorYearAvg > 0 ? "+" : ""}${r.priorYearAvg}%` : "—"}</td>
+          <td className={td}>{r.priorYearPositiveShare != null ? `${r.priorYearPositiveShare}%` : "—"}</td>
+        </tr>
+      ))}</tbody></table></div>
+  );
+}
+function YearForecastModalContent({ forecast, trajectory, yearPoints, forecastYear, forwardPath, nextYearForecast, thisYearStartPrice, thisYearEndApproxPrice, history, forecastPath, qqqCorrelation, crashFrequency }) {
   if (!forecast) return <div className="text-xs py-6 text-center" style={{ color: C.textDim }}>データが不足しています。</div>;
   const v = forecast.blendedForecastPct;
   const nv = nextYearForecast?.blendedForecastPct;
@@ -6213,6 +6301,15 @@ function YearForecastModalContent({ forecast, trajectory, yearPoints, forecastYe
         <div className="text-xs mb-2" style={{ color: C.textDim }}>過去10年の実績＋今年末までの予測＋来年末までの予測（点線）</div>
         <YearForecastChart history={history} forecastPath={forecastPath} height={260} fontSize={11} />
       </div>
+
+      {crashFrequency && crashFrequency.length > 0 && (
+        <div>
+          <div className="text-xs mb-1" style={{ color: C.textDim }}>暴落発生確率（VOO実績ベース、過去の発生頻度から算出）</div>
+          <div className="text-[10px] mb-2 leading-relaxed" style={{ color: C.textDim }}>今後1年以内に各節目を超える下落が発生する確率の目安（年あたり発生率からのポアソン過程近似）。上記の総合予測（7指標の加重平均）には組み込まれていない参考統計です。過去の実績は将来を保証しません。</div>
+          <CrashRiskChart rows={crashFrequency} />
+          <div className="mt-3"><CrashRiskTable rows={crashFrequency} /></div>
+        </div>
+      )}
 
       <div>
         <div className="text-xs mb-2" style={{ color: C.textDim }}>7つの予測要素（それぞれの予測値・確率・根拠）</div>
@@ -7966,9 +8063,9 @@ export default function DDDashboard() {
       {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} synthetic={sp500Synthetic} qqqSynthetic={qqqSynthetic} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} vooQqqSeries={vooQqqSeries} onAppendVooQqq={handleAppendVooQqq} onImportVooQqq={handleImportVooQqq} onApplyApiGold={handleApplyApiGold} onResetVooQqqField={handleResetVooQqqField} virtualAggregateLabels={virtualAggregateLabels} onRegisterBrokerHoldings={handleRegisterBrokerHoldings} brokerSummaries={brokerSummaries} />}
       {modal?.type === "checkpointSettings" && <FullScreenModal title="チェックポイント設定" onClose={() => setModal(null)}><CheckpointSettingsContent checkpoints={checkpoints} onCheckpointChange={handleCheckpointChange} holdings={holdings} /></FullScreenModal>}
       {modal?.type === "bottomScore" && <FullScreenModal title={activeBottom.hold.applicable ? `${activeBottomLabel}底値判定：${bottomLabel(activeBottomFull, activeBottom.hold.state)} が底値として確定する確率（${activeBottomLabel}実績から都度算出）` : `${activeBottomLabel}底値判定（${activeBottomLabel}実績から都度算出）`} onClose={() => setModal(null)}><BottomScoreModalContent bottom={activeBottom} FULL={activeBottomFull} instrumentLabel={activeBottomLabel} /></FullScreenModal>}
-      {modal?.type === "yearForecast" && <FullScreenModal title={`${forecastYear}年 年騰落率予測${yearForecast?.blendedForecastPct != null ? `（総合：${yearForecast.blendedForecastPct > 0 ? "+" : ""}${yearForecast.blendedForecastPct.toFixed(1)}%）` : ""}`} onClose={() => setModal(null)}><YearForecastModalContent forecast={yearForecast} trajectory={yearForecastTrajectoryData} yearPoints={forecastYearPoints} forecastYear={forecastYear} forwardPath={yearForecastTrajectoryForwardPath} nextYearForecast={nextYearForecast} thisYearStartPrice={thisYearStartPrice} thisYearEndApproxPrice={thisYearEndApproxPrice} history={yearForecastHistory} forecastPath={yearForecastChartPath} qqqCorrelation={qqqSpxCorrelation} /></FullScreenModal>}
+      {modal?.type === "yearForecast" && <FullScreenModal title={`${forecastYear}年 年騰落率予測${yearForecast?.blendedForecastPct != null ? `（総合：${yearForecast.blendedForecastPct > 0 ? "+" : ""}${yearForecast.blendedForecastPct.toFixed(1)}%）` : ""}`} onClose={() => setModal(null)}><YearForecastModalContent forecast={yearForecast} trajectory={yearForecastTrajectoryData} yearPoints={forecastYearPoints} forecastYear={forecastYear} forwardPath={yearForecastTrajectoryForwardPath} nextYearForecast={nextYearForecast} thisYearStartPrice={thisYearStartPrice} thisYearEndApproxPrice={thisYearEndApproxPrice} history={yearForecastHistory} forecastPath={yearForecastChartPath} qqqCorrelation={qqqSpxCorrelation} crashFrequency={bottom.stats.crashFrequency} /></FullScreenModal>}
       {modal?.type === "realHoldingsRanking" && <FullScreenModal title="実質保有銘柄ランキング" onClose={() => setModal(null)}><RealHoldingsRankingContent holdings={combinedHoldings} /></FullScreenModal>}
-      {modal?.type === "summary" && <FullScreenModal title="詳細サマリー出力（AI相談用）" onClose={() => setModal(null)}><SummaryModalContent d={d} dVoo={dVoo} dQqq={dQqq} holdings={holdings} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} blocks={blocks} rankLabels={rankLabels} lifecycle={lifecycle} onLifecycleChange={handleLifecycleChange} fixedPositions={fixedPositions} onFixedPositionChange={handleFixedPositionChange} checkpoints={checkpoints} prevSnapshot={prevSnapshot} onSaveSnapshot={handleSaveSnapshot} /></FullScreenModal>}
+      {modal?.type === "summary" && <FullScreenModal title="詳細サマリー出力（AI相談用）" onClose={() => setModal(null)}><SummaryModalContent d={d} dVoo={dVoo} dQqq={dQqq} holdings={holdings} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} blocks={blocks} rankLabels={rankLabels} lifecycle={lifecycle} onLifecycleChange={handleLifecycleChange} fixedPositions={fixedPositions} onFixedPositionChange={handleFixedPositionChange} checkpoints={checkpoints} prevSnapshot={prevSnapshot} onSaveSnapshot={handleSaveSnapshot} crashFrequency={bottom.stats.crashFrequency} /></FullScreenModal>}
       {modal?.type === "mobileChartZoom" && <MobileChartZoomModal onClose={() => setModal(null)} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} sourceViews={sourceViews} chartSources={chartSources} onToggleChartSource={toggleChartSource} yearCompare={yearCompare} setYearCompare={setYearCompare} initialTab={chartTab} isRealDevice={isMobileAuto} />}
 
       {isMobile ? (
