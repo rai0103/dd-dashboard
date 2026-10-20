@@ -6,7 +6,7 @@ import { join } from "node:path";
 import {
   detectEpisodes, countFakeRalliesInRange, isCleanRecovery, computeDepthStats, computeLevelProgression,
   computeReboundProgression, computeLevelTransitionDays, buildStatsTable, deriveCurrentState, depthBucketIndex,
-  collectHoldSamples, computeMddHoldProbability,
+  collectHoldSamples, computeMddHoldProbability, collectRecoverySamples, computeRecoveryMatrix,
 } from "./bottomScore.ts";
 
 function loadSp500(): { prices: number[]; dates: Date[] } {
@@ -81,6 +81,9 @@ test("SP500全履歴: 統計テーブルが全データから算出され、日�
   for (let i = 1; i < stats.levelProgression.length; i++) assert.ok(stats.levelProgression[i].reached <= stats.levelProgression[i - 1].reached);
   assert.equal(stats.reboundTable.length, 6);
   assert.ok(stats.transitionDays[0].n > 30 && stats.transitionDays[0].median !== null);
+  // 節目回復統計：fromLevel(-10〜-45、8段)×steps(1〜段位index)の全マス目＝1+2+...+8=36件。データ量に関わらず固定。
+  assert.equal(stats.recoveryMatrix.length, 36);
+  assert.ok(stats.recoveryMatrix.some((c) => c.occurrences > 0 && c.p !== null));
 
   // --- 日次データ追加による自動更新 ---
   // (a) 新ATH→-12%下落→新ATH回復 の合成日次データを追加すると、エピソードが1件増え各テーブルに反映される
@@ -159,4 +162,50 @@ test("computeReboundProgression: アンカー割れ前の到達を判定し、�
   const [row2] = computeReboundProgression([100, 94, 99], [-5], [3, 10]);
   assert.deepEqual(row2.rungs.map((r) => [r.hits, r.n]), [[1, 1], [0, 0]]);
   assert.equal(computeDepthStats(detectEpisodes(prices), prices)[1].n, 1);
+});
+
+test("collectRecoverySamples / computeRecoveryMatrix: 節目回復の段階数とセルの確率を手計算と一致させる", () => {
+  // ATH100→-21%(79)→-15%まで回復(85,1段階)→-24%へ再下落・底割れ(76)→-10%まで回復(90)→新ATH(101)
+  const prices = [100, 79, 85, 76, 90, 101];
+  const samples = collectRecoverySamples(prices);
+  // trough=79(-21%): fromLevel=-20、85(-15%)まで1段階回復した後76へ底割れ → stepsReached=1, held=false
+  // trough=76(-24%): fromLevel=-20、90→101で底割れせず新ATHまで到達 → -15/-10/-5の3段階回復, held=true
+  assert.deepEqual(
+    samples.map((s) => [s.fromLevel, s.stepsReached, s.held]),
+    [[-20, 1, false], [-20, 3, true]],
+  );
+
+  const matrix = computeRecoveryMatrix(prices);
+  const cellsAt20 = matrix.filter((c) => c.fromLevel === -20).sort((a, b) => a.steps - b.steps);
+  assert.equal(cellsAt20.length, 3); // -20%は3段階（-15/-10/-5）まで定義される
+  // 発生回数(occurrences)は常に2（-20%に到達した局所トラフの数）。確率pはoccurrences基準で一定、
+  // reachedのみ段階が進むほど減る。
+  assert.deepEqual(
+    cellsAt20.map((c) => [c.toLevel, c.occurrences, c.reached, c.bottomHeld, c.p]),
+    [[-15, 2, 2, 1, 50], [-10, 2, 1, 1, 50], [-5, 2, 1, 1, 50]],
+  );
+});
+
+test("computeMddHoldProbability: 節目回復統計が底値確定確率の判定tierに追加される", () => {
+  // 1局面目（解消済み・上のテストと同じ）に、同じ相対パターンのATH更新後の2局面目（未解消・現在進行中）を続ける。
+  // 現在地は2局面目のtrough(-24%)から-10%まで回復した状態＝節目-20%から2段階回復中。
+  const prices = [100, 79, 85, 76, 90, 101, 79.79, 85.85, 76.76, 90.9];
+  const stats = buildStatsTable(prices);
+  const state = deriveCurrentState(prices)!;
+  assert.ok(Math.abs(state.mdd - (-24)) < 1e-9 && Math.abs(state.latest_dd - (-10)) < 1e-9);
+
+  const h = computeMddHoldProbability(prices, stats, state);
+  assert.equal(h.applicable, true);
+  if (h.applicable) {
+    assert.equal(h.tiers.length, 4); // 既存3tier + 節目tier
+    const milestone = h.tiers[0]; // 節目tierが先頭（最優先）に追加される
+    assert.match(milestone.label, /節目 -20%・2段階回復（-10%）/);
+    assert.deepEqual([milestone.n, milestone.held, milestone.broke, milestone.pHold, milestone.pBreak, milestone.lowSample], [2, 1, 1, 50, 50, true]);
+  }
+
+  // まだ節目から1段も回復していない（直近ddが浅い回復基準に届かない）場合は節目tierを追加しない
+  const pricesNoRecovery = [100, 79, 85, 76, 77];
+  const h2 = computeMddHoldProbability(pricesNoRecovery, buildStatsTable(pricesNoRecovery));
+  assert.equal(h2.applicable, true);
+  if (h2.applicable) assert.equal(h2.tiers.length, 3);
 });

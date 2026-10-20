@@ -1,14 +1,15 @@
 // 年騰落率予測：直近10年平均・前年類似年の翌年平均・大統領サイクル平均・大統領サイクル別季節性（月次）・
-// 当年月末時点類似年・類似年の残り期間実績平均、の6つの実績統計から今年の年末までの騰落率を予想する。各指標は
-// 「ある年Yの予測」を、Y年より前のデータだけを使って計算できる関数として実装し（ルックアヘッド無し）、過去の
-// 確定年に遡って「その指標が過去にどれだけ当たっていたか（符号一致率）」を検証し、その一致率を指標ごとの重み
-// として使う加重平均で総合予測値を出す（単純平均ではない）。月末時点類似年・季節性の2指標は月が進むほど一致率が
-// 上がる傾向があるため、同じ仕組み（指標ごとの符号一致率バックテスト）が自然に月ごとの精度差を重みに反映する。
-// 今年の年末予測値を実績の代わりに使うことで、翌年の予測（computeNextYearForecast）も算出できる。
+// 当年月末時点類似年・類似年の残り期間実績平均・当年DD局面類似年、の7つの実績統計から今年の年末までの騰落率を
+// 予想する。各指標は「ある年Yの予測」を、Y年より前のデータだけを使って計算できる関数として実装し（ルックアヘッド
+// 無し）、過去の確定年に遡って「その指標が過去にどれだけ当たっていたか（符号一致率）」を検証し、その一致率を
+// 指標ごとの重みとして使う加重平均で総合予測値を出す（単純平均ではない）。月末時点類似年・季節性の2指標は月が
+// 進むほど一致率が上がる傾向があるため、同じ仕組み（指標ごとの符号一致率バックテスト）が自然に月ごとの精度差を
+// 重みに反映する。今年の年末予測値を実績の代わりに使うことで、翌年の予測（computeNextYearForecast）も算出できる。
 // このファイルはこの他に、QQQとSP500の年間騰落率の相関係数・ベータ等を算出するcomputeQqqSpxCorrelationも
-// 公開している（こちらは参考統計であり、上記6指標の加重平均予測には組み込まない）。
+// 公開している（こちらは参考統計であり、上記7指標の加重平均予測には組み込まない）。
 // このファイルはlib/yearCompare.ts（外部importを持たない純粋関数のみで構成）だけをimportし、
-// `node --test`から直接実行できるようにしている。
+// `node --test`から直接実行できるようにしている。lib/bottomScore.ts（底値判定・節目回復統計）はimportせず、
+// 7指標目（当年DD局面類似年）に必要な最小限のATH/DD計算をpearsonCorrと同様にこのファイル内に複製している。
 import { buildYearSeries, presidentialTermYear, type YearSeries, type YearPoint } from "./yearCompare.ts";
 
 // buildYearSeries(FULL全体を年別に再集計する処理)は入力が同じFULL配列（参照が同じ）であれば結果も必ず同じになる。
@@ -24,6 +25,45 @@ function cachedYearSeries(FULL: { date: string; price: number }[]): YearSeries {
   const series = buildYearSeries(FULL.map((p) => ({ date: p.date, price: p.price })));
   yearSeriesCache.set(FULL, series);
   return series;
+}
+
+// 7指標目（当年DD局面類似年）用：FULL全体（日付昇順）に対する、その時点までのATHからのドローダウン%の系列。
+// lib/bottomScore.tsのcomputeDrawdownsと同じ考え方だが、このファイルは外部importを持たない方針のため複製する
+// （ファイル冒頭コメント参照）。yearSeriesCacheと同じ理由でFULL参照をキーにキャッシュする。
+const ddSeriesCache = new WeakMap<object, number[]>();
+function cachedDdSeries(FULL: { date: string; price: number }[]): number[] {
+  const cached = ddSeriesCache.get(FULL);
+  if (cached) return cached;
+  const dd: number[] = [];
+  let m = -Infinity;
+  for (const p of FULL) { m = Math.max(m, p.price); dd.push((p.price - m) / m * 100); }
+  ddSeriesCache.set(FULL, dd);
+  return dd;
+}
+
+// 7指標目用：年→[各月末時点のFULL配列上のindex]（0始まり、月1〜12）のルックアップ表。同じ理由でキャッシュする。
+const monthEndIdxCache = new WeakMap<object, Map<number, (number | null)[]>>();
+function cachedMonthEndIdx(FULL: { date: string; price: number }[]): Map<number, (number | null)[]> {
+  const cached = monthEndIdxCache.get(FULL);
+  if (cached) return cached;
+  const out = new Map<number, (number | null)[]>();
+  for (let i = 0; i < FULL.length; i++) {
+    const d = FULL[i].date;
+    const y = Number(d.slice(0, 4)), mo = Number(d.slice(5, 7));
+    let arr = out.get(y);
+    if (!arr) { arr = new Array(12).fill(null); out.set(y, arr); }
+    arr[mo - 1] = i; // FULLは日付昇順前提。同じ月内で後に出てきたindexで上書き＝その月の最終営業日が残る
+  }
+  monthEndIdxCache.set(FULL, out);
+  return out;
+}
+
+// year年のasOfMonth月末（以前）の最終営業日が、FULL配列の何番目か。該当データが無ければnull。
+function lastIdxAtMonthEnd(FULL: { date: string; price: number }[], year: number, asOfMonth: number): number | null {
+  const arr = cachedMonthEndIdx(FULL).get(year);
+  if (!arr) return null;
+  for (let m = Math.min(asOfMonth, 12); m >= 1; m--) if (arr[m - 1] != null) return arr[m - 1];
+  return null;
 }
 
 export interface FactorResult {
@@ -158,6 +198,43 @@ export function monthEndAnalogRemainingForecast(FULL: { date: string; price: num
   return { forecastPct, probability: posShare(remainingReturns), refYears };
 }
 
+const DD_ANALOG_MIN_DD = -3; // lib/bottomScore.tsのMIN_EPISODE_DDと同じ閾値（複製。ファイル冒頭コメント参照）
+
+// 7. 当年DD局面類似年：yearのasOfMonth月末時点の対ATHドローダウン%（直近ATHからの下落率）に近い過去の確定年
+//    （yearより前）を最大k件選び、それらの年の「asOfMonthから年末までの残り期間リターン」の平均を、現在のYTDに
+//    複利適用して予測値とする（指標6の、YTD%ではなくDDの深さを類似度の基準にした派生版。底値判定側の節目回復
+//    統計と同じ「DDの深さ」という軸を年末予測にも反映する）。現在が下落局面でない（DDがDD_ANALOG_MIN_DDに
+//    達していない）年はnullを返す（他の指標と異なり、DD局面であることそのものが前提の指標のため）。
+export function ddStateAnalogForecast(FULL: { date: string; price: number }[], year: number, asOfMonth: number, k = 8, minK = 5): FactorResult | null {
+  const series = cachedYearSeries(FULL);
+  const currentYtd = ytdAtMonthEnd(series, year, asOfMonth);
+  if (currentYtd == null) return null;
+  const curIdx = lastIdxAtMonthEnd(FULL, year, asOfMonth);
+  if (curIdx == null) return null;
+  const dd = cachedDdSeries(FULL);
+  const currentDd = dd[curIdx];
+  if (currentDd > DD_ANALOG_MIN_DD) return null;
+
+  const candidates: { z: number; dist: number; remainingReturn: number }[] = [];
+  for (const [z, pts] of series) {
+    if (z >= year || !pts.length) continue;
+    const zYtd = ytdAtMonthEnd(series, z, asOfMonth);
+    if (zYtd == null) continue;
+    const zIdx = lastIdxAtMonthEnd(FULL, z, asOfMonth);
+    if (zIdx == null) continue;
+    const zFull = pts[pts.length - 1].index - 100;
+    const remainingReturn = ((100 + zFull) / (100 + zYtd) - 1) * 100;
+    candidates.push({ z, dist: Math.abs(dd[zIdx] - currentDd), remainingReturn });
+  }
+  if (candidates.length < Math.min(minK, 3)) return null;
+  candidates.sort((a, b) => a.dist - b.dist);
+  const chosen = candidates.slice(0, Math.max(Math.min(minK, candidates.length), Math.min(k, candidates.length)));
+  const remainingReturns = chosen.map((c) => c.remainingReturn);
+  const forecastPct = (100 + currentYtd) * (1 + avg(remainingReturns) / 100) - 100;
+  const refYears = chosen.map((c) => ({ year: c.z, return: c.remainingReturn })).sort((a, b) => a.year - b.year);
+  return { forecastPct, probability: posShare(remainingReturns), refYears };
+}
+
 // ある年の月ごとの単月リターン（%）。年初(index=100)→1月末、1月末→2月末、…と連鎖して算出する。
 // その月のデータが無い月（進行中の年の未到達月等）はスキップする。
 function monthlyReturnsForYear(pts: YearPoint[]): Map<number, number> {
@@ -256,7 +333,7 @@ export function yearEndProjectionPath(FULL: { date: string; price: number }[], y
   });
 }
 
-export type FactorKey = "recent10" | "similarPrior" | "cycle" | "seasonality" | "monthEnd" | "monthEndRemaining";
+export type FactorKey = "recent10" | "similarPrior" | "cycle" | "seasonality" | "monthEnd" | "monthEndRemaining" | "ddState";
 
 const FACTOR_LABELS: Record<FactorKey, string> = {
   recent10: "直近10年平均",
@@ -265,6 +342,7 @@ const FACTOR_LABELS: Record<FactorKey, string> = {
   seasonality: "大統領サイクル別季節性（月次）",
   monthEnd: "当年月末時点類似年",
   monthEndRemaining: "類似年の残り期間実績平均",
+  ddState: "当年DD局面類似年",
 };
 
 // 各指標の予測精度（符号一致率）をバックテストする。十分なデータがある全ての過去確定年Yについて、
@@ -311,7 +389,7 @@ function blendFactors(factors: YearForecastFactor[]): { blendedForecastPct: numb
   };
 }
 
-// ある時点（year年のasOfMonth月末まで確定しているデータ）での5指標＋重み付き総合予測を計算する。
+// ある時点（year年のasOfMonth月末まで確定しているデータ）での7指標＋重み付き総合予測を計算する。
 export function computeYearForecast(FULL: { date: string; price: number }[], year: number, asOfMonth: number): YearForecast {
   const returns = buildAnnualReturns(FULL);
   const allYears = [...returns.keys()].filter((y) => y < year).sort((a, b) => a - b);
@@ -323,6 +401,7 @@ export function computeYearForecast(FULL: { date: string; price: number }[], yea
     { key: "seasonality", compute: (y) => seasonalRemainingForecast(FULL, y, asOfMonth) },
     { key: "monthEnd", compute: (y) => monthEndAnalogForecast(FULL, y, asOfMonth) },
     { key: "monthEndRemaining", compute: (y) => monthEndAnalogRemainingForecast(FULL, y, asOfMonth) },
+    { key: "ddState", compute: (y) => ddStateAnalogForecast(FULL, y, asOfMonth) },
   ];
 
   const factors: YearForecastFactor[] = defs.map(({ key, compute }) => ({
@@ -346,9 +425,9 @@ export interface NextYearForecast extends YearForecast {
 // 指標1・2（直近10年平均・前年類似年）は、今年を「予測値を実績とみなした年」として含めた拡張Mapで計算する。
 // 指標3（大統領サイクル平均）・指標5（季節性）は実績のみを使う（指標5はasOfMonth=0で呼ぶ＝年がまだ始まっていない
 // ため残り12ヶ月すべてが対象になり、通年の季節性予測として機能する）。指標4（当年月末時点類似年）・指標6（類似年
-// の残り期間実績平均）は、いずれも「今年のasOfMonth月末時点のYTD」を起点にする指標で、年が始まっていない翌年には
-// 意味を持たないため含めない（4指標構成）。重みは、asOfMonthに依存しない指標1・2・3は今年の予測で使った精度を
-// そのまま再利用し、季節性だけasOfMonth=0用に再バックテストする。
+// の残り期間実績平均）・指標7（当年DD局面類似年）は、いずれも「今年のasOfMonth月末時点の状態」を起点にする指標
+// で、年が始まっていない翌年には意味を持たないため含めない（4指標構成）。重みは、asOfMonthに依存しない指標1・2・3
+// は今年の予測で使った精度をそのまま再利用し、季節性だけasOfMonth=0用に再バックテストする。
 export function computeNextYearForecast(FULL: { date: string; price: number }[], year: number, asOfMonth: number): NextYearForecast | null {
   const current = computeYearForecast(FULL, year, asOfMonth);
   if (current.blendedForecastPct == null) return null;

@@ -127,11 +127,13 @@ export function computeDepthStats(episodes: Episode[], prices: number[]): DepthS
   });
 }
 
+export const PROGRESSION_LEVELS = [-5, -10, -15, -20, -25, -30, -35, -40, -45];
+
 export type LevelProgressionRow = { from: number; to: number; reached: number; progressed: number; p: number | null; lowSample: boolean };
 
 // 2-4. 節目間進行確率。L(i)到達エピソードを分母、同一局面内でL(i+1)まで到達した数を分子とする。
 // 進行中のエピソードは、L(i+1)到達済みなら成功として数え、未到達なら結果未確定のため分母から除外する。
-export function computeLevelProgression(prices: number[], levels = [-5, -10, -15, -20, -25, -30, -35, -40, -45], episodes?: Episode[]): LevelProgressionRow[] {
+export function computeLevelProgression(prices: number[], levels: number[] = PROGRESSION_LEVELS, episodes?: Episode[]): LevelProgressionRow[] {
   const eps = episodes ?? detectEpisodes(prices);
   const rows: LevelProgressionRow[] = [];
   for (let i = 0; i < levels.length - 1; i++) {
@@ -217,6 +219,7 @@ export type StatsTable = {
   levelProgression: LevelProgressionRow[];
   reboundTable: ReboundRow[];
   transitionDays: TransitionDays[];
+  recoveryMatrix: RecoveryMatrixCell[];
   depthBucket: (dd: number) => DepthStat | null;
 };
 
@@ -230,6 +233,7 @@ export function buildStatsTable(prices: number[], dates?: (Date | string)[]): St
     levelProgression: computeLevelProgression(prices, undefined, episodes),
     reboundTable: computeReboundProgression(prices, undefined, undefined, episodes),
     transitionDays: TRANSITION_PAIRS.map(([f, t]) => computeLevelTransitionDays(prices, f, t, episodes)),
+    recoveryMatrix: computeRecoveryMatrix(prices, undefined, episodes),
     depthBucket: (dd) => { const i = depthBucketIndex(dd); return i === -1 ? null : depthStats[i]; },
   };
 }
@@ -298,6 +302,88 @@ export function collectHoldSamples(prices: number[], cond: HoldCondition, episod
   return out;
 }
 
+/* ---------------- 4. 節目回復統計（反発段階） ---------------- */
+// 節目回復：下落エピソード内の各ローカルトラフが、5%刻みの節目(PROGRESSION_LEVELS)を再び下回る前に
+// 何段階回復できたか（浅い節目まで戻せたか）を追跡する。computeLevelProgression（深くなる方向の進行確率）
+// の鏡写しの指標で、底値判定（computeMddHoldProbability）にも判定材料として組み込む。
+
+function levelIndexReached(dd: number, levels: number[]): number {
+  let idx = -1;
+  for (let i = 0; i < levels.length; i++) if (dd <= levels[i]) idx = i;
+  return idx;
+}
+
+export type RecoverySample = HoldSample & {
+  fromLevel: number; // 到達した節目（例: -25）
+  stepsReached: number; // fromLevelを再び下回る前に到達できた最大の回復段階数（5%刻み、0以上）
+};
+
+// 解消済みの各局面を日次で走査し、各ローカルトラフについて、再び同じ安値を下回る（底割れ）前に
+// 何段階分浅い節目まで戻せたか（stepsReached）を記録する。最浅の節目（levels[0]）にも届かないトラフは対象外。
+export function collectRecoverySamples(prices: number[], levels: number[] = PROGRESSION_LEVELS, episodes?: Episode[]): RecoverySample[] {
+  const eps = (episodes ?? detectEpisodes(prices)).filter((e) => e.resolve_idx !== null);
+  const { dd } = computeDrawdowns(prices);
+  const out: RecoverySample[] = [];
+  for (const e of eps) {
+    const end = e.resolve_idx!;
+    let tr = e.start_idx, lastUsed = -1;
+    for (let k = e.start_idx; k < end; k++) {
+      if (prices[k] < prices[tr]) tr = k;
+      if (tr === lastUsed) continue;
+      lastUsed = tr;
+      const idx = levelIndexReached(dd[tr], levels);
+      if (idx === -1) continue; // 最も浅い節目にも届いていない
+      let brk = -1, maxDdSeen = dd[tr];
+      for (let j = tr + 1; j <= end; j++) {
+        if (prices[j] < prices[tr]) { brk = j; break; }
+        if (dd[j] > maxDdSeen) maxDdSeen = dd[j];
+      }
+      let stepsReached = 0;
+      for (let s = idx - 1; s >= 0; s--) { if (maxDdSeen >= levels[s]) stepsReached++; else break; }
+      const held = brk === -1;
+      out.push({
+        pre_ath_idx: e.pre_ath_idx, trough_idx: tr, sample_idx: tr, resolve_idx: end,
+        mdd: dd[tr], held, days_to_ath: held ? end - tr : null, days_to_break: held ? null : brk - tr,
+        final_mdd: e.min_dd, fromLevel: levels[idx], stepsReached,
+      });
+    }
+  }
+  return out;
+}
+
+export type RecoveryMatrixCell = {
+  fromLevel: number; steps: number; toLevel: number;
+  occurrences: number; // fromLevel到達回数
+  reached: number; // そのうちsteps段階回復した回数（held不問）
+  bottomHeld: number; // そのうちfromLevelを最後まで割らず、かつsteps段階回復した回数
+  p: number | null; // 確率 = bottomHeld / occurrences（%）
+  lowSample: boolean;
+  samples: HoldSample[]; // steps段階回復した事例（held/broke両方。底値判定tierへの転用にそのまま使える）
+};
+
+// fromLevel（levelsのうちlevels[1]以降）× steps（1〜そのfromLevelの段位index）の全マス目を生成する。
+export function computeRecoveryMatrix(prices: number[], levels: number[] = PROGRESSION_LEVELS, episodes?: Episode[]): RecoveryMatrixCell[] {
+  const eps = episodes ?? detectEpisodes(prices);
+  const samples = collectRecoverySamples(prices, levels, eps);
+  const out: RecoveryMatrixCell[] = [];
+  for (let idx = 1; idx < levels.length; idx++) {
+    const fromLevel = levels[idx];
+    const atLevel = samples.filter((s) => s.fromLevel === fromLevel);
+    const occurrences = atLevel.length;
+    for (let steps = 1; steps <= idx; steps++) {
+      const toLevel = levels[idx - steps];
+      const matched = atLevel.filter((s) => s.stepsReached >= steps);
+      const bottomHeldSamples = matched.filter((s) => s.held);
+      out.push({
+        fromLevel, steps, toLevel, occurrences, reached: matched.length, bottomHeld: bottomHeldSamples.length,
+        p: occurrences ? round1(bottomHeldSamples.length / occurrences * 100) : null,
+        lowSample: occurrences < LOW_SAMPLE_N, samples: matched,
+      });
+    }
+  }
+  return out;
+}
+
 export type HoldTier = {
   label: string; cond: HoldCondition; n: number; held: number; broke: number;
   pHold: number | null; pBreak: number | null; lowSample: boolean; samples: HoldSample[];
@@ -314,6 +400,16 @@ function tierOf(label: string, cond: HoldCondition, prices: number[], episodes: 
   return { label, cond, n, held, broke: n - held, pHold: n ? round1(held / n * 100) : null, pBreak: n ? round1((n - held) / n * 100) : null, lowSample: n < LOW_SAMPLE_N, samples };
 }
 
+// 現在の節目(fromLevel)と、そこから何段階回復済みか(steps)を返す。節目(levels[1]以降)に届いていない、
+// または回復0段階（まだfromLevelから戻っていない）場合はnull。
+function currentRecoveryStep(state: CurrentState, levels: number[]): { fromLevel: number; steps: number } | null {
+  const idx = levelIndexReached(state.mdd, levels);
+  if (idx <= 0) return null;
+  let steps = 0;
+  for (let s = idx - 1; s >= 0; s--) { if (state.latest_dd >= levels[s]) steps++; else break; }
+  return steps > 0 ? { fromLevel: levels[idx], steps } : null;
+}
+
 // 条件を厳しい順に並べ、サンプル数がLOW_SAMPLE_N以上になる最初の段を採用する（どれも満たさなければ最も緩い段）。
 export function computeMddHoldProbability(prices: number[], stats: StatsTable, state: CurrentState | null = deriveCurrentState(prices)): MddHoldResult {
   if (!state) return { applicable: false, reason: "現在は最高値圏（DD 0%）のため判定対象外です" };
@@ -327,6 +423,17 @@ export function computeMddHoldProbability(prices: number[], stats: StatsTable, s
     tierOf(`MDD ${b.label}・戻し${rl}以上`, { mddUpper: b.upper, mddLower: b.lower, minRecovery: r, minDaysSinceTrough: 0 }, prices, stats.episodes),
     tierOf(`MDD ${wide.upper}〜${wide.lower === -Infinity ? "" : wide.lower}%（隣接バケット含む）・戻し${rl}以上`, { mddUpper: wide.upper, mddLower: wide.lower, minRecovery: r, minDaysSinceTrough: 0 }, prices, stats.episodes),
   ];
+  const rec = currentRecoveryStep(state, PROGRESSION_LEVELS);
+  const recCell = rec ? stats.recoveryMatrix.find((c) => c.fromLevel === rec.fromLevel && c.steps === rec.steps) : undefined;
+  if (recCell) {
+    tiers.unshift({
+      label: `節目 ${rec!.fromLevel}%・${rec!.steps}段階回復（${recCell.toLevel}%）`,
+      cond: { mddUpper: rec!.fromLevel, mddLower: rec!.fromLevel - 5, minRecovery: NaN, minDaysSinceTrough: 0 },
+      n: recCell.occurrences, held: recCell.bottomHeld, broke: recCell.occurrences - recCell.bottomHeld,
+      pHold: recCell.p, pBreak: recCell.p === null ? null : round1(100 - recCell.p),
+      lowSample: recCell.lowSample, samples: recCell.samples,
+    });
+  }
   const tier = tiers.find((t) => !t.lowSample) ?? tiers.reduce((a, t) => (t.n > a.n ? t : a));
   const med = (xs: number[]) => percentile([...xs].sort((x, y) => x - y), 0.5);
   const broken = tier.samples.filter((s) => !s.held);

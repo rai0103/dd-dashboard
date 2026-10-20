@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   buildAnnualReturns, recentNYearAverage, similarPriorYearFollowing, presidentialCycleAverage,
-  monthEndAnalogForecast, monthEndAnalogRemainingForecast, computeYearForecast, yearForecastTrajectory,
+  monthEndAnalogForecast, monthEndAnalogRemainingForecast, ddStateAnalogForecast, computeYearForecast, yearForecastTrajectory,
   seasonalMonthlyAverages, seasonalRemainingForecast, yearEndProjectionPath, computeNextYearForecast,
   computeQqqSpxCorrelation,
 } from "./yearForecast.ts";
@@ -132,7 +132,8 @@ test("computeYearForecast：重みの合計が1に正規化され、総合予測
   for (let y = 2001; y <= 2016; y++) years.push({ year: y, annualReturn: Math.round((10 * Math.sin((y - 2001) * 0.7) + 2) * 100) / 10000 });
   const FULL = monthlySeries(years);
   const forecast = computeYearForecast(FULL, 2016, 12);
-  assert.equal(forecast.factors.length, 6); // 6指標構成
+  assert.equal(forecast.factors.length, 7); // 7指標構成
+  assert.ok(forecast.factors.some((f) => f.key === "ddState" && f.label === "当年DD局面類似年"));
   const withResult = forecast.factors.filter((f) => f.result);
   assert.ok(withResult.length >= 2); // 十分な履歴があるので複数指標が有効なはず
   const weightSum = forecast.factors.reduce((s, f) => s + f.weight, 0);
@@ -140,6 +141,34 @@ test("computeYearForecast：重みの合計が1に正規化され、総合予測
   const mags = withResult.map((f) => f.result!.forecastPct);
   assert.ok(forecast.blendedForecastPct! >= Math.min(...mags) - 1e-9);
   assert.ok(forecast.blendedForecastPct! <= Math.max(...mags) + 1e-9);
+});
+
+test("ddStateAnalogForecast：当年のDD（対ATH下落率）に近い過去年を選び、その「残り期間リターン」を現在のYTDに複利適用する", () => {
+  // RESET(+100%)年の直後に下落年を置くことで、その下落年のYTD（年初=100%基準）と対ATH下落率(DD)が一致する
+  // ように構成する（RESET年が直前に新ATHを作るため、下落年の開始値＝その時点のATH）。
+  const FULL = monthlySeries([
+    { year: 2001, annualReturn: 1.0 },  // RESET（新ATH）
+    { year: 2002, annualReturn: -0.08 }, // 候補A：6月末DD=-4.0%（対象の-6.0%に近い）
+    { year: 2003, annualReturn: 1.0 },  // RESET
+    { year: 2004, annualReturn: -0.08 }, // 候補B：6月末DD=-4.0%（同上、距離が同じ2件を選ぶ）
+    { year: 2005, annualReturn: 1.0 },  // RESET
+    { year: 2006, annualReturn: -0.30 }, // 候補C：6月末DD=-15.0%（対象から遠い＝選ばれないはず）
+    { year: 2007, annualReturn: 1.0 },  // RESET
+    { year: 2008, annualReturn: -0.12 }, // 対象年：6月末DD=-6.0%
+  ]);
+  const r = ddStateAnalogForecast(FULL, 2008, 6, 2, 1);
+  assert.ok(r);
+  const refYearNums = r!.refYears.map((x) => x.year).sort((a, b) => a - b);
+  assert.deepEqual(refYearNums, [2002, 2004]); // DDが最も近い2候補（Cは遠いので選ばれない）
+  const remainingExpected = (92 / 96 - 1) * 100; // 候補の「残り期間(7〜12月)リターン」= (100-8)/(100-4)-1
+  for (const ry of r!.refYears) assert.ok(Math.abs(ry.return - remainingExpected) < 1e-6);
+  const expectedForecastPct = 94 * (1 + remainingExpected / 100) - 100; // 現在のYTD(-6.0%)に複利適用
+  assert.ok(Math.abs(r!.forecastPct - expectedForecastPct) < 1e-6);
+  assert.equal(r!.probability, 0); // 選ばれた候補の残り期間リターンはいずれも負
+  // RESET年（DDがほぼ0＝下落局面でない）はnull
+  assert.equal(ddStateAnalogForecast(FULL, 2007, 6, 2, 1), null);
+  // データが無ければnull
+  assert.equal(ddStateAnalogForecast([], 2005, 6), null);
 });
 
 test("ルックアヘッド無し：対象年のasOfMonthより後のデータを変えても、その時点までの予測結果は変わらない", () => {
@@ -263,6 +292,7 @@ test("computeNextYearForecast：今年の予測値を実績の代わりに使っ
   assert.ok(Math.abs(next!.basedOnForecastPct - current.blendedForecastPct!) < 1e-9);
   assert.ok(!next!.factors.some((f) => f.key === "monthEnd"));
   assert.ok(!next!.factors.some((f) => f.key === "monthEndRemaining"));
+  assert.ok(!next!.factors.some((f) => f.key === "ddState"));
   assert.equal(next!.factors.length, 4);
 
   // 重みは正規化されて合計1になる

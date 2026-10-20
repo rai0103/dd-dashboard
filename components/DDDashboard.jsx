@@ -22,7 +22,7 @@ import { decodeCp932, parseTradeCsv, mergeTrades, computeRealizedEvents, aggrega
 import { OWNER_RAKUTEN_SAKI, OWNER_RAKUTEN_SHIN, OWNER_MOOMOO, OWNER_OPTIONS, RAKUTEN_OWNERS, migrateHoldingsOwners, migrateAsOfKeys, detectRakutenOwnerFromFileName, ownerDisplayLabel } from "@/lib/owners";
 import { BROKERS, brokerByKey, extractionToPreviewRows, previewRowsToHoldings, replaceBrokerHoldings, aggregateLabelsReplacedByBrokers, rowValue, reconcileWithAccountTotal, isPlausibleBrokerRate, guessBrokerRank, reconciliationTarget, sectionChecks, buildBrokerSummary, profitChecks, appendHoldingSnapshot, holdingChanges } from "@/lib/brokerImport";
 import { importUserPrices, applyApiGold, resetPriceField, goldHistoryFetchStart } from "@/lib/priceSeries";
-import { buildStatsTable, computeMddHoldProbability, depthBucketIndex, LOW_SAMPLE_N } from "@/lib/bottomScore";
+import { buildStatsTable, computeMddHoldProbability, depthBucketIndex, LOW_SAMPLE_N, PROGRESSION_LEVELS } from "@/lib/bottomScore";
 import { computeYearForecast, yearForecastTrajectory, yearEndProjectionPath, computeNextYearForecast, computeQqqSpxCorrelation } from "@/lib/yearForecast";
 import { buildQqqEquivalentSeries, parseNdxPreQqqCsv } from "@/lib/qqqSynthetic";
 
@@ -5829,6 +5829,87 @@ function BottomScorePanelBody({ bottom, FULL, instrumentLabel = "VOO", onOpen, l
     </div>
   );
 }
+// 節目回復統計：下落局面でDDの節目（5%刻み）を何段階回復したか（例：-25%→3段階回復で-10%）をVOO/QQQ全履歴
+// から集計したもの（lib/bottomScore.ts computeRecoveryMatrix）。折れ線グラフ＋別表の両方で提示する
+// （ユーザー指定）。底値確定確率の判定（computeMddHoldProbability）にも判定tierとして組み込まれている。
+const RECOVERY_LEVELS = PROGRESSION_LEVELS.slice(1); // -10%〜-45%（-5%には回復元となる更に浅い節目が無いため除外）
+const RECOVERY_MAX_STEPS = RECOVERY_LEVELS.length; // -45%は最大8段階（-10%は最大1段階）
+function recoveryLevelColor(level) {
+  const idx = RECOVERY_LEVELS.indexOf(level), t = idx / (RECOVERY_LEVELS.length - 1);
+  return t <= 0.5 ? lerpColor(C.teal, C.amber, t / 0.5) : lerpColor(C.amber, C.rust, (t - 0.5) / 0.5);
+}
+// グラフの点（節目×回復段階数）をクリックすると、その節目・段階の発生回数・底値回数・確率を下に表示する。
+function RecoveryMatrixChart({ matrix }) {
+  const [selected, setSelected] = useState(null); // { fromLevel, steps }
+  const data = useMemo(() => {
+    const rows = [];
+    for (let s = 1; s <= RECOVERY_MAX_STEPS; s++) {
+      const row = { steps: s };
+      for (const lvl of RECOVERY_LEVELS) {
+        const cell = matrix.find((c) => c.fromLevel === lvl && c.steps === s);
+        if (cell) row[`level_${lvl}`] = cell.p;
+      }
+      rows.push(row);
+    }
+    return rows;
+  }, [matrix]);
+  const selectedCell = selected ? matrix.find((c) => c.fromLevel === selected.fromLevel && c.steps === selected.steps) : null;
+  const makeDot = (lvl) => (props) => {
+    const { cx, cy, payload } = props;
+    if (payload[`level_${lvl}`] == null) return null;
+    const isSel = selected && selected.fromLevel === lvl && selected.steps === payload.steps;
+    return (
+      <circle key={`${lvl}-${payload.steps}`} cx={cx} cy={cy} r={isSel ? 6 : 4} fill={recoveryLevelColor(lvl)}
+        stroke={isSel ? C.white : "none"} strokeWidth={isSel ? 2 : 0} style={{ cursor: "pointer" }}
+        onClick={() => setSelected({ fromLevel: lvl, steps: payload.steps })} />
+    );
+  };
+  return (
+    <div className="flex flex-col gap-2">
+      <div style={{ width: "100%", height: 260 }}>
+        <ResponsiveContainer>
+          <LineChart data={data} margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke={C.borderSoft} />
+            <XAxis dataKey="steps" tick={{ fill: C.textMuted, fontSize: 11 }} label={{ value: "回復段階数", position: "insideBottom", offset: -4, fill: C.textDim, fontSize: 11 }} />
+            <YAxis tick={{ fill: C.textMuted, fontSize: 11 }} unit="%" width={44} />
+            <Tooltip contentStyle={{ background: C.panel2, border: `1px solid ${C.border}` }} labelFormatter={(v) => `${v}段階回復`} formatter={(v, name) => [`${v}%`, `節目${name}%`]} />
+            {RECOVERY_LEVELS.map((lvl) => (
+              <Line key={lvl} type="monotone" dataKey={`level_${lvl}`} name={`${lvl}`} stroke={recoveryLevelColor(lvl)} strokeWidth={1.5} dot={makeDot(lvl)} activeDot={false} connectNulls={false} isAnimationActive={false} />
+            ))}
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+      <div className="text-[11px] mono text-center" style={{ color: C.textMuted }}>
+        {selectedCell ? (
+          <span>
+            節目 <span style={{ color: recoveryLevelColor(selectedCell.fromLevel), fontWeight: 700 }}>{selectedCell.fromLevel}%</span>→{selectedCell.steps}段階（{selectedCell.toLevel}%）：
+            発生回数 <b>{selectedCell.occurrences}</b>件／底値回数 <b style={{ color: C.teal }}>{selectedCell.bottomHeld}</b>件／確率 <b>{selectedCell.p ?? "—"}%</b>
+            <LowSampleBadge n={selectedCell.occurrences} />
+          </span>
+        ) : (<span style={{ color: C.textDim }}>グラフの点をクリックすると、その節目・段階の発生回数・底値回数・確率が表示されます</span>)}
+      </div>
+    </div>
+  );
+}
+function RecoveryMatrixTable({ matrix }) {
+  const th = "text-left font-normal py-1 px-2", td = "py-1 px-2";
+  return (
+    <div className="overflow-x-auto"><table className="w-full text-xs mono"><thead><tr style={{ color: C.textDim }}>
+      <th className={th}>節目</th>
+      {Array.from({ length: RECOVERY_MAX_STEPS }, (_, i) => i + 1).map((s) => <th key={s} className={th}>{s}段階</th>)}
+    </tr></thead>
+      <tbody>{RECOVERY_LEVELS.map((lvl) => (
+        <tr key={lvl} style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+          <td className={td} style={{ color: recoveryLevelColor(lvl) }}>{lvl}%</td>
+          {Array.from({ length: RECOVERY_MAX_STEPS }, (_, i) => i + 1).map((s) => {
+            const cell = matrix.find((c) => c.fromLevel === lvl && c.steps === s);
+            if (!cell) return <td key={s} className={td} style={{ color: C.textDim }}>—</td>;
+            return (<td key={s} className={td} style={{ color: cell.lowSample ? C.textDim : C.text }}>{cell.p === null ? "—" : `${cell.p}%`}<span className="text-[9px] ml-0.5" style={{ color: C.textDim }}>{cell.occurrences}</span></td>);
+          })}
+        </tr>
+      ))}</tbody></table></div>
+  );
+}
 function BottomScoreModalContent({ bottom, FULL, instrumentLabel = "VOO" }) {
   const { stats, hold: h } = bottom;
   const th = "text-left font-normal py-1 px-2", td = "py-1 px-2";
@@ -5916,6 +5997,12 @@ function BottomScoreModalContent({ bottom, FULL, instrumentLabel = "VOO" }) {
           ))}</tbody></table></div>
       </div>
 
+      <div>
+        {sectionTitle("参考：節目回復統計", "（DDの節目を5%刻みで何段階回復したか。底値確定確率の判定にも使用）")}
+        <RecoveryMatrixChart matrix={stats.recoveryMatrix} />
+        <div className="mt-3"><RecoveryMatrixTable matrix={stats.recoveryMatrix} /></div>
+      </div>
+
       <div className="text-[11px] leading-relaxed" style={{ color: C.textDim }}>
         底値＝DD-3%を越えた下落局面の、その時点までのMDD。過去の解消済み局面を日次でたどり、「MDDが同じ深度帯」「底値から同じ割合以上戻している」「底値から同じ日数以上経過」した時点を底値ごとに1件として集計し、その底値を終値で割る前にATHを更新したかで判定しています。統計はすべて、{instrumentLabel}（上場前は{instrumentLabel === "QQQ" ? "NDX指数をQQQ" : "SP500指数をVOO"}換算）の日次終値（{stats.n.toLocaleString()}営業日）から毎回再計算しており、日次終値を追加すると自動的に反映されます。n&lt;{LOW_SAMPLE_N}は参考値です。過去の統計は将来を保証しません。
       </div>
@@ -5923,11 +6010,11 @@ function BottomScoreModalContent({ bottom, FULL, instrumentLabel = "VOO" }) {
   );
 }
 /* ---------------- 年騰落率予測（直近10年平均・前年類似年の翌年平均・大統領サイクル平均・大統領サイクル別季節性（月次）・当年月末時点類似年・類似年の残り期間実績平均） ---------------- */
-// 6つの実績統計（lib/yearForecast.ts）から年末までの騰落率を予想する。各指標の重みは、過去の確定年でその指標が
+// 7つの実績統計（lib/yearForecast.ts）から年末までの騰落率を予想する。各指標の重みは、過去の確定年でその指標が
 // 方向（上昇/下落）をどれだけ当てていたか（符号一致率）に基づく加重平均であり、単純平均ではない。投資助言ではない。
 // このほか、QQQ・SP500の年間騰落率の相関係数・ベータ等（lib/yearForecast.tsのcomputeQqqSpxCorrelation）を
-// 参考統計として表示する（こちらは6指標の加重平均予測には組み込まれない）。
-const FORECAST_FACTOR_COLOR = { recent10: C.teal, similarPrior: C.amber, cycle: C.violet, seasonality: C.blue, monthEnd: C.rust, monthEndRemaining: C.gold };
+// 参考統計として表示する（こちらは7指標の加重平均予測には組み込まれない）。
+const FORECAST_FACTOR_COLOR = { recent10: C.teal, similarPrior: C.amber, cycle: C.violet, seasonality: C.blue, monthEnd: C.rust, monthEndRemaining: C.gold, ddState: C.gray };
 // 予測値（%、年初＝100基準の指数）を、現在のVOO実価格から逆算した基準価格に当てはめて概算のVOO価格（$）に変換する。
 // 来年の予測は「今年の年末予測＝100」基準になるため、来年側のカードにはbasePriceとして今年の年末概算価格
 // （thisYearEndApproxPrice）を渡す。
@@ -5976,7 +6063,7 @@ function YearForecastPanelBody({ forecast, forecastYear, history, forecastPath, 
   }
   const v = forecast.blendedForecastPct;
   return (
-    <div className="h-full flex flex-col p-2.5 gap-1.5 cursor-pointer" onClick={onOpen} title="クリックで詳細（6指標の予測値・確率・根拠、予測軌跡）">
+    <div className="h-full flex flex-col p-2.5 gap-1.5 cursor-pointer" onClick={onOpen} title="クリックで詳細（7指標の予測値・確率・根拠、予測軌跡）">
       <div className="flex items-baseline justify-between">
         <div className="text-[11px]" style={{ color: C.textMuted }}>{forecastYear}年 年末想定（総合）</div>
         <div className="flex items-baseline gap-1">
@@ -6119,7 +6206,7 @@ function YearForecastModalContent({ forecast, trajectory, yearPoints, forecastYe
           <div className="text-[11px]" style={{ color: C.textMuted }}>上昇確率（総合・加重平均）</div>
           <div className="mono font-bold text-xl">{forecast.blendedProbability == null ? "—" : `${Math.round(forecast.blendedProbability * 100)}%`}</div>
         </div>
-        <div className="text-[11px] leading-relaxed max-w-md" style={{ color: C.textDim }}>6指標を、各指標の過去の予測精度（符号一致率）で重み付けして統合した値です。単純平均ではありません。</div>
+        <div className="text-[11px] leading-relaxed max-w-md" style={{ color: C.textDim }}>7指標を、各指標の過去の予測精度（符号一致率）で重み付けして統合した値です。単純平均ではありません。</div>
       </div>
 
       <div>
@@ -6128,7 +6215,7 @@ function YearForecastModalContent({ forecast, trajectory, yearPoints, forecastYe
       </div>
 
       <div>
-        <div className="text-xs mb-2" style={{ color: C.textDim }}>6つの予測要素（それぞれの予測値・確率・根拠）</div>
+        <div className="text-xs mb-2" style={{ color: C.textDim }}>7つの予測要素（それぞれの予測値・確率・根拠）</div>
         <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))" }}>
           {forecast.factors.map((f) => <YearForecastFactorCard key={f.key} f={f} basePrice={thisYearStartPrice} />)}
         </div>
@@ -6162,7 +6249,7 @@ function YearForecastModalContent({ forecast, trajectory, yearPoints, forecastYe
       )}
 
       <div className="text-[11px] leading-relaxed" style={{ color: C.textDim }}>
-        この予測は、直近10年平均・前年類似年の翌年平均・大統領サイクル平均・大統領サイクル別季節性（月次）・当年月末時点類似年・類似年の残り期間実績平均、という6つの実績統計（VOO・上場前はSP500指数換算）から機械的に算出した参考値であり、投資助言ではありません。各指標の重みは、その指標が過去の確定年で方向（上昇／下落）をどれだけ当てていたか（符号一致率）に基づく加重平均で、単純平均ではありません。いずれの指標も予測対象の年より前のデータだけを使っており、将来の情報は使っていません（ルックアヘッド無し）。過去の実績は将来を保証しません。QQQとSP500の相関統計は参考データであり、この加重平均予測には組み込まれていません。
+        この予測は、直近10年平均・前年類似年の翌年平均・大統領サイクル平均・大統領サイクル別季節性（月次）・当年月末時点類似年・類似年の残り期間実績平均・当年DD局面類似年、という7つの実績統計（VOO・上場前はSP500指数換算）から機械的に算出した参考値であり、投資助言ではありません。各指標の重みは、その指標が過去の確定年で方向（上昇／下落）をどれだけ当てていたか（符号一致率）に基づく加重平均で、単純平均ではありません。いずれの指標も予測対象の年より前のデータだけを使っており、将来の情報は使っていません（ルックアヘッド無し）。過去の実績は将来を保証しません。QQQとSP500の相関統計は参考データであり、この加重平均予測には組み込まれていません。
       </div>
     </div>
   );
@@ -7685,7 +7772,7 @@ export default function DDDashboard() {
   const yearForecastProjectionPath = useMemo(() => yearEndProjectionPath(d.FULL, forecastYear, forecastLatestMonth, yearForecast?.blendedForecastPct ?? null), [d.FULL, forecastYear, forecastLatestMonth, yearForecast]);
   // 今年の年末予測を実績の代わりに使って算出する、来年の予測（拡大画面のみで表示）。
   const nextYearForecast = useMemo(() => computeNextYearForecast(d.FULL, forecastYear, forecastLatestMonth), [d.FULL, forecastYear, forecastLatestMonth]);
-  // QQQ・SP500の年間騰落率の相関係数・ベータ（参考統計。年騰落率予測の6指標の加重平均には組み込まない）。
+  // QQQ・SP500の年間騰落率の相関係数・ベータ（参考統計。年騰落率予測の7指標の加重平均には組み込まない）。
   // 進行中の今年（forecastYear）は実績未確定のため候補から除外する。
   const qqqSpxCorrelation = useMemo(() => (dQqq ? computeQqqSpxCorrelation(d.FULL, dQqq.FULL, forecastYear) : null), [d.FULL, dQqq, forecastYear]);
   // 予測値（年初＝100基準の指数、%）からVOOの概算価格（$）を逆算するための基準価格。現在のVOO実価格（d.currentPrice）と
