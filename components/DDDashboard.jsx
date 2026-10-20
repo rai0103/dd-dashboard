@@ -22,7 +22,7 @@ import { decodeCp932, parseTradeCsv, mergeTrades, computeRealizedEvents, aggrega
 import { OWNER_RAKUTEN_SAKI, OWNER_RAKUTEN_SHIN, OWNER_MOOMOO, OWNER_OPTIONS, RAKUTEN_OWNERS, migrateHoldingsOwners, migrateAsOfKeys, detectRakutenOwnerFromFileName, ownerDisplayLabel } from "@/lib/owners";
 import { BROKERS, brokerByKey, extractionToPreviewRows, previewRowsToHoldings, replaceBrokerHoldings, aggregateLabelsReplacedByBrokers, rowValue, reconcileWithAccountTotal, isPlausibleBrokerRate, guessBrokerRank, reconciliationTarget, sectionChecks, buildBrokerSummary, profitChecks, appendHoldingSnapshot, holdingChanges } from "@/lib/brokerImport";
 import { importUserPrices, applyApiGold, resetPriceField, goldHistoryFetchStart } from "@/lib/priceSeries";
-import { buildStatsTable, computeMddHoldProbability, depthBucketIndex, LOW_SAMPLE_N, PROGRESSION_LEVELS } from "@/lib/bottomScore";
+import { buildStatsTable, computeMddHoldProbability, depthBucketIndex, DEPTH_BUCKETS, LOW_SAMPLE_N, PROGRESSION_LEVELS } from "@/lib/bottomScore";
 import { computeYearForecast, yearForecastTrajectory, yearEndProjectionPath, computeNextYearForecast, computeQqqSpxCorrelation } from "@/lib/yearForecast";
 import { buildQqqEquivalentSeries, parseNdxPreQqqCsv } from "@/lib/qqqSynthetic";
 
@@ -245,6 +245,7 @@ const SPEED_MODIFIER = { "3日以内": 0.7, "4〜5日": 0.85, "6〜10日": 1.0, 
 const ENTRY_COUNT_MODIFIER = { 1: 1.0, 2: 0.95, 3: 0.85, 4: 0.75, "5+": 0.6 };
 const QQQ_AMPLIFICATION_ALERT_MULTIPLIER = 2; // 現在のQQQ増幅率が中央値の何倍以上で「著しく高い」とみなすか
 const QQQ_MODIFIER_FACTOR = 0.9; // 著しく高い場合に買い増し額へ掛ける抑制係数
+const QQQ_GAP_ALERT_THRESHOLD_PT = -5; // 現在のQQQギャップ（pt）が同程度の深さの過去平均よりこの値以上下振れしていたら注意表示
 
 // ④QQQ/SP500の増幅率（qqqMaxDD/spMaxDD）の中央値を動的に算出する。SP500の各完了エピソードの期間
 // （ATH〜底値）について、同じ期間内でのQQQ自身の最大DD（QQQ自身のATH基準）を求め、SP500の最大DDとの
@@ -264,6 +265,60 @@ function computeQqqAmplificationStats(spEpisodes, qqqFULL) {
   }
   if (!ratios.length) return { medianRatio: null, n: 0 };
   return { medianRatio: Number(median(ratios).toFixed(2)), n: ratios.length };
+}
+// ④' QQQとのDDギャップ（pt）統計。SP500の各完了エピソードについて、底値日・解消日時点でのQQQ自身のDD%
+// （QQQ自身のATH基準）とSP500のDD%の差を深さバケット別に集計する。「現在の下落局面と同程度の深さの過去ケースでは、
+// QQQとのギャップはどの程度が普通か」を底値判定パネルの参考情報として表示するために使う
+// （SP500/NQ100のDDギャップ分析より。詳細はプロジェクトのdd-dashboard/sp500-qqq-dd-gap-analysis.md参照）。
+function computeQqqGapStats(spEpisodes, qqqFULL) {
+  if (!qqqFULL || !qqqFULL.length) return null;
+  const qqqByDate = new Map(qqqFULL.map((p) => [p.date.getTime(), p.dd]));
+  const qqqStart = qqqFULL[0].date, qqqEnd = qqqFULL[qqqFULL.length - 1].date;
+  const rows = [];
+  for (const ep of spEpisodes.filter((e) => !e.isOngoing && e.troughDD < 0)) {
+    if (ep.athDate < qqqStart || ep.troughDate > qqqEnd) continue;
+    const qAtTrough = qqqByDate.get(ep.troughDate.getTime());
+    if (qAtTrough === undefined) continue;
+    const gapAtTrough = Number((qAtTrough - ep.troughDD).toFixed(1));
+    let gapAtResolve = null;
+    if (ep.recoveryDate && ep.recoveryDate <= qqqEnd) {
+      const qAtResolve = qqqByDate.get(ep.recoveryDate.getTime());
+      if (qAtResolve !== undefined) gapAtResolve = Number(qAtResolve.toFixed(1)); // SP500側のDDは解消時点でほぼ0のためQQQのDDそのものがgap相当
+    }
+    rows.push({ depth: ep.troughDD, gapAtTrough, gapAtResolve });
+  }
+  if (!rows.length) return null;
+  const withResolveAll = rows.filter((r) => r.gapAtResolve !== null);
+  const overall = { n: rows.length, pctStillDownAtResolve: withResolveAll.length ? Number((withResolveAll.filter((r) => r.gapAtResolve <= -3).length / withResolveAll.length * 100).toFixed(1)) : null };
+  const byBucket = DEPTH_BUCKETS.map((b) => {
+    const sub = rows.filter((r) => r.depth <= b.upper && r.depth > b.lower);
+    if (!sub.length) return null;
+    const withResolve = sub.filter((r) => r.gapAtResolve !== null);
+    return {
+      key: b.key, label: b.label, n: sub.length,
+      avgGapAtTrough: Number(median(sub.map((r) => r.gapAtTrough)).toFixed(1)),
+      pctStillDownAtResolve: withResolve.length ? Number((withResolve.filter((r) => r.gapAtResolve <= -3).length / withResolve.length * 100).toFixed(1)) : null,
+    };
+  }).filter(Boolean);
+  return { n: rows.length, overall, byBucket };
+}
+// VOO底値判定パネル／モーダルの参考情報：現在のQQQとのDDギャップが同程度の深さの過去ケースと比べて広いか（注意）、
+// ATH圏ならQQQがまだ未回復か、を1つのオブジェクトにまとめる。instrumentLabelがVOO以外、またはQQQデータ未取込
+// （qqqGapStats/currentQqqDDがnull）の場合はnull（何も表示しない）。
+function deriveQqqGapInfo(h, instrumentLabel, qqqGapStats, currentQqqDD) {
+  if (instrumentLabel !== "VOO" || !qqqGapStats || currentQqqDD === null) return null;
+  if (h.applicable) {
+    const bi = depthBucketIndex(h.state.mdd);
+    const bucket = bi === -1 ? null : qqqGapStats.byBucket.find((b) => b.key === DEPTH_BUCKETS[bi].key);
+    if (!bucket) return null;
+    const currentGap = Number((currentQqqDD - h.state.latest_dd).toFixed(1));
+    const alert = currentGap - bucket.avgGapAtTrough <= QQQ_GAP_ALERT_THRESHOLD_PT;
+    return { kind: "live", currentGap, bucket, alert };
+  }
+  if (currentQqqDD <= -3 && qqqGapStats.overall.pctStillDownAtResolve !== null) {
+    return { kind: "resolved", currentQqqDD, pctStillDownAtResolve: qqqGapStats.overall.pctStillDownAtResolve };
+  }
+  return null;
 }
 // ⑤ 各DDマイルストーン到達時のCクラス買い増し額 = ベース配分額（①の動的モデルの目標C%と現在C%保有比率の差）
 //   × 速度モディファイア（②） × 突入回数モディファイア（③） × QQQ警戒モディファイア（④）。
@@ -5879,8 +5934,9 @@ function HoldSplitLine({ tier, large = false }) {
 }
 function fmtIdxDate(FULL, idx) { return FULL[idx] ? fmtYMD(FULL[idx].date) : "—"; }
 function bottomLabel(FULL, state) { return `${fmtIdxDate(FULL, state.trough_idx)}（${state.mdd.toFixed(2)}%）`; }
-function BottomScorePanelBody({ bottom, FULL, instrumentLabel = "VOO", onOpen, large = false }) {
+function BottomScorePanelBody({ bottom, FULL, instrumentLabel = "VOO", onOpen, large = false, qqqGapStats = null, currentQqqDD = null }) {
   const h = bottom.hold;
+  const qqqGapInfo = deriveQqqGapInfo(h, instrumentLabel, qqqGapStats, currentQqqDD);
   return (
     <div className="h-full flex flex-col p-2.5 gap-1.5 cursor-pointer" onClick={onOpen} title="クリックで詳細（条件別の確率・過去事例・統計テーブル）">
       {h.applicable ? (
@@ -5893,6 +5949,13 @@ function BottomScorePanelBody({ bottom, FULL, instrumentLabel = "VOO", onOpen, l
         </div>
       ) : (
         <div className="flex-1 flex items-center justify-center text-[11px] text-center px-3" style={{ color: C.textDim }}>{h.reason}</div>
+      )}
+      {qqqGapInfo && (
+        <div className="text-[10px] text-center leading-snug" style={{ color: qqqGapInfo.kind === "live" ? (qqqGapInfo.alert ? C.rust : C.textDim) : C.amber }}>
+          {qqqGapInfo.kind === "live"
+            ? <>QQQとのDDギャップ {qqqGapInfo.currentGap}pt（同程度の深さの過去平均 {qqqGapInfo.bucket.avgGapAtTrough}pt）{qqqGapInfo.alert ? " ⚠ 乖離大" : ""}</>
+            : <>QQQは自身のATHから{qqqGapInfo.currentQqqDD.toFixed(1)}%（SP500解消時点でQQQ未回復だった過去ケース {qqqGapInfo.pctStillDownAtResolve}%）</>}
+        </div>
       )}
       <div className="text-[9px] leading-tight" style={{ color: C.textDim }}>{instrumentLabel}（換算込み）{bottom.stats.n.toLocaleString()}営業日の実績から都度算出。投資助言ではありません。</div>
     </div>
@@ -5979,7 +6042,7 @@ function RecoveryMatrixTable({ matrix }) {
       ))}</tbody></table></div>
   );
 }
-function BottomScoreModalContent({ bottom, FULL, instrumentLabel = "VOO" }) {
+function BottomScoreModalContent({ bottom, FULL, instrumentLabel = "VOO", qqqGapStats = null, currentQqqDD = null }) {
   const { stats, hold: h } = bottom;
   const th = "text-left font-normal py-1 px-2", td = "py-1 px-2";
   const pctCell = (p) => (p === null ? "—" : `${p}%`);
@@ -6037,6 +6100,28 @@ function BottomScoreModalContent({ bottom, FULL, instrumentLabel = "VOO" }) {
             </tr>
           ))}</tbody></table></div>
       </div>
+
+      {qqqGapStats && instrumentLabel === "VOO" && (() => {
+        const info = deriveQqqGapInfo(h, instrumentLabel, qqqGapStats, currentQqqDD);
+        return (
+          <div>
+            {sectionTitle("参考：QQQとのDDギャップ", "（SP500の各局面で、QQQ自身のATH基準DDがどれだけ乖離したか）")}
+            {info && (
+              <div className="text-xs mb-2" style={{ color: info.kind === "live" ? (info.alert ? C.rust : C.textMuted) : C.amber }}>
+                {info.kind === "live"
+                  ? <>現在のギャップ：{info.currentGap}pt（同程度の深さ「{info.bucket.label}」の過去平均：{info.bucket.avgGapAtTrough}pt、n={info.bucket.n}）{info.alert ? "　⚠ 過去平均より乖離が大きくなっています" : ""}</>
+                  : <>現在QQQは自身のATHから{info.currentQqqDD.toFixed(1)}%の状態です。過去、SP500が新高値を回復した時点でQQQも-3%以上未回復だったケースは{info.pctStillDownAtResolve}%あります。</>}
+              </div>
+            )}
+            <div className="overflow-x-auto"><table className="w-full text-xs mono"><thead><tr style={{ color: C.textDim }}><th className={th}>最大DD</th><th className={th}>n</th><th className={th}>底値時点GAP平均</th><th className={th}>SP500解消時QQQ未回復率</th></tr></thead>
+              <tbody>{qqqGapStats.byBucket.map((b) => (
+                <tr key={b.key} style={{ borderTop: `1px solid ${C.borderSoft}`, color: C.textMuted }}>
+                  <td className={td}>{b.label}</td><td className={td}>{b.n}<LowSampleBadge n={b.n} /></td><td className={td}>{b.avgGapAtTrough}pt</td><td className={td}>{b.pctStillDownAtResolve !== null ? `${b.pctStillDownAtResolve}%` : "—"}</td>
+                </tr>
+              ))}</tbody></table></div>
+          </div>
+        );
+      })()}
 
       <div className="grid gap-6" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))" }}>
         <div>
@@ -6393,7 +6478,7 @@ function YearForecastModalContent({ forecast, trajectory, yearPoints, forecastYe
   );
 }
 
-function MobileBottomScorePage({ bottom, FULL, instrumentLabel = "VOO", bottomInstrument, setBottomInstrument, qqqAvailable = false, onOpen, onOpenForecast, forecast, forecastYear, history, forecastPath, basePrice, tab, setTab }) {
+function MobileBottomScorePage({ bottom, FULL, instrumentLabel = "VOO", bottomInstrument, setBottomInstrument, qqqAvailable = false, onOpen, onOpenForecast, forecast, forecastYear, history, forecastPath, basePrice, tab, setTab, qqqGapStats = null, currentQqqDD = null }) {
   return (
     <div className="p-3 h-full">
       <div className="rounded-lg h-full flex flex-col" style={{ background: C.panel, border: `1px solid ${C.border}` }}>
@@ -6408,7 +6493,7 @@ function MobileBottomScorePage({ bottom, FULL, instrumentLabel = "VOO", bottomIn
             : <span className="text-[10px] whitespace-nowrap" style={{ color: C.textDim }}>詳細 ›</span>}
         </div>
         {tab === "score"
-          ? <div className="flex-1 min-h-0"><BottomScorePanelBody bottom={bottom} FULL={FULL} instrumentLabel={instrumentLabel} onOpen={onOpen} large /></div>
+          ? <div className="flex-1 min-h-0"><BottomScorePanelBody bottom={bottom} FULL={FULL} instrumentLabel={instrumentLabel} onOpen={onOpen} large qqqGapStats={qqqGapStats} currentQqqDD={currentQqqDD} /></div>
           : <div className="flex-1 min-h-0"><YearForecastPanelBody forecast={forecast} forecastYear={forecastYear} history={history} forecastPath={forecastPath} basePrice={basePrice} onOpen={onOpenForecast} large /></div>}
       </div>
     </div>
@@ -7978,6 +8063,8 @@ export default function DDDashboard() {
   }, [dGold, period]);
   // ④QQQ早期警戒モディファイア用：QQQ/SP500の増幅率の中央値（読み込み済みSP500エピソード×QQQ実データから動的算出）。
   const qqqAmplification = useMemo(() => (dQqq ? computeQqqAmplificationStats(d.episodes, dQqq.FULL) : null), [d.episodes, dQqq]);
+  // VOO底値判定パネル・モーダルの参考情報（QQQとのDDギャップ）用。動的配分モデルのqqqAmplification（比率・買い増し額の抑制）とは別の指標（pt差・深さバケット別）。
+  const qqqGapStats = useMemo(() => (dQqq ? computeQqqGapStats(d.episodes, dQqq.FULL) : null), [d.episodes, dQqq]);
   // 複数選択の比較チャート用：銘柄ごとの { d, chartData, periodStats }（未取り込みの銘柄はnull）。
   const sourceViews = useMemo(() => ({
     sp500: { d, chartData, periodStats },
@@ -8103,7 +8190,7 @@ export default function DDDashboard() {
       {modal?.type === "ddChart" && <FullScreenModal title={chartSourceTitle(chartSource)} onClose={() => setModal(null)}><DDChartModalContent initialTab={chartTab} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} sourceViews={sourceViews} chartSources={chartSources} onToggleChartSource={toggleChartSource} yearCompare={yearCompare} setYearCompare={setYearCompare} /></FullScreenModal>}
       {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} synthetic={sp500Synthetic} qqqSynthetic={qqqSynthetic} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} vooQqqSeries={vooQqqSeries} onAppendVooQqq={handleAppendVooQqq} onImportVooQqq={handleImportVooQqq} onApplyApiGold={handleApplyApiGold} onResetVooQqqField={handleResetVooQqqField} virtualAggregateLabels={virtualAggregateLabels} onRegisterBrokerHoldings={handleRegisterBrokerHoldings} brokerSummaries={brokerSummaries} />}
       {modal?.type === "checkpointSettings" && <FullScreenModal title="チェックポイント設定" onClose={() => setModal(null)}><CheckpointSettingsContent checkpoints={checkpoints} onCheckpointChange={handleCheckpointChange} holdings={holdings} /></FullScreenModal>}
-      {modal?.type === "bottomScore" && <FullScreenModal title={activeBottom.hold.applicable ? `${activeBottomLabel}底値判定：${bottomLabel(activeBottomFull, activeBottom.hold.state)} が底値として確定する確率（${activeBottomLabel}実績から都度算出）` : `${activeBottomLabel}底値判定（${activeBottomLabel}実績から都度算出）`} onClose={() => setModal(null)}><BottomScoreModalContent bottom={activeBottom} FULL={activeBottomFull} instrumentLabel={activeBottomLabel} /></FullScreenModal>}
+      {modal?.type === "bottomScore" && <FullScreenModal title={activeBottom.hold.applicable ? `${activeBottomLabel}底値判定：${bottomLabel(activeBottomFull, activeBottom.hold.state)} が底値として確定する確率（${activeBottomLabel}実績から都度算出）` : `${activeBottomLabel}底値判定（${activeBottomLabel}実績から都度算出）`} onClose={() => setModal(null)}><BottomScoreModalContent bottom={activeBottom} FULL={activeBottomFull} instrumentLabel={activeBottomLabel} qqqGapStats={qqqGapStats} currentQqqDD={dQqq?.currentDD ?? null} /></FullScreenModal>}
       {modal?.type === "yearForecast" && <FullScreenModal title={`${forecastYear}年 年騰落率予測${yearForecast?.blendedForecastPct != null ? `（総合：${yearForecast.blendedForecastPct > 0 ? "+" : ""}${yearForecast.blendedForecastPct.toFixed(1)}%）` : ""}`} onClose={() => setModal(null)}><YearForecastModalContent forecast={yearForecast} trajectory={yearForecastTrajectoryData} yearPoints={forecastYearPoints} forecastYear={forecastYear} forwardPath={yearForecastTrajectoryForwardPath} nextYearForecast={nextYearForecast} thisYearStartPrice={thisYearStartPrice} thisYearEndApproxPrice={thisYearEndApproxPrice} history={yearForecastHistory} forecastPath={yearForecastChartPath} qqqCorrelation={qqqSpxCorrelation} crashFrequency={bottom.stats.crashFrequency} /></FullScreenModal>}
       {modal?.type === "realHoldingsRanking" && <FullScreenModal title="実質保有銘柄ランキング" onClose={() => setModal(null)}><RealHoldingsRankingContent holdings={combinedHoldings} /></FullScreenModal>}
       {modal?.type === "summary" && <FullScreenModal title="詳細サマリー出力（AI相談用）" onClose={() => setModal(null)}><SummaryModalContent d={d} dVoo={dVoo} dQqq={dQqq} holdings={holdings} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} blocks={blocks} rankLabels={rankLabels} lifecycle={lifecycle} onLifecycleChange={handleLifecycleChange} fixedPositions={fixedPositions} onFixedPositionChange={handleFixedPositionChange} checkpoints={checkpoints} prevSnapshot={prevSnapshot} onSaveSnapshot={handleSaveSnapshot} crashFrequency={bottom.stats.crashFrequency} /></FullScreenModal>}
@@ -8169,7 +8256,7 @@ export default function DDDashboard() {
               { key: "chart", label: "チャート", icon: Activity, content: <MobileChartPage chartTab={chartTab} setChartTab={setChartTab} chartSources={chartSources} onToggleChartSource={toggleChartSource} sourceViews={sourceViews} chartData={chartData} rangeDays={rangeDays} d={d} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} yearCompare={yearCompare} setYearCompare={setYearCompare} onZoom={() => setModal({ type: "mobileChartZoom" })} onOpenCrash={(c) => setModal({ type: "crash", crash: c })} /> },
               { key: "portfolio", label: "構成", icon: Layers, content: <MobilePortfolioPage pieView={pieView} setPieView={setPieView} holdings={combinedHoldings} ownerDates={ownerUpdatedDates} fxRates={fxRates} onOpen={() => setModal({ type: "portfolio" })} onOpenRealHoldingsRanking={() => setModal({ type: "realHoldingsRanking" })} dateLabel={holdingsDateLabel} /> },
               { key: "diff", label: "配分乖離", icon: ListChecks, content: <MobileDiffPage modelOverride={modelOverride} setModelOverride={setModelOverride} d={d} currentHoldingPct={currentHoldingPct} currentHoldingAmount={currentHoldingAmount} effectiveModelRow={effectiveModelRow} rankLabels={rankLabels} blocks={blocks} onOpenRank={(rank) => setModal({ type: "rank", rank })} onOpenDDTable={() => setModal({ type: "ddTable" })} dateLabel={holdingsDateLabel} /> },
-              { key: "bottom", label: "VOO底値判定", icon: Gauge, content: <MobileBottomScorePage bottom={activeBottom} FULL={activeBottomFull} instrumentLabel={activeBottomLabel} bottomInstrument={bottomScoreInstrument} setBottomInstrument={setBottomScoreInstrument} qqqAvailable={!!dQqq} onOpen={() => setModal({ type: "bottomScore" })} onOpenForecast={() => setModal({ type: "yearForecast" })} forecast={yearForecast} forecastYear={forecastYear} history={yearForecastHistory} forecastPath={yearForecastChartPath} basePrice={thisYearStartPrice} tab={bottomPanelTab} setTab={setBottomPanelTab} /> },
+              { key: "bottom", label: "VOO底値判定", icon: Gauge, content: <MobileBottomScorePage bottom={activeBottom} FULL={activeBottomFull} instrumentLabel={activeBottomLabel} bottomInstrument={bottomScoreInstrument} setBottomInstrument={setBottomScoreInstrument} qqqAvailable={!!dQqq} onOpen={() => setModal({ type: "bottomScore" })} onOpenForecast={() => setModal({ type: "yearForecast" })} forecast={yearForecast} forecastYear={forecastYear} history={yearForecastHistory} forecastPath={yearForecastChartPath} basePrice={thisYearStartPrice} tab={bottomPanelTab} setTab={setBottomPanelTab} qqqGapStats={qqqGapStats} currentQqqDD={dQqq?.currentDD ?? null} /> },
               { key: "analysis", label: "現状分析", icon: Info, content: <MobileAnalysisPage analysis={analysis} onNavigate={setModal} checkpointResults={checkpointResults} onOpenCheckpointSettings={() => setModal({ type: "checkpointSettings" })} /> },
             ]}
           />
@@ -8338,7 +8425,7 @@ export default function DDDashboard() {
                 className="h-full"
               >
                 {bottomPanelTab === "score"
-                  ? <BottomScorePanelBody bottom={activeBottom} FULL={activeBottomFull} instrumentLabel={activeBottomLabel} onOpen={() => setModal({ type: "bottomScore" })} />
+                  ? <BottomScorePanelBody bottom={activeBottom} FULL={activeBottomFull} instrumentLabel={activeBottomLabel} onOpen={() => setModal({ type: "bottomScore" })} qqqGapStats={qqqGapStats} currentQqqDD={dQqq?.currentDD ?? null} />
                   : <YearForecastPanelBody forecast={yearForecast} forecastYear={forecastYear} history={yearForecastHistory} forecastPath={yearForecastChartPath} basePrice={thisYearStartPrice} onOpen={() => setModal({ type: "yearForecast" })} />}
               </Panel>
             </div>
