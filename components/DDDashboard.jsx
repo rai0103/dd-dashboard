@@ -5562,7 +5562,7 @@ function computeBottomScoreInfo(bottom) {
   };
 }
 function computeLongformAnalysisJSON(ctx) {
-  const { d, crashFrequency, generatedAt, bottom } = ctx;
+  const { d, crashFrequency, generatedAt, bottom, instrumentLabel = "SP500" } = ctx;
   const FULL = d.FULL;
   const last = FULL[FULL.length - 1];
   const recent = computeRecentStats(FULL);
@@ -5587,6 +5587,7 @@ function computeLongformAnalysisJSON(ctx) {
   });
   return {
     generated_at: generatedAt.toISOString(),
+    instrument_label: instrumentLabel,
     data_last_date: last.date.toISOString().slice(0, 10),
     current_state: {
       dd_pct: d.currentDD, mode: d.mode, days_since_ath: d.daysSinceATH ?? null,
@@ -5611,7 +5612,7 @@ function buildLongformAnalysisMarkdown(ctx) {
   const data = computeLongformAnalysisJSON(ctx);
   const pct = (v, digits = 1) => (v === null || v === undefined ? "—" : `${v >= 0 ? "+" : ""}${v.toFixed ? v.toFixed(digits) : v}%`);
   const L = [];
-  L.push(`【SP500 長尺分析データ】基準日：${fmtYMD(ctx.d.last.date)}（米国時間）`);
+  L.push(`【${ctx.instrumentLabel ?? "SP500"} 長尺分析データ】基準日：${fmtYMD(ctx.d.last.date)}（米国時間）`);
   L.push(`生成: ${fmtDateTimeJST(ctx.generatedAt)}`);
   L.push("");
   L.push("■ 1. 現在の状況");
@@ -5679,7 +5680,7 @@ function buildLongformAnalysisMarkdown(ctx) {
   return L.join("\n");
 }
 // 長尺用S&P500分析データ出力モーダル。資産情報には触れず、SP500専用のデータのみを扱う。
-function LongformAnalysisModalContent({ d, crashFrequency, bottom }) {
+function LongformAnalysisModalContent({ d, crashFrequency, bottom, instrumentLabel = "SP500" }) {
   const generatedAt = useState(() => new Date())[0];
   const [format, setFormat] = useState("md");
   // 動的チャート（画面録画用）：既存の「年比較」機能（YearComparePanel）をそのまま2インスタンス使う。
@@ -5693,7 +5694,7 @@ function LongformAnalysisModalContent({ d, crashFrequency, bottom }) {
   }, [d.FULL]);
   const [recent10State, setRecent10State] = useState(() => ({ ...YEAR_COMPARE_INITIAL, preset: "recent10" }));
   const [cycleCompareState, setCycleCompareState] = useState(() => ({ ...YEAR_COMPARE_INITIAL, preset: cycleInfo.presetKey }));
-  const ctx = useMemo(() => ({ d, crashFrequency, generatedAt, bottom }), [d, crashFrequency, generatedAt, bottom]);
+  const ctx = useMemo(() => ({ d, crashFrequency, generatedAt, bottom, instrumentLabel }), [d, crashFrequency, generatedAt, bottom, instrumentLabel]);
   const jsonOutput = useMemo(() => { try { return computeLongformAnalysisJSON(ctx); } catch (e) { return null; } }, [ctx]);
   const mdOutput = useMemo(() => {
     try { return buildLongformAnalysisMarkdown(ctx); }
@@ -5711,7 +5712,7 @@ function LongformAnalysisModalContent({ d, crashFrequency, bottom }) {
     const blob = new Blob([output], { type: mime });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url; a.download = `sp500_analysis_${stamp}.${ext}`;
+    a.href = url; a.download = `${instrumentLabel.toLowerCase()}_analysis_${stamp}.${ext}`;
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     URL.revokeObjectURL(url);
   };
@@ -5719,7 +5720,7 @@ function LongformAnalysisModalContent({ d, crashFrequency, bottom }) {
   return (
     <div className="flex flex-col">
       <p className="text-xs mb-3 leading-relaxed" style={{ color: C.textDim }}>
-        長尺動画制作用のSP500分析データです。評価額・ドル表記は一切含めず、騰落率(%)・日数・回数・年・確率のみで構成しています。上のタブでMarkdown（台本ドラフト）／JSON（構造化データ）を切り替えてプレビューでき、「ダウンロード」でプレビュー中の形式を1ファイル保存します（アップロード先ツールでは通常Markdownのみ使用）。
+        長尺動画制作用の{instrumentLabel}分析データです。評価額・ドル表記は一切含めず、騰落率(%)・日数・回数・年・確率のみで構成しています。上のタブでMarkdown（台本ドラフト）／JSON（構造化データ）を切り替えてプレビューでき、「ダウンロード」でプレビュー中の形式を1ファイル保存します（アップロード先ツールでは通常Markdownのみ使用）。
       </p>
       <div className="mb-4">
         <div className="text-[11px] font-semibold mb-1" style={{ color: C.textMuted }}>■ 動的チャート（画面録画用）</div>
@@ -5745,6 +5746,122 @@ function LongformAnalysisModalContent({ d, crashFrequency, bottom }) {
       </div>
       <textarea readOnly value={output} onClick={(e) => e.target.select()} className="w-full mono text-[11px] rounded p-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text, height: 380, resize: "vertical" }} />
       <div className="text-[10px] mt-3 leading-relaxed" style={{ color: C.textDim }}>投資助言ではなく判断補助です。過去確率・統計は傾向であり将来を保証しません。</div>
+    </div>
+  );
+}
+
+/* ---------------- 動画用ティッカー分析（SP500以外の個別株・ETFをYouTube動画生成ツール用に分析・出力） ---------------- */
+// SP500専用の「長尺用データ出力」（LongformAnalysisModalContent）を、任意ティッカーでも使えるようにする薄いラッパー。
+// 取り込んだ価格系列からcomputeAll・底値判定統計をその場で計算し、あとは既存のLongformAnalysisModalContentに
+// instrumentLabelを渡してそのまま再利用する（MD/JSON生成・プレビュー・ダウンロード・動的チャートは完全に共通ロジック）。
+// 進行確率・速度別統計はSP500のtrackRecordを借用する（QQQ/GOLDパネルと同じ考え方。単独銘柄の短い履歴では
+// サンプルが不十分なため）。取り込んだデータはIndexedDB（video_tickersキー）にティッカーごとに保存される。
+const VIDEO_TICKERS_STORAGE_KEY = "video_tickers";
+const VIDEO_TICKER_MIN_POINTS = 30; // 分析に最低限必要な件数（これ未満はガードして計算しない）
+function TickerVideoModalContent({ trackRecord }) {
+  const [tickers, setTickers] = useState({}); // { SYMBOL: [{date:"YYYY-MM-DD", price}] }
+  const [loaded, setLoaded] = useState(false);
+  const [newSymbol, setNewSymbol] = useState("");
+  const [selected, setSelected] = useState("");
+  const [fileMsg, setFileMsg] = useState("");
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await storage.get(VIDEO_TICKERS_STORAGE_KEY);
+        if (res && res.value) {
+          const parsed = JSON.parse(res.value);
+          setTickers(parsed);
+          const keys = Object.keys(parsed);
+          if (keys.length) setSelected(keys[0]);
+        }
+      } catch (e) { /* no saved video tickers yet */ }
+      setLoaded(true);
+    })();
+  }, []);
+
+  const persist = (next) => {
+    setTickers(next);
+    storage.set(VIDEO_TICKERS_STORAGE_KEY, JSON.stringify(next)).catch(() => { /* storage unavailable */ });
+  };
+  const handleAddSymbol = () => {
+    const sym = newSymbol.trim().toUpperCase();
+    if (!sym || tickers[sym]) return;
+    persist({ ...tickers, [sym]: [] });
+    setSelected(sym);
+    setNewSymbol("");
+  };
+  const handleDeleteSymbol = (sym) => {
+    const next = { ...tickers };
+    delete next[sym];
+    persist(next);
+    if (selected === sym) setSelected(Object.keys(next)[0] ?? "");
+  };
+  const handleFile = (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !selected) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const parsed = parseStooqCSV(String(ev.target.result));
+      if (!parsed.length) { setFileMsg("CSVを読み取れませんでした（Date/Close列を確認してください）"); return; }
+      persist({ ...tickers, [selected]: parsed.map((p) => ({ date: p.date.toISOString().slice(0, 10), price: p.price })) });
+      setFileMsg(`${parsed.length.toLocaleString()}件取り込みました（${fmtYMD(parsed[0].date)}〜${fmtYMD(parsed[parsed.length - 1].date)}）`);
+    };
+    reader.readAsText(file);
+  };
+
+  const series = selected && tickers[selected] ? tickers[selected] : [];
+  const tickerD = useMemo(() => {
+    if (series.length < VIDEO_TICKER_MIN_POINTS) return null;
+    try { return computeAll(series.map((p) => ({ date: parseDateOnly(p.date), price: p.price })), trackRecord); }
+    catch (e) { return null; }
+  }, [series, trackRecord]);
+  const tickerBottom = useMemo(() => {
+    if (!tickerD) return null;
+    const prices = tickerD.FULL.map((p) => p.price), dates = tickerD.FULL.map((p) => p.date);
+    const stats = buildStatsTable(prices, dates);
+    return { stats, hold: computeMddHoldProbability(prices, stats) };
+  }, [tickerD]);
+
+  return (
+    <div className="flex flex-col">
+      <p className="text-xs mb-3 leading-relaxed" style={{ color: C.textDim }}>
+        SP500以外の個別株・ETF（例：SOXL）を動画化する場合に使います。Stooqの日次CSVを取り込むと、「長尺用データ出力」と同じ分析（騰落率・暴落発生確率・底値判定等、評価額・ドル表記は含みません）をその銘柄で生成できます。進行確率・速度別統計はSP500の長期実績を流用します（単独銘柄の短い履歴だけではサンプルが不足するため）。
+      </p>
+      <div className="flex items-end gap-2 mb-3 flex-wrap">
+        <div>
+          <label className="text-[10px] block mb-1" style={{ color: C.textDim }}>銘柄コードを追加（例：SOXL）</label>
+          <input type="text" value={newSymbol} onChange={(e) => setNewSymbol(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") handleAddSymbol(); }} className="text-xs px-2 py-1.5 rounded mono" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text, width: 120 }} placeholder="SOXL" />
+        </div>
+        <button onClick={handleAddSymbol} className="text-xs px-3 py-1.5 rounded" style={{ background: C.teal, color: C.bg, fontWeight: 700, border: "none", cursor: "pointer" }}>追加</button>
+        {Object.keys(tickers).length > 0 && (
+          <div className="flex items-center gap-1.5 flex-wrap ml-2">
+            {Object.keys(tickers).map((sym) => (
+              <button key={sym} onClick={() => setSelected(sym)} className="text-[11px] pl-2 pr-1.5 py-1 rounded flex items-center gap-1" style={{ color: selected === sym ? C.bg : C.textMuted, background: selected === sym ? C.teal : "transparent", fontWeight: selected === sym ? 700 : 400, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+                {sym}（{tickers[sym].length.toLocaleString()}件）
+                <X size={11} onClick={(e) => { e.stopPropagation(); handleDeleteSymbol(sym); }} />
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      {selected && (
+        <div className="mb-4 pb-4" style={{ borderBottom: `1px solid ${C.borderSoft}` }}>
+          <label className="inline-flex items-center gap-2 text-xs px-3 py-2 rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.textMuted, cursor: "pointer" }}>
+            <Upload size={13} /> {selected} のStooq CSVを選択
+            <input type="file" accept=".csv,text/csv,text/comma-separated-values,application/csv,application/vnd.ms-excel,text/plain,application/octet-stream" onChange={handleFile} style={{ display: "none" }} />
+          </label>
+          <div className="text-xs mt-2" style={{ color: C.textDim }}>取得元: https://stooq.com/q/d/l/?s={selected.toLowerCase()}.us&i=d</div>
+          {fileMsg && <div className="text-xs mt-2" style={{ color: C.teal }}>{fileMsg}</div>}
+        </div>
+      )}
+      {!selected && loaded && <div className="text-xs" style={{ color: C.textDim }}>上で銘柄コードを追加してください。</div>}
+      {selected && series.length > 0 && series.length < VIDEO_TICKER_MIN_POINTS && (
+        <div className="text-xs" style={{ color: C.amber }}>データが{series.length}件のみです（最低{VIDEO_TICKER_MIN_POINTS}件程度必要）。CSVを取り込んでください。</div>
+      )}
+      {selected && tickerD && tickerBottom && (
+        <LongformAnalysisModalContent d={tickerD} crashFrequency={tickerBottom.stats.crashFrequency} bottom={tickerBottom} instrumentLabel={selected} />
+      )}
     </div>
   );
 }
@@ -8589,6 +8706,7 @@ export default function DDDashboard() {
       {modal?.type === "realHoldingsRanking" && <FullScreenModal title="実質保有銘柄ランキング" onClose={() => setModal(null)}><RealHoldingsRankingContent holdings={combinedHoldings} /></FullScreenModal>}
       {modal?.type === "summary" && <FullScreenModal title="詳細サマリー出力（AI相談用）" onClose={() => setModal(null)}><SummaryModalContent d={d} dVoo={dVoo} dQqq={dQqq} holdings={holdings} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} blocks={blocks} rankLabels={rankLabels} lifecycle={lifecycle} onLifecycleChange={handleLifecycleChange} fixedPositions={fixedPositions} onFixedPositionChange={handleFixedPositionChange} checkpoints={checkpoints} prevSnapshot={prevSnapshot} onSaveSnapshot={handleSaveSnapshot} crashFrequency={bottom.stats.crashFrequency} /></FullScreenModal>}
       {modal?.type === "longform" && <FullScreenModal title="長尺用S&P500分析データ出力" onClose={() => setModal(null)}><LongformAnalysisModalContent d={d} crashFrequency={bottom.stats.crashFrequency} bottom={bottom} /></FullScreenModal>}
+      {modal?.type === "videoTicker" && <FullScreenModal title="動画用ティッカー分析" onClose={() => setModal(null)}><TickerVideoModalContent trackRecord={d.trackRecord} /></FullScreenModal>}
       {modal?.type === "mobileChartZoom" && <MobileChartZoomModal onClose={() => setModal(null)} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} sourceViews={sourceViews} chartSources={chartSources} onToggleChartSource={toggleChartSource} yearCompare={yearCompare} setYearCompare={setYearCompare} initialTab={chartTab} isRealDevice={isMobileAuto} />}
 
       {isMobile ? (
@@ -8605,6 +8723,9 @@ export default function DDDashboard() {
             </button>
             <button onClick={() => setModal({ type: "longform" })} title="長尺用S&P500分析データを出力" className="flex items-center justify-center w-[30px] h-[30px] max-[374px]:w-7 max-[374px]:h-7 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
               <Film size={16} />
+            </button>
+            <button onClick={() => setModal({ type: "videoTicker" })} title="動画用ティッカー分析（SP500以外の銘柄）" className="flex items-center justify-center w-[30px] h-[30px] max-[374px]:w-7 max-[374px]:h-7 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+              <Layers size={16} />
             </button>
             <button onClick={() => setModal({ type: "dataInput" })} title="データ入力・出力" className="flex items-center justify-center w-[30px] h-[30px] max-[374px]:w-7 max-[374px]:h-7 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
               <Database size={16} />
@@ -8630,6 +8751,9 @@ export default function DDDashboard() {
           </button>
           <button onClick={() => setModal({ type: "longform" })} title="長尺用S&P500分析データを出力" className="shrink-0 flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
             <Film size={12} /> 長尺用データ出力
+          </button>
+          <button onClick={() => setModal({ type: "videoTicker" })} title="動画用ティッカー分析（SP500以外の銘柄）" className="shrink-0 flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+            <Layers size={12} /> 動画用ティッカー
           </button>
           <button onClick={() => setModal({ type: "dataInput" })} title="データ入力・出力" className="shrink-0 flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
             <Database size={12} /> データ入力・出力
