@@ -5639,6 +5639,17 @@ function buildLongformAnalysisMarkdown(ctx) {
 function LongformAnalysisModalContent({ d, crashFrequency }) {
   const generatedAt = useState(() => new Date())[0];
   const [format, setFormat] = useState("md");
+  // 動的チャート（画面録画用）：既存の「年比較」機能（YearComparePanel）をそのまま2インスタンス使う。
+  // メインダッシュボードのyearCompare状態とは独立（このモーダルを開くたびに既定のプリセットに戻る）。
+  const cycleInfo = useMemo(() => {
+    const year = d.FULL[d.FULL.length - 1].date.getFullYear();
+    const t = presidentialTermYear(year);
+    const presetKey = t === 4 ? "election" : t === 2 ? "midterm" : t === 1 ? "term1" : "term3";
+    const label = t === 4 ? "大統領選挙年" : t === 2 ? "中間選挙年" : `任期${t}年目`;
+    return { year, termYear: t, presetKey, label };
+  }, [d.FULL]);
+  const [recent10State, setRecent10State] = useState(() => ({ ...YEAR_COMPARE_INITIAL, preset: "recent10" }));
+  const [cycleCompareState, setCycleCompareState] = useState(() => ({ ...YEAR_COMPARE_INITIAL, preset: cycleInfo.presetKey }));
   const ctx = useMemo(() => ({ d, crashFrequency, generatedAt }), [d, crashFrequency, generatedAt]);
   const jsonOutput = useMemo(() => { try { return computeLongformAnalysisJSON(ctx); } catch (e) { return null; } }, [ctx]);
   const mdOutput = useMemo(() => {
@@ -5669,6 +5680,17 @@ function LongformAnalysisModalContent({ d, crashFrequency }) {
       <p className="text-xs mb-3 leading-relaxed" style={{ color: C.textDim }}>
         長尺動画制作用のSP500分析データです。評価額・ドル表記は一切含めず、騰落率(%)・日数・回数・年・確率のみで構成しています。「JSON＋MDを両方ダウンロード」でJSON（構造化データ）とMarkdown（台本ドラフト）の2ファイルを同時に保存します。
       </p>
+      <div className="mb-4">
+        <div className="text-[11px] font-semibold mb-1" style={{ color: C.textMuted }}>■ 動的チャート（画面録画用）</div>
+        <div className="mb-3">
+          <div className="text-[11px] mb-1" style={{ color: C.textDim }}>過去10年との比較</div>
+          <div style={{ height: 300 }}><YearComparePanel FULL={d.FULL} fontSize={10} state={recent10State} setState={setRecent10State} /></div>
+        </div>
+        <div>
+          <div className="text-[11px] mb-1" style={{ color: C.textDim }}>{cycleInfo.year}年は大統領任期{cycleInfo.termYear}年目（{cycleInfo.label}）。同区分の過去の年との比較</div>
+          <div style={{ height: 300 }}><YearComparePanel FULL={d.FULL} fontSize={10} state={cycleCompareState} setState={setCycleCompareState} /></div>
+        </div>
+      </div>
       <div className="flex items-center gap-2 mb-3 flex-wrap">
         <div className="flex gap-0.5">
           {[{ k: "md", l: "台本ドラフト（Markdown）" }, { k: "json", l: "JSON" }].map((t) => (
