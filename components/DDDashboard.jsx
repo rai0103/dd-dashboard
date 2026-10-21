@@ -5552,7 +5552,7 @@ function computeBottomScoreInfo(bottom) {
   const s = hold.state, t = hold.tier;
   return {
     applicable: true,
-    current_mdd_pct: s.mdd, latest_dd_pct: s.latest_dd,
+    current_mdd_pct: Number(s.mdd.toFixed(1)), latest_dd_pct: Number(s.latest_dd.toFixed(1)),
     recovery_ratio_pct: Number((Math.max(0, Math.min(1, s.recovery_ratio)) * 100).toFixed(1)),
     days_since_trough: s.days_since_trough,
     tier_label: t.label, tier_n: t.n, tier_low_sample: t.lowSample,
