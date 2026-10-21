@@ -5,7 +5,7 @@ import {
   ComposedChart, LineChart, Area, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ReferenceLine, ReferenceDot, ResponsiveContainer, PieChart, Pie, Cell, Brush, Customized,
 } from "recharts";
-import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Download, RefreshCw, Database, Trash2, Zap, Copy, FileText, Activity, Layers, ListChecks, Smartphone, Monitor, Wallet, Gauge, Film } from "lucide-react";
+import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Download, RefreshCw, Database, Trash2, Zap, Copy, FileText, Activity, Layers, ListChecks, Smartphone, Monitor, Wallet, Gauge, Film, Clapperboard, Play, Pause, Square } from "lucide-react";
 import { storage } from "@/lib/storage";
 import { pullSyncAndApply, pushSyncNow, scheduleSyncPush, getLastSyncedAt, onSyncMergedFromRemote } from "@/lib/sync";
 import { parseInvestmentExcel, computeOwnAssetDrawdown, computeBenchmarkCAGR, latestUsdJpyRates, fxImpact, simulateDcaBenchmark, simulateMonthlyRebasedBenchmark, accountChanges, resolveBeginnerTrial, trialAxis } from "@/lib/investmentPerformance";
@@ -25,6 +25,13 @@ import { importUserPrices, applyApiGold, resetPriceField, goldHistoryFetchStart 
 import { buildStatsTable, computeMddHoldProbability, depthBucketIndex, DEPTH_BUCKETS, LOW_SAMPLE_N, PROGRESSION_LEVELS } from "@/lib/bottomScore";
 import { computeYearForecast, yearForecastTrajectory, yearEndProjectionPath, computeNextYearForecast, computeQqqSpxCorrelation, buildAnnualReturns, presidentialCycleAverage, seasonalMonthlyAverages } from "@/lib/yearForecast";
 import { buildQqqEquivalentSeries, parseNdxPreQqqCsv } from "@/lib/qqqSynthetic";
+import { buildVideoLongform, SP500_KANA, tickerKana } from "@/lib/videoDataAdapter";
+import { ANALYSTS, analystById, voiceGender } from "@/lib/videoAnalysts";
+import { LongAnalysisRenderer } from "@/lib/videoLongAnalysisRenderer";
+import { AudioMixer, setTtsBaseUrl, getTtsBaseUrl } from "@/lib/videoAudioMixer";
+import { VideoExporter } from "@/lib/videoExporter";
+import { listBgms, saveBgm, deleteBgm } from "@/lib/videoBgmLibrary";
+import { listBackgrounds, saveBackground, deleteBackground } from "@/lib/videoBackgroundLibrary";
 
 // Cloudflare Worker（当日のVOO/QQQ終値を返す。SP500はここでは扱わず引き続きCSV取り込み/直接入力で更新する）のエンドポイント。
 // デプロイ先のURLに置き換えてください。
@@ -5754,6 +5761,369 @@ function LongformAnalysisModalContent({ d, crashFrequency, bottom, instrumentLab
   );
 }
 
+// 長尺動画作成：既存の「長尺用データ出力」と同じ入力(d/crashFrequency/bottom/instrumentLabel)から、
+// MD/JSONテキストを一切経由せず、動画のシーン・ナレーション・音声合成・BGM合成・動画書き出しまでを
+// dd-dashboard内で完結させる（lib/videoDataAdapter.ts・lib/video*.ts群を使用）。
+// ショート動画は従来どおりinvestment-shorts（別サービス）で作成し、ここでは長尺のみを扱う。
+// BGM・背景はブラウザ内（IndexedDB）にアップロードして保存・選択する、既存と同じ使い方。
+// ナレーション音声合成は、dd-dashboard本体（output: "export"の静的サイト）とは別プロセスの
+// ローカルTTSヘルパーサーバー（既定 http://localhost:4100・`npm run dev:video`で同時起動）を使う。
+function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = "SP500" }) {
+  const generatedAt = useState(() => new Date())[0];
+  const ctx = useMemo(() => ({ d, crashFrequency, generatedAt, bottom, instrumentLabel }), [d, crashFrequency, generatedAt, bottom, instrumentLabel]);
+  const jsonOutput = useMemo(() => { try { return computeLongformAnalysisJSON(ctx); } catch (e) { return null; } }, [ctx]);
+  const instrumentNameKana = instrumentLabel === "SP500" ? SP500_KANA : tickerKana(instrumentLabel);
+  const video = useMemo(() => {
+    if (!jsonOutput) return null;
+    try { return buildVideoLongform(jsonOutput, d, instrumentNameKana); } catch (e) { console.error("buildVideoLongform error:", e); return null; }
+  }, [jsonOutput, d, instrumentNameKana]);
+  const scenes = video?.scenes ?? [];
+
+  // --- ナレーション文の編集（場面ごと） ---
+  const sceneKey = (i, id) => `${i}:${id}`;
+  const [sceneEdits, setSceneEdits] = useState({});
+  const readings = useMemo(() => scenes.map((sc, i) => { const e = sceneEdits[sceneKey(i, sc.id)]; return e && e.base === sc.reading ? e.text : sc.reading; }), [scenes, sceneEdits]);
+  const handleSceneTextChange = (i, sc, text) => setSceneEdits((prev) => ({ ...prev, [sceneKey(i, sc.id)]: { base: sc.reading, text } }));
+  const resetSceneText = (i, sc) => setSceneEdits((prev) => { const next = { ...prev }; delete next[sceneKey(i, sc.id)]; return next; });
+
+  // --- アナリスト（ベクター画像・アップロード不要） ---
+  const [analystId, setAnalystId] = useState(ANALYSTS[0].id);
+  const analyst = useMemo(() => analystById(analystId), [analystId]);
+
+  // --- 声（ローカルTTSサーバーの一覧） ---
+  const mixerRef = useRef(null);
+  const mixer = () => (mixerRef.current ??= new AudioMixer());
+  const [voices, setVoices] = useState([]);
+  const [voicesLoaded, setVoicesLoaded] = useState(false);
+  const [voiceIndex, setVoiceIndex] = useState("");
+  const [rate, setRate] = useState(1.0);
+  const [pitch, setPitch] = useState(1.0);
+  useEffect(() => {
+    mixer().listServerVoices().then((v) => { setVoices(v); setVoicesLoaded(true); }).catch(() => setVoicesLoaded(true));
+  }, []);
+  const voiceChoices = useMemo(() => voices.filter((v) => { const g = voiceGender(v); return g === null || g === analyst.gender; }), [voices, analyst.gender]);
+  useEffect(() => {
+    if (voiceChoices.length > 0 && !voiceChoices.includes(voiceIndex)) setVoiceIndex(voiceChoices[0]);
+  }, [voiceChoices, voiceIndex]);
+
+  // --- BGM（アップロードして保存・選択） ---
+  const [bgms, setBgms] = useState([]);
+  const [activeBgmId, setActiveBgmId] = useState("");
+  const [bgmVolume, setBgmVolume] = useState(25);
+  const refreshBgms = () => listBgms(true).then(setBgms).catch(() => {});
+  useEffect(() => { refreshBgms(); }, []);
+  const activeBgm = bgms.find((b) => b.id === activeBgmId) || null;
+  const [bgmUrl, setBgmUrl] = useState(null);
+  useEffect(() => {
+    if (!activeBgm) { setBgmUrl(null); return; }
+    const url = URL.createObjectURL(activeBgm.blob);
+    setBgmUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [activeBgm]);
+  const handleBgmUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try { const saved = await saveBgm(file, true); await refreshBgms(); setActiveBgmId(saved.id); } catch (err) { console.error(err); alert("BGMの保存に失敗しました"); }
+  };
+  const handleBgmDelete = async (id) => { await deleteBgm(id, true); if (activeBgmId === id) setActiveBgmId(""); refreshBgms(); };
+
+  // --- 背景（アップロードして保存・選択） ---
+  const [backgrounds, setBackgrounds] = useState([]);
+  const [activeBackgroundId, setActiveBackgroundId] = useState("");
+  const [backgroundOpacity, setBackgroundOpacity] = useState(28);
+  const refreshBackgrounds = () => listBackgrounds(true).then(setBackgrounds).catch(() => {});
+  useEffect(() => { refreshBackgrounds(); }, []);
+  const activeBackground = backgrounds.find((b) => b.id === activeBackgroundId) || null;
+  const [backgroundImgEl, setBackgroundImgEl] = useState(null);
+  useEffect(() => {
+    if (!activeBackground) { setBackgroundImgEl(null); return; }
+    const url = URL.createObjectURL(activeBackground.blob);
+    const img = new Image();
+    img.onload = () => setBackgroundImgEl(img);
+    img.src = url;
+    return () => URL.revokeObjectURL(url);
+  }, [activeBackground]);
+  const handleBackgroundUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try { const saved = await saveBackground(file, true); await refreshBackgrounds(); setActiveBackgroundId(saved.id); } catch (err) { console.error(err); alert("背景画像の保存に失敗しました"); }
+  };
+  const handleBackgroundDelete = async (id) => { await deleteBackground(id, true); if (activeBackgroundId === id) setActiveBackgroundId(""); refreshBackgrounds(); };
+
+  // --- Canvasプレビュー・再生 ---
+  const canvasRef = useRef(null);
+  const rendererRef = useRef(null);
+  const isPlayingRef = useRef(false);
+  const animationFrameRef = useRef(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [seekPos, setSeekPos] = useState(0);
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState(0);
+  const [ttsError, setTtsError] = useState(false);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !video?.stats || !scenes.length) { rendererRef.current = null; return; }
+    canvas.width = 1920; canvas.height = 1080;
+    try {
+      const renderer = new LongAnalysisRenderer(canvas, {
+        stats: video.stats, scenes, analyst: { kind: "vector", a: analyst },
+        backgroundImage: backgroundImgEl, backgroundOpacity: backgroundOpacity / 100,
+        md: video.longMd, basis: video.basis, rolling: video.rolling,
+      });
+      rendererRef.current = renderer;
+      renderer.draw(seekPos);
+    } catch (e) { console.error("LongAnalysisRenderer init error:", e); rendererRef.current = null; }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [video, scenes, analyst, backgroundImgEl, backgroundOpacity]);
+
+  const stopLoop = () => { if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current); animationFrameRef.current = 0; isPlayingRef.current = false; };
+
+  // 各場面のナレーションを音声合成し、音声の長さに合わせて場面の長さを決める（映像用の最短秒数とナレーションのどちらか長い方）
+  const prepareAudio = async (r) => {
+    setTtsError(false);
+    let failed = false;
+    const bufs = [];
+    for (let i = 0; i < scenes.length; i++) {
+      try { bufs.push(await mixer().fetchNarrationBuffer(readings[i], r, voiceIndex, pitch)); }
+      catch (e) { console.error("TTS error:", e); failed = true; bufs.push(null); }
+    }
+    const durs = scenes.map((sc, i) => Math.max(sc.minSec, bufs[i] ? 0.3 + bufs[i].duration + 0.8 : 0));
+    const starts = [];
+    durs.reduce((acc, dur) => { starts.push(acc); return acc + dur; }, 0);
+    const total = durs.reduce((a, b) => a + b, 0);
+    if (failed) setTtsError(true);
+    return { bufs, durs, starts, total, failed };
+  };
+
+  const handlePlay = async () => {
+    if (!rendererRef.current || !scenes.length) return;
+    stopLoop();
+    mixer().stopBGM(); mixer().stopNarration();
+    setIsPlaying(true);
+    isPlayingRef.current = true;
+    const pr = await prepareAudio(rate);
+    if (!isPlayingRef.current || !rendererRef.current) return; // 準備中に停止された
+    rendererRef.current.setDurations?.(pr.durs);
+    rendererRef.current.setNarration?.(pr.bufs);
+    const totalMs = pr.total * 1000;
+    if (bgmUrl) { try { mixer().playBGM(bgmUrl, bgmVolume, true); } catch (e) { console.error("BGM error:", e); } }
+    pr.bufs.forEach((b, i) => { if (b) mixer().playBufferAfter(b, pr.starts[i] + 0.3); });
+    const startTime = performance.now();
+    const tick = (now) => {
+      if (!isPlayingRef.current || !rendererRef.current) return;
+      const progress = Math.min(1, (now - startTime) / totalMs);
+      setSeekPos(progress);
+      rendererRef.current.draw(progress);
+      if (progress < 1) { animationFrameRef.current = requestAnimationFrame(tick); }
+      else { isPlayingRef.current = false; setIsPlaying(false); mixer().fadeBGM(1); rendererRef.current?.pauseAvatar?.(); }
+    };
+    animationFrameRef.current = requestAnimationFrame(tick);
+  };
+
+  const handlePause = () => {
+    stopLoop();
+    setIsPlaying(false);
+    mixer().stopBGM(); mixer().stopNarration();
+    rendererRef.current?.pauseAvatar?.();
+  };
+
+  const handleSeek = (v) => {
+    if (isPlayingRef.current) { stopLoop(); setIsPlaying(false); mixer().stopBGM(); mixer().stopNarration(); }
+    setSeekPos(v);
+    rendererRef.current?.draw(v);
+  };
+
+  const previewScene = async (i) => {
+    try { mixer().stopNarration(); const b = await mixer().fetchNarrationBuffer(readings[i], rate, voiceIndex, pitch); if (b) mixer().playBufferAfter(b, 0); }
+    catch (e) { console.error(e); alert(`音声合成に失敗しました（ローカルTTSサーバー ${getTtsBaseUrl()} が起動しているか確認してください）\n${e?.message ?? e}`); }
+  };
+
+  const handleExport = async () => {
+    if (!rendererRef.current || !canvasRef.current || !scenes.length) return;
+    stopLoop();
+    mixer().stopNarration();
+    setIsPlaying(false);
+    setIsExporting(true);
+    setExportProgress(0);
+    const canvas = canvasRef.current;
+    const exporter = new VideoExporter();
+    let handle = null;
+    try {
+      const audioStream = mixer().startRecordingTap();
+      const pr = await prepareAudio(rate);
+      rendererRef.current.setDurations?.(pr.durs);
+      rendererRef.current.setNarration?.(pr.bufs);
+      const animMs = Math.round(pr.total * 1000);
+      const totalMs = animMs + 300;
+      if (bgmUrl) await mixer().playBGM(bgmUrl, bgmVolume, true);
+      handle = exporter.startRecording(canvas, audioStream, 30);
+      await new Promise((resolve) => {
+        const startTime = performance.now();
+        pr.bufs.forEach((b, i) => { if (b) mixer().playBufferAfter(b, pr.starts[i] + 0.3); });
+        let fading = false;
+        const tick = (now) => {
+          const elapsed = performance.now() - startTime;
+          const progress = Math.min(1, elapsed / animMs);
+          rendererRef.current?.draw(progress);
+          setSeekPos(progress);
+          setExportProgress(Math.round(Math.min(1, elapsed / totalMs) * 95));
+          if (!fading && elapsed >= totalMs - 1400) { fading = true; mixer().fadeBGM(1.4); }
+          if (elapsed < totalMs) requestAnimationFrame(tick); else resolve();
+        };
+        requestAnimationFrame(tick);
+      });
+      await new Promise((r) => setTimeout(r, 400));
+      const blob = await handle.stop();
+      mixer().stopBGM();
+      mixer().stopRecordingTap();
+      const stamp = d.last.date.toISOString().slice(0, 10).replace(/-/g, "");
+      const filename = `${instrumentLabel.toLowerCase()}_long_${stamp}.${handle.extension}`;
+      exporter.downloadVideo(blob, filename);
+      setExportProgress(100);
+      if (pr.failed) alert("ナレーションを動画に入れられませんでした（BGMのみ）。ローカルTTSサーバー（npm run dev:video）が起動しているか、Windowsに日本語音声が入っているかご確認ください。");
+      if (handle.extension === "webm") alert("このブラウザはMP4で直接保存できないため、WebM形式で保存しました。YouTubeにはそのままアップロードできます。");
+    } catch (err) {
+      console.error("Export error:", err);
+      alert(`書き出しエラー: ${err?.message ?? err}`);
+      try { await handle?.stop(); } catch (e2) { /* 無視 */ }
+      mixer().stopBGM();
+      mixer().stopRecordingTap();
+    } finally {
+      rendererRef.current?.draw(seekPos);
+      setTimeout(() => { setIsExporting(false); setExportProgress(0); }, 800);
+    }
+  };
+
+  if (!video || !video.stats) {
+    return <div className="text-xs" style={{ color: C.amber }}>データが不足しているため動画を生成できません（データ件数をご確認ください）。</div>;
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      <p className="text-xs leading-relaxed" style={{ color: C.textDim }}>
+        {instrumentLabel}の長尺分析動画を、ダッシュボード内のデータから直接作成します（MD/JSONのテキストは経由しません）。ナレーション音声合成にはローカルTTSサーバーが必要です（<code className="mono">npm run dev:video</code> で<code className="mono">next dev</code>と同時に起動・既定 {getTtsBaseUrl()}）。評価額・ドル表記は含みません。
+      </p>
+      {voicesLoaded && voices.length === 0 && (
+        <div className="text-xs px-3 py-2 rounded" style={{ background: `${C.rust}1a`, border: `1px solid ${C.rust}44`, color: C.rust }}>
+          ローカルTTSサーバーの音声が見つかりません。<code className="mono">npm run dev:video</code>（または <code className="mono">npm run tts-server</code>）でサーバーを起動してください（Windows専用・音声合成機能）。プレビュー映像の確認自体は音声なしでも可能です。
+        </div>
+      )}
+
+      <div className="grid gap-4" style={{ gridTemplateColumns: "minmax(0,560px) 1fr" }}>
+        {/* Canvasプレビュー */}
+        <div className="flex flex-col gap-2">
+          <div className="relative rounded-lg overflow-hidden border" style={{ borderColor: C.borderSoft, background: "#000", aspectRatio: "16 / 9" }}>
+            <canvas ref={canvasRef} className="w-full h-full" />
+          </div>
+          <input type="range" min={0} max={1} step={0.001} value={seekPos} onChange={(e) => handleSeek(Number(e.target.value))} className="w-full" />
+          <div className="flex items-center gap-2">
+            <button onClick={isPlaying ? handlePause : handlePlay} className="text-xs px-3 py-1.5 rounded flex items-center gap-1.5" style={{ background: C.teal, color: C.bg, fontWeight: 700, border: "none", cursor: "pointer" }}>
+              {isPlaying ? <><Pause size={13} /> 一時停止</> : <><Play size={13} /> プレビュー再生</>}
+            </button>
+            <button onClick={() => { handlePause(); handleSeek(0); }} className="text-xs px-3 py-1.5 rounded flex items-center gap-1.5" style={{ background: C.panel2, color: C.textMuted, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+              <Square size={12} /> 先頭へ
+            </button>
+            <button onClick={handleExport} disabled={isExporting} className="text-xs px-3 py-1.5 rounded flex items-center gap-1.5 ml-auto" style={{ background: isExporting ? C.panel2 : C.amber, color: isExporting ? C.textMuted : C.bg, fontWeight: 700, border: "none", cursor: isExporting ? "default" : "pointer" }}>
+              <Download size={13} /> {isExporting ? `書き出し中… ${exportProgress}%` : "動画を書き出す（MP4）"}
+            </button>
+          </div>
+          {ttsError && <div className="text-[11px]" style={{ color: C.rust }}>一部の場面でナレーション音声の生成に失敗しました（TTSサーバーをご確認ください）。</div>}
+        </div>
+
+        {/* 設定パネル */}
+        <div className="flex flex-col gap-4 text-xs" style={{ color: C.text }}>
+          {/* アナリスト */}
+          <div>
+            <div className="text-[11px] font-semibold mb-1.5" style={{ color: C.textMuted }}>アナリスト</div>
+            <div className="flex flex-wrap gap-1.5">
+              {ANALYSTS.map((a) => (
+                <button key={a.id} onClick={() => setAnalystId(a.id)} className="text-[11px] px-2 py-1 rounded" style={{ color: analystId === a.id ? C.bg : C.textMuted, background: analystId === a.id ? C.teal : "transparent", fontWeight: analystId === a.id ? 700 : 400, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+                  {a.name}（{a.role}）
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* 声・速度 */}
+          <div>
+            <div className="text-[11px] font-semibold mb-1.5" style={{ color: C.textMuted }}>声</div>
+            <select value={voiceIndex} onChange={(e) => setVoiceIndex(e.target.value)} className="text-xs px-2 py-1.5 rounded w-full mb-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }}>
+              {voiceChoices.length === 0 && <option value="">（音声が見つかりません）</option>}
+              {voiceChoices.map((v) => <option key={v} value={v}>{v}</option>)}
+            </select>
+            <div className="flex items-center gap-3">
+              <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>速さ<input type="range" min={0.6} max={1.6} step={0.05} value={rate} onChange={(e) => setRate(Number(e.target.value))} />{rate.toFixed(2)}x</label>
+              <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>高さ<input type="range" min={0.8} max={1.3} step={0.02} value={pitch} onChange={(e) => setPitch(Number(e.target.value))} />{pitch.toFixed(2)}x</label>
+            </div>
+          </div>
+
+          {/* BGM */}
+          <div>
+            <div className="text-[11px] font-semibold mb-1.5" style={{ color: C.textMuted }}>BGM</div>
+            <div className="flex flex-wrap gap-1.5 mb-1.5">
+              <button onClick={() => setActiveBgmId("")} className="text-[11px] px-2 py-1 rounded" style={{ color: activeBgmId === "" ? C.bg : C.textMuted, background: activeBgmId === "" ? C.teal : "transparent", border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>なし</button>
+              {bgms.map((b) => (
+                <span key={b.id} className="inline-flex items-center gap-1 text-[11px] pl-2 pr-1 py-1 rounded" style={{ color: activeBgmId === b.id ? C.bg : C.textMuted, background: activeBgmId === b.id ? C.teal : "transparent", border: `1px solid ${C.borderSoft}` }}>
+                  <button onClick={() => setActiveBgmId(b.id)} style={{ background: "none", border: "none", color: "inherit", cursor: "pointer", fontWeight: activeBgmId === b.id ? 700 : 400 }}>{b.name}</button>
+                  <X size={11} style={{ cursor: "pointer" }} onClick={() => handleBgmDelete(b.id)} />
+                </span>
+              ))}
+              <label className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded" style={{ color: C.textMuted, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+                <Upload size={11} /> 追加
+                <input type="file" accept="audio/*" onChange={handleBgmUpload} style={{ display: "none" }} />
+              </label>
+            </div>
+            <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>音量<input type="range" min={0} max={100} value={bgmVolume} onChange={(e) => setBgmVolume(Number(e.target.value))} />{bgmVolume}%</label>
+          </div>
+
+          {/* 背景 */}
+          <div>
+            <div className="text-[11px] font-semibold mb-1.5" style={{ color: C.textMuted }}>背景画像</div>
+            <div className="flex flex-wrap gap-1.5 mb-1.5">
+              <button onClick={() => setActiveBackgroundId("")} className="text-[11px] px-2 py-1 rounded" style={{ color: activeBackgroundId === "" ? C.bg : C.textMuted, background: activeBackgroundId === "" ? C.teal : "transparent", border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>なし</button>
+              {backgrounds.map((b) => (
+                <span key={b.id} className="inline-flex items-center gap-1 text-[11px] pl-2 pr-1 py-1 rounded" style={{ color: activeBackgroundId === b.id ? C.bg : C.textMuted, background: activeBackgroundId === b.id ? C.teal : "transparent", border: `1px solid ${C.borderSoft}` }}>
+                  <button onClick={() => setActiveBackgroundId(b.id)} style={{ background: "none", border: "none", color: "inherit", cursor: "pointer", fontWeight: activeBackgroundId === b.id ? 700 : 400 }}>{b.name}</button>
+                  <X size={11} style={{ cursor: "pointer" }} onClick={() => handleBackgroundDelete(b.id)} />
+                </span>
+              ))}
+              <label className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded" style={{ color: C.textMuted, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+                <Upload size={11} /> 追加
+                <input type="file" accept="image/*" onChange={handleBackgroundUpload} style={{ display: "none" }} />
+              </label>
+            </div>
+            <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>不透明度<input type="range" min={0} max={100} value={backgroundOpacity} onChange={(e) => setBackgroundOpacity(Number(e.target.value))} />{backgroundOpacity}%</label>
+          </div>
+        </div>
+      </div>
+
+      {/* 場面ごとのナレーション編集 */}
+      <div>
+        <div className="text-[11px] font-semibold mb-1.5" style={{ color: C.textMuted }}>場面とナレーション（{scenes.length}場面・編集するとその場面のみ変更されます）</div>
+        <div className="flex flex-col gap-1.5 max-h-80 overflow-y-auto pr-1">
+          {scenes.map((sc, i) => {
+            const edited = sceneEdits[sceneKey(i, sc.id)];
+            return (
+              <div key={sc.id + i} className="rounded p-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[10px]" style={{ color: C.textDim }}>{i + 1}. {sc.caption}</span>
+                  <div className="flex items-center gap-2">
+                    {edited && <button onClick={() => resetSceneText(i, sc)} className="text-[10px]" style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer" }}>元に戻す</button>}
+                    <button onClick={() => previewScene(i)} className="text-[10px] flex items-center gap-1" style={{ color: C.teal, background: "none", border: "none", cursor: "pointer" }}><Play size={10} /> 試聴</button>
+                  </div>
+                </div>
+                <textarea value={readings[i]} onChange={(e) => handleSceneTextChange(i, sc, e.target.value)} className="w-full text-[11px] rounded p-1.5" style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, color: C.text, minHeight: 44, resize: "vertical" }} />
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      <div className="text-[10px]" style={{ color: C.textDim }}>投資助言ではなく判断補助です。過去確率・統計は傾向であり将来を保証しません。</div>
+    </div>
+  );
+}
+
 /* ---------------- 動画用ティッカー分析（SP500以外の個別株・ETFをYouTube動画生成ツール用に分析・出力） ---------------- */
 // SP500専用の「長尺用データ出力」（LongformAnalysisModalContent）を、任意ティッカーでも使えるようにする薄いラッパー。
 // 取り込んだ価格系列からcomputeAll・底値判定統計をその場で計算し、あとは既存のLongformAnalysisModalContentに
@@ -5768,6 +6138,7 @@ function TickerVideoModalContent({ trackRecord }) {
   const [newSymbol, setNewSymbol] = useState("");
   const [selected, setSelected] = useState("");
   const [fileMsg, setFileMsg] = useState("");
+  const [tickerTab, setTickerTab] = useState("data"); // "data"（データ出力）| "video"（動画作成）
 
   useEffect(() => {
     (async () => {
@@ -5864,7 +6235,15 @@ function TickerVideoModalContent({ trackRecord }) {
         <div className="text-xs" style={{ color: C.amber }}>データが{series.length}件のみです（最低{VIDEO_TICKER_MIN_POINTS}件程度必要）。CSVを取り込んでください。</div>
       )}
       {selected && tickerD && tickerBottom && (
-        <LongformAnalysisModalContent d={tickerD} crashFrequency={tickerBottom.stats.crashFrequency} bottom={tickerBottom} instrumentLabel={selected} />
+        <>
+          <div className="flex gap-0.5 mb-3">
+            {[{ k: "data", l: "データ出力（MD/JSON）" }, { k: "video", l: "動画作成" }].map((t) => (
+              <button key={t.k} onClick={() => setTickerTab(t.k)} className="text-[11px] px-2 py-1 rounded" style={{ color: tickerTab === t.k ? C.bg : C.textMuted, background: tickerTab === t.k ? C.teal : "transparent", fontWeight: tickerTab === t.k ? 700 : 400, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>{t.l}</button>
+            ))}
+          </div>
+          {tickerTab === "data" && <LongformAnalysisModalContent d={tickerD} crashFrequency={tickerBottom.stats.crashFrequency} bottom={tickerBottom} instrumentLabel={selected} />}
+          {tickerTab === "video" && <VideoCreateModalContent d={tickerD} crashFrequency={tickerBottom.stats.crashFrequency} bottom={tickerBottom} instrumentLabel={selected} />}
+        </>
       )}
     </div>
   );
@@ -8710,6 +9089,7 @@ export default function DDDashboard() {
       {modal?.type === "realHoldingsRanking" && <FullScreenModal title="実質保有銘柄ランキング" onClose={() => setModal(null)}><RealHoldingsRankingContent holdings={combinedHoldings} /></FullScreenModal>}
       {modal?.type === "summary" && <FullScreenModal title="詳細サマリー出力（AI相談用）" onClose={() => setModal(null)}><SummaryModalContent d={d} dVoo={dVoo} dQqq={dQqq} holdings={holdings} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} blocks={blocks} rankLabels={rankLabels} lifecycle={lifecycle} onLifecycleChange={handleLifecycleChange} fixedPositions={fixedPositions} onFixedPositionChange={handleFixedPositionChange} checkpoints={checkpoints} prevSnapshot={prevSnapshot} onSaveSnapshot={handleSaveSnapshot} crashFrequency={bottom.stats.crashFrequency} /></FullScreenModal>}
       {modal?.type === "longform" && <FullScreenModal title="長尺用S&P500分析データ出力" onClose={() => setModal(null)}><LongformAnalysisModalContent d={d} crashFrequency={bottom.stats.crashFrequency} bottom={bottom} /></FullScreenModal>}
+      {modal?.type === "videoCreate" && <FullScreenModal title="長尺動画作成（S&P500）" onClose={() => setModal(null)}><VideoCreateModalContent d={d} crashFrequency={bottom.stats.crashFrequency} bottom={bottom} /></FullScreenModal>}
       {modal?.type === "videoTicker" && <FullScreenModal title="動画用ティッカー分析" onClose={() => setModal(null)}><TickerVideoModalContent trackRecord={d.trackRecord} /></FullScreenModal>}
       {modal?.type === "mobileChartZoom" && <MobileChartZoomModal onClose={() => setModal(null)} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} sourceViews={sourceViews} chartSources={chartSources} onToggleChartSource={toggleChartSource} yearCompare={yearCompare} setYearCompare={setYearCompare} initialTab={chartTab} isRealDevice={isMobileAuto} />}
 
@@ -8727,6 +9107,9 @@ export default function DDDashboard() {
             </button>
             <button onClick={() => setModal({ type: "longform" })} title="長尺用S&P500分析データを出力" className="flex items-center justify-center w-[30px] h-[30px] max-[374px]:w-7 max-[374px]:h-7 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
               <Film size={16} />
+            </button>
+            <button onClick={() => setModal({ type: "videoCreate" })} title="長尺動画作成（S&P500）" className="flex items-center justify-center w-[30px] h-[30px] max-[374px]:w-7 max-[374px]:h-7 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+              <Clapperboard size={16} />
             </button>
             <button onClick={() => setModal({ type: "videoTicker" })} title="動画用ティッカー分析（SP500以外の銘柄）" className="flex items-center justify-center w-[30px] h-[30px] max-[374px]:w-7 max-[374px]:h-7 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
               <Layers size={16} />
@@ -8755,6 +9138,9 @@ export default function DDDashboard() {
           </button>
           <button onClick={() => setModal({ type: "longform" })} title="長尺用S&P500分析データを出力" className="shrink-0 flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
             <Film size={12} /> 長尺用データ出力
+          </button>
+          <button onClick={() => setModal({ type: "videoCreate" })} title="長尺動画作成（S&P500）" className="shrink-0 flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+            <Clapperboard size={12} /> 長尺動画作成
           </button>
           <button onClick={() => setModal({ type: "videoTicker" })} title="動画用ティッカー分析（SP500以外の銘柄）" className="shrink-0 flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
             <Layers size={12} /> 動画用ティッカー
