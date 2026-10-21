@@ -9,12 +9,12 @@ import { LongBasis, valueAt } from './videoLongBasis';
 import { LongScene, LongSceneId } from './videoLongAnalysis';
 import { MarketUpdateRenderer } from './videoMarketUpdateRenderer';
 import { VideoAvatar } from './videoAvatarRender';
-import { Analyst, MouthPos, SpriteSet, LONG_COLUMN_X, drawAnalyst, drawLongBackground, drawPhotoAnalyst, drawSpriteAnalyst } from './videoAnalysts';
+import { LONG_COLUMN_X, drawLongBackground } from './videoAnalysts';
 
 export interface LongAnalysisConfig {
   stats: UpdateStats;
   scenes: LongScene[];
-  analyst: { kind: 'video'; avatar: VideoAvatar } | { kind: 'sprite'; set: SpriteSet } | { kind: 'photo'; img: HTMLImageElement; mouth: MouthPos } | { kind: 'vector'; a: Analyst };
+  analyst: { kind: 'video'; avatar: VideoAvatar } | null; // 人物アバター（MP4最大3本・ランダム連続再生）。未登録時はnull（人物パネルなし）
   backgroundImage?: HTMLImageElement | null;
   backgroundOpacity: number;
   rolling?: { label: string; v: number }[];
@@ -89,12 +89,12 @@ export class LongAnalysisRenderer {
   getDurations(): number[] { return this.durs.slice(); }
   /** 動画のアバターが、指定の位置の画面になるまで待つ（サムネ保存用） */
   async prepare(progress: number): Promise<void> {
-    if (this.cfg.analyst.kind === 'video') {
+    if (this.cfg.analyst) {
       this.cfg.analyst.avatar.ensureSchedule(this.totalSeconds);
       await this.cfg.analyst.avatar.prepare(Math.min(1, Math.max(0, progress)) * this.totalSeconds);
     }
   }
-  pauseAvatar(): void { if (this.cfg.analyst.kind === 'video') this.cfg.analyst.avatar.pauseAll(); }
+  pauseAvatar(): void { if (this.cfg.analyst) this.cfg.analyst.avatar.pauseAll(); }
 
   thumbProgress(): number { return (this.durs[0] * 0.9) / Math.max(1e-6, this.totalSeconds); }
 
@@ -762,32 +762,13 @@ export class LongAnalysisRenderer {
     return v < 0.12 ? 0 : Math.pow(v, 0.75);
   }
 
-  private drawAnalystPanel(level: number, gt: number) {
+  private drawAnalystPanel(_level: number, gt: number) {
+    if (!this.cfg.analyst) return; // MP4アバター未登録時は人物パネルを描かない
     const ctx = this.ctx;
-    const X = 690, Y = 58, W = 250, H = 480;
     ctx.save();
     ctx.globalAlpha = 1;
-    if (this.cfg.analyst.kind === 'video') {
-      this.cfg.analyst.avatar.ensureSchedule(this.totalSeconds);
-      this.cfg.analyst.avatar.draw(ctx, LONG_COLUMN_X, 0, LW - LONG_COLUMN_X, LH, gt);
-      ctx.restore();
-      return;
-    }
-    if (this.cfg.analyst.kind === 'sprite') {
-      drawSpriteAnalyst(ctx, this.cfg.analyst.set, LONG_COLUMN_X, 0, LW - LONG_COLUMN_X, LH, level, gt);
-      ctx.restore();
-      return;
-    }
-    if (this.cfg.analyst.kind === 'photo') {
-      drawPhotoAnalyst(ctx, this.cfg.analyst.img, this.cfg.analyst.mouth, X, Y, W, H, level, gt);
-    } else {
-      ctx.fillStyle = 'rgba(0,0,0,0.25)';
-      ctx.fillRect(X, Y, W, H);
-      drawAnalyst(ctx, this.cfg.analyst.a, X, Y + 90, W, 300, gt, level);
-    }
-    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(X, Y, W, H);
+    this.cfg.analyst.avatar.ensureSchedule(this.totalSeconds);
+    this.cfg.analyst.avatar.draw(ctx, LONG_COLUMN_X, 0, LW - LONG_COLUMN_X, LH, gt);
     ctx.restore();
   }
 }

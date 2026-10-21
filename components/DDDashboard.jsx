@@ -26,12 +26,14 @@ import { buildStatsTable, computeMddHoldProbability, depthBucketIndex, DEPTH_BUC
 import { computeYearForecast, yearForecastTrajectory, yearEndProjectionPath, computeNextYearForecast, computeQqqSpxCorrelation, buildAnnualReturns, presidentialCycleAverage, seasonalMonthlyAverages } from "@/lib/yearForecast";
 import { buildQqqEquivalentSeries, parseNdxPreQqqCsv } from "@/lib/qqqSynthetic";
 import { buildVideoLongform, SP500_KANA, tickerKana } from "@/lib/videoDataAdapter";
-import { ANALYSTS, analystById, voiceGender } from "@/lib/videoAnalysts";
+import { voiceGender } from "@/lib/videoAnalysts";
 import { LongAnalysisRenderer } from "@/lib/videoLongAnalysisRenderer";
 import { AudioMixer, setTtsBaseUrl, getTtsBaseUrl } from "@/lib/videoAudioMixer";
 import { VideoExporter } from "@/lib/videoExporter";
 import { listBgms, saveBgm, deleteBgm } from "@/lib/videoBgmLibrary";
 import { listBackgrounds, saveBackground, deleteBackground } from "@/lib/videoBackgroundLibrary";
+import { listAvatars, saveAvatar, deleteAvatar, newAvatar, MAX_CLIPS } from "@/lib/videoAvatarLibrary";
+import { VideoAvatar } from "@/lib/videoAvatarRender";
 
 // Cloudflare Worker（当日のVOO/QQQ終値を返す。SP500はここでは扱わず引き続きCSV取り込み/直接入力で更新する）のエンドポイント。
 // デプロイ先のURLに置き換えてください。
@@ -5786,9 +5788,86 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
   const handleSceneTextChange = (i, sc, text) => setSceneEdits((prev) => ({ ...prev, [sceneKey(i, sc.id)]: { base: sc.reading, text } }));
   const resetSceneText = (i, sc) => setSceneEdits((prev) => { const next = { ...prev }; delete next[sceneKey(i, sc.id)]; return next; });
 
-  // --- アナリスト（ベクター画像・アップロード不要） ---
-  const [analystId, setAnalystId] = useState(ANALYSTS[0].id);
-  const analyst = useMemo(() => analystById(analystId), [analystId]);
+  // --- アバター（人物の動画。1人につきMP4を最大{MAX_CLIPS}本・アップロードしてブラウザに保存） ---
+  const [avatars, setAvatars] = useState([]);
+  const [avatarId, setAvatarId] = useState(null);
+  const [avatarObj, setAvatarObj] = useState(null);
+  const avatarUrlsRef = useRef([]);
+  const seekPosRef = useRef(0);
+  const refreshAvatars = async () => {
+    try {
+      const items = await listAvatars();
+      setAvatars(items);
+      setAvatarId((prev) => (prev && items.some((m) => m.id === prev) ? prev : items[0]?.id ?? null));
+    } catch (e) { console.warn("アバターを読み込めません", e); }
+  };
+  useEffect(() => { refreshAvatars(); }, []);
+  const curAvatar = avatars.find((a) => a.id === avatarId) ?? null;
+  const clipSig = curAvatar ? curAvatar.clips.map((c) => (c ? `${c.name}:${c.blob.size}` : "-")).join("|") : "";
+  useEffect(() => {
+    avatarUrlsRef.current.forEach((u) => URL.revokeObjectURL(u));
+    avatarUrlsRef.current = [];
+    setAvatarObj(null);
+    if (!curAvatar) return;
+    const blobs = curAvatar.clips.filter((c) => !!c);
+    if (blobs.length === 0) return;
+    let cancelled = false;
+    const vids = blobs.map((c) => {
+      const v = document.createElement("video");
+      const url = URL.createObjectURL(c.blob);
+      avatarUrlsRef.current.push(url);
+      v.muted = true; v.loop = false; v.playsInline = true; v.preload = "auto";
+      v.src = url;
+      return v;
+    });
+    Promise.all(vids.map((v) => new Promise((res) => {
+      if (v.readyState >= 2) { res(); return; }
+      v.addEventListener("loadeddata", () => res(), { once: true });
+      v.addEventListener("error", () => res(), { once: true });
+    }))).then(() => {
+      if (cancelled) return;
+      const av = new VideoAvatar(vids, { keyOn: curAvatar.keyOn, tol: curAvatar.tol, zoom: curAvatar.zoom });
+      av.onRedraw = () => {
+        const r = rendererRef.current;
+        if (r && !isPlayingRef.current) r.draw(seekPosRef.current ?? 0);
+      };
+      setAvatarObj(av);
+    });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [avatarId, clipSig]);
+  useEffect(() => {
+    if (avatarObj && curAvatar) avatarObj.setOptions({ keyOn: curAvatar.keyOn, tol: curAvatar.tol, zoom: curAvatar.zoom });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [curAvatar?.keyOn, curAvatar?.tol, curAvatar?.zoom, avatarObj]);
+  const patchAvatar = (id, patch) => {
+    setAvatars((prev) => prev.map((a) => {
+      if (a.id !== id) return a;
+      const next = { ...a, ...patch };
+      saveAvatar(next).catch((err) => console.warn(err));
+      return next;
+    }));
+  };
+  const addAvatar = async () => {
+    const a = newAvatar(`アバター${avatars.length + 1}`);
+    try { await saveAvatar(a); } catch (err) { console.warn(err); alert("登録できませんでした"); return; }
+    await refreshAvatars();
+    setAvatarId(a.id);
+  };
+  const removeAvatarHandler = async (id) => {
+    if (!confirm("このアバター（動画も含む）を登録から削除しますか？")) return;
+    try { await deleteAvatar(id); } catch (err) { console.warn(err); }
+    refreshAvatars();
+  };
+  const setAvatarClip = (id, slot, file) => {
+    const a = avatars.find((x) => x.id === id);
+    if (!a) return;
+    if (file && !(file.type.startsWith("video/") || /\.(mp4|m4v|mov|webm)$/i.test(file.name))) { alert(`動画ではありません: ${file.name}`); return; }
+    const clips = a.clips.slice();
+    while (clips.length < MAX_CLIPS) clips.push(null);
+    clips[slot] = file ? { name: file.name, blob: file } : null;
+    patchAvatar(id, { clips });
+  };
 
   // --- 声（ローカルTTSサーバーの一覧） ---
   const mixerRef = useRef(null);
@@ -5801,7 +5880,8 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
   useEffect(() => {
     mixer().listServerVoices().then((v) => { setVoices(v); setVoicesLoaded(true); }).catch(() => setVoicesLoaded(true));
   }, []);
-  const voiceChoices = useMemo(() => voices.filter((v) => { const g = voiceGender(v); return g === null || g === analyst.gender; }), [voices, analyst.gender]);
+  const avatarGender = avatarObj && curAvatar ? curAvatar.gender : "male"; // 動画のアバターが未登録のときは、声の候補を標準（男性）にする
+  const voiceChoices = useMemo(() => voices.filter((v) => { const g = voiceGender(v); return g === null || g === avatarGender; }), [voices, avatarGender]);
   useEffect(() => {
     if (voiceChoices.length > 0 && !voiceChoices.includes(voiceIndex)) setVoiceIndex(voiceChoices[0]);
   }, [voiceChoices, voiceIndex]);
@@ -5857,6 +5937,7 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
   const animationFrameRef = useRef(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [seekPos, setSeekPos] = useState(0);
+  useEffect(() => { seekPosRef.current = seekPos; }, [seekPos]);
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
   const [ttsError, setTtsError] = useState(false);
@@ -5867,7 +5948,7 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
     canvas.width = 1920; canvas.height = 1080;
     try {
       const renderer = new LongAnalysisRenderer(canvas, {
-        stats: video.stats, scenes, analyst: { kind: "vector", a: analyst },
+        stats: video.stats, scenes, analyst: avatarObj ? { kind: "video", avatar: avatarObj } : null,
         backgroundImage: backgroundImgEl, backgroundOpacity: backgroundOpacity / 100,
         md: video.longMd, basis: video.basis, rolling: video.rolling,
       });
@@ -5875,7 +5956,7 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
       renderer.draw(seekPos);
     } catch (e) { console.error("LongAnalysisRenderer init error:", e); rendererRef.current = null; }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [video, scenes, analyst, backgroundImgEl, backgroundOpacity]);
+  }, [video, scenes, avatarObj, backgroundImgEl, backgroundOpacity]);
 
   const stopLoop = () => { if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current); animationFrameRef.current = 0; isPlayingRef.current = false; };
 
@@ -6010,9 +6091,9 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
         </div>
       )}
 
-      <div className="grid gap-4" style={{ gridTemplateColumns: "minmax(0,560px) 1fr" }}>
-        {/* Canvasプレビュー */}
-        <div className="flex flex-col gap-2">
+      <div className="flex flex-col gap-4 md:flex-row md:items-start">
+        {/* Canvasプレビュー（スクロールしても追従） */}
+        <div className="flex flex-col gap-2 w-full" style={{ flex: "0 0 auto", maxWidth: 560, position: "sticky", top: 0, alignSelf: "flex-start" }}>
           <div className="relative rounded-lg overflow-hidden border" style={{ borderColor: C.borderSoft, background: "#000", aspectRatio: "16 / 9" }}>
             <canvas ref={canvasRef} className="w-full h-full" />
           </div>
@@ -6031,17 +6112,80 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
           {ttsError && <div className="text-[11px]" style={{ color: C.rust }}>一部の場面でナレーション音声の生成に失敗しました（TTSサーバーをご確認ください）。</div>}
         </div>
 
-        {/* 設定パネル */}
-        <div className="flex flex-col gap-4 text-xs" style={{ color: C.text }}>
-          {/* アナリスト */}
+        {/* 設定パネル（右側で縦にスクロール：アバター→ナレーション→声→BGM→背景） */}
+        <div className="flex flex-col gap-4 text-xs flex-1 min-w-0" style={{ color: C.text }}>
+          {/* アバター（人物の動画・MP4最大MAX_CLIPS本） */}
           <div>
-            <div className="text-[11px] font-semibold mb-1.5" style={{ color: C.textMuted }}>アナリスト</div>
-            <div className="flex flex-wrap gap-1.5">
-              {ANALYSTS.map((a) => (
-                <button key={a.id} onClick={() => setAnalystId(a.id)} className="text-[11px] px-2 py-1 rounded" style={{ color: analystId === a.id ? C.bg : C.textMuted, background: analystId === a.id ? C.teal : "transparent", fontWeight: analystId === a.id ? 700 : 400, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
-                  {a.name}（{a.role}）
-                </button>
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="text-[11px] font-semibold" style={{ color: C.textMuted }}>アバター（人物の動画・1人につき最大{MAX_CLIPS}本）</div>
+              <button onClick={addAvatar} className="text-[11px] px-2 py-1 rounded" style={{ color: C.teal, background: "transparent", border: `1px solid ${C.teal}66`, cursor: "pointer" }}>＋ アバターを追加</button>
+            </div>
+            {avatars.length === 0 && <p className="text-[10px] mb-1.5" style={{ color: C.textDim }}>未登録のあいだは人物は表示されません。MP4を登録すると、ランダムな順番でつなぎ目を重ねながらくり返し再生します。</p>}
+            <div className="flex flex-wrap gap-1.5 mb-2">
+              {avatars.map((a) => (
+                <span key={a.id} className="inline-flex items-center gap-1 text-[11px] pl-2 pr-1 py-1 rounded" style={{ color: avatarId === a.id ? C.bg : C.textMuted, background: avatarId === a.id ? C.teal : "transparent", border: `1px solid ${C.borderSoft}`, fontWeight: avatarId === a.id ? 700 : 400 }}>
+                  <button onClick={() => setAvatarId(a.id)} style={{ background: "none", border: "none", color: "inherit", cursor: "pointer", fontWeight: "inherit" }}>{a.gender === "male" ? "♂" : "♀"} {a.name}（{a.clips.filter(Boolean).length}本）</button>
+                  <X size={11} style={{ cursor: "pointer" }} onClick={() => removeAvatarHandler(a.id)} />
+                </span>
               ))}
+            </div>
+            {curAvatar && (
+              <div className="rounded p-2 flex flex-col gap-1.5" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
+                <div className="flex items-center flex-wrap gap-1.5 text-[11px]" style={{ color: C.textDim }}>
+                  <span>名前</span>
+                  <input type="text" value={curAvatar.name} onChange={(e) => patchAvatar(curAvatar.id, { name: e.target.value })} className="px-1.5 py-0.5 rounded text-xs" style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, color: C.text, width: 120 }} />
+                  <span className="ml-1">性別</span>
+                  {["male", "female"].map((g) => (
+                    <button key={g} onClick={() => patchAvatar(curAvatar.id, { gender: g })} className="text-[11px] px-2 py-0.5 rounded" style={{ color: curAvatar.gender === g ? C.bg : C.textMuted, background: curAvatar.gender === g ? C.teal : "transparent", border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>{g === "male" ? "男性" : "女性"}</button>
+                  ))}
+                  <span className="text-[10px]">（声の候補が変わります）</span>
+                </div>
+                {Array.from({ length: MAX_CLIPS }).map((_, i) => {
+                  const clip = curAvatar.clips[i] ?? null;
+                  return (
+                    <div key={i} className="flex items-center gap-1.5 text-[11px]" style={{ color: C.textDim }}>
+                      <span style={{ width: 40, flexShrink: 0 }}>動画{i + 1}</span>
+                      <label className="px-2 py-0.5 rounded cursor-pointer" style={{ color: C.teal, border: `1px solid ${C.teal}66` }}>
+                        {clip ? "差し替え" : "MP4を選択"}
+                        <input type="file" accept="video/mp4,video/*,.mp4,.m4v,.mov,.webm" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0] ?? null; e.target.value = ""; if (f) setAvatarClip(curAvatar.id, i, f); }} />
+                      </label>
+                      <span className="truncate flex-1" title={clip?.name}>{clip ? clip.name : "未登録"}</span>
+                      {clip && <X size={12} style={{ cursor: "pointer", flexShrink: 0 }} onClick={() => setAvatarClip(curAvatar.id, i, null)} />}
+                    </div>
+                  );
+                })}
+                <p className="text-[10px]" style={{ color: C.textDim }}>登録した動画の中から、ランダムな順番でつないで、つなぎ目を自然に重ねながらくり返し再生します（1〜2本でもその範囲でくり返します）。動画の音声は使いません。</p>
+                <label className="flex items-center gap-1.5 text-[11px]" style={{ color: C.textDim }}>
+                  <input type="checkbox" checked={curAvatar.keyOn} onChange={(e) => patchAvatar(curAvatar.id, { keyOn: e.target.checked })} />
+                  背景を消す（動画の四隅の色を基準）
+                </label>
+                {curAvatar.keyOn && (
+                  <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>背景を消す感度 {curAvatar.tol}<input type="range" min={8} max={60} step={1} value={curAvatar.tol} onChange={(e) => patchAvatar(curAvatar.id, { tol: parseInt(e.target.value, 10) })} /></label>
+                )}
+                <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>人物の大きさ {Math.round(curAvatar.zoom * 100)}%<input type="range" min={0.5} max={1.4} step={0.05} value={curAvatar.zoom} onChange={(e) => patchAvatar(curAvatar.id, { zoom: parseFloat(e.target.value) })} /></label>
+              </div>
+            )}
+          </div>
+
+          {/* 場面ごとのナレーション編集（ひらがな表記。場面の長さは音声の長さに自動で合わせます） */}
+          <div>
+            <div className="text-[11px] font-semibold mb-1.5" style={{ color: C.textMuted }}>場面とナレーション（{scenes.length}場面・編集するとその場面のみ変更されます）</div>
+            <div className="flex flex-col gap-1.5 max-h-96 overflow-y-auto pr-1">
+              {scenes.map((sc, i) => {
+                const edited = sceneEdits[sceneKey(i, sc.id)];
+                return (
+                  <div key={sc.id + i} className="rounded p-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-[10px]" style={{ color: C.textDim }}>{i + 1}. {sc.caption}</span>
+                      <div className="flex items-center gap-2">
+                        {edited && <button onClick={() => resetSceneText(i, sc)} className="text-[10px]" style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer" }}>元に戻す</button>}
+                        <button onClick={() => previewScene(i)} className="text-[10px] flex items-center gap-1" style={{ color: C.teal, background: "none", border: "none", cursor: "pointer" }}><Play size={10} /> 試聴</button>
+                      </div>
+                    </div>
+                    <textarea value={readings[i]} onChange={(e) => handleSceneTextChange(i, sc, e.target.value)} className="w-full text-[11px] rounded p-1.5" style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, color: C.text, minHeight: 44, resize: "vertical" }} />
+                  </div>
+                );
+              })}
             </div>
           </div>
 
@@ -6095,28 +6239,6 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
             </div>
             <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>不透明度<input type="range" min={0} max={100} value={backgroundOpacity} onChange={(e) => setBackgroundOpacity(Number(e.target.value))} />{backgroundOpacity}%</label>
           </div>
-        </div>
-      </div>
-
-      {/* 場面ごとのナレーション編集 */}
-      <div>
-        <div className="text-[11px] font-semibold mb-1.5" style={{ color: C.textMuted }}>場面とナレーション（{scenes.length}場面・編集するとその場面のみ変更されます）</div>
-        <div className="flex flex-col gap-1.5 max-h-80 overflow-y-auto pr-1">
-          {scenes.map((sc, i) => {
-            const edited = sceneEdits[sceneKey(i, sc.id)];
-            return (
-              <div key={sc.id + i} className="rounded p-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-[10px]" style={{ color: C.textDim }}>{i + 1}. {sc.caption}</span>
-                  <div className="flex items-center gap-2">
-                    {edited && <button onClick={() => resetSceneText(i, sc)} className="text-[10px]" style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer" }}>元に戻す</button>}
-                    <button onClick={() => previewScene(i)} className="text-[10px] flex items-center gap-1" style={{ color: C.teal, background: "none", border: "none", cursor: "pointer" }}><Play size={10} /> 試聴</button>
-                  </div>
-                </div>
-                <textarea value={readings[i]} onChange={(e) => handleSceneTextChange(i, sc, e.target.value)} className="w-full text-[11px] rounded p-1.5" style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, color: C.text, minHeight: 44, resize: "vertical" }} />
-              </div>
-            );
-          })}
         </div>
       </div>
       <div className="text-[10px]" style={{ color: C.textDim }}>投資助言ではなく判断補助です。過去確率・統計は傾向であり将来を保証しません。</div>
