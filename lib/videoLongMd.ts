@@ -1,0 +1,166 @@
+// [dd-dashboard移植版] investment-shorts (lib/longMd.ts) を移植。
+// テキスト(.md)をパースする parseLongMd / sections / num は移植しない（dd-dashboardは自前のデータから直接LongMdを組み立てるため不要）。
+// buildMdScenes と、読み上げ（ひらがな）生成に必要な型・ヘルパーのみを移植する。
+// 追加変更点：オープニング／エンディングの読み上げに決め打ちだった「えすあんどぴーごひゃく」を、
+// instrumentNameKana引数（省略時は従来どおりS&P500）で任意銘柄に対応できるようにした（investment-shorts側は無改変）。
+import { integerToKana, numberStringToKana, yearsToKana } from './videoReading';
+import { monthDayKana, pctKana, nichiKana } from './videoMarketUpdate';
+import { LongBasis } from './videoLongBasis';
+
+export interface LongMd {
+  y: number; m: number; d: number;
+  status: { dd: number; mode: string; ytd: number; oneYear: number | null; cycle: string; athDate: string; athDays: number | null;
+    caseN: number | null; caseFrom: number | null; caseTo: number | null; caseAth: number | null; caseDd: number | null; caseDdLevel: number | null; notes: string[] } | null;
+  bottom: { lines: string[]; excluded: boolean; mdd: number | null; level: number | null } | null;
+  rolling: { label: string; v: number }[];
+  ytdNote: { ytd: number; years: number; pct: number } | null;
+  forecast: { total: number; prob: number; cycleYears: number[]; monthly: { m: number; v: number }[]; rows: { name: string; mean: number | null; prob: number | null; weight: number | null; n: number | null }[] } | null;
+  ddpace: { athCount: number; perYear: number; every: number; buckets: { range: string; n: number; ref: boolean; days: number; clean: number }[]; phases: number | null } | null;
+  crash: { level: number; count: string; ref: boolean; interval: string; last: string; prob: number; prevAvg: string; prevPlus: string; a1: string; a3: string; a5: string }[];
+  daily: { up: number; down: number; avg: number; buckets: { label: string; v: number }[] } | null;
+}
+
+// ---------- 読み（ひらがな） ----------
+const kz = (t: string): string => t
+  .replace(/([+-]?)(\d+(?:\.\d+)?)%/g, (_, s, n) => `${s === '+' ? 'ぷらす' : s === '-' ? 'まいなす' : ''}${numberStringToKana(n)}ぱーせんと`)
+  .replace(/(\d+(?:\.\d+)?)年/g, (_, n) => (n.includes('.') ? `${numberStringToKana(n)}ねん` : yearsToKana(+n)));
+
+const NAME_MAP: [RegExp, string][] = [
+  [/直近(\d+)年平均/, ''], [/前年類似年の翌年平均/, 'ぜんねんるいじねんの、よくねんへいきん'], [/大統領サイクル別季節性（月次）/, 'だいとうりょう、さいくるべつの、きせつせい'],
+  [/大統領サイクル平均/, 'だいとうりょう、さいくるの、へいきん'], [/当年月末時点類似年/, 'とうねん、げつまつじてんの、るいじねん'], [/類似年の残り期間実績平均/, 'るいじねんの、のこりきかんの、じっせきへいきん'],
+  [/当年DD局面類似年/, 'とうねん、どろーだうん、きょくめんの、るいじねん'],
+];
+function nameKana(n: string): string {
+  const r = n.match(/直近(\d+)年平均/);
+  if (r) return `ちょっきん、${yearsToKana(+r[1])}の、へいきん`;
+  for (const [re, k] of NAME_MAP) if (re.test(n)) return k;
+  return kz(n);
+}
+
+const MONTH_UNIT: Record<string, string> = { '1ヶ月': 'いっかげつ', '3ヶ月': 'さんかげつ', '6ヶ月': 'ろっかげつ' };
+const periodKana = (l: string) => MONTH_UNIT[l] ?? (l.endsWith('年') ? yearsToKana(parseInt(l, 10)) : kz(l));
+export const pk = (v: number, signed = true) => {
+  const r = Math.round(Math.abs(v) * 10) / 10;
+  if (Number.isInteger(r)) return `${signed && r !== 0 ? (v >= 0 ? 'ぷらす' : 'まいなす') : ''}${integerToKana(r)}ぱーせんと`;
+  return pctKana(v, signed);
+};
+export const lvKana = (n: number) => `${integerToKana(n)}ぱーせんと`.replace(/じゅうぱー/, 'じゅっぱー');
+const rangeKana = (r: string): string => {
+  const m = r.match(/^-(\d+)〜-(\d+)%$/);
+  if (m) return `まいなす、${integerToKana(+m[1])}から、まいなす、${lvKana(+m[2])}`;
+  const o = r.match(/^-(\d+)%超$/);
+  if (o) return `まいなす、${lvKana(+o[1])}、ちょう`;
+  return kz(r);
+};
+const BUCKET_K: Record<string, string> = {
+  '+2%超': 'ぷらす、にぱーせんと、ちょう', '+1〜2%': 'ぷらす、いちから、にぱーせんと', '0〜+1%': 'ぜろから、ぷらす、いちぱーせんと',
+  '-1〜0%': 'まいなす、いちぱーせんとから、ぜろ', '-2〜-1%': 'まいなす、にから、まいなす、いちぱーせんと', '-2%超の下落': 'まいなす、にぱーせんと、ちょうの、げらく',
+};
+const MODE_K: [RegExp, string][] = [[/最高値/g, 'さいたかね'], [/更新/g, 'こうしん'], [/モード/g, 'もーど'], [/調整/g, 'ちょうせい'], [/下落/g, 'げらく'], [/回復/g, 'かいふく'], [/ボックス圏?/g, 'ぼっくすけん'], [/ATH/g, 'さいたかね']];
+const modeKana = (t: string) => MODE_K.reduce((s, [re, k]) => s.replace(re, k), t);
+const NY = ['', 'いちねんめ', 'にねんめ', 'さんねんめ', 'よねんめ'];
+export const cycleKana = (t: string): string => {
+  let s = t.replace(/（[^）]*大統領[^）]*）/g, '');
+  s = s.replace(/中間選挙年/g, 'ちゅうかんせんきょねん').replace(/大統領選挙年/g, 'だいとうりょうせんきょねん').replace(/任期(\d)年目/g, (_, n) => `にんき${NY[+n] ?? ''}`);
+  return s.replace(/[（）()]/g, '、');
+};
+const lastKana = (t: string): string => {
+  const m = t.match(/(\d{4})年（([\d.]+)年経過）/);
+  return m ? `ぜんかいは、${yearsToKana(+m[1])}、${numberStringToKana(m[2])}ねん、けいかしています` : kz(t);
+};
+export const intervalK = (t: string): string => {
+  const m = t.match(/^([\d.]+)年に1度/);
+  if (!m) return kz(t);
+  return m[1].includes('.') ? `${numberStringToKana(m[1])}ねんに、いちど` : `${yearsToKana(+m[1])}に、いちど`;
+};
+
+// 任意の英数字ティッカーを1文字ずつ読み上げるためのかな変換（S&P500以外の銘柄用フォールバック）。
+const LETTER_KANA: Record<string, string> = {
+  A: 'えー', B: 'びー', C: 'しー', D: 'でぃー', E: 'いー', F: 'えふ', G: 'じー', H: 'えいち', I: 'あい', J: 'じぇい', K: 'けい', L: 'える',
+  M: 'えむ', N: 'えぬ', O: 'おー', P: 'ぴー', Q: 'きゅー', R: 'あーる', S: 'えす', T: 'てぃー', U: 'ゆー', V: 'ぶい', W: 'だぶりゅー', X: 'えっくす', Y: 'わい', Z: 'ぜっと',
+};
+export function tickerKana(symbol: string): string {
+  return symbol.toUpperCase().split('').map((c) => LETTER_KANA[c] ?? (/[0-9]/.test(c) ? integerToKana(+c) : '')).filter(Boolean).join('・');
+}
+export const SP500_KANA = 'えすあんどぴーごひゃく';
+
+export interface MdScene { id: string; reading: string; minSec: number; caption: string }
+
+/** md から長尺シーンを作る。順序：オープニング→1〜7→エンディング。instrumentNameKana省略時は従来どおりS&P500として読む */
+export function buildMdScenes(md: LongMd, basis?: LongBasis | null, instrumentNameKana: string = SP500_KANA): MdScene[] {
+  const sc: MdScene[] = [];
+  const dateK = `${yearsToKana(md.y)}、${monthDayKana(md.m, md.d)}`;
+  const dateJ = `${md.y}年${md.m}月${md.d}日`;
+  sc.push({ id: 'open', minSec: 5, reading: `${dateK}、${instrumentNameKana}の、ぶんせきを、れぽーとします。`, caption: `${dateJ}、S&P500の分析をレポートします。` });
+
+  const st = md.status;
+  if (st) {
+    let r = `まず、げんざいの、じょうきょうです。さいたかねからの、げらくりつは、${pk(st.dd)}。もーどは、${modeKana(st.mode)}です。ことしの、ねんしょうらいは、${pk(st.ytd)}`;
+    if (st.oneYear !== null) r += `、ちょっきん、いちねんは、${pk(st.oneYear)}`;
+    r += '。';
+    if (st.cycle) r += `${cycleKana(st.cycle)}です。`;
+    if (st.athDays !== null) r += `さいたかね、こうしんから、${nichiKana(st.athDays)}、けいかしています。`;
+    if (st.caseN !== null && st.caseAth !== null && st.caseDd !== null) r += `さいたかねの、こうしんが、${integerToKana(st.caseFrom ?? 0)}から、${nichiKana(st.caseTo ?? 0)}、つづいた、かこの、${integerToKana(st.caseN)}けーすでは、さいしゅうてきに、さいたかねを、こうしんしたのが、${pk(st.caseAth, false)}、まいなす、${integerToKana(st.caseDdLevel ?? 3)}ぱーせんとに、とうたつしたのが、${pk(st.caseDd, false)}でした。`;
+    sc.push({ id: 'status', minSec: 12, reading: r, caption: `現在の状況：DD ${st.dd}%・年初来 ${st.ytd >= 0 ? '+' : ''}${st.ytd}%` });
+  }
+  const bt = md.bottom;
+  if (bt) {
+    const r = bt.excluded
+      ? `つぎに、そこねの、はんていです。げんきょくめんの、まっくすどろーだうんは、${bt.mdd !== null ? pk(bt.mdd) : ''}で、まいなす、${integerToKana(Math.abs(bt.level ?? 3))}ぱーせんとに、たっして、いないため、はんていの、たいしょうがいです。`
+      : `つぎに、そこねの、はんていです。${kz(bt.lines.join('。'))}`;
+    sc.push({ id: 'bottom', minSec: 8, reading: r, caption: '底値判定' });
+  }
+  if (md.rolling.length) {
+    let r = 'つぎに、ろーりんぐ、りたーんです。ろーりんぐ、りたーんとは、きじゅんびから、さかのぼって、それぞれの、きかんの、とうらくりつを、みたものです。その、きかん、もちつづけた、ばあいの、せいせきと、かんがえられます。' + md.rolling.map(x => `${periodKana(x.label)}は、${pk(x.v)}`).join('、') + '。';
+    if (md.ytdNote) r += `ことしの、ねんしょうらいは、${pk(md.ytdNote.ytd)}。おなじじてんの、かこ、${integerToKana(md.ytdNote.years)}ねんの、うち、${pk(md.ytdNote.pct, false)}の、ねんを、うわまわる、ぺーすです。`;
+    sc.push({ id: 'rolling', minSec: 24, reading: r, caption: 'ローリングリターンと年初来の立ち位置' });
+  }
+  const f = md.forecast;
+  if (f) {
+    let r = `つぎに、ねんまつまでの、みとおしです。ふくすうの、しひょうを、かじゅうごうせいした、そうごうよそくは、${pk(f.total)}、じょうしょうかくりつは、${pk(f.prob, false).replace('ぱーせんと', 'ぱーせんと')}です。`;
+    f.rows.filter(x => x.mean !== null).forEach(x => { r += `${nameKana(x.name)}は、${pk(x.mean!)}、じょうしょうかくりつは、${pk(x.prob!, false)}。`; });
+    r += 'これは、かこの、じっせきからの、みとおしで、しょうらいを、ほしょうするものでは、ありません。';
+    sc.push({ id: 'forecast', minSec: 24, reading: r, caption: `年末までの見通し：総合予測 ${f.total >= 0 ? '+' : ''}${f.total}%（上昇確率 ${f.prob}%）` });
+  }
+  if (f && basis) {
+    const r10 = f.rows.find(x => /直近10年平均/.test(x.name));
+    if (r10 && r10.mean !== null && basis.recent.length) {
+      const up = basis.recent.filter(x => x.ret > 0).length;
+      let r = `ここからは、ねんまつみとおしの、こんきょです。まず、ちょっきん、じゅうねんの、へいきんです。さんしょうねんの、ねんかんの、とうらくりつは、`;
+      r += basis.recent.map(x => `${yearsToKana(x.year)}、${pk(x.ret)}`).join('、') + '。';
+      r += `${integerToKana(basis.recent.length)}ねんの、うち、${integerToKana(up)}ねんが、ぷらすで、へいきんは、${pk(r10.mean)}、じょうしょうかくりつは、${pk(r10.prob ?? 0, false)}。ごうせいでの、かじゅうは、${pk(r10.weight ?? 0, false)}です。`;
+      sc.push({ id: 'basis10', minSec: 26, reading: r, caption: `根拠①：直近10年平均 ${r10.mean >= 0 ? '+' : ''}${r10.mean}%` });
+    }
+    const rc = f.rows.find(x => /大統領サイクル平均/.test(x.name));
+    if (rc && rc.mean !== null && basis.cycle.length >= 3) {
+      let r = `つぎに、だいとうりょう、さいくるの、くらべです。${cycleKana(md.status?.cycle ?? '')}の、ことしと、おなじ、くぶんの、かこ、${integerToKana(basis.cycle.length)}ねんの、すいいを、かさねました。みどりの、せんが、ことしです。`;
+      r += `おなじくぶんの、ねんかんの、へいきんは、${pk(rc.mean)}、じょうしょうかくりつは、${pk(rc.prob ?? 0, false)}でした。`;
+      if (f.monthly.length) r += 'げつべつの、きせつせいでは、' + f.monthly.map(x => `${monthDayKana(x.m, 1).replace(/ついたち$/, '')}は、${pk(x.v)}`).join('、') + 'です。';
+      sc.push({ id: 'basisCycle', minSec: 20, reading: r, caption: `根拠②：大統領サイクル平均 ${rc.mean >= 0 ? '+' : ''}${rc.mean}%` });
+    }
+  }
+  const dp = md.ddpace;
+  if (dp) {
+    let r = 'つぎに、かこの、どろーだうん、きょくめんと、さいたかねの、こうしんぺーすです。';
+    if (dp.athCount) r += `さいたかねは、ぜんきかんで、${integerToKana(dp.athCount)}かい、ねんへいきん、${numberStringToKana(String(dp.perYear))}かい、へいきん、${nichiKana(dp.every)}に、いちど、こうしんしています。`;
+    dp.buckets.forEach(b => { r += `${rangeKana(b.range)}の、げらくは、${integerToKana(b.n)}けん、へいきん、げらくにっすうは、${numberStringToKana(String(b.days))}にち、くりーんかいふくりつは、${pk(b.clean, false)}。`; });
+    if (dp.buckets.some(b => b.ref)) r += 'さんぷるすうの、すくないものは、さんこうちです。';
+    sc.push({ id: 'ddpace', minSec: 28, reading: r, caption: '過去のDD局面・ATH更新ペース' });
+  }
+  if (md.crash.length) {
+    let r = 'つぎに、ぼうらくの、はっせいかくりつと、はっせいごの、りたーんです。';
+    md.crash.filter(c => [10, 20, 30].includes(c.level)).forEach(c => {
+      r += `どろーだうん、まいなす、${lvKana(c.level)}を、こえる、げらくは、${intervalK(c.interval)}。${lastKana(c.last)}。こんご、いちねんいないに、はっせいする、かくりつは、${pk(c.prob, false)}。はっせいごの、いちねんは、${kz(c.a1)}、さんねんは、${kz(c.a3)}、ごねんは、${kz(c.a5)}です。`;
+    });
+    r += 'ほかの、ふしめは、ひょうの、とおりです。';
+    sc.push({ id: 'crashmd', minSec: 28, reading: r, caption: '暴落の発生確率と発生後のリターン' });
+  }
+  const dl = md.daily;
+  if (dl) {
+    let r = `さいごに、にちじ、りたーんの、ぶんぷです。じょうしょうびは、${pk(dl.up, false)}、げらくびは、${pk(dl.down, false)}、へいきんの、にちじ、りたーんは、${pk(dl.avg)}です。`;
+    [...dl.buckets].reverse().forEach(b => { r += `${BUCKET_K[b.label] ?? kz(b.label)}は、${pk(b.v, false)}。`; });
+    sc.push({ id: 'daily', minSec: 20, reading: r, caption: '日次リターンの分布' });
+  }
+  sc.push({ id: 'end', minSec: 8, reading: `${dateK}の、${instrumentNameKana}の、ぶんせきれぽーとは、いじょうです。`, caption: `${dateJ}のS&P500の分析レポートは以上です。` });
+  return sc;
+}

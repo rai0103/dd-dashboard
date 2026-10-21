@@ -5427,6 +5427,7 @@ function computeOutlookFromToday(FULL) {
       probability_pct: f.result ? Number((f.result.probability * 100).toFixed(1)) : null,
       weight_pct: Number((f.weight * 100).toFixed(1)),
       sample_n: f.result ? f.result.refYears.length : 0,
+      ref_years: f.result ? f.result.refYears.map((r) => ({ year: r.year, return_pct: Number(r.return.toFixed(1)) })) : [],
     })),
   };
 }
@@ -5648,6 +5649,9 @@ function buildLongformAnalysisMarkdown(ctx) {
   L.push(`総合予測: ${pct(o.blended_forecast_pct)}（上昇確率 ${o.blended_probability_pct ?? "—"}%）`);
   for (const f of o.factors) {
     L.push(`  - ${f.label}: ${pct(f.forecast_pct)}（上昇確率${f.probability_pct ?? "—"}%・重み${f.weight_pct}%・n=${f.sample_n}）`);
+    if (f.ref_years && f.ref_years.length) {
+      L.push(`    根拠（参照年の騰落率）: ${f.ref_years.map((r) => `${r.year}：${pct(r.return_pct)}`).join(" / ")}`);
+    }
     if (f.key === "cycle" && f.detail) {
       L.push(`    ${data.current_state.election_cycle_label}${f.detail.president_info ? `（${f.detail.president_info}）` : ""}・対象年: ${f.detail.sample_years.join(", ") || "—"}`);
     }
