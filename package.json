@@ -4,6 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:video": "node scripts/dev-video.js",
+    "tts-server": "node tts-server/server.js",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
