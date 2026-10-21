@@ -5702,26 +5702,24 @@ function LongformAnalysisModalContent({ d, crashFrequency, bottom }) {
   const jsonText = jsonOutput ? JSON.stringify(jsonOutput, null, 2) : "【生成エラー】データの生成に失敗しました。";
   const output = format === "md" ? mdOutput : jsonText;
 
-  const handleDownloadBoth = () => {
+  // アップロード先（長尺動画生成ツール）はMarkdownのみを使うため、プレビュー中の形式を1ファイルだけ保存する
+  // （JSONはChatGPT等への手動貼り付け用に表示のみ残し、自動ダウンロードはしない）。
+  const handleDownload = () => {
     const stamp = d.last.date.toISOString().slice(0, 10).replace(/-/g, "");
-    const files = [
-      { name: `sp500_analysis_${stamp}.json`, content: jsonText, mime: "application/json;charset=utf-8;" },
-      { name: `sp500_analysis_${stamp}.md`, content: mdOutput, mime: "text/markdown;charset=utf-8;" },
-    ];
-    for (const f of files) {
-      const blob = new Blob([f.content], { type: f.mime });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url; a.download = f.name;
-      document.body.appendChild(a); a.click(); document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    }
+    const ext = format === "md" ? "md" : "json";
+    const mime = format === "md" ? "text/markdown;charset=utf-8;" : "application/json;charset=utf-8;";
+    const blob = new Blob([output], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `sp500_analysis_${stamp}.${ext}`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   return (
     <div className="flex flex-col">
       <p className="text-xs mb-3 leading-relaxed" style={{ color: C.textDim }}>
-        長尺動画制作用のSP500分析データです。評価額・ドル表記は一切含めず、騰落率(%)・日数・回数・年・確率のみで構成しています。「JSON＋MDを両方ダウンロード」でJSON（構造化データ）とMarkdown（台本ドラフト）の2ファイルを同時に保存します。
+        長尺動画制作用のSP500分析データです。評価額・ドル表記は一切含めず、騰落率(%)・日数・回数・年・確率のみで構成しています。上のタブでMarkdown（台本ドラフト）／JSON（構造化データ）を切り替えてプレビューでき、「ダウンロード」でプレビュー中の形式を1ファイル保存します（アップロード先ツールでは通常Markdownのみ使用）。
       </p>
       <div className="mb-4">
         <div className="text-[11px] font-semibold mb-1" style={{ color: C.textMuted }}>■ 動的チャート（画面録画用）</div>
@@ -5740,7 +5738,7 @@ function LongformAnalysisModalContent({ d, crashFrequency, bottom }) {
             <button key={t.k} onClick={() => setFormat(t.k)} className="text-[11px] px-2 py-1 rounded" style={{ color: format === t.k ? C.bg : C.textMuted, background: format === t.k ? C.teal : "transparent", fontWeight: format === t.k ? 700 : 400, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>{t.l}</button>
           ))}
         </div>
-        <button onClick={handleDownloadBoth} className="text-xs px-3 py-1 rounded flex items-center gap-1.5 ml-auto" style={{ background: C.panel2, color: C.textMuted, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}><Download size={12} />JSON＋MDを両方ダウンロード</button>
+        <button onClick={handleDownload} className="text-xs px-3 py-1 rounded flex items-center gap-1.5 ml-auto" style={{ background: C.panel2, color: C.textMuted, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}><Download size={12} />{format === "md" ? "台本ドラフト（MD）をダウンロード" : "JSONをダウンロード"}</button>
       </div>
       <div className="flex items-center justify-between mb-1">
         <span className="text-[10px]" style={{ color: C.textDim }}>プレビュー（{format === "md" ? "Markdown" : "JSON"}）・{output.length.toLocaleString()}文字・クリックで全選択</span>
