@@ -5,7 +5,7 @@ import {
   ComposedChart, LineChart, Area, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ReferenceLine, ReferenceDot, ResponsiveContainer, PieChart, Pie, Cell, Brush, Customized,
 } from "recharts";
-import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Download, RefreshCw, Database, Trash2, Zap, Copy, FileText, Activity, Layers, ListChecks, Smartphone, Monitor, Wallet, Gauge } from "lucide-react";
+import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Download, RefreshCw, Database, Trash2, Zap, Copy, FileText, Activity, Layers, ListChecks, Smartphone, Monitor, Wallet, Gauge, Film } from "lucide-react";
 import { storage } from "@/lib/storage";
 import { pullSyncAndApply, pushSyncNow, scheduleSyncPush, getLastSyncedAt, onSyncMergedFromRemote } from "@/lib/sync";
 import { parseInvestmentExcel, computeOwnAssetDrawdown, computeBenchmarkCAGR, latestUsdJpyRates, fxImpact, simulateDcaBenchmark, simulateMonthlyRebasedBenchmark, accountChanges, resolveBeginnerTrial, trialAxis } from "@/lib/investmentPerformance";
@@ -16,14 +16,14 @@ import { isStaleSince } from "@/lib/marketClock";
 import { amountsByClass, largestRemainderPercent, allocationDiff, topHoldingsByClass, ddLabel } from "@/lib/currentAllocation";
 import { computeAccelSensor } from "@/lib/accelSensor";
 import { buildVooEquivalentSeries } from "@/lib/sp500Synthetic";
-import { buildYearSeries, completeYears, selectCompareYears, computeYearStats, averageYearStats, sortYearsBy, YEAR_PRESETS } from "@/lib/yearCompare";
-import { yearEventText, recoveryInfo } from "@/lib/yearEvents";
+import { buildYearSeries, completeYears, selectCompareYears, computeYearStats, averageYearStats, sortYearsBy, YEAR_PRESETS, presidentialTermYear } from "@/lib/yearCompare";
+import { yearEventText, recoveryInfo, presidentFor } from "@/lib/yearEvents";
 import { decodeCp932, parseTradeCsv, mergeTrades, computeRealizedEvents, aggregateRanking, splitRanking, periodOptions, emptyTradeHistory, TRADE_KIND_LABEL } from "@/lib/tradeHistory";
 import { OWNER_RAKUTEN_SAKI, OWNER_RAKUTEN_SHIN, OWNER_MOOMOO, OWNER_OPTIONS, RAKUTEN_OWNERS, migrateHoldingsOwners, migrateAsOfKeys, detectRakutenOwnerFromFileName, ownerDisplayLabel } from "@/lib/owners";
 import { BROKERS, brokerByKey, extractionToPreviewRows, previewRowsToHoldings, replaceBrokerHoldings, aggregateLabelsReplacedByBrokers, rowValue, reconcileWithAccountTotal, isPlausibleBrokerRate, guessBrokerRank, reconciliationTarget, sectionChecks, buildBrokerSummary, profitChecks, appendHoldingSnapshot, holdingChanges } from "@/lib/brokerImport";
 import { importUserPrices, applyApiGold, resetPriceField, goldHistoryFetchStart } from "@/lib/priceSeries";
 import { buildStatsTable, computeMddHoldProbability, depthBucketIndex, DEPTH_BUCKETS, LOW_SAMPLE_N, PROGRESSION_LEVELS } from "@/lib/bottomScore";
-import { computeYearForecast, yearForecastTrajectory, yearEndProjectionPath, computeNextYearForecast, computeQqqSpxCorrelation } from "@/lib/yearForecast";
+import { computeYearForecast, yearForecastTrajectory, yearEndProjectionPath, computeNextYearForecast, computeQqqSpxCorrelation, buildAnnualReturns, presidentialCycleAverage, seasonalMonthlyAverages } from "@/lib/yearForecast";
 import { buildQqqEquivalentSeries, parseNdxPreQqqCsv } from "@/lib/qqqSynthetic";
 
 // Cloudflare Worker（当日のVOO/QQQ終値を返す。SP500はここでは扱わず引き続きCSV取り込み/直接入力で更新する）のエンドポイント。
@@ -5355,6 +5355,337 @@ function buildSummaryJSON(ctx) {
   };
 }
 
+/* ---------------- 長尺用S&P500分析データ出力 ---------------- */
+// YouTube長尺動画制作用の分析データセット。既存の「詳細サマリー」出力（buildSummaryJSON/buildSummaryMarkdown/
+// SummaryModalContent）は一切変更せず、全て新規追加の関数・コンポーネントとして実装する。
+// 「SP500」は実際にはVOOのデータから作っているため、評価額（ドル）は一切出力しない。price/$の値はJSON・台本の
+// どちらにも含めず、騰落率(%)・日数・回数・年・確率のみで表現する。
+
+// 直近日からyears年前に最も近い（それ以前で最も新しい）営業日のレコードを返す（データが足りなければnull）。
+function priceYearsAgo(FULL, years) {
+  const last = FULL[FULL.length - 1];
+  const target = new Date(last.date);
+  target.setFullYear(target.getFullYear() - years);
+  return [...FULL].reverse().find((p) => p.date <= target) ?? null;
+}
+// 複数期間（月・年）の直近日比騰落率(%)をまとめて返す。computeRecentStatsのoneYearReturnと同じ考え方の汎用版。
+function computeRollingReturns(FULL) {
+  const n = FULL.length;
+  if (n < 2) return null;
+  const last = FULL[n - 1];
+  const byMonths = (m) => {
+    const target = new Date(last.date);
+    target.setMonth(target.getMonth() - m);
+    const point = [...FULL].reverse().find((p) => p.date <= target);
+    return point ? Number((((last.price / point.price) - 1) * 100).toFixed(1)) : null;
+  };
+  const byYears = (y) => {
+    const point = priceYearsAgo(FULL, y);
+    return point ? Number((((last.price / point.price) - 1) * 100).toFixed(1)) : null;
+  };
+  return {
+    "1m": byMonths(1), "3m": byMonths(3), "6m": byMonths(6),
+    "1y": byYears(1), "3y": byYears(3), "5y": byYears(5), "10y": byYears(10), "20y": byYears(20),
+    since_data_start: Number((((last.price / FULL[0].price) - 1) * 100).toFixed(1)),
+  };
+}
+// 今年のYTD%を、過去の確定年（同じ通算日時点）のYTD%と比較する（buildYearSeries/completeYearsを再利用）。
+function computeYtdVsPast(FULL) {
+  const last = FULL[FULL.length - 1];
+  const year = last.date.getFullYear();
+  const series = buildYearSeries(FULL.map((p) => ({ date: p.date, price: p.price })));
+  const curPts = series.get(year);
+  if (!curPts || !curPts.length) return null;
+  const curDoy = curPts[curPts.length - 1].doy;
+  const currentYtdPct = Number((curPts[curPts.length - 1].index - 100).toFixed(1));
+  const years = completeYears(series, year);
+  const sampleYears = years.map((y) => {
+    const pts = series.get(y);
+    let v = pts[0].index;
+    for (const p of pts) { if (p.doy > curDoy) break; v = p.index; }
+    return { year: y, ytd_pct_at_same_point: Number((v - 100).toFixed(1)) };
+  });
+  const better = sampleYears.filter((s) => currentYtdPct > s.ytd_pct_at_same_point).length;
+  return {
+    current_ytd_pct: currentYtdPct,
+    better_than_pct_of_years: sampleYears.length ? Number((better / sampleYears.length * 100).toFixed(1)) : null,
+    sample_years: sampleYears,
+  };
+}
+// 今日時点での年末までの見通し（既存lib/yearForecast.tsの7指標加重予測をそのまま変換）。
+function computeOutlookFromToday(FULL) {
+  const last = FULL[FULL.length - 1];
+  const year = last.date.getFullYear(), month = last.date.getMonth() + 1;
+  const forecast = computeYearForecast(FULL, year, month);
+  return {
+    year: forecast.year, as_of_month: forecast.asOfMonth,
+    blended_forecast_pct: forecast.blendedForecastPct !== null ? Number(forecast.blendedForecastPct.toFixed(1)) : null,
+    blended_probability_pct: forecast.blendedProbability !== null ? Number((forecast.blendedProbability * 100).toFixed(1)) : null,
+    factors: forecast.factors.map((f) => ({
+      key: f.key, label: f.label,
+      forecast_pct: f.result ? Number(f.result.forecastPct.toFixed(1)) : null,
+      probability_pct: f.result ? Number((f.result.probability * 100).toFixed(1)) : null,
+      weight_pct: Number((f.weight * 100).toFixed(1)),
+      sample_n: f.result ? f.result.refYears.length : 0,
+    })),
+  };
+}
+// 米大統領サイクル情報（lib/yearCompare.ts・lib/yearEvents.ts・lib/yearForecast.tsを再利用）。
+function computeUsElectionCycleInfo(FULL) {
+  const last = FULL[FULL.length - 1];
+  const year = last.date.getFullYear();
+  const termYear = presidentialTermYear(year);
+  const termLabel = termYear === 4 ? "大統領選挙年（任期4年目）" : termYear === 2 ? "中間選挙年（任期2年目）" : termYear === 1 ? "大統領任期1年目" : "大統領任期3年目";
+  const returns = buildAnnualReturns(FULL);
+  const cycle = presidentialCycleAverage(returns, year);
+  return {
+    term_year: termYear, label: termLabel, president_info: presidentFor(year),
+    cycle_avg_return_pct: cycle ? Number(cycle.forecastPct.toFixed(1)) : null,
+    cycle_positive_share_pct: cycle ? Number((cycle.probability * 100).toFixed(1)) : null,
+    cycle_sample_years: cycle ? cycle.refYears.map((r) => r.year) : [],
+  };
+}
+// 月次の季節性（同じ大統領サイクル区分の過去年の月別平均リターン。lib/yearForecast.tsを再利用）。
+function computeMonthlySeasonalityInfo(FULL) {
+  const last = FULL[FULL.length - 1];
+  const year = last.date.getFullYear(), month = last.date.getMonth() + 1;
+  const pattern = seasonalMonthlyAverages(FULL, year, month);
+  return (pattern || []).map((p) => ({ month: p.month, avg_return_pct: Number(p.avgReturnPct.toFixed(1)), n: p.n }));
+}
+// 全期間のATH更新回数の統計（年平均・更新ペース。lib/yearCompare.tsのcomputeYearStatsを再利用、価格は含まない）。
+function computeAthStats(FULL) {
+  const last = FULL[FULL.length - 1];
+  const year = last.date.getFullYear();
+  const series = buildYearSeries(FULL.map((p) => ({ date: p.date, price: p.price })));
+  const years = completeYears(series, year);
+  if (!years.length) return null;
+  const statsMap = computeYearStats(FULL, years);
+  const rows = years.map((y) => statsMap.get(y)).filter(Boolean);
+  if (!rows.length) return null;
+  const totalCount = rows.reduce((s, r) => s + r.athCount, 0);
+  const totalDays = (FULL[FULL.length - 1].date - FULL[0].date) / 86400000;
+  return {
+    total_count: totalCount, years_covered: rows.length,
+    avg_per_year: Number((totalCount / rows.length).toFixed(1)),
+    avg_days_between: totalCount > 0 ? Number((totalDays / totalCount).toFixed(0)) : null,
+  };
+}
+// 深度バケット別のATHからの日数統計（lib/bottomScore.tsのbuildStatsTable.depthStatsを再利用、価格は含まない）。
+function computeAthGaps(FULL) {
+  const prices = FULL.map((p) => p.price);
+  const dates = FULL.map((p) => p.date);
+  const stats = buildStatsTable(prices, dates);
+  return stats.depthStats.map((b) => ({ depth_bucket: b.label, n: b.n, avg_duration_days: b.avgDurationDays, clean_recovery_rate_pct: b.cleanRecoveryRate, low_sample: b.lowSample }));
+}
+// 過去のDD局面一覧を、価格($)を一切含めない形に変換する（既存d.episodes＝findDDEpisodesの戻り値を再利用）。
+function summarizeDrawdownEpisodesNoPrice(episodes) {
+  return episodes.map((ep) => ({
+    ath_date: fmtYMD(ep.athDate), trough_date: fmtYMD(ep.troughDate), trough_dd_pct: ep.troughDD,
+    decline_duration_days: ep.troughIdx - ep.athIdx,
+    recovery_date: ep.isOngoing ? null : fmtYMD(ep.recoveryDate),
+    recovery_duration_days: ep.isOngoing ? null : ep.recoveryIdx - ep.troughIdx,
+    is_ongoing: ep.isOngoing,
+  }));
+}
+// 暴落閾値到達後のN年後リターン(%)。既存crashFrequencyの発生日（価格を含まない）から、FULLの価格を使って算出する。
+function computeAfterCrashReturns(FULL, crashFrequency) {
+  if (!crashFrequency || !crashFrequency.length) return [];
+  const byTime = new Map(FULL.map((p, i) => [p.date.getTime(), i]));
+  const returnAfter = (startIdx, years) => {
+    const target = new Date(FULL[startIdx].date);
+    target.setFullYear(target.getFullYear() + years);
+    let idx = -1;
+    for (let k = startIdx; k < FULL.length; k++) { if (FULL[k].date >= target) { idx = k; break; } }
+    return idx === -1 ? null : Number((((FULL[idx].price / FULL[startIdx].price) - 1) * 100).toFixed(1));
+  };
+  const avg = (xs) => xs.length ? Number((xs.reduce((s, v) => s + v, 0) / xs.length).toFixed(1)) : null;
+  return crashFrequency.map((row) => {
+    const rets1 = [], rets3 = [], rets5 = [];
+    for (const occ of row.occurrences) {
+      if (!occ.date) continue;
+      const idx = byTime.get(occ.date.getTime());
+      if (idx === undefined) continue;
+      const r1 = returnAfter(idx, 1), r3 = returnAfter(idx, 3), r5 = returnAfter(idx, 5);
+      if (r1 !== null) rets1.push(r1);
+      if (r3 !== null) rets3.push(r3);
+      if (r5 !== null) rets5.push(r5);
+    }
+    return { threshold_pct: row.threshold, n: row.occurrences.length, avg_return_1y_pct: avg(rets1), avg_return_3y_pct: avg(rets3), avg_return_5y_pct: avg(rets5) };
+  });
+}
+// 全期間の日次騰落率分布（上昇/下落日の割合・分布バケット）。価格($)ではなく騰落率(%)のみを使う。
+function computeDailyReturnDistribution(FULL) {
+  const n = FULL.length;
+  if (n < 2) return null;
+  const rets = [];
+  for (let i = 1; i < n; i++) rets.push((FULL[i].price / FULL[i - 1].price - 1) * 100);
+  const up = rets.filter((r) => r > 0).length, down = rets.filter((r) => r < 0).length;
+  const avgRet = rets.reduce((s, v) => s + v, 0) / rets.length;
+  const bucketDefs = [
+    { label: "+2%超", test: (r) => r > 2 },
+    { label: "+1〜2%", test: (r) => r > 1 && r <= 2 },
+    { label: "0〜+1%", test: (r) => r > 0 && r <= 1 },
+    { label: "-1〜0%", test: (r) => r <= 0 && r > -1 },
+    { label: "-2〜-1%", test: (r) => r <= -1 && r > -2 },
+    { label: "-2%超の下落", test: (r) => r <= -2 },
+  ];
+  const buckets = bucketDefs.map((b) => ({ label: b.label, share_pct: Number((rets.filter(b.test).length / rets.length * 100).toFixed(1)) }));
+  return { n: rets.length, up_days_pct: Number((up / rets.length * 100).toFixed(1)), down_days_pct: Number((down / rets.length * 100).toFixed(1)), avg_daily_return_pct: Number(avgRet.toFixed(3)), buckets };
+}
+
+// 長尺用S&P500分析データのJSON本体。既存のsummarizeSeriesForJSON等とは独立し、価格($)を一切含めない。
+function computeLongformAnalysisJSON(ctx) {
+  const { d, crashFrequency, generatedAt } = ctx;
+  const FULL = d.FULL;
+  const last = FULL[FULL.length - 1];
+  const recent = computeRecentStats(FULL);
+  const crashTable = (crashFrequency || []).map((r) => ({
+    threshold_pct: r.threshold, occurrence_count: r.count, coverage_years: r.coverageYears, avg_interval_years: r.avgIntervalYears,
+    last_occurrence_year: r.lastOccurrence?.year ?? null, years_since_last: r.yearsSinceLast, next_year_probability_pct: r.nextYearProbability,
+    prior_year_avg_return_pct: r.priorYearAvg, prior_year_positive_share_pct: r.priorYearPositiveShare, low_sample: r.lowSample,
+    occurrence_years: r.occurrences.map((o) => o.year),
+  }));
+  return {
+    generated_at: generatedAt.toISOString(),
+    data_last_date: last.date.toISOString().slice(0, 10),
+    current_state: {
+      dd_pct: d.currentDD, mode: d.mode, days_since_ath: d.daysSinceATH ?? null,
+      ytd_return_pct: recent?.ytdReturn ?? null, one_year_return_pct: recent?.oneYearReturn ?? null,
+    },
+    rolling_returns: computeRollingReturns(FULL),
+    ytd_vs_past: computeYtdVsPast(FULL),
+    outlook_from_today: computeOutlookFromToday(FULL),
+    us_election_cycle: computeUsElectionCycleInfo(FULL),
+    monthly_seasonality: computeMonthlySeasonalityInfo(FULL),
+    ath_count: computeAthStats(FULL),
+    ath_gaps: computeAthGaps(FULL),
+    drawdown_episodes: summarizeDrawdownEpisodesNoPrice(d.episodes),
+    crash_table: crashTable,
+    after_crash_returns: computeAfterCrashReturns(FULL, crashFrequency),
+    daily_distribution: computeDailyReturnDistribution(FULL),
+    disclaimer: "本データは判断補助であり投資助言ではありません。過去確率・統計は傾向であり将来を保証しません。",
+  };
+}
+// 長尺用S&P500分析データの台本ドラフト（Markdown）。上と同じ値を文章化する。
+function buildLongformAnalysisMarkdown(ctx) {
+  const data = computeLongformAnalysisJSON(ctx);
+  const pct = (v, digits = 1) => (v === null || v === undefined ? "—" : `${v >= 0 ? "+" : ""}${v.toFixed ? v.toFixed(digits) : v}%`);
+  const L = [];
+  L.push(`【SP500 長尺分析データ】基準日：${fmtYMD(ctx.d.last.date)}（米国時間）`);
+  L.push(`生成: ${fmtDateTimeJST(ctx.generatedAt)}`);
+  L.push("");
+  L.push("■ 1. 現在の状況");
+  L.push(`DD ${pct(data.current_state.dd_pct)} / モード: ${data.current_state.mode} / YTD ${pct(data.current_state.ytd_return_pct)} / 直近1年 ${pct(data.current_state.one_year_return_pct)}`);
+  L.push("");
+  L.push("■ 2. ローリングリターン");
+  if (data.rolling_returns) {
+    const r = data.rolling_returns;
+    L.push(`1ヶ月 ${pct(r["1m"])} / 3ヶ月 ${pct(r["3m"])} / 6ヶ月 ${pct(r["6m"])} / 1年 ${pct(r["1y"])} / 3年 ${pct(r["3y"])} / 5年 ${pct(r["5y"])} / 10年 ${pct(r["10y"])} / 20年 ${pct(r["20y"])}`);
+  }
+  L.push("");
+  L.push("■ 3. 今年のYTDは過去と比べてどうか");
+  if (data.ytd_vs_past) {
+    L.push(`今年のYTD ${pct(data.ytd_vs_past.current_ytd_pct)}（同じ時点の過去確定年${data.ytd_vs_past.sample_years.length}年中、${data.ytd_vs_past.better_than_pct_of_years}%の年を上回るペース）`);
+  } else {
+    L.push("データ不足のため算出できません。");
+  }
+  L.push("");
+  L.push("■ 4. 今日から年末までの見通し（複数指標の加重合成）");
+  const o = data.outlook_from_today;
+  L.push(`総合予測: ${pct(o.blended_forecast_pct)}（上昇確率 ${o.blended_probability_pct ?? "—"}%）`);
+  for (const f of o.factors) L.push(`  - ${f.label}: ${pct(f.forecast_pct)}（上昇確率${f.probability_pct ?? "—"}%・重み${f.weight_pct}%・n=${f.sample_n}）`);
+  L.push("");
+  L.push("■ 5. 米大統領選サイクルとの関係");
+  const ec = data.us_election_cycle;
+  L.push(`${ec.label}${ec.president_info ? `（${ec.president_info}）` : ""} / 同区分の過去平均騰落率 ${pct(ec.cycle_avg_return_pct)}（プラス率${ec.cycle_positive_share_pct ?? "—"}%、対象年: ${ec.cycle_sample_years.join(", ") || "—"}）`);
+  L.push("");
+  L.push("■ 6. 月次の季節性（同サイクル区分の過去平均、今月以降）");
+  if (data.monthly_seasonality.length) {
+    for (const m of data.monthly_seasonality) L.push(`  ${m.month}月: ${pct(m.avg_return_pct)}（n=${m.n}）`);
+  } else {
+    L.push("データ不足のため算出できません。");
+  }
+  L.push("");
+  L.push("■ 7. 暴落発生確率（既存の暴落発生確率の表）");
+  L.push("節目 | 発生回数 | 平均間隔 | 前回発生 | 今後1年以内の確率 | 前年平均騰落率 | 前年プラス率");
+  for (const r of data.crash_table) {
+    L.push(`DD${r.threshold_pct}%超 | ${r.occurrence_count}件${r.low_sample ? "（参考値）" : ""} | ${r.avg_interval_years != null ? `${r.avg_interval_years}年に1度` : "—"} | ${r.last_occurrence_year ? `${r.last_occurrence_year}年（${r.years_since_last}年経過）` : "発生なし"} | ${r.next_year_probability_pct != null ? `${r.next_year_probability_pct}%` : "—"} | ${pct(r.prior_year_avg_return_pct)} | ${r.prior_year_positive_share_pct ?? "—"}%`);
+  }
+  L.push("");
+  L.push("■ 8. 過去のDD局面・ATH更新ペース");
+  if (data.ath_count) L.push(`ATH更新: 全期間${data.ath_count.total_count}回（年平均${data.ath_count.avg_per_year}回・平均${data.ath_count.avg_days_between}日に1度）`);
+  L.push("深度バケット別の下落日数・クリーン回復率:");
+  for (const b of data.ath_gaps) L.push(`  ${b.depth_bucket}: n=${b.n}${b.low_sample ? "（参考値）" : ""} / 平均下落日数${b.avg_duration_days ?? "—"}日 / クリーン回復率${b.clean_recovery_rate_pct ?? "—"}%`);
+  L.push(`DD局面件数（全履歴）: ${data.drawdown_episodes.length}件`);
+  L.push("");
+  L.push("■ 9. 暴落後のリターン");
+  for (const a of data.after_crash_returns) {
+    if (!a.n) continue;
+    L.push(`DD${a.threshold_pct}%超（n=${a.n}）: 1年後 ${pct(a.avg_return_1y_pct)} / 3年後 ${pct(a.avg_return_3y_pct)} / 5年後 ${pct(a.avg_return_5y_pct)}`);
+  }
+  L.push("");
+  L.push("■ 10. 日次リターン分布");
+  if (data.daily_distribution) {
+    const dd = data.daily_distribution;
+    L.push(`上昇日 ${dd.up_days_pct}% / 下落日 ${dd.down_days_pct}% / 平均日次リターン ${pct(dd.avg_daily_return_pct, 3)}`);
+    for (const b of dd.buckets) L.push(`  ${b.label}: ${b.share_pct}%`);
+  }
+  L.push("");
+  L.push("---");
+  L.push(data.disclaimer);
+  return L.join("\n");
+}
+// 長尺用S&P500分析データ出力モーダル。資産情報には触れず、SP500専用のデータのみを扱う。
+function LongformAnalysisModalContent({ d, crashFrequency }) {
+  const generatedAt = useState(() => new Date())[0];
+  const [format, setFormat] = useState("md");
+  const ctx = useMemo(() => ({ d, crashFrequency, generatedAt }), [d, crashFrequency, generatedAt]);
+  const jsonOutput = useMemo(() => { try { return computeLongformAnalysisJSON(ctx); } catch (e) { return null; } }, [ctx]);
+  const mdOutput = useMemo(() => {
+    try { return buildLongformAnalysisMarkdown(ctx); }
+    catch (e) { return `【生成エラー】データの生成に失敗しました。お手数ですが下記のエラー内容と共にご連絡ください。\n\n${e?.stack || e?.message || String(e)}`; }
+  }, [ctx]);
+  const jsonText = jsonOutput ? JSON.stringify(jsonOutput, null, 2) : "【生成エラー】データの生成に失敗しました。";
+  const output = format === "md" ? mdOutput : jsonText;
+
+  const handleDownloadBoth = () => {
+    const stamp = d.last.date.toISOString().slice(0, 10).replace(/-/g, "");
+    const files = [
+      { name: `sp500_analysis_${stamp}.json`, content: jsonText, mime: "application/json;charset=utf-8;" },
+      { name: `sp500_analysis_${stamp}.md`, content: mdOutput, mime: "text/markdown;charset=utf-8;" },
+    ];
+    for (const f of files) {
+      const blob = new Blob([f.content], { type: f.mime });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = f.name;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+  };
+
+  return (
+    <div className="flex flex-col">
+      <p className="text-xs mb-3 leading-relaxed" style={{ color: C.textDim }}>
+        長尺動画制作用のSP500分析データです。評価額・ドル表記は一切含めず、騰落率(%)・日数・回数・年・確率のみで構成しています。「JSON＋MDを両方ダウンロード」でJSON（構造化データ）とMarkdown（台本ドラフト）の2ファイルを同時に保存します。
+      </p>
+      <div className="flex items-center gap-2 mb-3 flex-wrap">
+        <div className="flex gap-0.5">
+          {[{ k: "md", l: "台本ドラフト（Markdown）" }, { k: "json", l: "JSON" }].map((t) => (
+            <button key={t.k} onClick={() => setFormat(t.k)} className="text-[11px] px-2 py-1 rounded" style={{ color: format === t.k ? C.bg : C.textMuted, background: format === t.k ? C.teal : "transparent", fontWeight: format === t.k ? 700 : 400, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>{t.l}</button>
+          ))}
+        </div>
+        <button onClick={handleDownloadBoth} className="text-xs px-3 py-1 rounded flex items-center gap-1.5 ml-auto" style={{ background: C.panel2, color: C.textMuted, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}><Download size={12} />JSON＋MDを両方ダウンロード</button>
+      </div>
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-[10px]" style={{ color: C.textDim }}>プレビュー（{format === "md" ? "Markdown" : "JSON"}）・{output.length.toLocaleString()}文字・クリックで全選択</span>
+      </div>
+      <textarea readOnly value={output} onClick={(e) => e.target.select()} className="w-full mono text-[11px] rounded p-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text, height: 380, resize: "vertical" }} />
+      <div className="text-[10px] mt-3 leading-relaxed" style={{ color: C.textDim }}>投資助言ではなく判断補助です。過去確率・統計は傾向であり将来を保証しません。</div>
+    </div>
+  );
+}
+
 /* ---------------- legends ---------------- */
 function ClickLegend({ items, hidden, onToggle }) {
   return (<div className="flex items-center gap-3 px-1 flex-wrap">{items.map((it) => (<button key={it.key} onClick={() => onToggle(it.key)} className="flex items-center gap-1.5 text-[11px]" style={{ opacity: hidden[it.key] ? 0.35 : 1, background: "transparent", border: "none", cursor: "pointer" }}><span style={{ width: 10, height: 10, borderRadius: 2, background: it.color }} /><span style={{ color: C.textMuted, textDecoration: hidden[it.key] ? "line-through" : "none" }}>{it.label}</span></button>))}</div>);
@@ -8194,6 +8525,7 @@ export default function DDDashboard() {
       {modal?.type === "yearForecast" && <FullScreenModal title={`${forecastYear}年 年騰落率予測${yearForecast?.blendedForecastPct != null ? `（総合：${yearForecast.blendedForecastPct > 0 ? "+" : ""}${yearForecast.blendedForecastPct.toFixed(1)}%）` : ""}`} onClose={() => setModal(null)}><YearForecastModalContent forecast={yearForecast} trajectory={yearForecastTrajectoryData} yearPoints={forecastYearPoints} forecastYear={forecastYear} forwardPath={yearForecastTrajectoryForwardPath} nextYearForecast={nextYearForecast} thisYearStartPrice={thisYearStartPrice} thisYearEndApproxPrice={thisYearEndApproxPrice} history={yearForecastHistory} forecastPath={yearForecastChartPath} qqqCorrelation={qqqSpxCorrelation} crashFrequency={bottom.stats.crashFrequency} /></FullScreenModal>}
       {modal?.type === "realHoldingsRanking" && <FullScreenModal title="実質保有銘柄ランキング" onClose={() => setModal(null)}><RealHoldingsRankingContent holdings={combinedHoldings} /></FullScreenModal>}
       {modal?.type === "summary" && <FullScreenModal title="詳細サマリー出力（AI相談用）" onClose={() => setModal(null)}><SummaryModalContent d={d} dVoo={dVoo} dQqq={dQqq} holdings={holdings} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} blocks={blocks} rankLabels={rankLabels} lifecycle={lifecycle} onLifecycleChange={handleLifecycleChange} fixedPositions={fixedPositions} onFixedPositionChange={handleFixedPositionChange} checkpoints={checkpoints} prevSnapshot={prevSnapshot} onSaveSnapshot={handleSaveSnapshot} crashFrequency={bottom.stats.crashFrequency} /></FullScreenModal>}
+      {modal?.type === "longform" && <FullScreenModal title="長尺用S&P500分析データ出力" onClose={() => setModal(null)}><LongformAnalysisModalContent d={d} crashFrequency={bottom.stats.crashFrequency} /></FullScreenModal>}
       {modal?.type === "mobileChartZoom" && <MobileChartZoomModal onClose={() => setModal(null)} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} sourceViews={sourceViews} chartSources={chartSources} onToggleChartSource={toggleChartSource} yearCompare={yearCompare} setYearCompare={setYearCompare} initialTab={chartTab} isRealDevice={isMobileAuto} />}
 
       {isMobile ? (
@@ -8207,6 +8539,9 @@ export default function DDDashboard() {
             </button>
             <button onClick={() => setModal({ type: "summary" })} title="詳細サマリー" className="flex items-center justify-center w-[30px] h-[30px] max-[374px]:w-7 max-[374px]:h-7 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
               <FileText size={16} />
+            </button>
+            <button onClick={() => setModal({ type: "longform" })} title="長尺用S&P500分析データを出力" className="flex items-center justify-center w-[30px] h-[30px] max-[374px]:w-7 max-[374px]:h-7 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+              <Film size={16} />
             </button>
             <button onClick={() => setModal({ type: "dataInput" })} title="データ入力・出力" className="flex items-center justify-center w-[30px] h-[30px] max-[374px]:w-7 max-[374px]:h-7 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
               <Database size={16} />
@@ -8229,6 +8564,9 @@ export default function DDDashboard() {
           </button>
           <button onClick={() => setModal({ type: "summary" })} title="詳細サマリー" className="shrink-0 flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
             <FileText size={12} /> 詳細サマリー
+          </button>
+          <button onClick={() => setModal({ type: "longform" })} title="長尺用S&P500分析データを出力" className="shrink-0 flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+            <Film size={12} /> 長尺用データ出力
           </button>
           <button onClick={() => setModal({ type: "dataInput" })} title="データ入力・出力" className="shrink-0 flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
             <Database size={12} /> データ入力・出力
