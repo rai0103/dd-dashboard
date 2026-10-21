@@ -5534,34 +5534,74 @@ function computeDailyReturnDistribution(FULL) {
 }
 
 // 長尺用S&P500分析データのJSON本体。既存のsummarizeSeriesForJSON等とは独立し、価格($)を一切含めない。
+// 現状分析パネル（フェーズ別ロジック）の$フリー部分を長尺用に転用：buildPhase1/2/3Analysis・buildDd3EntryAnalysis
+// （既存関数は無変更。現状分析パネル本体で使われる¥入りのbuildDynamicAllocationItem/buildRebalanceItemは呼ばない）。
+function computeCurrentPhaseAnalysis(d) {
+  const items = [], notes = [];
+  if (d.currentDD <= -5) buildPhase3Analysis(d, items, notes);
+  else if (d.currentDD <= -3) buildPhase2Analysis(d, items, notes);
+  else buildPhase1Analysis(d, items, notes);
+  buildDd3EntryAnalysis(d, items, notes);
+  return { items: items.map((it) => it.text), notes: notes.filter(Boolean) };
+}
+// 底値判定（lib/bottomScore.tsのcomputeMddHoldProbability、既存のbottomメモ化値をそのまま利用）を
+// 長尺用の$フリーな形に変換する。applicable===falseの場合（最高値圏など判定対象外）はreasonのみ返す。
+function computeBottomScoreInfo(bottom) {
+  const hold = bottom?.hold;
+  if (!hold || !hold.applicable) return { applicable: false, reason: hold?.reason ?? "算出不可" };
+  const s = hold.state, t = hold.tier;
+  return {
+    applicable: true,
+    current_mdd_pct: s.mdd, latest_dd_pct: s.latest_dd,
+    recovery_ratio_pct: Number((Math.max(0, Math.min(1, s.recovery_ratio)) * 100).toFixed(1)),
+    days_since_trough: s.days_since_trough,
+    tier_label: t.label, tier_n: t.n, tier_low_sample: t.lowSample,
+    p_hold_pct: t.pHold, p_break_pct: t.pBreak,
+    median_days_to_ath: hold.medianDaysToAth, median_days_to_break: hold.medianDaysToBreak,
+    break_distribution: hold.breakDistribution.filter((b) => b.count > 0),
+  };
+}
 function computeLongformAnalysisJSON(ctx) {
-  const { d, crashFrequency, generatedAt } = ctx;
+  const { d, crashFrequency, generatedAt, bottom } = ctx;
   const FULL = d.FULL;
   const last = FULL[FULL.length - 1];
   const recent = computeRecentStats(FULL);
-  const crashTable = (crashFrequency || []).map((r) => ({
-    threshold_pct: r.threshold, occurrence_count: r.count, coverage_years: r.coverageYears, avg_interval_years: r.avgIntervalYears,
-    last_occurrence_year: r.lastOccurrence?.year ?? null, years_since_last: r.yearsSinceLast, next_year_probability_pct: r.nextYearProbability,
-    prior_year_avg_return_pct: r.priorYearAvg, prior_year_positive_share_pct: r.priorYearPositiveShare, low_sample: r.lowSample,
-    occurrence_years: r.occurrences.map((o) => o.year),
-  }));
+  const outlook = computeOutlookFromToday(FULL);
+  const ec = computeUsElectionCycleInfo(FULL);
+  const seasonality = computeMonthlySeasonalityInfo(FULL);
+  const factors = outlook.factors.map((f) => {
+    if (f.key === "cycle") return { ...f, detail: { president_info: ec.president_info, sample_years: ec.cycle_sample_years } };
+    if (f.key === "seasonality") return { ...f, detail: { months: seasonality } };
+    return f;
+  });
+  const afterCrash = computeAfterCrashReturns(FULL, crashFrequency);
+  const crashAnalysis = (crashFrequency || []).map((r, i) => {
+    const a = afterCrash[i];
+    return {
+      threshold_pct: r.threshold, occurrence_count: r.count, coverage_years: r.coverageYears, avg_interval_years: r.avgIntervalYears,
+      last_occurrence_year: r.lastOccurrence?.year ?? null, years_since_last: r.yearsSinceLast, next_year_probability_pct: r.nextYearProbability,
+      prior_year_avg_return_pct: r.priorYearAvg, prior_year_positive_share_pct: r.priorYearPositiveShare, low_sample: r.lowSample,
+      occurrence_years: r.occurrences.map((o) => o.year),
+      after_1y_avg_return_pct: a?.avg_return_1y_pct ?? null, after_3y_avg_return_pct: a?.avg_return_3y_pct ?? null, after_5y_avg_return_pct: a?.avg_return_5y_pct ?? null,
+    };
+  });
   return {
     generated_at: generatedAt.toISOString(),
     data_last_date: last.date.toISOString().slice(0, 10),
     current_state: {
       dd_pct: d.currentDD, mode: d.mode, days_since_ath: d.daysSinceATH ?? null,
       ytd_return_pct: recent?.ytdReturn ?? null, one_year_return_pct: recent?.oneYearReturn ?? null,
+      election_cycle_term_year: ec.term_year, election_cycle_label: ec.label,
+      phase_analysis: computeCurrentPhaseAnalysis(d),
     },
+    bottom_score: computeBottomScoreInfo(bottom),
     rolling_returns: computeRollingReturns(FULL),
     ytd_vs_past: computeYtdVsPast(FULL),
-    outlook_from_today: computeOutlookFromToday(FULL),
-    us_election_cycle: computeUsElectionCycleInfo(FULL),
-    monthly_seasonality: computeMonthlySeasonalityInfo(FULL),
+    outlook_from_today: { year: outlook.year, as_of_month: outlook.as_of_month, blended_forecast_pct: outlook.blended_forecast_pct, blended_probability_pct: outlook.blended_probability_pct, factors },
     ath_count: computeAthStats(FULL),
     ath_gaps: computeAthGaps(FULL),
     drawdown_episodes: summarizeDrawdownEpisodesNoPrice(d.episodes),
-    crash_table: crashTable,
-    after_crash_returns: computeAfterCrashReturns(FULL, crashFrequency),
+    crash_analysis: crashAnalysis,
     daily_distribution: computeDailyReturnDistribution(FULL),
     disclaimer: "本データは判断補助であり投資助言ではありません。過去確率・統計は傾向であり将来を保証しません。",
   };
@@ -5575,56 +5615,59 @@ function buildLongformAnalysisMarkdown(ctx) {
   L.push(`生成: ${fmtDateTimeJST(ctx.generatedAt)}`);
   L.push("");
   L.push("■ 1. 現在の状況");
-  L.push(`DD ${pct(data.current_state.dd_pct)} / モード: ${data.current_state.mode} / YTD ${pct(data.current_state.ytd_return_pct)} / 直近1年 ${pct(data.current_state.one_year_return_pct)}`);
+  L.push(`DD ${pct(data.current_state.dd_pct)} / モード: ${data.current_state.mode} / YTD ${pct(data.current_state.ytd_return_pct)} / 直近1年 ${pct(data.current_state.one_year_return_pct)} / ${data.current_state.election_cycle_label}`);
+  const phase = data.current_state.phase_analysis;
+  for (const t of phase.items) L.push(`  - ${t}`);
+  for (const n of phase.notes) L.push(`  （注：${n}）`);
   L.push("");
-  L.push("■ 2. ローリングリターン");
+  L.push("■ 2. 底値判定（現在の下落が底値として確定する確率）");
+  const bs = data.bottom_score;
+  if (!bs.applicable) {
+    L.push(bs.reason);
+  } else {
+    L.push(`現在のMDD ${bs.current_mdd_pct}%・直近DD ${bs.latest_dd_pct}%・戻し${bs.recovery_ratio_pct}%・底値から${bs.days_since_trough}日`);
+    L.push(`該当する過去ケース「${bs.tier_label}」（n=${bs.tier_n}${bs.tier_low_sample ? "・参考値" : ""}）：底値を維持してATH更新に至った割合 ${bs.p_hold_pct ?? "—"}% ／ さらに底割れした割合 ${bs.p_break_pct ?? "—"}%`);
+    if (bs.median_days_to_ath != null) L.push(`底値を維持したケースのATH到達までの中央日数：${bs.median_days_to_ath}日`);
+    if (bs.median_days_to_break != null) L.push(`底割れしたケースの再下落確定までの中央日数：${bs.median_days_to_break}日`);
+    const brk = bs.break_distribution.filter((b) => b.count > 0);
+    if (brk.length) L.push(`底割れした場合の最終到達深度の内訳：${brk.map((b) => `${b.label} ${b.count}件`).join(" / ")}`);
+  }
+  L.push("");
+  L.push("■ 3. ローリングリターン・YTDの立ち位置");
   if (data.rolling_returns) {
     const r = data.rolling_returns;
     L.push(`1ヶ月 ${pct(r["1m"])} / 3ヶ月 ${pct(r["3m"])} / 6ヶ月 ${pct(r["6m"])} / 1年 ${pct(r["1y"])} / 3年 ${pct(r["3y"])} / 5年 ${pct(r["5y"])} / 10年 ${pct(r["10y"])} / 20年 ${pct(r["20y"])}`);
   }
-  L.push("");
-  L.push("■ 3. 今年のYTDは過去と比べてどうか");
   if (data.ytd_vs_past) {
     L.push(`今年のYTD ${pct(data.ytd_vs_past.current_ytd_pct)}（同じ時点の過去確定年${data.ytd_vs_past.sample_years.length}年中、${data.ytd_vs_past.better_than_pct_of_years}%の年を上回るペース）`);
-  } else {
-    L.push("データ不足のため算出できません。");
   }
   L.push("");
   L.push("■ 4. 今日から年末までの見通し（複数指標の加重合成）");
   const o = data.outlook_from_today;
   L.push(`総合予測: ${pct(o.blended_forecast_pct)}（上昇確率 ${o.blended_probability_pct ?? "—"}%）`);
-  for (const f of o.factors) L.push(`  - ${f.label}: ${pct(f.forecast_pct)}（上昇確率${f.probability_pct ?? "—"}%・重み${f.weight_pct}%・n=${f.sample_n}）`);
-  L.push("");
-  L.push("■ 5. 米大統領選サイクルとの関係");
-  const ec = data.us_election_cycle;
-  L.push(`${ec.label}${ec.president_info ? `（${ec.president_info}）` : ""} / 同区分の過去平均騰落率 ${pct(ec.cycle_avg_return_pct)}（プラス率${ec.cycle_positive_share_pct ?? "—"}%、対象年: ${ec.cycle_sample_years.join(", ") || "—"}）`);
-  L.push("");
-  L.push("■ 6. 月次の季節性（同サイクル区分の過去平均、今月以降）");
-  if (data.monthly_seasonality.length) {
-    for (const m of data.monthly_seasonality) L.push(`  ${m.month}月: ${pct(m.avg_return_pct)}（n=${m.n}）`);
-  } else {
-    L.push("データ不足のため算出できません。");
+  for (const f of o.factors) {
+    L.push(`  - ${f.label}: ${pct(f.forecast_pct)}（上昇確率${f.probability_pct ?? "—"}%・重み${f.weight_pct}%・n=${f.sample_n}）`);
+    if (f.key === "cycle" && f.detail) {
+      L.push(`    ${data.current_state.election_cycle_label}${f.detail.president_info ? `（${f.detail.president_info}）` : ""}・対象年: ${f.detail.sample_years.join(", ") || "—"}`);
+    }
+    if (f.key === "seasonality" && f.detail?.months?.length) {
+      L.push(`    月別内訳: ${f.detail.months.map((m) => `${m.month}月${pct(m.avg_return_pct)}(n=${m.n})`).join(" / ")}`);
+    }
   }
   L.push("");
-  L.push("■ 7. 暴落発生確率（既存の暴落発生確率の表）");
-  L.push("節目 | 発生回数 | 平均間隔 | 前回発生 | 今後1年以内の確率 | 前年平均騰落率 | 前年プラス率");
-  for (const r of data.crash_table) {
-    L.push(`DD${r.threshold_pct}%超 | ${r.occurrence_count}件${r.low_sample ? "（参考値）" : ""} | ${r.avg_interval_years != null ? `${r.avg_interval_years}年に1度` : "—"} | ${r.last_occurrence_year ? `${r.last_occurrence_year}年（${r.years_since_last}年経過）` : "発生なし"} | ${r.next_year_probability_pct != null ? `${r.next_year_probability_pct}%` : "—"} | ${pct(r.prior_year_avg_return_pct)} | ${r.prior_year_positive_share_pct ?? "—"}%`);
-  }
-  L.push("");
-  L.push("■ 8. 過去のDD局面・ATH更新ペース");
+  L.push("■ 5. 過去のDD局面・ATH更新ペース");
   if (data.ath_count) L.push(`ATH更新: 全期間${data.ath_count.total_count}回（年平均${data.ath_count.avg_per_year}回・平均${data.ath_count.avg_days_between}日に1度）`);
   L.push("深度バケット別の下落日数・クリーン回復率:");
   for (const b of data.ath_gaps) L.push(`  ${b.depth_bucket}: n=${b.n}${b.low_sample ? "（参考値）" : ""} / 平均下落日数${b.avg_duration_days ?? "—"}日 / クリーン回復率${b.clean_recovery_rate_pct ?? "—"}%`);
   L.push(`DD局面件数（全履歴）: ${data.drawdown_episodes.length}件`);
   L.push("");
-  L.push("■ 9. 暴落後のリターン");
-  for (const a of data.after_crash_returns) {
-    if (!a.n) continue;
-    L.push(`DD${a.threshold_pct}%超（n=${a.n}）: 1年後 ${pct(a.avg_return_1y_pct)} / 3年後 ${pct(a.avg_return_3y_pct)} / 5年後 ${pct(a.avg_return_5y_pct)}`);
+  L.push("■ 6. 暴落発生確率と発生後のリターン");
+  L.push("節目 | 発生回数 | 平均間隔 | 前回発生 | 今後1年以内の確率 | 前年平均騰落率 | 前年プラス率 | 発生後1年 | 発生後3年 | 発生後5年");
+  for (const r of data.crash_analysis) {
+    L.push(`DD${r.threshold_pct}%超 | ${r.occurrence_count}件${r.low_sample ? "（参考値）" : ""} | ${r.avg_interval_years != null ? `${r.avg_interval_years}年に1度` : "—"} | ${r.last_occurrence_year ? `${r.last_occurrence_year}年（${r.years_since_last}年経過）` : "発生なし"} | ${r.next_year_probability_pct != null ? `${r.next_year_probability_pct}%` : "—"} | ${pct(r.prior_year_avg_return_pct)} | ${r.prior_year_positive_share_pct ?? "—"}% | ${pct(r.after_1y_avg_return_pct)} | ${pct(r.after_3y_avg_return_pct)} | ${pct(r.after_5y_avg_return_pct)}`);
   }
   L.push("");
-  L.push("■ 10. 日次リターン分布");
+  L.push("■ 7. 日次リターン分布");
   if (data.daily_distribution) {
     const dd = data.daily_distribution;
     L.push(`上昇日 ${dd.up_days_pct}% / 下落日 ${dd.down_days_pct}% / 平均日次リターン ${pct(dd.avg_daily_return_pct, 3)}`);
@@ -5636,7 +5679,7 @@ function buildLongformAnalysisMarkdown(ctx) {
   return L.join("\n");
 }
 // 長尺用S&P500分析データ出力モーダル。資産情報には触れず、SP500専用のデータのみを扱う。
-function LongformAnalysisModalContent({ d, crashFrequency }) {
+function LongformAnalysisModalContent({ d, crashFrequency, bottom }) {
   const generatedAt = useState(() => new Date())[0];
   const [format, setFormat] = useState("md");
   // 動的チャート（画面録画用）：既存の「年比較」機能（YearComparePanel）をそのまま2インスタンス使う。
@@ -5650,7 +5693,7 @@ function LongformAnalysisModalContent({ d, crashFrequency }) {
   }, [d.FULL]);
   const [recent10State, setRecent10State] = useState(() => ({ ...YEAR_COMPARE_INITIAL, preset: "recent10" }));
   const [cycleCompareState, setCycleCompareState] = useState(() => ({ ...YEAR_COMPARE_INITIAL, preset: cycleInfo.presetKey }));
-  const ctx = useMemo(() => ({ d, crashFrequency, generatedAt }), [d, crashFrequency, generatedAt]);
+  const ctx = useMemo(() => ({ d, crashFrequency, generatedAt, bottom }), [d, crashFrequency, generatedAt, bottom]);
   const jsonOutput = useMemo(() => { try { return computeLongformAnalysisJSON(ctx); } catch (e) { return null; } }, [ctx]);
   const mdOutput = useMemo(() => {
     try { return buildLongformAnalysisMarkdown(ctx); }
@@ -8547,7 +8590,7 @@ export default function DDDashboard() {
       {modal?.type === "yearForecast" && <FullScreenModal title={`${forecastYear}年 年騰落率予測${yearForecast?.blendedForecastPct != null ? `（総合：${yearForecast.blendedForecastPct > 0 ? "+" : ""}${yearForecast.blendedForecastPct.toFixed(1)}%）` : ""}`} onClose={() => setModal(null)}><YearForecastModalContent forecast={yearForecast} trajectory={yearForecastTrajectoryData} yearPoints={forecastYearPoints} forecastYear={forecastYear} forwardPath={yearForecastTrajectoryForwardPath} nextYearForecast={nextYearForecast} thisYearStartPrice={thisYearStartPrice} thisYearEndApproxPrice={thisYearEndApproxPrice} history={yearForecastHistory} forecastPath={yearForecastChartPath} qqqCorrelation={qqqSpxCorrelation} crashFrequency={bottom.stats.crashFrequency} /></FullScreenModal>}
       {modal?.type === "realHoldingsRanking" && <FullScreenModal title="実質保有銘柄ランキング" onClose={() => setModal(null)}><RealHoldingsRankingContent holdings={combinedHoldings} /></FullScreenModal>}
       {modal?.type === "summary" && <FullScreenModal title="詳細サマリー出力（AI相談用）" onClose={() => setModal(null)}><SummaryModalContent d={d} dVoo={dVoo} dQqq={dQqq} holdings={holdings} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} blocks={blocks} rankLabels={rankLabels} lifecycle={lifecycle} onLifecycleChange={handleLifecycleChange} fixedPositions={fixedPositions} onFixedPositionChange={handleFixedPositionChange} checkpoints={checkpoints} prevSnapshot={prevSnapshot} onSaveSnapshot={handleSaveSnapshot} crashFrequency={bottom.stats.crashFrequency} /></FullScreenModal>}
-      {modal?.type === "longform" && <FullScreenModal title="長尺用S&P500分析データ出力" onClose={() => setModal(null)}><LongformAnalysisModalContent d={d} crashFrequency={bottom.stats.crashFrequency} /></FullScreenModal>}
+      {modal?.type === "longform" && <FullScreenModal title="長尺用S&P500分析データ出力" onClose={() => setModal(null)}><LongformAnalysisModalContent d={d} crashFrequency={bottom.stats.crashFrequency} bottom={bottom} /></FullScreenModal>}
       {modal?.type === "mobileChartZoom" && <MobileChartZoomModal onClose={() => setModal(null)} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} sourceViews={sourceViews} chartSources={chartSources} onToggleChartSource={toggleChartSource} yearCompare={yearCompare} setYearCompare={setYearCompare} initialTab={chartTab} isRealDevice={isMobileAuto} />}
 
       {isMobile ? (
