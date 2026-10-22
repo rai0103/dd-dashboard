@@ -35,6 +35,8 @@ import { listBgms, saveBgm, deleteBgm } from "@/lib/videoBgmLibrary";
 import { listBackgrounds, saveBackground, deleteBackground } from "@/lib/videoBackgroundLibrary";
 import { listAvatars, saveAvatar, deleteAvatar, newAvatar, MAX_CLIPS } from "@/lib/videoAvatarLibrary";
 import { VideoAvatar } from "@/lib/videoAvatarRender";
+import { segmentReading, displayOf, readingOf, applyMixedEdit } from "@/lib/videoNarrText";
+import NarrMixedBox from "@/components/NarrMixedBox";
 
 // Cloudflare Worker（当日のVOO/QQQ終値を返す。SP500はここでは扱わず引き続きCSV取り込み/直接入力で更新する）のエンドポイント。
 // デプロイ先のURLに置き換えてください。
@@ -5799,11 +5801,39 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
   const addSection = (id) => setSections((prev) => (prev.includes(id) ? prev : [...prev, id]));
 
   // --- ナレーション文の編集（場面ごと） ---
+  // 通常の文章（漢字・英字・数字まじり）で表示し、読み方が違う箇所だけひらがなに直す（直した箇所は緑）。
+  // 用語（S&P500 など）の直しは学習して、次回以降の同じ用語にも反映する。読み上げは常にひらがなで行う。
   const sceneKey = (i, id) => `${i}:${id}`;
   const [sceneEdits, setSceneEdits] = useState({});
-  const readings = useMemo(() => scenes.map((sc, i) => { const e = sceneEdits[sceneKey(i, sc.id)]; return e && e.base === sc.reading ? e.text : sc.reading; }), [scenes, sceneEdits]);
-  const handleSceneTextChange = (i, sc, text) => setSceneEdits((prev) => ({ ...prev, [sceneKey(i, sc.id)]: { base: sc.reading, text } }));
+  const [learned, setLearned] = useState(() => { try { const v = JSON.parse(localStorage.getItem("video-narr-learned-v1") || "{}"); return v && typeof v === "object" ? v : {}; } catch (e) { return {}; } });
+  const [narrNote, setNarrNote] = useState("");
+  const saveLearnedMap = (m) => { setLearned(m); try { localStorage.setItem("video-narr-learned-v1", JSON.stringify(m)); } catch (e) { /* 保存できなくても動作は続ける */ } };
+  const extraVocab = useMemo(() => (instrumentLabel === "SP500" ? [] : [[instrumentNameKana, instrumentLabel]]), [instrumentLabel, instrumentNameKana]);
+  const segsList = useMemo(() => scenes.map((sc) => segmentReading(sc.reading, extraVocab, learned)), [scenes, extraVocab, learned]);
+  const baseShown = useMemo(() => scenes.map((sc) => displayOf(segmentReading(sc.reading, extraVocab, {}))), [scenes, extraVocab]);
+  const readings = useMemo(() => scenes.map((sc, i) => { const e = sceneEdits[sceneKey(i, sc.id)]; return e && e.base === sc.reading ? e.text : readingOf(segsList[i]); }), [scenes, sceneEdits, segsList]);
+  const shownTexts = scenes.map((sc, i) => { const e = sceneEdits[sceneKey(i, sc.id)]; return e && e.base === sc.reading ? e.shown : displayOf(segsList[i]); });
+  const handleSceneTextChange = (i, sc, typed) => setSceneEdits((prev) => { const k = sceneKey(i, sc.id); const old = prev[k]; return { ...prev, [k]: { base: sc.reading, shown: typed, text: old && old.base === sc.reading ? old.text : readingOf(segsList[i]) } }; });
   const resetSceneText = (i, sc) => setSceneEdits((prev) => { const next = { ...prev }; delete next[sceneKey(i, sc.id)]; return next; });
+  // 枠の外へ出たとき：直した内容から読みを組み立て直し、用語の読みは学習する
+  const commitSceneText = (i, sc) => {
+    const k = sceneKey(i, sc.id);
+    const e = sceneEdits[k];
+    if (!e || e.base !== sc.reading) return;
+    const r = applyMixedEdit(segsList[i], e.shown);
+    if (!r.changed) { resetSceneText(i, sc); return; }
+    if (r.learn.length > 0) {
+      const nx = { ...learned };
+      r.learn.forEach((l) => { nx[l.key] = { surface: l.surface, to: l.to }; });
+      saveLearnedMap(nx);
+      setNarrNote(`学習しました：${r.learn.map((l) => `${l.surface} → ${l.to}`).join("、")}（次回以降も同じ読みになります）`);
+      const r2 = applyMixedEdit(segmentReading(sc.reading, extraVocab, nx), e.shown);
+      if (!r2.changed) { resetSceneText(i, sc); return; }
+      setSceneEdits((prev) => ({ ...prev, [k]: { base: sc.reading, shown: e.shown, text: r2.reading } }));
+      return;
+    }
+    setSceneEdits((prev) => ({ ...prev, [k]: { base: sc.reading, shown: e.shown, text: r.reading } }));
+  };
 
   // --- アバター（人物の動画。1人につきMP4を最大{MAX_CLIPS}本・アップロードしてブラウザに保存） ---
   const [avatars, setAvatars] = useState([]);
@@ -6307,9 +6337,20 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
             </div>
           </div>
 
-          {/* 場面ごとのナレーション編集（ひらがな表記。場面の長さは音声の長さに自動で合わせます） */}
+          {/* 場面ごとのナレーション編集（通常の文章で表示。場面の長さは音声の長さに自動で合わせます） */}
           <div>
-            <div className="text-[11px] font-semibold mb-1.5" style={{ color: C.textMuted }}>場面とナレーション（{scenes.length}場面・編集するとその場面のみ変更されます）</div>
+            <div className="text-[11px] font-semibold mb-1.5" style={{ color: C.textMuted }}>場面とナレーション（{scenes.length}場面）</div>
+            <div className="text-[10px] mb-1.5" style={{ color: C.textDim }}>通常の文章で表示します。「試聴」で音声を確かめ、読み方が違う箇所だけを<b>ひらがな</b>に直して枠の外をクリックすると、直した箇所が<span style={{ color: "#2ee6b8", fontWeight: 600 }}>緑</span>になり、読み上げだけが変わります（動画の表示は変わりません）。S&P500 などの用語は学習して、次回以降も同じ読みになります。</div>
+            {narrNote && <div className="text-[10px] mb-1.5" style={{ color: "#2ee6b8" }}>{narrNote}</div>}
+            {Object.keys(learned).length > 0 && (
+              <div className="text-[10px] mb-1.5" style={{ color: C.textDim }}>学習した読み方：
+                {Object.entries(learned).map(([k, v]) => (
+                  <span key={k} className="inline-flex items-center gap-1 mr-1.5 px-1 rounded" style={{ border: `1px solid ${C.borderSoft}`, color: C.text }}>{v.surface} → {v.to}
+                    <button title="削除" onClick={() => { const nx = { ...learned }; delete nx[k]; saveLearnedMap(nx); }} style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer" }}>×</button>
+                  </span>
+                ))}
+              </div>
+            )}
             <div className="flex flex-col gap-1.5 max-h-96 overflow-y-auto pr-1">
               {scenes.map((sc, i) => {
                 const edited = sceneEdits[sceneKey(i, sc.id)];
@@ -6322,7 +6363,7 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
                         <button onClick={() => previewScene(i)} className="text-[10px] flex items-center gap-1" style={{ color: C.teal, background: "none", border: "none", cursor: "pointer" }}><Play size={10} /> 試聴</button>
                       </div>
                     </div>
-                    <textarea value={readings[i]} onChange={(e) => handleSceneTextChange(i, sc, e.target.value)} className="w-full text-[11px] rounded p-1.5" style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, color: C.text, minHeight: 44, resize: "vertical" }} />
+                    <NarrMixedBox value={shownTexts[i]} base={baseShown[i]} onChange={(t) => handleSceneTextChange(i, sc, t)} onBlur={() => commitSceneText(i, sc)} colors={{ text: C.text, border: C.borderSoft }} />
                   </div>
                 );
               })}
