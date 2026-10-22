@@ -36,6 +36,39 @@ function chatUrl(): string {
   return `${getTtsBaseUrl()}/api/chat`;
 }
 
+type JsonSchema = Record<string, unknown>;
+
+/**
+ * strict tool use（tools[].strict:true）の要件に合わせて、スキーマ中のすべてのobject型に
+ * additionalProperties:false を再帰的に補う（配列のitems・anyOf/allOf内のobjectも含む）。
+ * 呼び出し側（各UIの input_schema 定義）は通常のJSON Schemaだけを書けばよく、strict化特有の
+ * 要件を個別に意識しなくてよいようにするための共通処理。
+ */
+function toStrictSchema(schema: unknown): unknown {
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) return schema;
+  const s: JsonSchema = { ...(schema as JsonSchema) };
+  if (s.type === "object") {
+    s.additionalProperties = false;
+    if (s.properties && typeof s.properties === "object") {
+      const props = s.properties as Record<string, unknown>;
+      const nextProps: Record<string, unknown> = {};
+      for (const k of Object.keys(props)) {
+        nextProps[k] = toStrictSchema(props[k]);
+      }
+      s.properties = nextProps;
+    }
+  }
+  if (s.type === "array" && s.items) {
+    s.items = toStrictSchema(s.items);
+  }
+  for (const key of ["anyOf", "allOf"] as const) {
+    if (Array.isArray(s[key])) {
+      s[key] = (s[key] as unknown[]).map(toStrictSchema);
+    }
+  }
+  return s;
+}
+
 /**
  * AIにtoolを1つだけ指定して呼ばせ、その入力（構造化データ）を返す。
  * 注：Claude Sonnet 5.5等の新しいモデルでは tool_choice:{type:"tool"|"any"}（強制呼び出し）自体が
@@ -61,7 +94,9 @@ export async function callAiTool<T = unknown>(req: AiToolRequest): Promise<T> {
             content: `${prompt}\n\n（必ず ${toolName} ツールを呼び出して回答してください。通常の文章では返さないこと。）`,
           },
         ],
-        tools: [{ name: toolName, description: toolDescription, input_schema: inputSchema, strict: true }],
+        tools: [
+          { name: toolName, description: toolDescription, input_schema: toStrictSchema(inputSchema), strict: true },
+        ],
         tool_choice: { type: "auto" },
       }),
     });
