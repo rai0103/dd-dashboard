@@ -48,7 +48,7 @@ export function drawLongBackground(ctx: CanvasRenderingContext2D, img: HTMLImage
   if (img && img.complete && img.naturalWidth > 0) {
     const sc = Math.max(cw / img.naturalWidth, H / img.naturalHeight);
     const dw = img.naturalWidth * sc, dh = img.naturalHeight * sc;
-    ctx.globalAlpha = Math.min(1, Math.max(0, opacity / 100));
+    ctx.globalAlpha = Math.min(1, Math.max(0, opacity)); // opacityは0〜1（呼び出し側のDDDashboard.jsxで既に/100済み）。ここでさらに/100すると実質0%になり、背景画像が見えなくなるバグだった
     ctx.drawImage(img, x0 + (cw - dw) / 2, (H - dh) / 2, dw, dh);
   } else {
     const g = ctx.createLinearGradient(x0, 0, W, H);

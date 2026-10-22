@@ -7,7 +7,7 @@ import { integerToKana, yearsToKana } from './videoReading';
 import { LongMd, buildMdScenes, SP500_KANA, ContentSectionId } from './videoLongMd';
 import { LongBasis } from './videoLongBasis';
 
-export type LongSceneId = 'open' | 'ytd' | 'ytdvs' | 'ath' | 'athcount' | 'updown' | 'outlook' | 'crash' | 'end' | 'position' | 'momentum' | 'risk' | 'range' | 'status' | 'bottom' | 'rolling' | 'forecast' | 'ddpace' | 'crashmd' | 'daily' | 'basis10' | 'basisCycle' | 'x_open' | 'x_ytd' | 'x_recent' | 'x_ytdvs' | 'x_rolling' | 'x_ath' | 'x_episodes' | 'x_athcount' | 'x_updown' | 'x_outlook' | 'x_range' | 'x_crash' | 'x_end';
+export type LongSceneId = 'open' | 'ytd' | 'ytdvs' | 'ath' | 'athcount' | 'updown' | 'outlook' | 'crash' | 'end' | 'position' | 'momentum' | 'risk' | 'range' | 'status' | 'bottom' | 'rolling' | 'forecast' | 'ddpace' | 'crashmd' | 'daily' | 'basis10' | 'basisCycle' | 'ytdChange' | 'athDrop' | 'yearEndTrack' | 'crashFreq' | 'x_open' | 'x_ytd' | 'x_recent' | 'x_ytdvs' | 'x_rolling' | 'x_ath' | 'x_episodes' | 'x_athcount' | 'x_updown' | 'x_outlook' | 'x_range' | 'x_crash' | 'x_end';
 
 export interface LongScene {
   id: LongSceneId;
@@ -18,7 +18,7 @@ export interface LongScene {
 }
 
 export function buildLongScenes(s: UpdateStats, md?: LongMd | null, basis?: LongBasis | null, rolling?: { label: string; v: number }[], instrumentNameKana: string = SP500_KANA, sections?: ContentSectionId[]): LongScene[] {
-  if (md) return buildMdScenes(md, basis, instrumentNameKana, sections).map(m => ({ id: m.id as LongSceneId, reading: m.reading, minSec: m.minSec, caption: m.caption, detail: m.id !== 'open' }));
+  if (md) return buildMdScenes(md, basis, instrumentNameKana, sections, s).map(m => ({ id: m.id as LongSceneId, reading: m.reading, minSec: m.minSec, caption: m.caption, detail: m.id !== 'open' }));
   const base = buildUpdateScenes(s);
   const cap = (id: string): string => {
     switch (id) {

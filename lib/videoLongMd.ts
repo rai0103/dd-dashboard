@@ -4,7 +4,7 @@
 // 追加変更点：オープニング／エンディングの読み上げに決め打ちだった「えすあんどぴーごひゃく」を、
 // instrumentNameKana引数（省略時は従来どおりS&P500）で任意銘柄に対応できるようにした（investment-shorts側は無改変）。
 import { integerToKana, numberStringToKana, yearsToKana } from './videoReading';
-import { monthDayKana, pctKana, nichiKana } from './videoMarketUpdate';
+import { monthDayKana, pctKana, nichiKana, UpdateStats, buildUpdateScenes } from './videoMarketUpdate';
 import { LongBasis } from './videoLongBasis';
 
 export interface LongMd {
@@ -84,10 +84,15 @@ export function tickerKana(symbol: string): string {
 }
 export const SP500_KANA = 'えすあんどぴーごひゃく';
 
-export type ContentSectionId = 'status' | 'bottom' | 'rolling' | 'forecast' | 'basis10' | 'basisCycle' | 'ddpace' | 'crashmd' | 'daily';
-export const DEFAULT_CONTENT_SECTIONS: ContentSectionId[] = ['status'];
+export type ContentSectionId = 'ytdChange' | 'athDrop' | 'yearEndTrack' | 'crashFreq' | 'status' | 'bottom' | 'rolling' | 'forecast' | 'basis10' | 'basisCycle' | 'ddpace' | 'crashmd' | 'daily';
+/** 既定の構成：ショート動画（近況解説）と同じ4項目（騰落率／ATHからの下落率／年末までの過去実績／調整下落の頻度）。ショートから長尺への導線として、同じ切り口で始める */
+export const DEFAULT_CONTENT_SECTIONS: ContentSectionId[] = ['ytdChange', 'athDrop', 'yearEndTrack', 'crashFreq'];
 export const CONTENT_SECTION_LABELS: Record<ContentSectionId, string> = {
-  status: '近況',
+  ytdChange: '近況：騰落率',
+  athDrop: '近況：ATHからの下落率',
+  yearEndTrack: '近況：年末までの過去実績',
+  crashFreq: '近況：調整下落の頻度',
+  status: '近況（詳細一括版）',
   bottom: '底値判定',
   rolling: 'ローリングリターン',
   forecast: '年末見通し',
@@ -101,8 +106,44 @@ export const CONTENT_SECTION_LABELS: Record<ContentSectionId, string> = {
 export interface MdScene { id: string; reading: string; minSec: number; caption: string }
 
 /** 「近況」「底値判定」等の場面を1つだけ作るビルダーの一覧。対象データが無いものはnullを返す（構成UIの選択可否判定にも使う） */
-function contentSectionBuilders(md: LongMd, basis: LongBasis | null | undefined): Record<ContentSectionId, () => MdScene | null> {
+function contentSectionBuilders(md: LongMd, basis: LongBasis | null | undefined, stats?: UpdateStats | null): Record<ContentSectionId, () => MdScene | null> {
   return {
+    ytdChange: () => {
+      if (!stats) return null;
+      const upd = buildUpdateScenes(stats);
+      const ytd = upd.find(x => x.id === 'ytd');
+      const ytdvs = upd.find(x => x.id === 'ytdvs');
+      const updown = upd.find(x => x.id === 'updown');
+      if (!ytd) return null;
+      const r = [ytd.reading, ytdvs?.reading, updown?.reading].filter(Boolean).join('');
+      const minSec = ytd.minSec + (ytdvs?.minSec ?? 0) + (updown?.minSec ?? 0);
+      return { id: 'ytdChange', minSec, reading: r, caption: `近況：年初来 ${stats.ytd >= 0 ? '+' : ''}${stats.ytd}%` };
+    },
+    athDrop: () => {
+      if (!stats) return null;
+      const upd = buildUpdateScenes(stats);
+      const ath = upd.find(x => x.id === 'ath');
+      const athcount = upd.find(x => x.id === 'athcount');
+      if (!ath) return null;
+      const r = [ath.reading, athcount?.reading].filter(Boolean).join('');
+      const minSec = ath.minSec + (athcount?.minSec ?? 0);
+      return { id: 'athDrop', minSec, reading: r, caption: stats.dd >= -0.005 ? '近況：最高値を更新中' : `近況：最高値から ${stats.dd.toFixed(1)}%` };
+    },
+    yearEndTrack: () => {
+      if (!stats) return null;
+      const upd = buildUpdateScenes(stats);
+      const outlook = upd.find(x => x.id === 'outlook');
+      if (!outlook) return null;
+      const o = stats.outlook;
+      return { id: 'yearEndTrack', minSec: outlook.minSec, reading: outlook.reading, caption: `近況：年末までに上昇した年は ${o.posCount}/${o.n}年（${o.posProb.toFixed(0)}%）` };
+    },
+    crashFreq: () => {
+      if (!stats) return null;
+      const upd = buildUpdateScenes(stats);
+      const crash = upd.find(x => x.id === 'crash');
+      if (!crash) return null;
+      return { id: 'crashFreq', minSec: crash.minSec, reading: crash.reading, caption: '近況：調整〜暴落の発生頻度' };
+    },
     status: () => {
       const st = md.status;
       if (!st) return null;
@@ -186,19 +227,19 @@ function contentSectionBuilders(md: LongMd, basis: LongBasis | null | undefined)
 }
 
 /** 現在のmd/basisで、どの構成候補が選択可能か（対象データがあるか）を返す。構成UIの「選択候補」一覧に使う */
-export function availableContentSections(md: LongMd, basis?: LongBasis | null): ContentSectionId[] {
-  const builders = contentSectionBuilders(md, basis);
+export function availableContentSections(md: LongMd, basis?: LongBasis | null, stats?: UpdateStats | null): ContentSectionId[] {
+  const builders = contentSectionBuilders(md, basis, stats);
   return (Object.keys(builders) as ContentSectionId[]).filter(id => builders[id]() !== null);
 }
 
 /** md から長尺シーンを作る。順序：オープニング→sections（指定順）→エンディング。instrumentNameKana省略時は従来どおりS&P500として読む。sections省略時は近況のみ（DEFAULT_CONTENT_SECTIONS） */
-export function buildMdScenes(md: LongMd, basis?: LongBasis | null, instrumentNameKana: string = SP500_KANA, sections: ContentSectionId[] = DEFAULT_CONTENT_SECTIONS): MdScene[] {
+export function buildMdScenes(md: LongMd, basis?: LongBasis | null, instrumentNameKana: string = SP500_KANA, sections: ContentSectionId[] = DEFAULT_CONTENT_SECTIONS, stats?: UpdateStats | null): MdScene[] {
   const sc: MdScene[] = [];
   const dateK = `${yearsToKana(md.y)}、${monthDayKana(md.m, md.d)}`;
   const dateJ = `${md.y}年${md.m}月${md.d}日`;
   sc.push({ id: 'open', minSec: 5, reading: `${dateK}、${instrumentNameKana}の、ぶんせきを、れぽーとします。`, caption: `${dateJ}、S&P500の分析をレポートします。` });
 
-  const builders = contentSectionBuilders(md, basis);
+  const builders = contentSectionBuilders(md, basis, stats);
   for (const id of sections) {
     const scene = builders[id]?.();
     if (scene) sc.push(scene);

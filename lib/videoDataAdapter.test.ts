@@ -106,9 +106,9 @@ test("buildVideoLongform：sections引数で構成（場面の種類・順番）
   const data = makeData(FULL);
   const d = { FULL, currentDD: -4.2, mode: "調整", daysSinceATH: 12, athDate: FULL[FULL.length - 1].date };
 
-  // 既定（sections省略）：近況のみ（open・status・end）
+  // 既定（sections省略）：ショート動画と同じ近況4点（騰落率→ATHからの下落率→年末までの過去実績→調整下落の頻度）
   const def = buildVideoLongform(data, d);
-  assert.deepEqual(def.scenes.map((s) => s.id), ["open", "status", "end"], "既定はopen→status→endのみ");
+  assert.deepEqual(def.scenes.map((s) => s.id), ["open", "ytdChange", "athDrop", "yearEndTrack", "crashFreq", "end"], "既定はopen→近況4点→endの順");
 
   // 明示的に指定した順番・組み合わせでシーンが並ぶ（大統領サイクル根拠→底値判定→近況、の順）
   const custom = buildVideoLongform(data, d, SP500_KANA, ["basisCycle", "bottom", "status"]);
@@ -124,8 +124,8 @@ test("availableContentSections：このテストデータで選択可能な構�
   const data = makeData(FULL);
   const d = { FULL, currentDD: -4.2, mode: "調整", daysSinceATH: 12, athDate: FULL[FULL.length - 1].date };
   const result = buildVideoLongform(data, d);
-  const avail = availableContentSections(result.longMd, result.basis);
-  for (const id of ["status", "bottom", "rolling", "forecast", "basis10", "basisCycle", "ddpace", "crashmd", "daily"]) {
+  const avail = availableContentSections(result.longMd, result.basis, result.stats);
+  for (const id of ["ytdChange", "athDrop", "yearEndTrack", "crashFreq", "status", "bottom", "rolling", "forecast", "basis10", "basisCycle", "ddpace", "crashmd", "daily"]) {
     assert.ok(avail.includes(id), `${id}が選択候補に含まれる`);
   }
 });

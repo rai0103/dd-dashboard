@@ -5,7 +5,7 @@ import {
   ComposedChart, LineChart, Area, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ReferenceLine, ReferenceDot, ResponsiveContainer, PieChart, Pie, Cell, Brush, Customized,
 } from "recharts";
-import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Download, RefreshCw, Database, Trash2, Zap, Copy, FileText, Activity, Layers, ListChecks, Smartphone, Monitor, Wallet, Gauge, Film, Clapperboard, Play, Pause, Square, GripVertical } from "lucide-react";
+import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Download, RefreshCw, Database, Trash2, Zap, Copy, FileText, Activity, Layers, ListChecks, Smartphone, Monitor, Wallet, Gauge, Film, Clapperboard, Play, Pause, Square, GripVertical, Camera } from "lucide-react";
 import { storage } from "@/lib/storage";
 import { pullSyncAndApply, pushSyncNow, scheduleSyncPush, getLastSyncedAt, onSyncMergedFromRemote } from "@/lib/sync";
 import { parseInvestmentExcel, computeOwnAssetDrawdown, computeBenchmarkCAGR, latestUsdJpyRates, fxImpact, simulateDcaBenchmark, simulateMonthlyRebasedBenchmark, accountChanges, resolveBeginnerTrial, trialAxis } from "@/lib/investmentPerformance";
@@ -5784,7 +5784,7 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
     try { return buildVideoLongform(jsonOutput, d, instrumentNameKana, sections); } catch (e) { console.error("buildVideoLongform error:", e); return null; }
   }, [jsonOutput, d, instrumentNameKana, sections]);
   const scenes = video?.scenes ?? [];
-  const availableSectionIds = useMemo(() => (video?.longMd ? availableContentSections(video.longMd, video.basis) : []), [video]);
+  const availableSectionIds = useMemo(() => (video?.longMd ? availableContentSections(video.longMd, video.basis, video.stats) : []), [video]);
   const dragSectionIndexRef = useRef(null);
   const moveSectionTo = (from, to) => {
     setSections((prev) => {
@@ -6037,6 +6037,24 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
     catch (e) { console.error(e); alert(`音声合成に失敗しました（ローカルTTSサーバー ${getTtsBaseUrl()} が起動しているか確認してください）\n${e?.message ?? e}`); }
   };
 
+  // プレビューの今の1コマを、サムネイル用のPNG画像として保存する
+  const handleCaptureThumbnail = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+      a.href = url;
+      a.download = `${instrumentLabel.toLowerCase()}_long_thumbnail_${stamp}.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }, "image/png");
+  };
+
   const handleExport = async () => {
     if (!rendererRef.current || !canvasRef.current || !scenes.length) return;
     stopLoop();
@@ -6121,6 +6139,9 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
             </button>
             <button onClick={() => { handlePause(); handleSeek(0); }} className="text-xs px-3 py-1.5 rounded flex items-center gap-1.5" style={{ background: C.panel2, color: C.textMuted, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
               <Square size={12} /> 先頭へ
+            </button>
+            <button onClick={handleCaptureThumbnail} title="いま表示中の1コマをサムネイル用のPNGとして保存" className="text-xs px-3 py-1.5 rounded flex items-center gap-1.5" style={{ background: C.panel2, color: C.textMuted, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+              <Camera size={12} /> サムネ保存
             </button>
             <button onClick={handleExport} disabled={isExporting} className="text-xs px-3 py-1.5 rounded flex items-center gap-1.5 ml-auto" style={{ background: isExporting ? C.panel2 : C.amber, color: isExporting ? C.textMuted : C.bg, fontWeight: 700, border: "none", cursor: isExporting ? "default" : "pointer" }}>
               <Download size={13} /> {isExporting ? `書き出し中… ${exportProgress}%` : "動画を書き出す（MP4）"}

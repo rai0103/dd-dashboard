@@ -2,7 +2,7 @@
 // SummaryMd（sm）・xScene（buildSummaryScenes由来のx_*シーン）は移植しない（dd-dashboardはLongMdを直接組み立てるため発生しない経路）。
 // 長尺（16:9）「S&P500の分析」の描画。論理サイズは 960×540（実際のキャンバスはその倍率）。
 // 左：ショート用チャート（縦）＋要点カード／詳細分析は左〜中央を使って大きく描く／右：アナリストと吹き出し
-import { UpdateStats, fmtPct } from './videoMarketUpdate';
+import { UpdateStats, fmtPct, crashList } from './videoMarketUpdate';
 import { DISCLAIMERS } from './videoDisclaimer';
 import { LongMd } from './videoLongMd';
 import { LongBasis, valueAt } from './videoLongBasis';
@@ -670,6 +670,44 @@ export class LongAnalysisRenderer {
       ctx.restore();
       return;
     }
+    if (id === 'ytdChange') {
+      this.heading('近況：騰落率', `過去${s.pastYtd.length}年の同時期と比べる`, p);
+      const limY = Math.max(Math.abs(s.ytd), Math.abs(s.ytdAvg), Math.abs(s.ytdMedian), 5) * 1.15;
+      const rowsY: [string, number][] = [[`今年（${s.year}年）`, s.ytd], ['過去の平均', s.ytdAvg], ['過去の中央値', s.ytdMedian]];
+      rowsY.forEach(([l, v], i) => this.hbar(l, v, limY, 140 + i * 70, sub(p, 0.12 + i * 0.12, 0.5 + i * 0.12), fmtPct(v)));
+      ctx0.save(); ctx0.globalAlpha *= ease(sub(p, 0.6, 0.8));
+      this.txt(`過去${s.pastYtd.length + 1}年中 ${s.ytdRank}位`, 24, 400, 36, GREEN, { bold: true });
+      this.txt(`前日比 ${sg(s.dayChange)}　上昇日の割合 ${s.upRatio.toFixed(1)}%（過去平均 ${s.upRatioAvg.toFixed(1)}%）`, 24, 438, 17, WHITE, { alpha: 0.8, maxW: PW - 48 });
+      ctx0.restore();
+      return;
+    }
+    if (id === 'athDrop') {
+      this.heading('近況：ATHからの下落率', `${DATE}（米国時間）基準`, p);
+      const limA = Math.max(10, Math.abs(s.ddMin) * 1.3);
+      this.hbar('現在の最高値からの下落', s.dd, limA, 140, sub(p, 0.12, 0.5), `${s.dd.toFixed(1)}%`);
+      this.hbar('今年の最大下落', s.ddMin, limA, 206, sub(p, 0.22, 0.6), `${s.ddMin.toFixed(1)}%`);
+      ctx0.save(); ctx0.globalAlpha *= ease(sub(p, 0.6, 0.8));
+      this.txt(s.dd >= -0.005 ? '最高値を更新中です' : `最高値更新から ${s.athDays}日経過`, 24, 310, 22, WHITE, { bold: true, maxW: PW - 48 });
+      this.txt(`今年の最高値更新 ${s.athCount}回（過去平均 約${Math.max(1, Math.round(s.athAvg))}回）`, 24, 344, 17, WHITE, { alpha: 0.8, maxW: PW - 48 });
+      ctx0.restore();
+      return;
+    }
+    if (id === 'crashFreq') {
+      this.heading('近況：調整下落の頻度', '過去の実績から見た、下落の発生頻度', p);
+      const rowsC = crashList(s);
+      this.txt('下落幅ごとの発生間隔', 24, 118, 15, WHITE, { bold: true, alpha: 0.85 });
+      rowsC.forEach((r, i) => {
+        const y = 140 + i * 58;
+        const a = ease(sub(p, 0.12 + i * 0.12, 0.4 + i * 0.12));
+        ctx0.save(); ctx0.globalAlpha *= a;
+        ctx0.fillStyle = 'rgba(255,255,255,0.07)'; ctx0.fillRect(24, y, PW - 48, 48);
+        this.txt(`-${r.level}%超の下落（${r.name}）`, 38, y + 20, 15, WHITE, { bold: true, maxW: 320 });
+        this.txt(r.interval || '—', 400, y + 20, 18, r.level >= 30 ? DOWN : AMBER, { bold: true });
+        this.txt(r.lastYear ? `前回 ${r.lastYear}年` : '発生なし', 38, y + 40, 13, WHITE, { alpha: 0.8 });
+        ctx0.restore();
+      });
+      return;
+    }
     if (id === 'position') {
       this.heading('分析① 現在の位置', `年初来の騰落率を、過去${s.pastYtd.length}年の同時期と比べる`, p);
       const lim = Math.max(Math.abs(s.ytd), Math.abs(s.ytdAvg), Math.abs(s.ytdMedian), 5) * 1.15;
@@ -717,7 +755,7 @@ export class LongAnalysisRenderer {
         this.txt(r.lastYear ? `前回 ${r.lastYear}年` : '', 520, y + 28, 18, WHITE, { alpha: 0.85 });
         ctx.restore();
       });
-    } else if (id === 'range') {
+    } else if (id === 'range' || id === 'yearEndTrack') {
       this.heading('分析④ 年末までの幅（過去の実績）', `過去${o.n}年、今と同じ時期から年末までの変化`, p);
       const ends = o.paths.map(q => q.end);
       const lo = Math.min(...ends, -5), hi = Math.max(...ends, 5);
