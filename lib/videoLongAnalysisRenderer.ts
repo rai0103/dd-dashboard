@@ -98,6 +98,14 @@ export class LongAnalysisRenderer {
 
   thumbProgress(): number { return (this.durs[0] * 0.9) / Math.max(1e-6, this.totalSeconds); }
 
+  /** 指定の進捗（0〜1）の時点で、どの場面（durs配列のインデックス）が表示されるかを返す（draw()と同じ割り当てロジック。副作用なし） */
+  getSceneIndexAt(progress: number): number {
+    const gt = clamp01(progress) * this.totalSeconds;
+    let t = gt, i = 0;
+    while (i < this.durs.length - 1 && t >= this.durs[i]) { t -= this.durs[i]; i++; }
+    return i;
+  }
+
   draw(progress: number): void {
     const ctx = this.ctx;
     ctx.setTransform(this.k, 0, 0, this.k, 0, 0);
@@ -155,6 +163,36 @@ export class LongAnalysisRenderer {
     }
     if (cur) lines.push(cur);
     return lines;
+  }
+
+  /** 円グラフ（ドーナツ）。中心(cx,cy)・外径r・内径innerR・segments（0時位置から時計回りに割合で並べる）。progress（0〜1）で弧を描き進める */
+  private drawDonut(cx: number, cy: number, r: number, innerR: number, segments: { value: number; color: string }[], progress: number, centerLabel?: { text: string; rgb: string }): void {
+    const ctx = this.ctx;
+    const total = segments.reduce((a, sgm) => a + Math.max(0, sgm.value), 0);
+    if (total <= 0) return;
+    const k = ease(clamp01(progress));
+    const ringR = (r + innerR) / 2;
+    const lw = Math.max(1, r - innerR);
+    let startAngle = -Math.PI / 2;
+    ctx.save();
+    ctx.lineCap = 'butt';
+    segments.forEach(sgm => {
+      const frac = Math.max(0, sgm.value) / total;
+      const sweep = frac * Math.PI * 2 * k;
+      if (sweep > 0.002) {
+        ctx.beginPath();
+        ctx.strokeStyle = `rgba(${sgm.color},0.92)`;
+        ctx.lineWidth = lw;
+        ctx.arc(cx, cy, ringR, startAngle, startAngle + sweep);
+        ctx.stroke();
+      }
+      startAngle += frac * Math.PI * 2;
+    });
+    ctx.restore();
+    if (centerLabel) {
+      const a = ease(sub(k, 0.25, 0.95));
+      this.txt(centerLabel.text, cx, cy + 7, 20, centerLabel.rgb, { bold: true, align: 'center', alpha: a, maxW: Math.max(10, innerR * 2 - 8) });
+    }
   }
 
   private drawTitleBar() {
@@ -352,7 +390,21 @@ export class LongAnalysisRenderer {
         this.txt(`判定ライン ${bt.level}%`, GX + GW, GY + 68, 14, WHITE, { alpha: 0.8, align: 'right' });
         this.txt(`現局面のMDD ${bt.mdd}%`, GX + 8, GY + 26, 17, '0, 0, 0', { bold: true });
       } else {
-        bt.lines.forEach((l, i) => this.wrap(l, PW - 48).forEach((ln, k) => this.txt(ln, 24, 150 + i * 60 + k * 30, 22, WHITE, { alpha: 0.95 })));
+        const hasPie = bt.pHold !== null && bt.pBreak !== null;
+        const textMaxW = hasPie ? PW - 48 - 170 : PW - 48;
+        bt.lines.forEach((l, i) => this.wrap(l, textMaxW).forEach((ln, k) => this.txt(ln, 24, 150 + i * 60 + k * 30, 22, WHITE, { alpha: 0.95 })));
+        if (hasPie) {
+          const dcx = PW - 24 - 70, dcy = 196;
+          if (bt.tierLabel) this.txt(bt.tierLabel, dcx, dcy - 92, 12, WHITE, { alpha: 0.6, align: 'center', maxW: 180 });
+          this.drawDonut(dcx, dcy, 70, 42, [{ value: bt.pHold!, color: GREEN }, { value: bt.pBreak!, color: DOWN }], sub(p, 0.25, 0.7), { text: `${bt.pHold}%`, rgb: GREEN });
+          const la = ease(sub(p, 0.55, 0.85));
+          ctx0.save(); ctx0.globalAlpha *= la;
+          ctx0.fillStyle = `rgba(${GREEN},0.9)`; ctx0.fillRect(dcx - 86, dcy + 86, 10, 10);
+          this.txt(`底値維持 ${bt.pHold}%`, dcx - 70, dcy + 95, 13, WHITE, { alpha: 0.85, align: 'left' });
+          ctx0.fillStyle = `rgba(${DOWN},0.9)`; ctx0.fillRect(dcx - 86, dcy + 104, 10, 10);
+          this.txt(`底割れ ${bt.pBreak}%`, dcx - 70, dcy + 113, 13, WHITE, { alpha: 0.85, align: 'left' });
+          ctx0.restore();
+        }
       }
       ctx0.restore();
       return;
@@ -545,7 +597,15 @@ export class LongAnalysisRenderer {
       this.heading('DD局面とATH更新ペース', '最高値からの下落の深さ別に見た、回復までの実績', p);
       const a0 = ease(sub(p, 0.08, 0.25));
       ctx0.save(); ctx0.globalAlpha *= a0;
-      if (dp.athCount) this.txt(`ATH更新：全期間 ${dp.athCount}回（年平均 ${dp.perYear}回・平均 ${dp.every}日に1度）`, 24, 124, 17, GREEN, { bold: true, maxW: PW - 48 });
+      if (dp.athCount) this.txt(`ATH更新：全期間 ${dp.athCount}回（年平均 ${dp.perYear}回・平均 ${dp.every}日に1度）`, 24, 124, 17, GREEN, { bold: true, maxW: PW - 100 });
+      {
+        const totalN = dp.buckets.reduce((acc, b) => acc + b.n, 0);
+        if (totalN > 0) {
+          const wClean = dp.buckets.reduce((acc, b) => acc + b.clean * b.n, 0) / totalN;
+          const cleanRgb = wClean >= 60 ? GREEN : wClean >= 30 ? AMBER : DOWN;
+          this.drawDonut(PW - 44, 110, 24, 14, [{ value: wClean, color: cleanRgb }, { value: 100 - wClean, color: '120,130,150' }], a0, { text: `${Math.round(wClean)}%`, rgb: cleanRgb });
+        }
+      }
       this.txt('下落の深さ', 24, 156, 11, WHITE, { alpha: 0.55 });
       this.txt('件数', 168, 156, 11, WHITE, { alpha: 0.55, align: 'right' });
       this.txt('平均下落日数', 262, 156, 11, WHITE, { alpha: 0.55, align: 'right' });
@@ -605,6 +665,7 @@ export class LongAnalysisRenderer {
       this.txt('下落日', 190, 134, 14, WHITE, { alpha: 0.7 }); this.txt(`${dl.down}%`, 190, 168, 32, DOWN, { bold: true });
       this.txt('平均日次リターン', 356, 134, 14, WHITE, { alpha: 0.7 }); this.txt(sg(dl.avg, 3), 356, 168, 32, kuro(dl.avg), { bold: true });
       ctx0.restore();
+      this.drawDonut(596, 150, 40, 24, [{ value: dl.up, color: UP }, { value: dl.down, color: DOWN }], sub(p, 0.15, 0.55), { text: `${dl.up}%`, rgb: UP });
       const n = dl.buckets.length || 1, CL = 30, CR = PW - 30, B = 430, T = 214;
       const mx = Math.max(10, ...dl.buckets.map(b => b.v));
       const bw = (CR - CL) / n;

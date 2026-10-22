@@ -55,7 +55,7 @@ function longMdCrashRows(crashAnalysis: any[]): LongMd['crash'] {
 /** data.bottom_score（computeBottomScoreInfoの戻り値）→ LongMd.bottom。■2セクションのテキスト整形をそのまま再現する */
 function longMdBottom(bs: any): LongMd['bottom'] {
   if (!bs) return null;
-  if (!bs.applicable) return { lines: [bs.reason ?? '算出不可'], excluded: false, mdd: null, level: null };
+  if (!bs.applicable) return { lines: [bs.reason ?? '算出不可'], excluded: false, mdd: null, level: null, pHold: null, pBreak: null, tierLabel: null };
   const lines: string[] = [];
   lines.push(`現在のMDD ${bs.current_mdd_pct}%・直近DD ${bs.latest_dd_pct}%・戻し${bs.recovery_ratio_pct}%・底値から${bs.days_since_trough}日`);
   lines.push(`該当する過去ケース「${bs.tier_label}」（n=${bs.tier_n}${bs.tier_low_sample ? '・参考値' : ''}）：底値を維持してATH更新に至った割合 ${bs.p_hold_pct ?? '—'}% ／ さらに底割れした割合 ${bs.p_break_pct ?? '—'}%`);
@@ -63,7 +63,12 @@ function longMdBottom(bs: any): LongMd['bottom'] {
   if (bs.median_days_to_break != null) lines.push(`底割れしたケースの再下落確定までの中央日数：${bs.median_days_to_break}日`);
   const brk = (bs.break_distribution || []).filter((b: any) => b.count > 0);
   if (brk.length) lines.push(`底割れした場合の最終到達深度の内訳：${brk.map((b: any) => `${b.label} ${b.count}件`).join(' / ')}`);
-  return { lines, excluded: false, mdd: null, level: null };
+  return {
+    lines, excluded: false, mdd: null, level: null,
+    pHold: typeof bs.p_hold_pct === 'number' ? bs.p_hold_pct : null,
+    pBreak: typeof bs.p_break_pct === 'number' ? bs.p_break_pct : null,
+    tierLabel: bs.tier_label ?? null,
+  };
 }
 
 export interface VideoLongformResult {

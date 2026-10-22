@@ -11,7 +11,7 @@ export interface LongMd {
   y: number; m: number; d: number;
   status: { dd: number; mode: string; ytd: number; oneYear: number | null; cycle: string; athDate: string; athDays: number | null;
     caseN: number | null; caseFrom: number | null; caseTo: number | null; caseAth: number | null; caseDd: number | null; caseDdLevel: number | null; notes: string[] } | null;
-  bottom: { lines: string[]; excluded: boolean; mdd: number | null; level: number | null } | null;
+  bottom: { lines: string[]; excluded: boolean; mdd: number | null; level: number | null; pHold: number | null; pBreak: number | null; tierLabel: string | null } | null;
   rolling: { label: string; v: number }[];
   ytdNote: { ytd: number; years: number; pct: number } | null;
   forecast: { total: number; prob: number; cycleYears: number[]; monthly: { m: number; v: number }[]; rows: { name: string; mean: number | null; prob: number | null; weight: number | null; n: number | null }[] } | null;

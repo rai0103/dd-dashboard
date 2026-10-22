@@ -5997,6 +5997,11 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
   const [ttsError, setTtsError] = useState(false);
+  // 今どの場面を再生・表示しているか（「場面とナレーション」リストのハイライト・自動スクロール用）
+  const [currentSceneIdx, setCurrentSceneIdx] = useState(0);
+  const sceneRefs = useRef([]);
+  useEffect(() => { setCurrentSceneIdx((i) => Math.min(i, Math.max(0, scenes.length - 1))); }, [scenes.length]);
+  useEffect(() => { sceneRefs.current[currentSceneIdx]?.scrollIntoView({ block: "nearest", behavior: "smooth" }); }, [currentSceneIdx]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -6010,6 +6015,7 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
       });
       rendererRef.current = renderer;
       renderer.draw(seekPos);
+      setCurrentSceneIdx(renderer.getSceneIndexAt(seekPos));
     } catch (e) { console.error("LongAnalysisRenderer init error:", e); rendererRef.current = null; }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [video, scenes, avatarObj, backgroundImgEl, backgroundOpacity]);
@@ -6052,6 +6058,7 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
       const progress = Math.min(1, (now - startTime) / totalMs);
       setSeekPos(progress);
       rendererRef.current.draw(progress);
+      setCurrentSceneIdx(rendererRef.current.getSceneIndexAt(progress));
       if (progress < 1) { animationFrameRef.current = requestAnimationFrame(tick); }
       else { isPlayingRef.current = false; setIsPlaying(false); mixer().fadeBGM(1); rendererRef.current?.pauseAvatar?.(); }
     };
@@ -6069,6 +6076,7 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
     if (isPlayingRef.current) { stopLoop(); setIsPlaying(false); mixer().stopBGM(); mixer().stopNarration(); }
     setSeekPos(v);
     rendererRef.current?.draw(v);
+    if (rendererRef.current) setCurrentSceneIdx(rendererRef.current.getSceneIndexAt(v));
   };
 
   const previewScene = async (i) => {
@@ -6354,10 +6362,23 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
             <div className="flex flex-col gap-1.5 max-h-96 overflow-y-auto pr-1">
               {scenes.map((sc, i) => {
                 const edited = sceneEdits[sceneKey(i, sc.id)];
+                const isCurrent = i === currentSceneIdx;
                 return (
-                  <div key={sc.id + i} className="rounded p-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
+                  <div
+                    key={sc.id + i}
+                    ref={(el) => { sceneRefs.current[i] = el; }}
+                    className="rounded p-2 transition-colors"
+                    style={{
+                      background: isCurrent ? "rgba(46, 230, 184, 0.08)" : C.panel2,
+                      border: `1px solid ${isCurrent ? C.teal : C.borderSoft}`,
+                      boxShadow: isCurrent ? `inset 3px 0 0 ${C.teal}` : "none",
+                    }}
+                  >
                     <div className="flex items-center justify-between mb-1">
-                      <span className="text-[10px]" style={{ color: C.textDim }}>{i + 1}. {sc.caption}</span>
+                      <span className="text-[10px] flex items-center gap-1" style={{ color: isCurrent ? C.teal : C.textDim, fontWeight: isCurrent ? 600 : 400 }}>
+                        {isCurrent && <Play size={9} />}
+                        {i + 1}. {sc.caption}
+                      </span>
                       <div className="flex items-center gap-2">
                         {edited && <button onClick={() => resetSceneText(i, sc)} className="text-[10px]" style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer" }}>元に戻す</button>}
                         <button onClick={() => previewScene(i)} className="text-[10px] flex items-center gap-1" style={{ color: C.teal, background: "none", border: "none", cursor: "pointer" }}><Play size={10} /> 試聴</button>
