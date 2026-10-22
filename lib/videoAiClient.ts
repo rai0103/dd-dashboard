@@ -37,7 +37,10 @@ function chatUrl(): string {
 }
 
 /**
- * AIにtoolを1つだけ指定して強制的に呼ばせ（tool_choice）、その入力（構造化データ）を返す。
+ * AIにtoolを1つだけ指定して呼ばせ、その入力（構造化データ）を返す。
+ * 注：Claude Sonnet 5.5等の新しいモデルでは tool_choice:{type:"tool"|"any"}（強制呼び出し）自体が
+ * 400エラーになるため、tool_choice:{type:"auto"}＋tools[].strict:true（スキーマ厳格化）＋
+ * プロンプト内の明示的な指示、という組み合わせで「実質的に必ずそのtoolを呼ばせる」方式にしている。
  * サーバー未起動／APIキー未設定／レスポンス異常は、それぞれ分かりやすいコード付きの例外として投げる
  * （呼び出し側のUIでそのままエラー文として表示できる想定）。
  */
@@ -52,9 +55,14 @@ export async function callAiTool<T = unknown>(req: AiToolRequest): Promise<T> {
       body: JSON.stringify({
         system,
         max_tokens: maxTokens ?? 1024,
-        messages: [{ role: "user", content: prompt }],
-        tools: [{ name: toolName, description: toolDescription, input_schema: inputSchema }],
-        tool_choice: { type: "tool", name: toolName },
+        messages: [
+          {
+            role: "user",
+            content: `${prompt}\n\n（必ず ${toolName} ツールを呼び出して回答してください。通常の文章では返さないこと。）`,
+          },
+        ],
+        tools: [{ name: toolName, description: toolDescription, input_schema: inputSchema, strict: true }],
+        tool_choice: { type: "auto" },
       }),
     });
   } catch {
@@ -70,23 +78,30 @@ export async function callAiTool<T = unknown>(req: AiToolRequest): Promise<T> {
   } catch {
     throw new AiClientError("BAD_RESPONSE", "AIサーバーの応答を解析できませんでした。");
   }
-  const d = (data && typeof data === "object" ? (data as Record<string, unknown>) : {}) as {
-    error?: string;
-    message?: string;
-    content?: Array<{ type?: string; name?: string; input?: unknown }>;
-  };
+  // tts-server自身のエラー（{error: "NO_API_KEY", message} 形）と、
+  // tts-serverがそのまま中継したAnthropic Messages APIのエラー（{type:"error", error:{type, message}} 形）の
+  // 両方を扱う。どちらかの形に合わせてメッセージを取り出す。
+  const raw = (data && typeof data === "object" ? (data as Record<string, unknown>) : {}) as Record<string, unknown>;
+  const errorField = raw.error;
+  const errorCode = typeof errorField === "string" ? errorField : undefined;
+  const nestedMessage =
+    errorField && typeof errorField === "object" && typeof (errorField as Record<string, unknown>).message === "string"
+      ? ((errorField as Record<string, unknown>).message as string)
+      : undefined;
+  const topMessage = typeof raw.message === "string" ? raw.message : undefined;
 
   if (!resp.ok) {
-    if (d.error === "NO_API_KEY") {
+    if (errorCode === "NO_API_KEY") {
       throw new AiClientError(
         "NO_API_KEY",
-        d.message || "tts-server/.env にANTHROPIC_API_KEYが設定されていません。"
+        topMessage || "tts-server/.env にANTHROPIC_API_KEYが設定されていません。"
       );
     }
-    throw new AiClientError("UPSTREAM_ERROR", `AI呼び出しに失敗しました: ${d.message || `HTTP ${resp.status}`}`);
+    const detail = topMessage || nestedMessage || `HTTP ${resp.status}`;
+    throw new AiClientError("UPSTREAM_ERROR", `AI呼び出しに失敗しました: ${detail}`);
   }
 
-  const content = Array.isArray(d.content) ? d.content : [];
+  const content = Array.isArray(raw.content) ? (raw.content as Array<{ type?: string; name?: string; input?: unknown }>) : [];
   const toolUse = content.find((b) => b && b.type === "tool_use" && b.name === toolName);
   if (!toolUse) {
     throw new AiClientError(
