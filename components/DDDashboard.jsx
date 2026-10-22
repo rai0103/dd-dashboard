@@ -5,7 +5,7 @@ import {
   ComposedChart, LineChart, Area, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ReferenceLine, ReferenceDot, ResponsiveContainer, PieChart, Pie, Cell, Brush, Customized,
 } from "recharts";
-import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Download, RefreshCw, Database, Trash2, Zap, Copy, FileText, Activity, Layers, ListChecks, Smartphone, Monitor, Wallet, Gauge, Film, Clapperboard, Play, Pause, Square, GripVertical, Camera, MessageSquare } from "lucide-react";
+import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Download, RefreshCw, Database, Trash2, Zap, Copy, FileText, Activity, Layers, ListChecks, Smartphone, Monitor, Wallet, Gauge, Film, Clapperboard, Play, Pause, Square, GripVertical, Camera, MessageSquare, Lock, Unlock } from "lucide-react";
 import { storage } from "@/lib/storage";
 import { pullSyncAndApply, pushSyncNow, scheduleSyncPush, getLastSyncedAt, onSyncMergedFromRemote } from "@/lib/sync";
 import { parseInvestmentExcel, computeOwnAssetDrawdown, computeBenchmarkCAGR, latestUsdJpyRates, fxImpact, simulateDcaBenchmark, simulateMonthlyRebasedBenchmark, accountChanges, resolveBeginnerTrial, trialAxis } from "@/lib/investmentPerformance";
@@ -5697,6 +5697,40 @@ function buildLongformAnalysisMarkdown(ctx) {
   L.push(data.disclaimer);
   return L.join("\n");
 }
+// 動画生成パネルの各種スライダー（速さ・高さ・不透明度・音量）を「ロック」すると、
+// 次回このダッシュボードを開いたときも同じ値で再開できるようにする（localStorageに保存）。
+const VIDEO_SLIDER_LOCK_KEY = "video-slider-locks-v1";
+function loadSliderLocks() {
+  try { const v = JSON.parse(localStorage.getItem(VIDEO_SLIDER_LOCK_KEY) || "{}"); return v && typeof v === "object" ? v : {}; } catch (e) { return {}; }
+}
+function saveSliderLocks(m) {
+  try { localStorage.setItem(VIDEO_SLIDER_LOCK_KEY, JSON.stringify(m)); } catch (e) { /* 保存できなくても動作は続ける */ }
+}
+function sliderInitValue(key, fallback) {
+  const locks = loadSliderLocks();
+  return locks[key]?.locked && typeof locks[key]?.value === "number" ? locks[key].value : fallback;
+}
+// スライダーの隣に置く、小さな鍵アイコンのロック切り替えボタン
+function SliderLockButton({ locked, onClick, title }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title ?? (locked ? "ロック中（次回もこの値で始まります）" : "クリックでロック（次回もこの値で始まります）")}
+      className="inline-flex items-center justify-center rounded"
+      style={{ width: 20, height: 20, background: locked ? `${C.teal}22` : "transparent", border: `1px solid ${locked ? C.teal : C.borderSoft}`, color: locked ? C.teal : C.textMuted, cursor: "pointer", flexShrink: 0 }}
+    >
+      {locked ? <Lock size={11} /> : <Unlock size={11} />}
+    </button>
+  );
+}
+// 再生時間の表示（例：2:34）
+function formatVideoTime(sec) {
+  const s = Math.max(0, Math.round(sec || 0));
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return `${m}:${String(r).padStart(2, "0")}`;
+}
 // 長尺用S&P500分析データ出力モーダル。資産情報には触れず、SP500専用のデータのみを扱う。
 function LongformAnalysisModalContent({ d, crashFrequency, bottom, instrumentLabel = "SP500" }) {
   const generatedAt = useState(() => new Date())[0];
@@ -6146,8 +6180,25 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
   const [voices, setVoices] = useState([]);
   const [voicesLoaded, setVoicesLoaded] = useState(false);
   const [voiceIndex, setVoiceIndex] = useState("");
-  const [rate, setRate] = useState(1.0);
-  const [pitch, setPitch] = useState(1.0);
+  // 速さ・高さ・不透明度・音量は、鍵ボタンでロックすると次回もこの値で再開する（localStorage）
+  const [sliderLocks, setSliderLocks] = useState(loadSliderLocks);
+  const toggleSliderLock = (key, currentValue) => {
+    setSliderLocks((prev) => {
+      const next = { ...prev, [key]: { locked: !prev[key]?.locked, value: currentValue } };
+      saveSliderLocks(next);
+      return next;
+    });
+  };
+  const updateLockedValueIfLocked = (key, value) => {
+    setSliderLocks((prev) => {
+      if (!prev[key]?.locked) return prev;
+      const next = { ...prev, [key]: { locked: true, value } };
+      saveSliderLocks(next);
+      return next;
+    });
+  };
+  const [rate, setRate] = useState(() => sliderInitValue("rate", 1.0));
+  const [pitch, setPitch] = useState(() => sliderInitValue("pitch", 1.0));
   useEffect(() => {
     mixer().listServerVoices().then((v) => { setVoices(v); setVoicesLoaded(true); }).catch(() => setVoicesLoaded(true));
   }, []);
@@ -6160,7 +6211,7 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
   // --- BGM（アップロードして保存・選択） ---
   const [bgms, setBgms] = useState([]);
   const [activeBgmId, setActiveBgmId] = useState("");
-  const [bgmVolume, setBgmVolume] = useState(25);
+  const [bgmVolume, setBgmVolume] = useState(() => sliderInitValue("bgmVolume", 25));
   const refreshBgms = () => listBgms(true).then(setBgms).catch(() => {});
   useEffect(() => { refreshBgms(); }, []);
   const activeBgm = bgms.find((b) => b.id === activeBgmId) || null;
@@ -6181,7 +6232,7 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
   // --- 背景（アップロードして保存・選択） ---
   const [backgrounds, setBackgrounds] = useState([]);
   const [activeBackgroundId, setActiveBackgroundId] = useState("");
-  const [backgroundOpacity, setBackgroundOpacity] = useState(85); // 右側の背景は人物のうしろに全面表示する想定のため、最初から見えやすい不透明度にしておく
+  const [backgroundOpacity, setBackgroundOpacity] = useState(() => sliderInitValue("backgroundOpacity", 85)); // 右側の背景は人物のうしろに全面表示する想定のため、最初から見えやすい不透明度にしておく
   const refreshBackgrounds = () => listBackgrounds(true).then((items) => {
     setBackgrounds(items);
     // 背景が1つ以上あれば、未選択（なし）のままにせず最初から選んだ状態にしておく
@@ -6213,6 +6264,10 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
   const [isPlaying, setIsPlaying] = useState(false);
   const [seekPos, setSeekPos] = useState(0);
   useEffect(() => { seekPosRef.current = seekPos; }, [seekPos]);
+  // 動画の総時間（秒）。実測はprepareAudio（再生・書き出し時）で確定する。それまでは場面の最短秒数の合計を概算として使う
+  const [totalSec, setTotalSec] = useState(0);
+  const estimatedTotalSec = useMemo(() => scenes.reduce((a, sc) => a + (sc.minSec || 0), 0), [scenes]);
+  const displayTotalSec = totalSec > 0 ? totalSec : estimatedTotalSec;
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
   const [ttsError, setTtsError] = useState(false);
@@ -6270,6 +6325,7 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
     const starts = [];
     durs.reduce((acc, dur) => { starts.push(acc); return acc + dur; }, 0);
     const total = durs.reduce((a, b) => a + b, 0);
+    setTotalSec(total);
     if (failed) setTtsError(true);
     return { bufs, durs, starts, total, failed };
   };
@@ -6278,6 +6334,9 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
     if (!rendererRef.current || !scenes.length) return;
     stopLoop();
     mixer().stopBGM(); mixer().stopNarration();
+    // スライダーの位置から再開する（末尾近く＝ほぼ再生し終わっている位置からの「再生」は先頭からにする）
+    const pos0raw = Math.min(1, Math.max(0, seekPosRef.current ?? 0));
+    const pos0 = pos0raw >= 0.999 ? 0 : pos0raw;
     setIsPlaying(true);
     isPlayingRef.current = true;
     const pr = await prepareAudio(rate);
@@ -6285,9 +6344,17 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
     rendererRef.current.setDurations?.(pr.durs);
     rendererRef.current.setNarration?.(pr.bufs);
     const totalMs = pr.total * 1000;
-    if (bgmUrl) { try { mixer().playBGM(bgmUrl, bgmVolume, true); } catch (e) { console.error("BGM error:", e); } }
-    pr.bufs.forEach((b, i) => { if (b) mixer().playBufferAfter(b, pr.starts[i] + 0.3); });
-    const startTime = performance.now();
+    const elapsedSec = pos0 * pr.total;
+    if (bgmUrl) { try { mixer().playBGM(bgmUrl, bgmVolume, true, elapsedSec); } catch (e) { console.error("BGM error:", e); } }
+    pr.bufs.forEach((b, i) => {
+      if (!b) return;
+      const absStart = pr.starts[i] + 0.3;
+      const absEnd = absStart + b.duration;
+      if (absEnd <= elapsedSec) return; // 既に再生し終わっている場面のナレーションは鳴らさない
+      if (absStart >= elapsedSec) mixer().playBufferAfter(b, absStart - elapsedSec);
+      else mixer().playBufferAfter(b, 0, 1, elapsedSec - absStart); // 途中から再開する場面は、その分だけ音声も途中から鳴らす
+    });
+    const startTime = performance.now() - elapsedSec * 1000;
     const tick = (now) => {
       if (!isPlayingRef.current || !rendererRef.current) return;
       const progress = Math.min(1, (now - startTime) / totalMs);
@@ -6415,6 +6482,7 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
             <canvas ref={canvasRef} className="w-full h-full" />
           </div>
           <input type="range" min={0} max={1} step={0.001} value={seekPos} onChange={(e) => handleSeek(Number(e.target.value))} className="w-full" />
+          <div className="text-[11px] mono -mt-1" style={{ color: C.textDim }}>{formatVideoTime(seekPos * displayTotalSec)} / {formatVideoTime(displayTotalSec)}</div>
           <div className="flex items-center gap-2">
             <button onClick={isPlaying ? handlePause : handlePlay} className="text-xs px-3 py-1.5 rounded flex items-center gap-1.5" style={{ background: C.teal, color: C.bg, fontWeight: 700, border: "none", cursor: "pointer" }}>
               {isPlaying ? <><Pause size={13} /> 一時停止</> : <><Play size={13} /> プレビュー再生</>}
@@ -6613,7 +6681,10 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
                 <input type="file" accept="image/*" onChange={handleBackgroundUpload} style={{ display: "none" }} />
               </label>
             </div>
-            <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>不透明度<input type="range" min={0} max={100} value={backgroundOpacity} onChange={(e) => setBackgroundOpacity(Number(e.target.value))} />{backgroundOpacity}%</label>
+            <div className="flex items-center gap-1.5">
+              <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>不透明度<input type="range" min={0} max={100} value={backgroundOpacity} onChange={(e) => { const v = Number(e.target.value); setBackgroundOpacity(v); updateLockedValueIfLocked("backgroundOpacity", v); }} />{backgroundOpacity}%</label>
+              <SliderLockButton locked={!!sliderLocks.backgroundOpacity?.locked} onClick={() => toggleSliderLock("backgroundOpacity", backgroundOpacity)} />
+            </div>
           </div>
 
           {/* BGM */}
@@ -6632,7 +6703,10 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
                 <input type="file" accept="audio/*" onChange={handleBgmUpload} style={{ display: "none" }} />
               </label>
             </div>
-            <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>音量<input type="range" min={0} max={100} value={bgmVolume} onChange={(e) => setBgmVolume(Number(e.target.value))} />{bgmVolume}%</label>
+            <div className="flex items-center gap-1.5">
+              <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>音量<input type="range" min={0} max={100} value={bgmVolume} onChange={(e) => { const v = Number(e.target.value); setBgmVolume(v); updateLockedValueIfLocked("bgmVolume", v); }} />{bgmVolume}%</label>
+              <SliderLockButton locked={!!sliderLocks.bgmVolume?.locked} onClick={() => toggleSliderLock("bgmVolume", bgmVolume)} />
+            </div>
           </div>
 
           {/* 声・速度 */}
@@ -6642,9 +6716,15 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
               {voiceChoices.length === 0 && <option value="">（音声が見つかりません）</option>}
               {voiceChoices.map((v) => <option key={v} value={v}>{v}</option>)}
             </select>
-            <div className="flex items-center gap-3">
-              <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>速さ<input type="range" min={0.6} max={2.0} step={0.05} value={rate} onChange={(e) => setRate(Number(e.target.value))} />{rate.toFixed(2)}x</label>
-              <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>高さ<input type="range" min={0.8} max={1.3} step={0.02} value={pitch} onChange={(e) => setPitch(Number(e.target.value))} />{pitch.toFixed(2)}x</label>
+            <div className="flex items-center gap-3 flex-wrap">
+              <div className="flex items-center gap-1.5">
+                <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>速さ<input type="range" min={0.6} max={2.0} step={0.05} value={rate} onChange={(e) => { const v = Number(e.target.value); setRate(v); updateLockedValueIfLocked("rate", v); }} />{rate.toFixed(2)}x</label>
+                <SliderLockButton locked={!!sliderLocks.rate?.locked} onClick={() => toggleSliderLock("rate", rate)} />
+              </div>
+              <div className="flex items-center gap-1.5">
+                <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>高さ<input type="range" min={0.8} max={1.3} step={0.02} value={pitch} onChange={(e) => { const v = Number(e.target.value); setPitch(v); updateLockedValueIfLocked("pitch", v); }} />{pitch.toFixed(2)}x</label>
+                <SliderLockButton locked={!!sliderLocks.pitch?.locked} onClick={() => toggleSliderLock("pitch", pitch)} />
+              </div>
             </div>
           </div>
 

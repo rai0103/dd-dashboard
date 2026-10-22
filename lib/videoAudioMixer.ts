@@ -115,8 +115,9 @@ export class AudioMixer {
     });
   }
 
-  /** 指定秒数後にバッファを再生（画面の音と録画の両方に流す）。長さ(秒)を返す */
-  playBufferAfter(buffer: AudioBuffer, delaySec: number, volume = 1): number {
+  /** 指定秒数後にバッファを再生（画面の音と録画の両方に流す）。長さ(秒)を返す。
+   *  offsetSec>0のとき、バッファの途中（その秒数だけ経過した地点）から再生を始める（シーク位置からの再開用） */
+  playBufferAfter(buffer: AudioBuffer, delaySec: number, volume = 1, offsetSec = 0): number {
     const ctx = this.getContext();
     if (!ctx) return 0;
     const gain = ctx.createGain();
@@ -126,7 +127,8 @@ export class AudioMixer {
     const src = ctx.createBufferSource();
     src.buffer = buffer;
     src.connect(gain);
-    src.start(ctx.currentTime + Math.max(0, delaySec));
+    const safeOffset = Math.min(Math.max(0, offsetSec), Math.max(0, buffer.duration - 0.001));
+    src.start(ctx.currentTime + Math.max(0, delaySec), safeOffset);
     this.bufSources.push(src);
     src.onended = () => { this.bufSources = this.bufSources.filter(x => x !== src); };
     return buffer.duration;
@@ -136,7 +138,8 @@ export class AudioMixer {
    * BGM再生（登録したMP3）。
    * Web Audio のバッファをループ再生するので、繋ぎ目に無音が入らない（シームレスループ）
    */
-  async playBGM(url: string, volume: number, loop: boolean = true): Promise<void> {
+  /** offsetSec: シーク位置から再開するとき、BGMも同じ秒数だけ進めた地点から鳴らす（曲の長さで割った余り） */
+  async playBGM(url: string, volume: number, loop: boolean = true, offsetSec: number = 0): Promise<void> {
     this.stopBGM();
     const token = ++this.bgmToken;
     const ctx = this.getContext();
@@ -156,7 +159,8 @@ export class AudioMixer {
       source.buffer = buffer;
       source.loop = loop;
       source.connect(gain);
-      source.start(0);
+      const safeOffset = buffer.duration > 0 ? Math.max(0, offsetSec) % buffer.duration : 0;
+      source.start(0, safeOffset);
 
       this.bgmSource = source;
       this.bgmGain = gain;
