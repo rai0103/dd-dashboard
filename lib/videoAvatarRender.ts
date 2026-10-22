@@ -136,26 +136,31 @@ export class VideoAvatar {
       key = [r / c, g / c, b / c];
       this.keyColors[idx] = key;
     }
+    // 四隅の平均色に近い「ふちの画素」だけを種に、隣どうしの色の近さで背景領域を広げる。
+    // （全画素をキー色1色とだけ比べる方式だと、実写の背景の照明のムラ・グラデーションで
+    //  途中がキー色から外れてしまい、キー抜きが途中で止まって一部しか透明にならないことが
+    //  あったため、隣接画素間の差分でたどる方式に変更）
     const t2 = this.opt.tol * this.opt.tol;
-    const bg = this.bgBuf, vis = this.visBuf, st = this.stack;
-    for (let i = 0; i < n; i++) {
-      const k = i * 4;
-      const dr = d[k] - key[0], dg = d[k + 1] - key[1], db = d[k + 2] - key[2];
-      bg[i] = dr * dr + dg * dg + db * db < t2 ? 1 : 0;
-      vis[i] = 0;
-    }
-    // 画面の端につながっている「背景の色の部分」だけを背景とみなす
+    const vis = this.visBuf, st = this.stack;
+    vis.fill(0);
+    const nearKey = (i: number) => { const k = i * 4; const dr = d[k] - key[0], dg = d[k + 1] - key[1], db = d[k + 2] - key[2]; return dr * dr + dg * dg + db * db < t2; };
     let sp = 0;
-    const push = (i: number) => { if (bg[i] && !vis[i]) { vis[i] = 1; st[sp++] = i; } };
-    for (let x = 0; x < mw; x++) { push(x); push((mh - 1) * mw + x); }
-    for (let y = 0; y < mh; y++) { push(y * mw); push(y * mw + mw - 1); }
+    const seed = (i: number) => { if (!vis[i] && nearKey(i)) { vis[i] = 1; st[sp++] = i; } };
+    for (let x = 0; x < mw; x++) { seed(x); seed((mh - 1) * mw + x); }
+    for (let y = 0; y < mh; y++) { seed(y * mw); seed(y * mw + mw - 1); }
+    const grow = (from: number, to: number) => {
+      if (vis[to]) return;
+      const kf = from * 4, kt = to * 4;
+      const dr = d[kf] - d[kt], dg = d[kf + 1] - d[kt + 1], db = d[kf + 2] - d[kt + 2];
+      if (dr * dr + dg * dg + db * db < t2) { vis[to] = 1; st[sp++] = to; }
+    };
     while (sp > 0) {
       const i = st[--sp];
       const x = i % mw;
-      if (x > 0) push(i - 1);
-      if (x < mw - 1) push(i + 1);
-      if (i >= mw) push(i - mw);
-      if (i < n - mw) push(i + mw);
+      if (x > 0) grow(i, i - 1);
+      if (x < mw - 1) grow(i, i + 1);
+      if (i >= mw) grow(i, i - mw);
+      if (i < n - mw) grow(i, i + mw);
     }
     for (let i = 0; i < n; i++) { const k = i * 4; d[k] = 255; d[k + 1] = 255; d[k + 2] = 255; d[k + 3] = vis[i] ? 0 : 255; }
     this.mask.getContext('2d')!.putImageData(img, 0, 0);
