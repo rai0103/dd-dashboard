@@ -8,7 +8,7 @@
 // `d` は同ファイルの computeAll() 相当が返す価格系列オブジェクト（FULL/currentDD/mode/athDate等）。
 // dd-dashboard本体はJS（.jsx）で型を持たないため、ここでは data/d を緩く受け取る。
 
-import { LongMd, buildMdScenes, SP500_KANA, tickerKana } from './videoLongMd';
+import { LongMd, buildMdScenes, SP500_KANA, tickerKana, ContentSectionId } from './videoLongMd';
 import { CrashRow, UpdateStats, computeUpdateStats } from './videoMarketUpdate';
 import { StockDataPoint } from './videoTypes';
 import { LongBasis, buildBasis } from './videoLongBasis';
@@ -79,7 +79,7 @@ export interface VideoLongformResult {
  * 動画生成に必要な構造化データ一式（LongMd・UpdateStats・LongBasis・シーン配列）を直接組み立てる。
  * instrumentNameKana省略時はS&P500として読む（既存のSP500専用パスの挙動を維持）。
  */
-export function buildVideoLongform(data: any, d: any, instrumentNameKana: string = SP500_KANA): VideoLongformResult {
+export function buildVideoLongform(data: any, d: any, instrumentNameKana: string = SP500_KANA, sections?: ContentSectionId[]): VideoLongformResult {
   const dailyPoints = dailyPointsFromFull(d.FULL);
   const crashRows = crashRowsFromAnalysis(data.crash_analysis);
   const stats = computeUpdateStats(dailyPoints, crashRows);
@@ -133,6 +133,6 @@ export function buildVideoLongform(data: any, d: any, instrumentNameKana: string
     } : null,
   };
 
-  const scenes = stats ? buildLongScenes(stats, longMd, basis, rolling, instrumentNameKana) : [];
+  const scenes = stats ? buildLongScenes(stats, longMd, basis, rolling, instrumentNameKana, sections) : [];
   return { longMd, stats, basis, scenes, rolling };
 }

@@ -5,7 +5,7 @@ import {
   ComposedChart, LineChart, Area, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ReferenceLine, ReferenceDot, ResponsiveContainer, PieChart, Pie, Cell, Brush, Customized,
 } from "recharts";
-import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Download, RefreshCw, Database, Trash2, Zap, Copy, FileText, Activity, Layers, ListChecks, Smartphone, Monitor, Wallet, Gauge, Film, Clapperboard, Play, Pause, Square } from "lucide-react";
+import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Download, RefreshCw, Database, Trash2, Zap, Copy, FileText, Activity, Layers, ListChecks, Smartphone, Monitor, Wallet, Gauge, Film, Clapperboard, Play, Pause, Square, GripVertical } from "lucide-react";
 import { storage } from "@/lib/storage";
 import { pullSyncAndApply, pushSyncNow, scheduleSyncPush, getLastSyncedAt, onSyncMergedFromRemote } from "@/lib/sync";
 import { parseInvestmentExcel, computeOwnAssetDrawdown, computeBenchmarkCAGR, latestUsdJpyRates, fxImpact, simulateDcaBenchmark, simulateMonthlyRebasedBenchmark, accountChanges, resolveBeginnerTrial, trialAxis } from "@/lib/investmentPerformance";
@@ -26,6 +26,7 @@ import { buildStatsTable, computeMddHoldProbability, depthBucketIndex, DEPTH_BUC
 import { computeYearForecast, yearForecastTrajectory, yearEndProjectionPath, computeNextYearForecast, computeQqqSpxCorrelation, buildAnnualReturns, presidentialCycleAverage, seasonalMonthlyAverages } from "@/lib/yearForecast";
 import { buildQqqEquivalentSeries, parseNdxPreQqqCsv } from "@/lib/qqqSynthetic";
 import { buildVideoLongform, SP500_KANA, tickerKana } from "@/lib/videoDataAdapter";
+import { DEFAULT_CONTENT_SECTIONS, CONTENT_SECTION_LABELS, availableContentSections } from "@/lib/videoLongMd";
 import { voiceGender } from "@/lib/videoAnalysts";
 import { LongAnalysisRenderer } from "@/lib/videoLongAnalysisRenderer";
 import { AudioMixer, setTtsBaseUrl, getTtsBaseUrl } from "@/lib/videoAudioMixer";
@@ -5775,11 +5776,27 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
   const ctx = useMemo(() => ({ d, crashFrequency, generatedAt, bottom, instrumentLabel }), [d, crashFrequency, generatedAt, bottom, instrumentLabel]);
   const jsonOutput = useMemo(() => { try { return computeLongformAnalysisJSON(ctx); } catch (e) { return null; } }, [ctx]);
   const instrumentNameKana = instrumentLabel === "SP500" ? SP500_KANA : tickerKana(instrumentLabel);
+
+  // --- 構成（場面の追加・削除・並べ替え） ---
+  const [sections, setSections] = useState(DEFAULT_CONTENT_SECTIONS);
   const video = useMemo(() => {
     if (!jsonOutput) return null;
-    try { return buildVideoLongform(jsonOutput, d, instrumentNameKana); } catch (e) { console.error("buildVideoLongform error:", e); return null; }
-  }, [jsonOutput, d, instrumentNameKana]);
+    try { return buildVideoLongform(jsonOutput, d, instrumentNameKana, sections); } catch (e) { console.error("buildVideoLongform error:", e); return null; }
+  }, [jsonOutput, d, instrumentNameKana, sections]);
   const scenes = video?.scenes ?? [];
+  const availableSectionIds = useMemo(() => (video?.longMd ? availableContentSections(video.longMd, video.basis) : []), [video]);
+  const dragSectionIndexRef = useRef(null);
+  const moveSectionTo = (from, to) => {
+    setSections((prev) => {
+      if (from < 0 || from >= prev.length || to < 0 || to >= prev.length || from === to) return prev;
+      const next = prev.slice();
+      const [item] = next.splice(from, 1);
+      next.splice(to, 0, item);
+      return next;
+    });
+  };
+  const removeSection = (id) => setSections((prev) => prev.filter((x) => x !== id));
+  const addSection = (id) => setSections((prev) => (prev.includes(id) ? prev : [...prev, id]));
 
   // --- ナレーション文の編集（場面ごと） ---
   const sceneKey = (i, id) => `${i}:${id}`;
@@ -6114,6 +6131,48 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
 
         {/* 設定パネル（右側で縦にスクロール：アバター→ナレーション→声→BGM→背景） */}
         <div className="flex flex-col gap-4 text-xs flex-1 min-w-0" style={{ color: C.text }}>
+          {/* 構成（場面の追加・削除・並べ替え） */}
+          <div>
+            <div className="text-[11px] font-semibold mb-1.5" style={{ color: C.textMuted }}>構成（場面の追加・削除・並べ替え）</div>
+            <div className="flex flex-col gap-1 mb-2">
+              {sections.map((id, i) => (
+                <div
+                  key={id}
+                  draggable
+                  onDragStart={() => { dragSectionIndexRef.current = i; }}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => { e.preventDefault(); const from = dragSectionIndexRef.current; if (from !== null) moveSectionTo(from, i); dragSectionIndexRef.current = null; }}
+                  className="flex items-center gap-2 px-2 py-1.5 rounded"
+                  style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, cursor: "grab" }}
+                >
+                  <GripVertical size={13} style={{ color: C.textDim, flexShrink: 0 }} />
+                  <span className="text-[11px]" style={{ color: C.text }}>{i + 1}. {CONTENT_SECTION_LABELS[id] ?? id}</span>
+                  <button onClick={() => removeSection(id)} className="ml-auto" style={{ color: C.textDim, background: "transparent", border: "none", cursor: "pointer", padding: 2 }} title="この場面を削除">
+                    <X size={13} />
+                  </button>
+                </div>
+              ))}
+              {sections.length === 0 && <p className="text-[10px]" style={{ color: C.textDim }}>場面が選択されていません。下から追加してください。</p>}
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {Object.keys(CONTENT_SECTION_LABELS).filter((id) => !sections.includes(id)).map((id) => {
+                const available = availableSectionIds.includes(id);
+                return (
+                  <button
+                    key={id}
+                    onClick={() => available && addSection(id)}
+                    disabled={!available}
+                    title={available ? undefined : "現在のデータでは利用できません"}
+                    className="text-[11px] px-2 py-1 rounded"
+                    style={{ color: available ? C.teal : C.textDim, background: "transparent", border: `1px solid ${available ? C.teal + "66" : C.borderSoft}`, cursor: available ? "pointer" : "not-allowed", opacity: available ? 1 : 0.5 }}
+                  >
+                    ＋ {CONTENT_SECTION_LABELS[id]}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           {/* アバター（人物の動画・MP4最大MAX_CLIPS本） */}
           <div>
             <div className="flex items-center justify-between mb-1.5">

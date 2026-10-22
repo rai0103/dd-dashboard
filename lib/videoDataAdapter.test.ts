@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildVideoLongform, dailyPointsFromFull, crashRowsFromAnalysis } from "./videoDataAdapter.ts";
-import { SP500_KANA, tickerKana } from "./videoLongMd.ts";
+import { SP500_KANA, tickerKana, availableContentSections } from "./videoLongMd.ts";
 
 // 10年分の日次価格（単純な上昇トレンド＋ノイズ）を作る。computeUpdateStats/buildBasisが過去年のデータを
 // 必要とするため、十分な年数を用意する。
@@ -99,4 +99,33 @@ test("crashRowsFromAnalysis / dailyPointsFromFull：単純なフィールド変�
   const pts = dailyPointsFromFull([{ date: new Date(Date.UTC(2024, 0, 1)), price: 123.45 }]);
   assert.equal(pts[0].date, "2024-01-01");
   assert.equal(pts[0].close, 123.45);
+});
+
+test("buildVideoLongform：sections引数で構成（場面の種類・順番）を指定できる。既定は近況（status）のみ", () => {
+  const FULL = makeFull(15); // 大統領サイクル根拠（cycleSampleYears: 2014/2018/2022）が全てカバーされるよう十分な年数を用意
+  const data = makeData(FULL);
+  const d = { FULL, currentDD: -4.2, mode: "調整", daysSinceATH: 12, athDate: FULL[FULL.length - 1].date };
+
+  // 既定（sections省略）：近況のみ（open・status・end）
+  const def = buildVideoLongform(data, d);
+  assert.deepEqual(def.scenes.map((s) => s.id), ["open", "status", "end"], "既定はopen→status→endのみ");
+
+  // 明示的に指定した順番・組み合わせでシーンが並ぶ（大統領サイクル根拠→底値判定→近況、の順）
+  const custom = buildVideoLongform(data, d, SP500_KANA, ["basisCycle", "bottom", "status"]);
+  assert.deepEqual(custom.scenes.map((s) => s.id), ["open", "basisCycle", "bottom", "status", "end"]);
+
+  // 対象データの無い構成を指定してもエラーにならず、単にスキップされる（crashmdはdata.crash_analysisがあるため実際には生成される想定）
+  const withCrash = buildVideoLongform(data, d, SP500_KANA, ["status", "crashmd", "daily"]);
+  assert.deepEqual(withCrash.scenes.map((s) => s.id), ["open", "status", "crashmd", "daily", "end"]);
+});
+
+test("availableContentSections：このテストデータで選択可能な構成候補がすべて揃う", () => {
+  const FULL = makeFull(15);
+  const data = makeData(FULL);
+  const d = { FULL, currentDD: -4.2, mode: "調整", daysSinceATH: 12, athDate: FULL[FULL.length - 1].date };
+  const result = buildVideoLongform(data, d);
+  const avail = availableContentSections(result.longMd, result.basis);
+  for (const id of ["status", "bottom", "rolling", "forecast", "basis10", "basisCycle", "ddpace", "crashmd", "daily"]) {
+    assert.ok(avail.includes(id), `${id}が選択候補に含まれる`);
+  }
 });
