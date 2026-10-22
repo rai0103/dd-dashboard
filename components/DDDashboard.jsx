@@ -482,6 +482,32 @@ function dayChangePct(dObj) {
   const prevPrice = dObj.FULL[dObj.FULL.length - 2].price;
   return ((dObj.last.price / prevPrice) - 1) * 100;
 }
+// 現在のDD（ドローダウン）の深さを「調整・下落・暴落・大暴落・歴史的暴落」の5段階に分類し、
+// その節目（crashFrequencyの該当行）の発生頻度（年に1度程度）をあわせて返す。
+// まだどの節目にも到達していない浅い下落は、最も軽い「調整」の節目（DD-10%超）を暫定カテゴリーとする。
+const DD_CATEGORY_BUCKETS = [
+  { label: "調整", thresholdPct: -10 },
+  { label: "下落", thresholdPct: -20 },
+  { label: "暴落", thresholdPct: -30 },
+  { label: "大暴落", thresholdPct: -40 },
+  { label: "歴史的暴落", thresholdPct: -45 },
+];
+function ddCategoryInfo(currentDD, crashFrequency) {
+  let bucket = DD_CATEGORY_BUCKETS[0];
+  for (const b of DD_CATEGORY_BUCKETS) { if (currentDD <= b.thresholdPct) bucket = b; }
+  const row = (crashFrequency || []).find((r) => r.threshold === bucket.thresholdPct);
+  return { label: bucket.label, thresholdPct: bucket.thresholdPct, avgIntervalYears: row?.avgIntervalYears ?? null };
+}
+// 直近n営業日分の{date, price, dd}を古い順で返す（動画・ショート動画制作用の直近チャートデータとして利用）。
+function recentNTradingDays(FULL, n) {
+  return FULL.slice(-n).map((p) => ({ date: p.date, price: p.price, dd: p.dd }));
+}
+// 動画制作（主にショート動画の冒頭スライド用）の、前日比・現在のDD分類・直近7営業日をまとめたナレーション文。
+function buildOpeningSlideNarration(dayChg, currentDD, ddCat) {
+  const chgText = dayChg !== null ? `${dayChg >= 0 ? "+" : ""}${dayChg.toFixed(2)}%` : "—";
+  const freqText = ddCat.avgIntervalYears != null ? `${ddCat.avgIntervalYears}年に1度` : "頻度不明";
+  return `S&P500は、前日比${chgText}、現在のDD（ドローダウン）は${currentDD.toFixed(1)}%で、${freqText}程度発生する${ddCat.label}（DD${ddCat.thresholdPct}%超）の水準です。直近7営業日のチャートを動的折れ線グラフで表示します。`;
+}
 
 /* ---------------- トラックレコード統計（読み込まれている実データから都度算出） ---------------- */
 // 節目間の進行確率・DD-3%到達からの最終到達確率で扱う節目の刻み。
@@ -5118,6 +5144,13 @@ function buildSummaryMarkdown(ctx) {
   L.push("");
 
   if (includeSp500) {
+    const openDayChg = dayChangePct(d);
+    const openDdCat = ddCategoryInfo(d.currentDD, crashFrequency);
+    const openRecent7 = recentNTradingDays(d.FULL, 7);
+    L.push("■ 冒頭スライド用（前日比・DD確率・直近7営業日）");
+    L.push(buildOpeningSlideNarration(openDayChg, d.currentDD, openDdCat));
+    L.push(`直近7営業日: ${openRecent7.map((pt) => `${fmtYMD(pt.date)} $${pt.price.toFixed(2)}（DD${pt.dd.toFixed(1)}%）`).join(" / ")}`);
+    L.push("");
     L.push("■ VOO 状況");
     L.push(`現在値 $${d.currentPrice.toFixed(2)} / ATH $${d.currentATH.toFixed(2)}（${fmtYMD(d.athDate)}） / DD ${d.currentDD.toFixed(1)}%`);
     L.push(`モード: ${d.mode}${d.isDrawdown ? `（DD開始＝ATH翌日から${d.daysSinceATH}営業日経過）` : ""}`);
@@ -5267,34 +5300,50 @@ function buildSummaryJSON(ctx) {
   // バックテスト用の生の日次価格系列（[日付, 終値]の配列。長期データを取り込むほど件数が増える＝これが本サマリーの主目的）。
   const seriesToPairs = (dObj) => dObj.FULL.map((p) => [p.date.toISOString().slice(0, 10), p.price]);
 
-  const sp500Part = !includeSp500 ? {} : {
-    sp500: { ...summarizeSeriesForJSON(d), recent: recentStats },
-    crash_risk: {
-      note: "SP500の下落エピソードが各節目（5%刻み、-10%〜-45%）を超えた頻度・直近の発生年・今後1年以内の発生確率の目安（ポアソン過程近似）。前年の傾向は各発生年の前年（暦年）騰落率の集計。過去の実績は将来を保証しません。",
-      thresholds: (crashFrequency || []).map((r) => ({
-        threshold_pct: r.threshold,
-        occurrence_count: r.count,
-        coverage_years: r.coverageYears,
-        avg_interval_years: r.avgIntervalYears,
-        last_occurrence_year: r.lastOccurrence?.year ?? null,
-        last_occurrence_date: r.lastOccurrence?.date ? r.lastOccurrence.date.toISOString().slice(0, 10) : null,
-        years_since_last: r.yearsSinceLast,
-        next_year_probability_pct: r.nextYearProbability,
-        prior_year_avg_return_pct: r.priorYearAvg,
-        prior_year_positive_share_pct: r.priorYearPositiveShare,
-        low_sample: r.lowSample,
-        occurrences: r.occurrences.map((o) => ({ year: o.year, date: o.date ? o.date.toISOString().slice(0, 10) : null, episode_min_dd_pct: Number(o.min_dd.toFixed(1)) })),
-      })),
-    },
-    voo: dVoo ? summarizeSeriesForJSON(dVoo) : null,
-    qqq: dQqq ? summarizeSeriesForJSON(dQqq) : null,
-    price_series: {
-      note: "各配列は[日付, 終値]の全履歴（読み込み済み全期間）。バックテスト・独自分析にそのまま使用可能。",
-      sp500: seriesToPairs(d),
-      voo: dVoo ? seriesToPairs(dVoo) : null,
-      qqq: dQqq ? seriesToPairs(dQqq) : null,
-    },
-  };
+  const sp500Part = !includeSp500 ? {} : (() => {
+    const openDayChg = dayChangePct(d);
+    const openDdCat = ddCategoryInfo(d.currentDD, crashFrequency);
+    const openRecent7 = recentNTradingDays(d.FULL, 7);
+    return {
+      // 動画・ショート動画制作で、最初のスライド（冒頭の一言）として使う想定の要約。
+      opening_slide: {
+        day_change_pct: openDayChg !== null ? Number(openDayChg.toFixed(2)) : null,
+        dd_pct: d.currentDD,
+        dd_category: openDdCat.label,
+        dd_category_threshold_pct: openDdCat.thresholdPct,
+        dd_category_avg_interval_years: openDdCat.avgIntervalYears,
+        narration: buildOpeningSlideNarration(openDayChg, d.currentDD, openDdCat),
+        chart_instruction: "直近7営業日のチャートを動的折れ線グラフで表示する",
+        recent_7_trading_days: openRecent7.map((pt) => ({ date: pt.date.toISOString().slice(0, 10), price: pt.price, dd_pct: pt.dd })),
+      },
+      sp500: { ...summarizeSeriesForJSON(d), recent: recentStats },
+      crash_risk: {
+        note: "SP500の下落エピソードが各節目（5%刻み、-10%〜-45%）を超えた頻度・直近の発生年・今後1年以内の発生確率の目安（ポアソン過程近似）。前年の傾向は各発生年の前年（暦年）騰落率の集計。過去の実績は将来を保証しません。",
+        thresholds: (crashFrequency || []).map((r) => ({
+          threshold_pct: r.threshold,
+          occurrence_count: r.count,
+          coverage_years: r.coverageYears,
+          avg_interval_years: r.avgIntervalYears,
+          last_occurrence_year: r.lastOccurrence?.year ?? null,
+          last_occurrence_date: r.lastOccurrence?.date ? r.lastOccurrence.date.toISOString().slice(0, 10) : null,
+          years_since_last: r.yearsSinceLast,
+          next_year_probability_pct: r.nextYearProbability,
+          prior_year_avg_return_pct: r.priorYearAvg,
+          prior_year_positive_share_pct: r.priorYearPositiveShare,
+          low_sample: r.lowSample,
+          occurrences: r.occurrences.map((o) => ({ year: o.year, date: o.date ? o.date.toISOString().slice(0, 10) : null, episode_min_dd_pct: Number(o.min_dd.toFixed(1)) })),
+        })),
+      },
+      voo: dVoo ? summarizeSeriesForJSON(dVoo) : null,
+      qqq: dQqq ? summarizeSeriesForJSON(dQqq) : null,
+      price_series: {
+        note: "各配列は[日付, 終値]の全履歴（読み込み済み全期間）。バックテスト・独自分析にそのまま使用可能。",
+        sp500: seriesToPairs(d),
+        voo: dVoo ? seriesToPairs(dVoo) : null,
+        qqq: dQqq ? seriesToPairs(dQqq) : null,
+      },
+    };
+  })();
 
   const assetPart = !includeAsset ? {} : {
     household_total: val(total),
