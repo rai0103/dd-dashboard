@@ -5,7 +5,7 @@ import {
   ComposedChart, LineChart, Area, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ReferenceLine, ReferenceDot, ResponsiveContainer, PieChart, Pie, Cell, Brush, Customized,
 } from "recharts";
-import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Download, RefreshCw, Database, Trash2, Zap, Copy, FileText, Activity, Layers, ListChecks, Smartphone, Monitor, Wallet, Gauge, Film, Clapperboard, Play, Pause, Square, GripVertical, Camera } from "lucide-react";
+import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Download, RefreshCw, Database, Trash2, Zap, Copy, FileText, Activity, Layers, ListChecks, Smartphone, Monitor, Wallet, Gauge, Film, Clapperboard, Play, Pause, Square, GripVertical, Camera, MessageSquare } from "lucide-react";
 import { storage } from "@/lib/storage";
 import { pullSyncAndApply, pushSyncNow, scheduleSyncPush, getLastSyncedAt, onSyncMergedFromRemote } from "@/lib/sync";
 import { parseInvestmentExcel, computeOwnAssetDrawdown, computeBenchmarkCAGR, latestUsdJpyRates, fxImpact, simulateDcaBenchmark, simulateMonthlyRebasedBenchmark, accountChanges, resolveBeginnerTrial, trialAxis } from "@/lib/investmentPerformance";
@@ -36,6 +36,7 @@ import { listBackgrounds, saveBackground, deleteBackground } from "@/lib/videoBa
 import { listAvatars, saveAvatar, deleteAvatar, newAvatar, MAX_CLIPS } from "@/lib/videoAvatarLibrary";
 import { VideoAvatar } from "@/lib/videoAvatarRender";
 import { segmentReading, displayOf, readingOf, applyMixedEdit } from "@/lib/videoNarrText";
+import { callAiTool, AiClientError } from "@/lib/videoAiClient";
 import NarrMixedBox from "@/components/NarrMixedBox";
 
 // Cloudflare Worker（当日のVOO/QQQ終値を返す。SP500はここでは扱わず引き続きCSV取り込み/直接入力で更新する）のエンドポイント。
@@ -5807,6 +5808,11 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
   const [sceneEdits, setSceneEdits] = useState({});
   const [learned, setLearned] = useState(() => { try { const v = JSON.parse(localStorage.getItem("video-narr-learned-v1") || "{}"); return v && typeof v === "object" ? v : {}; } catch (e) { return {}; } });
   const [narrNote, setNarrNote] = useState("");
+  // --- AIチャットによるナレーション書き直し（Stage D-3） ---
+  const [chatOpenKey, setChatOpenKey] = useState(null);
+  const [chatText, setChatText] = useState("");
+  const [chatLoadingKey, setChatLoadingKey] = useState(null);
+  const [chatErrors, setChatErrors] = useState({});
   const saveLearnedMap = (m) => { setLearned(m); try { localStorage.setItem("video-narr-learned-v1", JSON.stringify(m)); } catch (e) { /* 保存できなくても動作は続ける */ } };
   const extraVocab = useMemo(() => (instrumentLabel === "SP500" ? [] : [[instrumentNameKana, instrumentLabel]]), [instrumentLabel, instrumentNameKana]);
   const segsList = useMemo(() => scenes.map((sc) => segmentReading(sc.reading, extraVocab, learned)), [scenes, extraVocab, learned]);
@@ -5833,6 +5839,49 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
       return;
     }
     setSceneEdits((prev) => ({ ...prev, [k]: { base: sc.reading, shown: e.shown, text: r.reading } }));
+  };
+
+  // AIに指示して場面のナレーションを書き直す（Stage D-3）。既存のsceneEdits（手動編集と同じ仕組み）に
+  // 書き込むため、「元に戻す」ボタンは変更不要でそのまま機能する。
+  const rewriteSceneViaAi = async (i, sc) => {
+    const k = sceneKey(i, sc.id);
+    const instruction = chatText.trim();
+    if (!instruction) return;
+    setChatLoadingKey(k);
+    setChatErrors((prev) => { const nx = { ...prev }; delete nx[k]; return nx; });
+    try {
+      const currentReading = readings[i];
+      const examples = scenes.map((_, j) => readings[j]).filter((t, j) => j !== i && t).slice(0, 3);
+      const system = [
+        "あなたは投資データ解説動画のナレーション編集者です。",
+        "出力は必ずひらがなのみで書いてください（漢字・カタカナ・英数字は使わない）。句読点は「、」「。」のみ使えます。",
+        "他の場面のナレーション文体の実例：",
+        ...examples.map((e, idx) => `例${idx + 1}：${e}`),
+      ].join("\n");
+      const prompt = `現在の場面（${sc.caption || ""}）のナレーションは次の通りです：\n『${currentReading}』\n\n次の指示に従って書き直してください：\n『${instruction}』`;
+      const result = await callAiTool({
+        system,
+        prompt,
+        toolName: "rewrite_narration",
+        toolDescription: "指示に従って、投資データ解説動画の1場面のナレーション文（ひらがなのみ）を書き直す。",
+        inputSchema: {
+          type: "object",
+          properties: { reading: { type: "string", description: "ひらがなのみの書き直し後の読み上げ文" } },
+          required: ["reading"],
+        },
+      });
+      const newReading = typeof result?.reading === "string" ? result.reading.trim() : "";
+      if (!newReading) throw new Error("AIから空の応答が返りました。");
+      const shown = displayOf(segmentReading(newReading, extraVocab, learned));
+      setSceneEdits((prev) => ({ ...prev, [k]: { base: sc.reading, shown, text: newReading } }));
+      setChatOpenKey(null);
+      setChatText("");
+    } catch (e) {
+      const msg = e instanceof AiClientError ? e.message : (e && e.message ? e.message : String(e));
+      setChatErrors((prev) => ({ ...prev, [k]: msg }));
+    } finally {
+      setChatLoadingKey(null);
+    }
   };
 
   // --- アバター（人物の動画。1人につきMP4を最大{MAX_CLIPS}本・アップロードしてブラウザに保存） ---
@@ -6397,9 +6446,39 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
                       <div className="flex items-center gap-2">
                         {edited && <button onClick={() => resetSceneText(i, sc)} className="text-[10px]" style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer" }}>元に戻す</button>}
                         <button onClick={() => previewScene(i)} className="text-[10px] flex items-center gap-1" style={{ color: C.teal, background: "none", border: "none", cursor: "pointer" }}><Play size={10} /> 試聴</button>
+                        <button
+                          onClick={() => { const k = sceneKey(i, sc.id); setChatOpenKey((prev) => (prev === k ? null : k)); setChatText(""); }}
+                          className="text-[10px] flex items-center gap-1"
+                          style={{ color: chatOpenKey === sceneKey(i, sc.id) ? C.teal : C.textDim, background: "none", border: "none", cursor: "pointer" }}
+                          title="AIに書き直しを指示する"
+                        ><MessageSquare size={10} /> AIに指示</button>
                       </div>
                     </div>
                     <NarrMixedBox value={shownTexts[i]} base={baseShown[i]} onChange={(t) => handleSceneTextChange(i, sc, t)} onBlur={() => commitSceneText(i, sc)} colors={{ text: C.text, border: C.borderSoft }} readUpTo={isCurrent && isPlaying ? readCharIdx : null} />
+                    {chatOpenKey === sceneKey(i, sc.id) && (
+                      <div className="mt-1.5 pt-1.5" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            type="text"
+                            value={chatText}
+                            onChange={(e) => setChatText(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === "Enter" && !chatLoadingKey) rewriteSceneViaAi(i, sc); }}
+                            placeholder="例：もう少し短く／もっとやさしい言葉で、など指示を入力"
+                            className="flex-1 text-[11px] rounded px-2 py-1"
+                            style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, color: C.text }}
+                          />
+                          <button
+                            onClick={() => rewriteSceneViaAi(i, sc)}
+                            disabled={chatLoadingKey === sceneKey(i, sc.id) || !chatText.trim()}
+                            className="text-[10px] px-2 py-1 rounded"
+                            style={{ background: C.teal, color: "#04201a", border: "none", cursor: chatLoadingKey ? "default" : "pointer", opacity: chatLoadingKey === sceneKey(i, sc.id) || !chatText.trim() ? 0.5 : 1 }}
+                          >{chatLoadingKey === sceneKey(i, sc.id) ? "生成中…" : "送信"}</button>
+                        </div>
+                        {chatErrors[sceneKey(i, sc.id)] && (
+                          <div className="text-[10px] mt-1" style={{ color: "#ff6b6b" }}>{chatErrors[sceneKey(i, sc.id)]}</div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })}
