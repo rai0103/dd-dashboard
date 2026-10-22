@@ -887,14 +887,70 @@ export class LongAnalysisRenderer {
       return;
     }
     if (id === 'athDrop') {
+      // 2026-10-22のユーザー指示により、上側の棒グラフ・文章を詰めて、空いた下側に当年の
+      // ドローダウン（ATHからの下落率）の推移を動的な面グラフで表示するよう変更。
+      // 最大下落・現在値をハイライトする。データはstats.ddPath（既存、当年の下落率の推移）を使う。
       this.heading('近況：ATHからの下落率', `${DATE}（米国時間）基準`, p);
       const limA = Math.max(10, Math.abs(s.ddMin) * 1.3);
-      this.hbar('現在の最高値からの下落', s.dd, limA, 140, sub(p, 0.12, 0.5), `${s.dd.toFixed(1)}%`);
-      this.hbar('今年の最大下落', s.ddMin, limA, 206, sub(p, 0.22, 0.6), `${s.ddMin.toFixed(1)}%`);
-      ctx0.save(); ctx0.globalAlpha *= ease(sub(p, 0.6, 0.8));
-      this.txt(s.dd >= -0.005 ? '最高値を更新中です' : `最高値更新から ${s.athDays}日経過`, 24, 310, 22, WHITE, { bold: true, maxW: PW - 48 });
-      this.txt(`今年の最高値更新 ${s.athCount}回（過去平均 約${Math.max(1, Math.round(s.athAvg))}回）`, 24, 344, 17, WHITE, { alpha: 0.8, maxW: PW - 48 });
+      this.hbar('現在の最高値からの下落', s.dd, limA, 108, sub(p, 0.06, 0.3), `${s.dd.toFixed(1)}%`);
+      this.hbar('今年の最大下落', s.ddMin, limA, 160, sub(p, 0.1, 0.34), `${s.ddMin.toFixed(1)}%`);
+      ctx0.save(); ctx0.globalAlpha *= ease(sub(p, 0.3, 0.45));
+      this.txt(s.dd >= -0.005 ? '最高値を更新中です' : `最高値更新から ${s.athDays}日経過`, 24, 222, 19, WHITE, { bold: true, maxW: PW - 48 });
+      this.txt(`今年の最高値更新 ${s.athCount}回（過去平均 約${Math.max(1, Math.round(s.athAvg))}回）`, 24, 248, 14, WHITE, { alpha: 0.8, maxW: PW - 48 });
       ctx0.restore();
+
+      const ddPts = s.ddPath ?? [];
+      if (ddPts.length > 1) {
+        const L = 24, R = PW - 24, T = 272, B = 452;
+        ctx0.fillStyle = 'rgba(255,255,255,0.04)'; ctx0.fillRect(L, T, R - L, B - T);
+        const minDd = Math.min(...ddPts.map(q => q.dd), s.ddMin, -2);
+        const yv = (v: number) => T + ((0 - v) / (0 - minDd)) * (B - T);
+        ctx0.strokeStyle = 'rgba(255,255,255,0.4)'; ctx0.lineWidth = 1;
+        ctx0.beginPath(); ctx0.moveTo(L, yv(0)); ctx0.lineTo(R, yv(0)); ctx0.stroke();
+        this.txt('0%', L + 2, yv(0) - 5, 10, WHITE, { alpha: 0.5 });
+        this.txt(`${minDd.toFixed(0)}%`, L + 2, B - 4, 10, WHITE, { alpha: 0.5 });
+        for (let m = 0; m < 12; m++) this.txt(`${m + 1}月`, L + ((m + 0.5) / 12) * (R - L), B + 14, 10, WHITE, { alpha: 0.5, align: 'center' });
+
+        const k = ease(sub(p, 0.45, 0.92));
+        const tMax = k * (ddPts[ddPts.length - 1]?.t ?? 1);
+        const visible = ddPts.filter(q => q.t <= tMax);
+        if (visible.length) {
+          ctx0.save();
+          ctx0.beginPath();
+          ctx0.moveTo(L + visible[0].t * (R - L), yv(0));
+          visible.forEach(q => ctx0.lineTo(L + q.t * (R - L), yv(q.dd)));
+          ctx0.lineTo(L + visible[visible.length - 1].t * (R - L), yv(0));
+          ctx0.closePath();
+          ctx0.fillStyle = `rgba(${DOWN},0.22)`;
+          ctx0.fill();
+          ctx0.restore();
+
+          ctx0.save(); ctx0.strokeStyle = `rgba(${DOWN},1)`; ctx0.lineWidth = 2.4; ctx0.lineJoin = 'round';
+          ctx0.beginPath();
+          visible.forEach((q, i) => { const x = L + q.t * (R - L); if (i === 0) ctx0.moveTo(x, yv(q.dd)); else ctx0.lineTo(x, yv(q.dd)); });
+          ctx0.stroke(); ctx0.restore();
+
+          const maxPt = ddPts.reduce((a, b) => (b.dd < a.dd ? b : a), ddPts[0]);
+          if (maxPt.t <= tMax) {
+            const mx = L + maxPt.t * (R - L), my = yv(maxPt.dd);
+            const ma = ease(sub(p, 0.7, 0.9));
+            ctx0.save(); ctx0.globalAlpha *= ma;
+            ctx0.fillStyle = `rgba(${AMBER},1)`; ctx0.beginPath(); ctx0.arc(mx, my, 5, 0, Math.PI * 2); ctx0.fill();
+            this.txt(`最大 ${maxPt.dd.toFixed(1)}%`, mx, my - 12, 12, AMBER, { bold: true, align: 'center' });
+            ctx0.restore();
+          }
+
+          const curPt = ddPts[ddPts.length - 1];
+          if (curPt && curPt.t <= tMax) {
+            const cx = L + curPt.t * (R - L), cy = yv(curPt.dd);
+            const ca = ease(sub(p, 0.82, 0.98));
+            ctx0.save(); ctx0.globalAlpha *= ca;
+            ctx0.fillStyle = `rgba(${GREEN},1)`; ctx0.beginPath(); ctx0.arc(cx, cy, 5, 0, Math.PI * 2); ctx0.fill();
+            this.txt(`現在 ${curPt.dd.toFixed(1)}%`, cx, cy + 20, 12, GREEN, { bold: true, align: 'center' });
+            ctx0.restore();
+          }
+        }
+      }
       return;
     }
     if (id === 'crashFreq') {
