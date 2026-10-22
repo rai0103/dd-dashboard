@@ -22,7 +22,7 @@ import { decodeCp932, parseTradeCsv, mergeTrades, computeRealizedEvents, aggrega
 import { OWNER_RAKUTEN_SAKI, OWNER_RAKUTEN_SHIN, OWNER_MOOMOO, OWNER_OPTIONS, RAKUTEN_OWNERS, migrateHoldingsOwners, migrateAsOfKeys, detectRakutenOwnerFromFileName, ownerDisplayLabel } from "@/lib/owners";
 import { BROKERS, brokerByKey, extractionToPreviewRows, previewRowsToHoldings, replaceBrokerHoldings, aggregateLabelsReplacedByBrokers, rowValue, reconcileWithAccountTotal, isPlausibleBrokerRate, guessBrokerRank, reconciliationTarget, sectionChecks, buildBrokerSummary, profitChecks, appendHoldingSnapshot, holdingChanges } from "@/lib/brokerImport";
 import { importUserPrices, applyApiGold, resetPriceField, goldHistoryFetchStart } from "@/lib/priceSeries";
-import { buildStatsTable, computeMddHoldProbability, depthBucketIndex, DEPTH_BUCKETS, LOW_SAMPLE_N, PROGRESSION_LEVELS } from "@/lib/bottomScore";
+import { buildStatsTable, computeMddHoldProbability, depthBucketIndex, DEPTH_BUCKETS, LOW_SAMPLE_N, PROGRESSION_LEVELS, PACE_TIER_LABEL } from "@/lib/bottomScore";
 import { computeYearForecast, yearForecastTrajectory, yearEndProjectionPath, computeNextYearForecast, computeQqqSpxCorrelation, buildAnnualReturns, presidentialCycleAverage, seasonalMonthlyAverages } from "@/lib/yearForecast";
 import { buildQqqEquivalentSeries, parseNdxPreQqqCsv } from "@/lib/qqqSynthetic";
 import { buildVideoLongform, SP500_KANA, tickerKana } from "@/lib/videoDataAdapter";
@@ -7160,7 +7160,15 @@ function BottomScoreModalContent({ bottom, FULL, instrumentLabel = "VOO", qqqGap
             <div className="flex flex-col items-center gap-1"><HoldProbGauge p={h.tier.pHold ?? 0} size={220} /><HoldSplitLine tier={h.tier} /><span className="text-[10px] text-center" style={{ color: C.textDim }}>この底値を割らずにATHを更新する確率</span></div>
             <div className="flex flex-col gap-3 min-w-0">
               <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
-                {[["直前ATH", fmtIdxDate(FULL, h.state.pre_ath_idx)], ["最新DD", `${h.state.latest_dd.toFixed(2)}%`], ["底値からの反発", `+${h.state.bounce_from_low_pct.toFixed(2)}%`], ["下落幅の戻し率", `${(h.state.recovery_ratio * 100).toFixed(1)}%`], ["底値からの経過", `${h.state.days_since_trough}営業日（ATHから${h.state.days_since_ath}営業日）`]].map(([k, v]) => (
+                {[
+                  ["直前ATH", fmtIdxDate(FULL, h.state.pre_ath_idx)],
+                  ["最新DD", `${h.state.latest_dd.toFixed(2)}%`],
+                  ["底値からの反発", `+${h.state.bounce_from_low_pct.toFixed(2)}%`],
+                  ["下落幅の戻し率", `${(h.state.recovery_ratio * 100).toFixed(1)}%`],
+                  ["底値からの経過", `${h.state.days_since_trough}営業日（ATHから${h.state.days_since_ath}営業日）`],
+                  h.nextLevelProgression && ["下落速度", `開始から${h.nextLevelProgression.daysElapsed}営業日で${h.nextLevelProgression.from}%到達（過去の中央値${h.nextLevelProgression.cutMedian ?? "—"}日・${PACE_TIER_LABEL[h.nextLevelProgression.paceTier]}）`],
+                  h.recoveryPaceInfo && ["回復速度", `底値から${h.recoveryPaceInfo.daysElapsed}営業日で節目${h.recoveryPaceInfo.fromLevel}%から回復中（過去の中央値${h.recoveryPaceInfo.cutMedian ?? "—"}日・${PACE_TIER_LABEL[h.recoveryPaceInfo.paceTier]}）`],
+                ].filter(Boolean).map(([k, v]) => (
                   <div key={k} className="flex justify-between gap-2" style={{ borderBottom: `1px solid ${C.borderSoft}` }}><span style={{ color: C.textMuted }}>{k}</span><span className="mono">{v}</span></div>
                 ))}
               </div>
@@ -7168,6 +7176,11 @@ function BottomScoreModalContent({ bottom, FULL, instrumentLabel = "VOO", qqqGap
                 採用条件「{h.tier.label}」に当てはまる過去{h.tier.n}件のうち、{h.tier.held}件はその底値を割らずにATHを更新しました（ATH更新まで中央値{h.medianDaysToAth ?? "—"}営業日）。
                 {h.tier.broke > 0 ? `${h.tier.broke}件は底値を割り（割るまで中央値${h.medianDaysToBreak}営業日）、最終MDDは ${h.breakDistribution.filter((b) => b.count).map((b) => `${b.label}:${b.count}件`).join(" / ")} でした。` : "底値を割ったケースはありません。"}
               </div>
+              {h.nextLevelProgression && (
+                <div className="text-[11px] leading-relaxed" style={{ color: C.textMuted }}>
+                  下落速度（開始から{h.nextLevelProgression.daysElapsed}営業日で{h.nextLevelProgression.from}%到達、過去の中央値{h.nextLevelProgression.cutMedian ?? "—"}日のため「{PACE_TIER_LABEL[h.nextLevelProgression.paceTier]}」）で見ると、次の節目（{h.nextLevelProgression.to}%）への到達確率は過去{h.nextLevelProgression.n}件中{pctCell(h.nextLevelProgression.p)}でした<LowSampleBadge n={h.nextLevelProgression.n} />。
+                </div>
+              )}
             </div>
           </div>
 
@@ -7243,6 +7256,19 @@ function BottomScoreModalContent({ bottom, FULL, instrumentLabel = "VOO", qqqGap
               <tr key={`${t.from}${t.to}`} style={{ borderTop: `1px solid ${C.borderSoft}` }}><td className={td}>{t.from}%→{t.to}%</td><td className={td}>{t.median ?? "—"}</td><td className={td}>{t.mean ?? "—"}</td><td className={td}>{t.p25 ?? "—"}〜{t.p75 ?? "—"}</td><td className={td}>{t.n}<LowSampleBadge n={t.n} /></td></tr>
             ))}</tbody></table>
         </div>
+        <div>
+          {sectionTitle("参考：下落速度別 進行確率", "（節目到達までの速さ別。p25以下＝速い、p75以上＝遅い）")}
+          <table className="w-full text-xs mono"><thead><tr style={{ color: C.textDim }}><th className={th}>節目</th><th className={th}>速度</th><th className={th}>進行確率</th><th className={th}>到達/n</th></tr></thead>
+            <tbody>{stats.descentPaceProgression.map((r) => {
+              const isCurrent = h.nextLevelProgression && r.from === h.nextLevelProgression.from && r.to === h.nextLevelProgression.to && r.paceTier === h.nextLevelProgression.paceTier;
+              return (
+                <tr key={`${r.from}${r.to}${r.paceTier}`} style={{ borderTop: `1px solid ${C.borderSoft}`, color: isCurrent ? C.text : C.textMuted }}>
+                  <td className={td}>{isCurrent ? "▶ " : ""}{r.from}%→{r.to}%</td><td className={td}>{PACE_TIER_LABEL[r.paceTier]}</td>
+                  <td className={td} style={{ color: isCurrent ? C.teal : undefined }}>{pctCell(r.p)}</td><td className={td}>{r.progressed}/{r.reached}<LowSampleBadge n={r.reached} /></td>
+                </tr>
+              );
+            })}</tbody></table>
+        </div>
       </div>
 
       <div>
@@ -7260,6 +7286,22 @@ function BottomScoreModalContent({ bottom, FULL, instrumentLabel = "VOO", qqqGap
         {sectionTitle("参考：節目回復統計", "（DDの節目を5%刻みで何段階回復したか。底値確定確率の判定にも使用）")}
         <RecoveryMatrixChart matrix={stats.recoveryMatrix} />
         <div className="mt-3"><RecoveryMatrixTable matrix={stats.recoveryMatrix} /></div>
+        {h.recoveryPaceInfo && (() => {
+          const cells = stats.recoveryMatrixByPace.filter((c) => c.fromLevel === h.recoveryPaceInfo.fromLevel && c.steps === h.recoveryPaceInfo.steps);
+          if (!cells.length) return null;
+          return (
+            <div className="mt-3">
+              <div className="text-[11px] mb-1" style={{ color: C.textDim }}>現在の節目（{h.recoveryPaceInfo.fromLevel}%・{h.recoveryPaceInfo.steps}段階回復）を、そこへの到達の速さでさらに分けると（条件付き確率。上表のpは発生全件を分母にした値のため数値の意味が異なります）：</div>
+              <table className="w-full text-xs mono"><thead><tr style={{ color: C.textDim }}><th className={th}>速度</th><th className={th}>到達件数</th><th className={th}>底値確定</th><th className={th}>確率</th></tr></thead>
+                <tbody>{cells.map((c) => (
+                  <tr key={c.paceTier} style={{ borderTop: `1px solid ${C.borderSoft}`, color: c.paceTier === h.recoveryPaceInfo.paceTier ? C.text : C.textMuted }}>
+                    <td className={td}>{c.paceTier === h.recoveryPaceInfo.paceTier ? "▶ " : ""}{PACE_TIER_LABEL[c.paceTier]}</td><td className={td}>{c.occurrences}<LowSampleBadge n={c.occurrences} /></td><td className={td}>{c.bottomHeld}</td>
+                    <td className={td} style={{ color: c.paceTier === h.recoveryPaceInfo.paceTier ? C.teal : undefined }}>{pctCell(c.p)}</td>
+                  </tr>
+                ))}</tbody></table>
+            </div>
+          );
+        })()}
       </div>
 
       <div className="text-[11px] leading-relaxed" style={{ color: C.textDim }}>

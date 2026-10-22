@@ -8,6 +8,7 @@ import {
   computeReboundProgression, computeLevelTransitionDays, buildStatsTable, deriveCurrentState, depthBucketIndex,
   collectHoldSamples, computeMddHoldProbability, collectRecoverySamples, computeRecoveryMatrix,
   collectCrashOccurrences, computeCrashFrequency, CRASH_RISK_THRESHOLDS,
+  computeLevelProgressionByPace, collectRecoveryPaceSamples, computeRecoveryMatrixByPace, paceTierOf,
 } from "./bottomScore.ts";
 
 function loadSp500(): { prices: number[]; dates: Date[] } {
@@ -63,6 +64,30 @@ test("computeLevelProgression / computeLevelTransitionDays: 合成データで�
   assert.equal(rows[0].lowSample, true);
   const t = computeLevelTransitionDays(prices, -3, -5);
   assert.deepEqual(t.days, [1, 0, 0]); // 局面1は97→94で1日、局面2・3は-3%と-5%を同日に通過
+});
+
+test("paceTierOf: p25以下は速い、p75以上は遅い、それ以外は普通", () => {
+  assert.equal(paceTierOf(1, 2, 5), "fast");
+  assert.equal(paceTierOf(2, 2, 5), "fast"); // ちょうどp25も速い
+  assert.equal(paceTierOf(3, 2, 5), "normal");
+  assert.equal(paceTierOf(5, 2, 5), "slow"); // ちょうどp75は遅い
+  assert.equal(paceTierOf(9, 2, 5), "slow");
+  assert.equal(paceTierOf(9, null, null), "normal"); // 境界が無ければ常にnormal
+});
+
+test("computeLevelProgressionByPace: -3%到達が速かった局面と遅かった局面で-5%到達確率が分かれる", () => {
+  // 独立した4局面（それぞれ新ATHで解消）：
+  // 局面1・2＝速い（ATHから1日で-3%通過・直接-4%）：どちらも-5%（実際は-6%）まで到達＝進行
+  // 局面3・4＝遅い（-1%→-2%→-4%と2日かけて-3%通過）：どちらも-4%止まりで-5%には届かない＝未進行
+  const prices = [100, 96, 94, 200, 192, 188, 300, 297, 294, 288, 400, 396, 392, 384, 500];
+  const rows = computeLevelProgressionByPace(prices).filter((r) => r.from === -3 && r.to === -5);
+  const byTier = Object.fromEntries(rows.map((r) => [r.paceTier, r]));
+  assert.equal(byTier.fast.cutP25, 0); // -3%到達までの日数分布[0,0,2,2]のp25
+  assert.equal(byTier.fast.cutP75, 2); // 同p75（slow側の境界と一致）
+  assert.deepEqual([byTier.fast.reached, byTier.fast.progressed, byTier.fast.p], [2, 2, 100]);
+  assert.deepEqual([byTier.slow.reached, byTier.slow.progressed, byTier.slow.p], [2, 0, 0]);
+  assert.deepEqual([byTier.normal.reached, byTier.normal.p], [0, null]);
+  assert.equal(byTier.fast.lowSample, true); // n=2<LOW_SAMPLE_N
 });
 
 test("SP500全履歴: 統計テーブルが全データから算出され、日次データ追加で自動更新される", () => {
@@ -193,6 +218,29 @@ test("collectRecoverySamples / computeRecoveryMatrix: 節目回復の段階数�
   );
 });
 
+test("collectRecoveryPaceSamples / computeRecoveryMatrixByPace: 回復節目への到達日数で速度帯に分ける", () => {
+  // 上と同じ局面（ATH100→-21%(79)→-15%まで回復(85,1段階)→-24%へ再下落・底割れ(76)→-10%まで回復(90)→新ATH(101)）
+  const prices = [100, 79, 85, 76, 90, 101];
+  const samples = collectRecoveryPaceSamples(prices);
+  // [fromLevel, steps, トラフからの到達日数, held]
+  assert.deepEqual(
+    samples.map((s) => [s.fromLevel, s.steps, s.daysToStep, s.held]),
+    [[-20, 1, 1, false], [-20, 1, 1, true], [-20, 2, 1, true], [-20, 3, 2, true]],
+  );
+
+  const matrix = computeRecoveryMatrixByPace(prices).filter((c) => c.fromLevel === -20);
+  // steps=1のマス目は到達日数が2件とも1日（p25=p75=1）なので両方fast扱いになり、
+  // occurrences/bottomHeld/pは速度を分けない既存のcomputeRecoveryMatrixの値（n=2,held=1,50%）と一致する。
+  const s1fast = matrix.find((c) => c.steps === 1 && c.paceTier === "fast")!;
+  assert.deepEqual([s1fast.occurrences, s1fast.bottomHeld, s1fast.p, s1fast.cutP25, s1fast.cutP75], [2, 1, 50, 1, 1]);
+  assert.equal(matrix.find((c) => c.steps === 1 && c.paceTier === "slow")!.occurrences, 0);
+  // steps=2・3は到達事例が1件のみなので、その1件がそのままfastに入り底値確定率100%になる
+  // （既存computeRecoveryMatrixのp=50%は占有数occurrences=2＝fromLevel到達全件を分母にした結合確率のため、
+  //  ここでの条件付き確率100%とは分母の定義が異なり、矛盾ではない）。
+  assert.equal(matrix.find((c) => c.steps === 2 && c.paceTier === "fast")!.p, 100);
+  assert.equal(matrix.find((c) => c.steps === 3 && c.paceTier === "fast")!.p, 100);
+});
+
 test("computeMddHoldProbability: 節目回復統計が底値確定確率の判定tierに追加される", () => {
   // 1局面目（解消済み・上のテストと同じ）に、同じ相対パターンのATH更新後の2局面目（未解消・現在進行中）を続ける。
   // 現在地は2局面目のtrough(-24%)から-10%まで回復した状態＝節目-20%から2段階回復中。
@@ -204,10 +252,16 @@ test("computeMddHoldProbability: 節目回復統計が底値確定確率の判�
   const h = computeMddHoldProbability(prices, stats, state);
   assert.equal(h.applicable, true);
   if (h.applicable) {
-    assert.equal(h.tiers.length, 4); // 既存3tier + 節目tier
-    const milestone = h.tiers[0]; // 節目tierが先頭（最優先）に追加される
+    // 既存3tier + 節目tier + 回復速度tier（節目-10%への回復に1日＝過去実績の中では「速い」ため追加される）
+    assert.equal(h.tiers.length, 5);
+    const paceMilestone = h.tiers[0]; // 回復速度tierが最優先（先頭）に追加される
+    assert.match(paceMilestone.label, /節目 -20%・2段階回復（-10%）・回復1日（速い）/);
+    assert.deepEqual([paceMilestone.n, paceMilestone.held, paceMilestone.broke, paceMilestone.pHold, paceMilestone.pBreak, paceMilestone.lowSample], [1, 1, 0, 100, 0, true]);
+    const milestone = h.tiers[1]; // 速度を条件にしない節目tierはその次
     assert.match(milestone.label, /節目 -20%・2段階回復（-10%）/);
     assert.deepEqual([milestone.n, milestone.held, milestone.broke, milestone.pHold, milestone.pBreak, milestone.lowSample], [2, 1, 1, 50, 50, true]);
+    assert.ok(h.recoveryPaceInfo);
+    assert.deepEqual([h.recoveryPaceInfo!.fromLevel, h.recoveryPaceInfo!.steps, h.recoveryPaceInfo!.daysElapsed, h.recoveryPaceInfo!.paceTier], [-20, 2, 1, "fast"]);
   }
 
   // まだ節目から1段も回復していない（直近ddが浅い回復基準に届かない）場合は節目tierを追加しない

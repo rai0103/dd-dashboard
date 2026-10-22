@@ -221,6 +221,8 @@ export type StatsTable = {
   transitionDays: TransitionDays[];
   recoveryMatrix: RecoveryMatrixCell[];
   crashFrequency: CrashFrequencyRow[];
+  descentPaceProgression: LevelProgressionPaceRow[];
+  recoveryMatrixByPace: RecoveryMatrixPaceCell[];
   depthBucket: (dd: number) => DepthStat | null;
 };
 
@@ -236,6 +238,8 @@ export function buildStatsTable(prices: number[], dates?: (Date | string)[]): St
     transitionDays: TRANSITION_PAIRS.map(([f, t]) => computeLevelTransitionDays(prices, f, t, episodes)),
     recoveryMatrix: computeRecoveryMatrix(prices, undefined, episodes),
     crashFrequency: computeCrashFrequency(prices, dates ?? [], undefined, episodes),
+    descentPaceProgression: computeLevelProgressionByPace(prices, undefined, episodes),
+    recoveryMatrixByPace: computeRecoveryMatrixByPace(prices, undefined, episodes),
     depthBucket: (dd) => { const i = depthBucketIndex(dd); return i === -1 ? null : depthStats[i]; },
   };
 }
@@ -246,6 +250,7 @@ export function buildStatsTable(prices: number[], dates?: (Date | string)[]): St
 
 export type CurrentState = {
   pre_ath_idx: number; trough_idx: number;
+  start_idx: number; // 下落開始日（dd<0になった初日。pre_ath_idx+1）
   mdd: number; // 現局面のこれまでのMDD（%、負値）
   latest_dd: number;
   days_since_ath: number; days_since_trough: number;
@@ -263,7 +268,7 @@ export function deriveCurrentState(prices: number[]): CurrentState | null {
   let trough = pre + 1;
   for (let k = pre + 1; k <= last; k++) if (prices[k] < prices[trough]) trough = k;
   return {
-    pre_ath_idx: pre, trough_idx: trough, mdd: dd[trough], latest_dd: dd[last],
+    pre_ath_idx: pre, trough_idx: trough, start_idx: pre + 1, mdd: dd[trough], latest_dd: dd[last],
     days_since_ath: last - pre, days_since_trough: last - trough,
     recovery_ratio: (prices[last] - prices[trough]) / (prices[pre] - prices[trough]),
     bounce_from_low_pct: (prices[last] / prices[trough] - 1) * 100,
@@ -386,6 +391,132 @@ export function computeRecoveryMatrix(prices: number[], levels: number[] = PROGR
   return out;
 }
 
+/* ---------------- 5. 下落・回復の「速度」による条件付け ---------------- */
+// 各節目まで進むのにかかった営業日数（下落側はエピソード開始から、回復側はトラフから）を、過去の
+// 同じ節目到達事例の日数分布（p25〜p75）と比べて速い(fast)／普通(normal)／遅い(slow)の3段階に分類し、
+// 「進むスピードが速い/遅いと、その先の確率がどう変わるか」を見るための統計を追加する。
+
+export type PaceTier = "fast" | "normal" | "slow";
+export const PACE_TIER_LABEL: Record<PaceTier, string> = { fast: "速い", normal: "普通", slow: "遅い" };
+
+// days<=p25なら速い、days>=p75なら遅い、それ以外は普通。p25/p75が無ければ常にnormal。
+export function paceTierOf(days: number, p25: number | null, p75: number | null): PaceTier {
+  if (p25 !== null && days <= p25) return "fast";
+  if (p75 !== null && days >= p75) return "slow";
+  return "normal";
+}
+
+// 下落側の速度分類に使う節目（DEPTH_BUCKETSの上側境界と同じ並び）。既存のTRANSITION_PAIRSは変更しない。
+export const DESCENT_PACE_LEVELS = [-3, -5, -8, -10, -15, -20, -30];
+
+export type LevelProgressionPaceRow = {
+  from: number; to: number; paceTier: PaceTier;
+  cutP25: number | null; cutP75: number | null; cutMedian: number | null; // 速度分類の境界（fromへの到達日数のp25/p75/中央値、エピソード開始起点）
+  reached: number; progressed: number; p: number | null; lowSample: boolean;
+};
+
+// 節目fromへの到達が（過去の実績に比べて）速かった/遅かったかで、次の節目toへの到達確率がどう変わるかを見る。
+// fromへの到達日数（エピソード開始からの営業日数）は、既存computeLevelTransitionDays(prices, 0, from, ...)を
+// そのまま再利用して求める（fromLevel=0を渡すとstart_idxが常に起点側にヒットするため）。
+export function computeLevelProgressionByPace(prices: number[], levels: number[] = DESCENT_PACE_LEVELS, episodes?: Episode[]): LevelProgressionPaceRow[] {
+  const eps = episodes ?? detectEpisodes(prices);
+  const { dd } = computeDrawdowns(prices);
+  const rows: LevelProgressionPaceRow[] = [];
+  for (let i = 0; i < levels.length - 1; i++) {
+    const from = levels[i], to = levels[i + 1];
+    const reaching = eps.filter((e) => e.min_dd <= from);
+    const fromDays = computeLevelTransitionDays(prices, 0, from, reaching);
+    const p25 = fromDays.p25, p75 = fromDays.p75;
+    const buckets: Record<PaceTier, { reached: number; progressed: number }> = {
+      fast: { reached: 0, progressed: 0 }, normal: { reached: 0, progressed: 0 }, slow: { reached: 0, progressed: 0 },
+    };
+    for (const e of reaching) {
+      let fi = -1;
+      for (let k = e.start_idx; k <= e.trough_idx; k++) { if (dd[k] <= from) { fi = k; break; } }
+      if (fi === -1) continue;
+      const hit = e.min_dd <= to;
+      if (!hit && e.resolve_idx === null) continue; // 未解消かつ未到達は結果未確定のため除外（既存computeLevelProgressionと同じ扱い）
+      const tier = paceTierOf(fi - e.start_idx, p25, p75);
+      buckets[tier].reached++;
+      if (hit) buckets[tier].progressed++;
+    }
+    (["fast", "normal", "slow"] as PaceTier[]).forEach((paceTier) => {
+      const b = buckets[paceTier];
+      rows.push({ from, to, paceTier, cutP25: p25, cutP75: p75, cutMedian: fromDays.median, reached: b.reached, progressed: b.progressed, p: b.reached ? round1(b.progressed / b.reached * 100) : null, lowSample: b.reached < LOW_SAMPLE_N });
+    });
+  }
+  return rows;
+}
+
+export type RecoveryPaceSample = HoldSample & { fromLevel: number; steps: number; daysToStep: number };
+
+// collectRecoverySamplesと同じ走査（トラフごとに底割れ前の最大回復段階を追う）に加え、各段階に初到達した日
+// （トラフからの営業日数）も記録する。1つのトラフから、到達段階数分（steps=1..stepsReached）のレコードを生成する。
+export function collectRecoveryPaceSamples(prices: number[], levels: number[] = PROGRESSION_LEVELS, episodes?: Episode[]): RecoveryPaceSample[] {
+  const eps = (episodes ?? detectEpisodes(prices)).filter((e) => e.resolve_idx !== null);
+  const { dd } = computeDrawdowns(prices);
+  const out: RecoveryPaceSample[] = [];
+  for (const e of eps) {
+    const end = e.resolve_idx!;
+    let tr = e.start_idx, lastUsed = -1;
+    for (let k = e.start_idx; k < end; k++) {
+      if (prices[k] < prices[tr]) tr = k;
+      if (tr === lastUsed) continue;
+      lastUsed = tr;
+      const idx = levelIndexReached(dd[tr], levels);
+      if (idx === -1) continue; // 最も浅い節目にも届いていない
+      let brk = -1;
+      const stepDay: number[] = []; // stepDay[s-1] = levels[idx-s]に初到達したインデックス
+      let nextS = 1;
+      for (let j = tr + 1; j <= end; j++) {
+        if (prices[j] < prices[tr]) { brk = j; break; }
+        while (nextS <= idx && dd[j] >= levels[idx - nextS]) { stepDay.push(j); nextS++; }
+      }
+      const held = brk === -1;
+      for (let s = 1; s <= stepDay.length; s++) {
+        out.push({
+          pre_ath_idx: e.pre_ath_idx, trough_idx: tr, sample_idx: tr, resolve_idx: end,
+          mdd: dd[tr], held, days_to_ath: held ? end - tr : null, days_to_break: held ? null : brk - tr,
+          final_mdd: e.min_dd, fromLevel: levels[idx], steps: s, daysToStep: stepDay[s - 1] - tr,
+        });
+      }
+    }
+  }
+  return out;
+}
+
+// RecoveryMatrixCellとはoccurrences／pの意味が異なる点に注意：ベースのRecoveryMatrixCellは
+// 「fromLevelに到達した全件（occurrences）のうち、steps段階回復かつ底値確定した件数（bottomHeld）」という
+// 結合確率だが、速度版はすでに「steps段階回復した」ことが分かっている状況（＝その速度で到達した）を前提に
+// 「その中で底値確定した割合」を見る条件付き確率（occurrences＝そのマス目・その速度帯への到達件数）。
+export type RecoveryMatrixPaceCell = RecoveryMatrixCell & { paceTier: PaceTier; cutP25: number | null; cutP75: number | null; cutMedian: number | null };
+
+export function computeRecoveryMatrixByPace(prices: number[], levels: number[] = PROGRESSION_LEVELS, episodes?: Episode[]): RecoveryMatrixPaceCell[] {
+  const eps = episodes ?? detectEpisodes(prices);
+  const samples = collectRecoveryPaceSamples(prices, levels, eps);
+  const out: RecoveryMatrixPaceCell[] = [];
+  for (let idx = 1; idx < levels.length; idx++) {
+    const fromLevel = levels[idx];
+    for (let steps = 1; steps <= idx; steps++) {
+      const toLevel = levels[idx - steps];
+      const atCell = samples.filter((s) => s.fromLevel === fromLevel && s.steps === steps);
+      const sorted = atCell.map((s) => s.daysToStep).sort((a, b) => a - b);
+      const p25 = percentile(sorted, 0.25), p75 = percentile(sorted, 0.75), cutMedian = percentile(sorted, 0.5);
+      (["fast", "normal", "slow"] as PaceTier[]).forEach((paceTier) => {
+        const matched = atCell.filter((s) => paceTierOf(s.daysToStep, p25, p75) === paceTier);
+        const occurrences = matched.length;
+        const bottomHeldSamples = matched.filter((s) => s.held);
+        out.push({
+          fromLevel, steps, toLevel, occurrences, reached: occurrences, bottomHeld: bottomHeldSamples.length,
+          p: occurrences ? round1(bottomHeldSamples.length / occurrences * 100) : null,
+          lowSample: occurrences < LOW_SAMPLE_N, samples: matched, paceTier, cutP25: p25, cutP75: p75, cutMedian,
+        });
+      });
+    }
+  }
+  return out;
+}
+
 export type HoldTier = {
   label: string; cond: HoldCondition; n: number; held: number; broke: number;
   pHold: number | null; pBreak: number | null; lowSample: boolean; samples: HoldSample[];
@@ -394,6 +525,10 @@ export type MddHoldResult = { applicable: false; reason: string } | {
   applicable: true; state: CurrentState; tier: HoldTier; tiers: HoldTier[];
   medianDaysToAth: number | null; medianDaysToBreak: number | null;
   breakDistribution: { label: string; count: number }[]; // 底割れしたケースの最終MDD内訳（深度バケット別）
+  // 下落速度：次の節目（to）への到達確率の参考値。底値確定/底割れの判定（tiers）には混ぜない独立値。
+  nextLevelProgression: { from: number; to: number; daysElapsed: number; paceTier: PaceTier; p: number | null; n: number; lowSample: boolean; cutMedian: number | null } | null;
+  // 回復速度：現在の回復段階（rec）に、過去実績に比べてどの速さで到達したか。該当tierはtiersに追加済み。
+  recoveryPaceInfo: { fromLevel: number; steps: number; daysElapsed: number; paceTier: PaceTier; cutMedian: number | null } | null;
 };
 
 function tierOf(label: string, cond: HoldCondition, prices: number[], episodes: Episode[]): HoldTier {
@@ -416,6 +551,7 @@ function currentRecoveryStep(state: CurrentState, levels: number[]): { fromLevel
 export function computeMddHoldProbability(prices: number[], stats: StatsTable, state: CurrentState | null = deriveCurrentState(prices)): MddHoldResult {
   if (!state) return { applicable: false, reason: "現在は最高値圏（DD 0%）のため判定対象外です" };
   if (state.mdd > MIN_EPISODE_DD) return { applicable: false, reason: `現局面のMDD（${state.mdd.toFixed(2)}%）が${MIN_EPISODE_DD}%に達していないため判定対象外です` };
+  const { dd } = computeDrawdowns(prices);
   const bi = depthBucketIndex(state.mdd), b = DEPTH_BUCKETS[bi];
   const wide = { upper: DEPTH_BUCKETS[Math.max(0, bi - 1)].upper, lower: DEPTH_BUCKETS[Math.min(DEPTH_BUCKETS.length - 1, bi + 1)].lower };
   const r = Math.max(0, Math.min(1, state.recovery_ratio)), dts = state.days_since_trough;
@@ -436,6 +572,52 @@ export function computeMddHoldProbability(prices: number[], stats: StatsTable, s
       lowSample: recCell.lowSample, samples: recCell.samples,
     });
   }
+  // 下落速度：現在のMDDがDESCENT_PACE_LEVELS上のどの節目に対応するかを求め、その節目への到達が
+  // 過去実績に比べて速い/普通/遅いかで、次の節目への到達確率（nextLevelProgression）を参考値として出す。
+  // 底値確定/底割れの判定（tiers）には混ぜず、独立した値として返す。
+  let nextLevelProgression: Extract<MddHoldResult, { applicable: true }>["nextLevelProgression"] = null;
+  const liDesc = levelIndexReached(state.mdd, DESCENT_PACE_LEVELS);
+  if (liDesc !== -1 && liDesc < DESCENT_PACE_LEVELS.length - 1) {
+    const from = DESCENT_PACE_LEVELS[liDesc], to = DESCENT_PACE_LEVELS[liDesc + 1];
+    let fi = -1;
+    for (let k = state.start_idx; k <= state.trough_idx; k++) { if (dd[k] <= from) { fi = k; break; } }
+    if (fi !== -1) {
+      const daysElapsed = fi - state.start_idx;
+      const rowsForPair = stats.descentPaceProgression.filter((rw) => rw.from === from && rw.to === to);
+      const anyRow = rowsForPair[0];
+      if (anyRow) {
+        const paceTier = paceTierOf(daysElapsed, anyRow.cutP25, anyRow.cutP75);
+        const row = rowsForPair.find((rw) => rw.paceTier === paceTier);
+        if (row) nextLevelProgression = { from, to, daysElapsed, paceTier, p: row.p, n: row.reached, lowSample: row.lowSample, cutMedian: row.cutMedian };
+      }
+    }
+  }
+  // 回復速度：現在、節目からstepsReached段階回復している場合、その段階に初到達した日数（トラフ起点）の
+  // 速さに応じたセルをrecoveryMatrixByPaceから探し、既存のrecCell由来tierより手前（より具体的）に追加する。
+  let recoveryPaceInfo: Extract<MddHoldResult, { applicable: true }>["recoveryPaceInfo"] = null;
+  if (rec && recCell) {
+    const cellRows = stats.recoveryMatrixByPace.filter((c) => c.fromLevel === rec!.fromLevel && c.steps === rec!.steps);
+    const anyCell = cellRows[0];
+    if (anyCell) {
+      let dayIdx = -1;
+      for (let k = state.trough_idx; k < prices.length; k++) { if (dd[k] >= recCell.toLevel) { dayIdx = k; break; } }
+      if (dayIdx !== -1) {
+        const daysElapsed = dayIdx - state.trough_idx;
+        const paceTier = paceTierOf(daysElapsed, anyCell.cutP25, anyCell.cutP75);
+        const cell = cellRows.find((c) => c.paceTier === paceTier);
+        if (cell) {
+          recoveryPaceInfo = { fromLevel: rec!.fromLevel, steps: rec!.steps, daysElapsed, paceTier, cutMedian: cell.cutMedian };
+          tiers.unshift({
+            label: `節目 ${rec!.fromLevel}%・${rec!.steps}段階回復（${cell.toLevel}%）・回復${daysElapsed}日（${PACE_TIER_LABEL[paceTier]}）`,
+            cond: { mddUpper: rec!.fromLevel, mddLower: rec!.fromLevel - 5, minRecovery: NaN, minDaysSinceTrough: 0 },
+            n: cell.occurrences, held: cell.bottomHeld, broke: cell.occurrences - cell.bottomHeld,
+            pHold: cell.p, pBreak: cell.p === null ? null : round1(100 - cell.p),
+            lowSample: cell.lowSample, samples: cell.samples,
+          });
+        }
+      }
+    }
+  }
   const tier = tiers.find((t) => !t.lowSample) ?? tiers.reduce((a, t) => (t.n > a.n ? t : a));
   const med = (xs: number[]) => percentile([...xs].sort((x, y) => x - y), 0.5);
   const broken = tier.samples.filter((s) => !s.held);
@@ -444,6 +626,7 @@ export function computeMddHoldProbability(prices: number[], stats: StatsTable, s
     medianDaysToAth: med(tier.samples.filter((s) => s.held).map((s) => s.days_to_ath!)),
     medianDaysToBreak: med(broken.map((s) => s.days_to_break!)),
     breakDistribution: DEPTH_BUCKETS.map((bk, i) => ({ label: bk.label, count: broken.filter((s) => depthBucketIndex(s.final_mdd) === i).length })),
+    nextLevelProgression, recoveryPaceInfo,
   };
 }
 
