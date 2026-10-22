@@ -148,7 +148,7 @@ export class VideoAvatar {
     // 影の濃淡をたどって誤って透明にしてしまう（人物側への「染み出し」）のを防ぐための安全弁
     const ksum = key[0] + key[1] + key[2] + 1;
     const keyRn = key[0] / ksum, keyGn = key[1] / ksum;
-    const CHROMA_TOL2 = 0.045 * 0.045;
+    const CHROMA_TOL2 = 0.06 * 0.06;
     const chromaOk = (k: number) => {
       const total = d[k] + d[k + 1] + d[k + 2] + 1;
       const rn = d[k] / total - keyRn, gn = d[k + 1] / total - keyGn;
@@ -163,13 +163,18 @@ export class VideoAvatar {
     const seed = (i: number) => { if (!vis[i] && nearKey(i)) { vis[i] = 1; st[sp++] = i; } };
     for (let x = 0; x < mw; x++) { seed(x); seed((mh - 1) * mw + x); }
     for (let y = 0; y < mh; y++) { seed(y * mw); seed(y * mw + mw - 1); }
+    // ふちの種まきは厳しめのtolのまま（人物が端に写り込んでいても種にしないため）だが、
+    // そこから先への伝播（歩幅）はゆるめる。被写体の近くでは背景にも照明の当たり方の違いで
+    // 明るいムラ（ハロー）が出やすく、歩幅の判定が厳しいとそこで広がりが止まってしまい、
+    // 人物のすぐ周りだけキーが抜けきらずに残ることがあったため
+    const growT2 = (this.opt.tol * 1.8) * (this.opt.tol * 1.8);
     // 隣との色の近さ（歩幅）に加えて、キー色からの総移動量（RGB・クロマ双方）にも上限を設ける
-    const gt2 = (this.opt.tol * 2.2) * (this.opt.tol * 2.2);
+    const gt2 = (this.opt.tol * 2.8) * (this.opt.tol * 2.8);
     const grow = (from: number, to: number) => {
       if (vis[to]) return;
       const kf = from * 4, kt = to * 4;
       const dr = d[kf] - d[kt], dg = d[kf + 1] - d[kt + 1], db = d[kf + 2] - d[kt + 2];
-      if (dr * dr + dg * dg + db * db >= t2) return;
+      if (dr * dr + dg * dg + db * db >= growT2) return;
       const gr = d[kt] - key[0], gg = d[kt + 1] - key[1], gb = d[kt + 2] - key[2];
       if (gr * gr + gg * gg + gb * gb >= gt2) return;
       if (!chromaOk(kt)) return;

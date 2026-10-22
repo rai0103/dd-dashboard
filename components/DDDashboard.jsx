@@ -5854,7 +5854,12 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [avatarId, clipSig]);
   useEffect(() => {
-    if (avatarObj && curAvatar) avatarObj.setOptions({ keyOn: curAvatar.keyOn, tol: curAvatar.tol, zoom: curAvatar.zoom });
+    if (avatarObj && curAvatar) {
+      avatarObj.setOptions({ keyOn: curAvatar.keyOn, tol: curAvatar.tol, zoom: curAvatar.zoom });
+      // 感度・大きさ・背景消去のON/OFFを変えたら、再生中でなければすぐにプレビューへ反映する
+      const r = rendererRef.current;
+      if (r && !isPlayingRef.current) r.draw(seekPosRef.current ?? 0);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [curAvatar?.keyOn, curAvatar?.tol, curAvatar?.zoom, avatarObj]);
   const patchAvatar = (id, patch) => {
@@ -6251,39 +6256,23 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
             )}
           </div>
 
-          {/* 場面ごとのナレーション編集（ひらがな表記。場面の長さは音声の長さに自動で合わせます） */}
+          {/* 背景 */}
           <div>
-            <div className="text-[11px] font-semibold mb-1.5" style={{ color: C.textMuted }}>場面とナレーション（{scenes.length}場面・編集するとその場面のみ変更されます）</div>
-            <div className="flex flex-col gap-1.5 max-h-96 overflow-y-auto pr-1">
-              {scenes.map((sc, i) => {
-                const edited = sceneEdits[sceneKey(i, sc.id)];
-                return (
-                  <div key={sc.id + i} className="rounded p-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-[10px]" style={{ color: C.textDim }}>{i + 1}. {sc.caption}</span>
-                      <div className="flex items-center gap-2">
-                        {edited && <button onClick={() => resetSceneText(i, sc)} className="text-[10px]" style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer" }}>元に戻す</button>}
-                        <button onClick={() => previewScene(i)} className="text-[10px] flex items-center gap-1" style={{ color: C.teal, background: "none", border: "none", cursor: "pointer" }}><Play size={10} /> 試聴</button>
-                      </div>
-                    </div>
-                    <textarea value={readings[i]} onChange={(e) => handleSceneTextChange(i, sc, e.target.value)} className="w-full text-[11px] rounded p-1.5" style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, color: C.text, minHeight: 44, resize: "vertical" }} />
-                  </div>
-                );
-              })}
+            <div className="text-[11px] font-semibold mb-1.5" style={{ color: C.textMuted }}>背景画像</div>
+            <div className="flex flex-wrap gap-1.5 mb-1.5">
+              <button onClick={() => setActiveBackgroundId("")} className="text-[11px] px-2 py-1 rounded" style={{ color: activeBackgroundId === "" ? C.bg : C.textMuted, background: activeBackgroundId === "" ? C.teal : "transparent", border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>なし</button>
+              {backgrounds.map((b) => (
+                <span key={b.id} className="inline-flex items-center gap-1 text-[11px] pl-2 pr-1 py-1 rounded" style={{ color: activeBackgroundId === b.id ? C.bg : C.textMuted, background: activeBackgroundId === b.id ? C.teal : "transparent", border: `1px solid ${C.borderSoft}` }}>
+                  <button onClick={() => setActiveBackgroundId(b.id)} style={{ background: "none", border: "none", color: "inherit", cursor: "pointer", fontWeight: activeBackgroundId === b.id ? 700 : 400 }}>{b.name}</button>
+                  <X size={11} style={{ cursor: "pointer" }} onClick={() => handleBackgroundDelete(b.id)} />
+                </span>
+              ))}
+              <label className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded" style={{ color: C.textMuted, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+                <Upload size={11} /> 追加
+                <input type="file" accept="image/*" onChange={handleBackgroundUpload} style={{ display: "none" }} />
+              </label>
             </div>
-          </div>
-
-          {/* 声・速度 */}
-          <div>
-            <div className="text-[11px] font-semibold mb-1.5" style={{ color: C.textMuted }}>声</div>
-            <select value={voiceIndex} onChange={(e) => setVoiceIndex(e.target.value)} className="text-xs px-2 py-1.5 rounded w-full mb-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }}>
-              {voiceChoices.length === 0 && <option value="">（音声が見つかりません）</option>}
-              {voiceChoices.map((v) => <option key={v} value={v}>{v}</option>)}
-            </select>
-            <div className="flex items-center gap-3">
-              <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>速さ<input type="range" min={0.6} max={1.6} step={0.05} value={rate} onChange={(e) => setRate(Number(e.target.value))} />{rate.toFixed(2)}x</label>
-              <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>高さ<input type="range" min={0.8} max={1.3} step={0.02} value={pitch} onChange={(e) => setPitch(Number(e.target.value))} />{pitch.toFixed(2)}x</label>
-            </div>
+            <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>不透明度<input type="range" min={0} max={100} value={backgroundOpacity} onChange={(e) => setBackgroundOpacity(Number(e.target.value))} />{backgroundOpacity}%</label>
           </div>
 
           {/* BGM */}
@@ -6305,23 +6294,39 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
             <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>音量<input type="range" min={0} max={100} value={bgmVolume} onChange={(e) => setBgmVolume(Number(e.target.value))} />{bgmVolume}%</label>
           </div>
 
-          {/* 背景 */}
+          {/* 声・速度 */}
           <div>
-            <div className="text-[11px] font-semibold mb-1.5" style={{ color: C.textMuted }}>背景画像</div>
-            <div className="flex flex-wrap gap-1.5 mb-1.5">
-              <button onClick={() => setActiveBackgroundId("")} className="text-[11px] px-2 py-1 rounded" style={{ color: activeBackgroundId === "" ? C.bg : C.textMuted, background: activeBackgroundId === "" ? C.teal : "transparent", border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>なし</button>
-              {backgrounds.map((b) => (
-                <span key={b.id} className="inline-flex items-center gap-1 text-[11px] pl-2 pr-1 py-1 rounded" style={{ color: activeBackgroundId === b.id ? C.bg : C.textMuted, background: activeBackgroundId === b.id ? C.teal : "transparent", border: `1px solid ${C.borderSoft}` }}>
-                  <button onClick={() => setActiveBackgroundId(b.id)} style={{ background: "none", border: "none", color: "inherit", cursor: "pointer", fontWeight: activeBackgroundId === b.id ? 700 : 400 }}>{b.name}</button>
-                  <X size={11} style={{ cursor: "pointer" }} onClick={() => handleBackgroundDelete(b.id)} />
-                </span>
-              ))}
-              <label className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded" style={{ color: C.textMuted, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
-                <Upload size={11} /> 追加
-                <input type="file" accept="image/*" onChange={handleBackgroundUpload} style={{ display: "none" }} />
-              </label>
+            <div className="text-[11px] font-semibold mb-1.5" style={{ color: C.textMuted }}>声</div>
+            <select value={voiceIndex} onChange={(e) => setVoiceIndex(e.target.value)} className="text-xs px-2 py-1.5 rounded w-full mb-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }}>
+              {voiceChoices.length === 0 && <option value="">（音声が見つかりません）</option>}
+              {voiceChoices.map((v) => <option key={v} value={v}>{v}</option>)}
+            </select>
+            <div className="flex items-center gap-3">
+              <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>速さ<input type="range" min={0.6} max={1.6} step={0.05} value={rate} onChange={(e) => setRate(Number(e.target.value))} />{rate.toFixed(2)}x</label>
+              <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>高さ<input type="range" min={0.8} max={1.3} step={0.02} value={pitch} onChange={(e) => setPitch(Number(e.target.value))} />{pitch.toFixed(2)}x</label>
             </div>
-            <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>不透明度<input type="range" min={0} max={100} value={backgroundOpacity} onChange={(e) => setBackgroundOpacity(Number(e.target.value))} />{backgroundOpacity}%</label>
+          </div>
+
+          {/* 場面ごとのナレーション編集（ひらがな表記。場面の長さは音声の長さに自動で合わせます） */}
+          <div>
+            <div className="text-[11px] font-semibold mb-1.5" style={{ color: C.textMuted }}>場面とナレーション（{scenes.length}場面・編集するとその場面のみ変更されます）</div>
+            <div className="flex flex-col gap-1.5 max-h-96 overflow-y-auto pr-1">
+              {scenes.map((sc, i) => {
+                const edited = sceneEdits[sceneKey(i, sc.id)];
+                return (
+                  <div key={sc.id + i} className="rounded p-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-[10px]" style={{ color: C.textDim }}>{i + 1}. {sc.caption}</span>
+                      <div className="flex items-center gap-2">
+                        {edited && <button onClick={() => resetSceneText(i, sc)} className="text-[10px]" style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer" }}>元に戻す</button>}
+                        <button onClick={() => previewScene(i)} className="text-[10px] flex items-center gap-1" style={{ color: C.teal, background: "none", border: "none", cursor: "pointer" }}><Play size={10} /> 試聴</button>
+                      </div>
+                    </div>
+                    <textarea value={readings[i]} onChange={(e) => handleSceneTextChange(i, sc, e.target.value)} className="w-full text-[11px] rounded p-1.5" style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, color: C.text, minHeight: 44, resize: "vertical" }} />
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
       </div>
