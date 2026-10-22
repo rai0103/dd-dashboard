@@ -6057,6 +6057,7 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
   const [avatars, setAvatars] = useState([]);
   const [avatarId, setAvatarId] = useState(null);
   const [avatarObj, setAvatarObj] = useState(null);
+  const [avatarEditorOpen, setAvatarEditorOpen] = useState(false); // 編集パネルは必要な時だけ開く（既定は折りたたみ）
   const avatarUrlsRef = useRef([]);
   const seekPosRef = useRef(0);
   const refreshAvatars = async () => {
@@ -6548,38 +6549,50 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
             </div>
             {curAvatar && (
               <div className="rounded p-2 flex flex-col gap-1.5" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
-                <div className="flex items-center flex-wrap gap-1.5 text-[11px]" style={{ color: C.textDim }}>
-                  <span>名前</span>
-                  <input type="text" value={curAvatar.name} onChange={(e) => patchAvatar(curAvatar.id, { name: e.target.value })} className="px-1.5 py-0.5 rounded text-xs" style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, color: C.text, width: 120 }} />
-                  <span className="ml-1">性別</span>
-                  {["male", "female"].map((g) => (
-                    <button key={g} onClick={() => patchAvatar(curAvatar.id, { gender: g })} className="text-[11px] px-2 py-0.5 rounded" style={{ color: curAvatar.gender === g ? C.bg : C.textMuted, background: curAvatar.gender === g ? C.teal : "transparent", border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>{g === "male" ? "男性" : "女性"}</button>
-                  ))}
-                  <span className="text-[10px]">（声の候補が変わります）</span>
-                </div>
-                {Array.from({ length: MAX_CLIPS }).map((_, i) => {
-                  const clip = curAvatar.clips[i] ?? null;
-                  return (
-                    <div key={i} className="flex items-center gap-1.5 text-[11px]" style={{ color: C.textDim }}>
-                      <span style={{ width: 40, flexShrink: 0 }}>動画{i + 1}</span>
-                      <label className="px-2 py-0.5 rounded cursor-pointer" style={{ color: C.teal, border: `1px solid ${C.teal}66` }}>
-                        {clip ? "差し替え" : "MP4を選択"}
-                        <input type="file" accept="video/mp4,video/*,.mp4,.m4v,.mov,.webm" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0] ?? null; e.target.value = ""; if (f) setAvatarClip(curAvatar.id, i, f); }} />
-                      </label>
-                      <span className="truncate flex-1" title={clip?.name}>{clip ? clip.name : "未登録"}</span>
-                      {clip && <X size={12} style={{ cursor: "pointer", flexShrink: 0 }} onClick={() => setAvatarClip(curAvatar.id, i, null)} />}
+                <button
+                  onClick={() => setAvatarEditorOpen((v) => !v)}
+                  className="flex items-center justify-between w-full text-[11px]"
+                  style={{ color: C.textMuted, background: "transparent", border: "none", padding: 0, cursor: "pointer" }}
+                >
+                  <span>{curAvatar.gender === "male" ? "♂" : "♀"} {curAvatar.name}（動画{curAvatar.clips.filter(Boolean).length}本・{curAvatar.keyOn ? `背景消去あり/感度${curAvatar.tol}` : "背景消去なし"}・大きさ{Math.round(curAvatar.zoom * 100)}%）</span>
+                  <span style={{ color: C.teal, flexShrink: 0 }}>{avatarEditorOpen ? "▲ 閉じる" : "▼ 編集"}</span>
+                </button>
+                {avatarEditorOpen && (
+                  <>
+                    <div className="flex items-center flex-wrap gap-1.5 text-[11px]" style={{ color: C.textDim }}>
+                      <span>名前</span>
+                      <input type="text" value={curAvatar.name} onChange={(e) => patchAvatar(curAvatar.id, { name: e.target.value })} className="px-1.5 py-0.5 rounded text-xs" style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, color: C.text, width: 120 }} />
+                      <span className="ml-1">性別</span>
+                      {["male", "female"].map((g) => (
+                        <button key={g} onClick={() => patchAvatar(curAvatar.id, { gender: g })} className="text-[11px] px-2 py-0.5 rounded" style={{ color: curAvatar.gender === g ? C.bg : C.textMuted, background: curAvatar.gender === g ? C.teal : "transparent", border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>{g === "male" ? "男性" : "女性"}</button>
+                      ))}
+                      <span className="text-[10px]">（声の候補が変わります）</span>
                     </div>
-                  );
-                })}
-                <p className="text-[10px]" style={{ color: C.textDim }}>登録した動画の中から、ランダムな順番でつないで、つなぎ目を自然に重ねながらくり返し再生します（1〜2本でもその範囲でくり返します）。動画の音声は使いません。</p>
-                <label className="flex items-center gap-1.5 text-[11px]" style={{ color: C.textDim }}>
-                  <input type="checkbox" checked={curAvatar.keyOn} onChange={(e) => patchAvatar(curAvatar.id, { keyOn: e.target.checked })} />
-                  背景を消す（動画の四隅の色を基準）
-                </label>
-                {curAvatar.keyOn && (
-                  <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>背景を消す感度 {curAvatar.tol}<input type="range" min={8} max={60} step={1} value={curAvatar.tol} onChange={(e) => patchAvatar(curAvatar.id, { tol: parseInt(e.target.value, 10) })} /></label>
+                    {Array.from({ length: MAX_CLIPS }).map((_, i) => {
+                      const clip = curAvatar.clips[i] ?? null;
+                      return (
+                        <div key={i} className="flex items-center gap-1.5 text-[11px]" style={{ color: C.textDim }}>
+                          <span style={{ width: 40, flexShrink: 0 }}>動画{i + 1}</span>
+                          <label className="px-2 py-0.5 rounded cursor-pointer" style={{ color: C.teal, border: `1px solid ${C.teal}66` }}>
+                            {clip ? "差し替え" : "MP4を選択"}
+                            <input type="file" accept="video/mp4,video/*,.mp4,.m4v,.mov,.webm" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0] ?? null; e.target.value = ""; if (f) setAvatarClip(curAvatar.id, i, f); }} />
+                          </label>
+                          <span className="truncate flex-1" title={clip?.name}>{clip ? clip.name : "未登録"}</span>
+                          {clip && <X size={12} style={{ cursor: "pointer", flexShrink: 0 }} onClick={() => setAvatarClip(curAvatar.id, i, null)} />}
+                        </div>
+                      );
+                    })}
+                    <p className="text-[10px]" style={{ color: C.textDim }}>登録した動画の中から、ランダムな順番でつないで、つなぎ目を自然に重ねながらくり返し再生します（1〜2本でもその範囲でくり返します）。動画の音声は使いません。</p>
+                    <label className="flex items-center gap-1.5 text-[11px]" style={{ color: C.textDim }}>
+                      <input type="checkbox" checked={curAvatar.keyOn} onChange={(e) => patchAvatar(curAvatar.id, { keyOn: e.target.checked })} />
+                      背景を消す（動画の四隅の色を基準）
+                    </label>
+                    {curAvatar.keyOn && (
+                      <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>背景を消す感度 {curAvatar.tol}<input type="range" min={8} max={60} step={1} value={curAvatar.tol} onChange={(e) => patchAvatar(curAvatar.id, { tol: parseInt(e.target.value, 10) })} /></label>
+                    )}
+                    <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>人物の大きさ {Math.round(curAvatar.zoom * 100)}%<input type="range" min={0.5} max={1.4} step={0.05} value={curAvatar.zoom} onChange={(e) => patchAvatar(curAvatar.id, { zoom: parseFloat(e.target.value) })} /></label>
+                  </>
                 )}
-                <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>人物の大きさ {Math.round(curAvatar.zoom * 100)}%<input type="range" min={0.5} max={1.4} step={0.05} value={curAvatar.zoom} onChange={(e) => patchAvatar(curAvatar.id, { zoom: parseFloat(e.target.value) })} /></label>
               </div>
             )}
           </div>
