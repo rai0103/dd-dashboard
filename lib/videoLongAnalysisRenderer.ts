@@ -261,6 +261,42 @@ export class LongAnalysisRenderer {
     ctx.restore();
   }
 
+  // [Stage D-5] カスタム場面用の汎用棒グラフ（既存のhbarを複数行ループで呼ぶだけ。ytdChange旧実装・athDrop等と同じ組み立て方）。
+  private drawBarCompare(title: string, subtitle: string, bars: { label: string; value: number }[], p: number): void {
+    this.heading(title, subtitle, p);
+    if (!bars.length) return;
+    const lim = Math.max(...bars.map(b => Math.abs(b.value)), 5) * 1.15;
+    const rowH = Math.max(40, Math.min(70, Math.floor(310 / bars.length)));
+    const delay = Math.min(0.1, 0.5 / bars.length);
+    bars.forEach((b, i) => this.hbar(b.label, b.value, lim, 130 + i * rowH, sub(p, 0.1 + i * delay, 0.5 + i * delay), fmtPct(b.value)));
+  }
+
+  // [Stage D-5] カスタム場面用の汎用円グラフ（既存のdrawDonutを使い、見出し・凡例を添えた1場面分にまとめる）。
+  private drawDonutScene(title: string, subtitle: string, segments: { label: string; value: number; rgb: string }[], p: number): void {
+    this.heading(title, subtitle, p);
+    if (!segments.length) return;
+    const ctx = this.ctx;
+    const cx = PW / 2, cy = 250, r = 120, innerR = 72;
+    const total = segments.reduce((a, sgm) => a + Math.max(0, sgm.value), 0);
+    const top = segments.reduce((a, sgm) => (sgm.value > a.value ? sgm : a), segments[0]);
+    this.drawDonut(
+      cx, cy, r, innerR,
+      segments.map(sgm => ({ value: sgm.value, color: sgm.rgb })),
+      p,
+      total > 0 ? { text: `${Math.round((Math.max(0, top.value) / total) * 100)}%`, rgb: top.rgb } : undefined
+    );
+    const la = ease(sub(p, 0.5, 0.85));
+    ctx.save(); ctx.globalAlpha *= la;
+    segments.forEach((sgm, i) => {
+      const col = i % 2, row = Math.floor(i / 2);
+      const x = 40 + col * (PW / 2 - 20), y = 400 + row * 26;
+      ctx.fillStyle = `rgba(${sgm.rgb},0.95)`; ctx.fillRect(x, y - 10, 14, 14);
+      const pct = total > 0 ? `${((Math.max(0, sgm.value) / total) * 100).toFixed(1)}%` : '';
+      this.txt(`${sgm.label}　${pct}`, x + 20, y + 2, 13, WHITE, { alpha: 0.9, maxW: PW / 2 - 60 });
+    });
+    ctx.restore();
+  }
+
   private drawTitleBar() {
     const s = this.cfg.stats;
     const ctx = this.ctx;
@@ -383,7 +419,11 @@ export class LongAnalysisRenderer {
     const kuro = (v: number) => (v >= 0 ? UP : DOWN);
     if (typeof id === 'string' && id.startsWith('custom:')) {
       const cs = (this.cfg.customScenes ?? []).find(c => c.id === id);
-      if (cs) { this.drawOverlayChart(cs.title, cs.subtitle, cs.series, cs.yUnit, p); }
+      if (cs) {
+        if (cs.chartType === 'bar') this.drawBarCompare(cs.title, cs.subtitle, cs.bars, p);
+        else if (cs.chartType === 'donut') this.drawDonutScene(cs.title, cs.subtitle, cs.donut?.segments ?? [], p);
+        else this.drawOverlayChart(cs.title, cs.subtitle, cs.series, cs.yUnit, p);
+      }
       return;
     }
     if (md && id === 'status' && md.status) {
@@ -803,6 +843,39 @@ export class LongAnalysisRenderer {
       return;
     }
     if (id === 'ytdChange') {
+      // 2026-10-22のユーザー指示により、棒グラフ（今年/過去の平均/過去の中央値の単純比較）から
+      // 動的な折れ線グラフ（今年の年初来推移と、過去の平均・中央値の推移を重ねる）に変更。
+      // 系列データはbasis10/basisCycleと同じthis.cfg.basis（LongBasis）を再利用する
+      // （drawOverlayChartはStage D-4のカスタム場面用に追加した汎用メソッドで、見た目はbasis10と同系統）。
+      const bs = this.cfg.basis;
+      if (bs && bs.recent.length) {
+        const grid: number[] = [];
+        for (let k = 0; k <= 200; k++) grid.push(k / 200);
+        const avgPath = grid.map(t => ({ t, v: bs.recent.reduce((acc, r) => acc + valueAt(r.pts ?? [], t), 0) / Math.max(1, bs.recent.length) }));
+        const medianPath = grid.map(t => {
+          const vals = bs.recent.map(r => valueAt(r.pts ?? [], t)).sort((a, b) => a - b);
+          const n = vals.length;
+          const mid = Math.floor(n / 2);
+          return { t, v: n % 2 ? vals[mid] : (vals[mid - 1] + vals[mid]) / 2 };
+        });
+        this.drawOverlayChart(
+          '近況：騰落率',
+          `過去${s.pastYtd.length}年の同時期と比べる`,
+          [
+            { label: `${s.year}年（今年）`, pts: bs.curPath, style: 'solid', emphasis: true, rgb: GREEN },
+            { label: '過去の平均の推移', pts: avgPath, style: 'dashed', emphasis: false, rgb: WHITE },
+            { label: '過去の中央値の推移', pts: medianPath, style: 'dashed', emphasis: false, rgb: AMBER },
+          ],
+          'pct',
+          p
+        );
+        ctx0.save(); ctx0.globalAlpha *= ease(sub(p, 0.6, 0.8));
+        this.txt(`過去${s.pastYtd.length + 1}年中 ${s.ytdRank}位`, 24, 372, 26, GREEN, { bold: true });
+        this.txt(`前日比 ${sg(s.dayChange)}　上昇日の割合 ${s.upRatio.toFixed(1)}%（過去平均 ${s.upRatioAvg.toFixed(1)}%）`, 24, 404, 15, WHITE, { alpha: 0.8, maxW: PW - 48 });
+        ctx0.restore();
+        return;
+      }
+      // フォールバック：basisデータが無い場合（データ不足等）は従来の棒グラフ比較を表示
       this.heading('近況：騰落率', `過去${s.pastYtd.length}年の同時期と比べる`, p);
       const limY = Math.max(Math.abs(s.ytd), Math.abs(s.ytdAvg), Math.abs(s.ytdMedian), 5) * 1.15;
       const rowsY: [string, number][] = [[`今年（${s.year}年）`, s.ytd], ['過去の平均', s.ytdAvg], ['過去の中央値', s.ytdMedian]];

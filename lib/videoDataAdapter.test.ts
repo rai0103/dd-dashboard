@@ -6,6 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildVideoLongform, dailyPointsFromFull, crashRowsFromAnalysis } from "./videoDataAdapter.ts";
 import { SP500_KANA, tickerKana, availableContentSections } from "./videoLongMd.ts";
+import type { CustomSceneSpec } from "./videoCustomScene.ts";
 
 // 10年分の日次価格（単純な上昇トレンド＋ノイズ）を作る。computeUpdateStats/buildBasisが過去年のデータを
 // 必要とするため、十分な年数を用意する。
@@ -128,4 +129,81 @@ test("availableContentSections：このテストデータで選択可能な構�
   for (const id of ["ytdChange", "athDrop", "yearEndTrack", "crashFreq", "status", "bottom", "rolling", "forecast", "basis10", "basisCycle", "ddpace", "crashmd", "daily"]) {
     assert.ok(avail.includes(id), `${id}が選択候補に含まれる`);
   }
+});
+
+test("buildVideoLongform：scalarCatalog（Stage D-5）に主要な数値が揃う", () => {
+  const FULL = makeFull(11);
+  const data = makeData(FULL);
+  const d = { FULL, currentDD: -4.2, mode: "調整", daysSinceATH: 12, athDate: FULL[FULL.length - 1].date };
+  const result = buildVideoLongform(data, d);
+  const sc = result.scalarCatalog;
+
+  for (const key of ["ytd", "ytdAvg", "ytdMedian", "dayChange", "dd", "ddMin", "athCount", "upRatio", "upRatioAvg"]) {
+    assert.ok(sc[key] && typeof sc[key].value === "number", `${key}がscalarCatalogに数値として入る`);
+  }
+  // rolling_returns（rolling_returnsのラベル付き各期間）が反映される
+  assert.ok(sc["rolling_1ヶ月"], "ローリングリターン（1ヶ月）がキーとして入る");
+  assert.equal(sc["rolling_1ヶ月"].value, 1.2);
+  // crash_analysis（threshold_pct 10/20）の来年発生確率
+  assert.equal(sc["crashProb_10"].value, 25);
+  assert.equal(sc["crashProb_20"].value, 10);
+  // bottom_score（applicable:trueのp_hold_pct/p_break_pct）
+  assert.equal(sc["bottomPHold"].value, 70);
+  assert.equal(sc["bottomPBreak"].value, 30);
+  // daily_distribution（up/down）
+  assert.equal(sc["dailyUpPct"].value, 54.0);
+  assert.equal(sc["dailyDownPct"].value, 46.0);
+  // ath_gaps（単一バケット n=40, clean=80 → 加重平均もそのまま80）
+  assert.equal(sc["ddpaceCleanRecovery"].value, 80);
+});
+
+test("buildVideoLongform：カスタム場面（chartType別）がscalarCatalogから解決される（Stage D-5）", () => {
+  const FULL = makeFull(11);
+  const data = makeData(FULL);
+  const d = { FULL, currentDD: -4.2, mode: "調整", daysSinceATH: 12, athDate: FULL[FULL.length - 1].date };
+
+  const barSpec: CustomSceneSpec = {
+    id: "custom:bar1",
+    title: "暴落発生確率の比較",
+    subtitle: "水準ごと",
+    chartType: "bar",
+    series: [],
+    yUnit: "index",
+    bars: [
+      { key: "crashProb_10", label: "-10%超" },
+      { key: "crashProb_20", label: "-20%超" },
+      { key: "unknownKey", label: "存在しないキー" },
+    ],
+    donut: null,
+    reading: "ぼうらくはっせいかくりつのひかく",
+    caption: "暴落発生確率の比較",
+    minSec: 18,
+    sourcePrompt: "暴落発生確率を棒グラフで比較して",
+  };
+  const donutSpec: CustomSceneSpec = {
+    id: "custom:donut1",
+    title: "上昇日と下落日の割合",
+    subtitle: "",
+    chartType: "donut",
+    series: [],
+    yUnit: "index",
+    bars: [],
+    donut: { items: [{ key: "dailyUpPct", label: "上昇日" }, { key: "dailyDownPct", label: "下落日" }] },
+    reading: "じょうしょうびとかりゅくびのわりあい",
+    caption: "上昇日と下落日の割合",
+    minSec: 18,
+    sourcePrompt: "上昇日と下落日の割合を円グラフで",
+  };
+
+  const result = buildVideoLongform(data, d, SP500_KANA, ["status"], [barSpec, donutSpec]);
+  const bar = result.customScenes.find((c) => c.id === "custom:bar1")!;
+  assert.equal(bar.chartType, "bar");
+  assert.equal(bar.bars.length, 2, "存在しないキーは除外される");
+  assert.deepEqual(bar.bars.map((b) => b.value), [25, 10]);
+
+  const donut = result.customScenes.find((c) => c.id === "custom:donut1")!;
+  assert.equal(donut.chartType, "donut");
+  assert.ok(donut.donut, "donutが解決される");
+  assert.equal(donut.donut!.segments.length, 2);
+  assert.deepEqual(donut.donut!.segments.map((sgm) => sgm.value), [54.0, 46.0]);
 });

@@ -9,7 +9,7 @@
 // dd-dashboard本体はJS（.jsx）で型を持たないため、ここでは data/d を緩く受け取る。
 
 import { LongMd, buildMdScenes, SP500_KANA, tickerKana, ComposedSectionId } from './videoLongMd';
-import { buildSeriesCatalog, resolveCustomScene, CustomSceneSpec, ResolvedCustomScene, SeriesCatalog } from './videoCustomScene';
+import { buildSeriesCatalog, resolveCustomScene, CustomSceneSpec, ResolvedCustomScene, SeriesCatalog, ScalarCatalog } from './videoCustomScene';
 import { CrashRow, UpdateStats, computeUpdateStats } from './videoMarketUpdate';
 import { StockDataPoint } from './videoTypes';
 import { LongBasis, buildBasis } from './videoLongBasis';
@@ -80,6 +80,67 @@ export interface VideoLongformResult {
   rolling: { label: string; v: number }[];
   customScenes: ResolvedCustomScene[]; // Stage D-4：チャットで生成したカスタム場面（系列データ解決済み）
   catalog: SeriesCatalog; // Stage D-4：カスタム場面で選べるデータ系列の一覧（AIのtoolスキーマ・UIで使う）
+  scalarCatalog: ScalarCatalog; // Stage D-5：カスタム場面の棒グラフ・円グラフで選べるスカラー値の一覧
+}
+
+/**
+ * [Stage D-5] カスタム場面の棒グラフ・円グラフ用の、名前付きスカラー値（1時点の数値）の辞書を組み立てる。
+ * 既に計算済みのstats/rolling/basis/longMdの値をそのまま再利用し、新規のデータ取得は行わない
+ * （videoLongAnalysisRendererが装飾的なドーナツで使っているのと同じ数値も含む）。
+ * 値がnull/undefined/NaNの項目は候補から除外する。
+ */
+function buildScalarCatalog(stats: UpdateStats | null, rolling: { label: string; v: number }[], basis: LongBasis | null, longMd: LongMd): ScalarCatalog {
+  const catalog: ScalarCatalog = {};
+  const put = (key: string, label: string, value: number | null | undefined) => {
+    if (value === null || value === undefined || Number.isNaN(value)) return;
+    catalog[key] = { label, value };
+  };
+
+  if (stats) {
+    put('ytd', `${stats.year}年の年初来騰落率`, stats.ytd);
+    put('ytdAvg', '過去の年初来騰落率の平均', stats.ytdAvg);
+    put('ytdMedian', '過去の年初来騰落率の中央値', stats.ytdMedian);
+    put('dayChange', '前日比', stats.dayChange);
+    put('oneYear', '直近1年の騰落率', stats.oneYear);
+    put('dd', '現在の最高値からの下落率', stats.dd);
+    put('ddMin', '今年の最大下落率', stats.ddMin);
+    put('athCount', '今年の最高値更新回数', stats.athCount);
+    put('athAvg', '過去平均の最高値更新回数', stats.athAvg);
+    put('athDays', '最高値更新からの経過日数', stats.athDays);
+    put('upRatio', '今年の上昇日の割合', stats.upRatio);
+    put('upRatioAvg', '過去平均の上昇日の割合', stats.upRatioAvg);
+  }
+
+  rolling.forEach((r) => put(`rolling_${r.label}`, `ローリングリターン（${r.label}）`, r.v));
+
+  if (basis) {
+    const byYear = new Map<number, number>();
+    basis.recent.forEach((r) => byYear.set(r.year, r.ret));
+    basis.cycle.forEach((c) => byYear.set(c.year, c.ret));
+    byYear.forEach((ret, year) => put(`year_${year}`, `${year}年の年間騰落率`, ret));
+  }
+
+  (longMd.crash ?? []).forEach((c) => put(`crashProb_${c.level}`, `-${c.level}%超の暴落、来年の発生確率`, c.prob));
+
+  if (longMd.bottom) {
+    put('bottomPHold', '底値を維持してATH更新に至った過去割合', longMd.bottom.pHold);
+    put('bottomPBreak', 'さらに底割れした過去割合', longMd.bottom.pBreak);
+  }
+
+  if (longMd.daily) {
+    put('dailyUpPct', '日次の上昇日の割合', longMd.daily.up);
+    put('dailyDownPct', '日次の下落日の割合', longMd.daily.down);
+  }
+
+  if (longMd.ddpace && longMd.ddpace.buckets.length) {
+    const totalN = longMd.ddpace.buckets.reduce((acc, b) => acc + b.n, 0);
+    if (totalN > 0) {
+      const wClean = longMd.ddpace.buckets.reduce((acc, b) => acc + b.clean * b.n, 0) / totalN;
+      put('ddpaceCleanRecovery', 'DD局面のクリーン回復率（加重平均）', wClean);
+    }
+  }
+
+  return catalog;
 }
 
 /**
@@ -142,8 +203,9 @@ export function buildVideoLongform(data: any, d: any, instrumentNameKana: string
   };
 
   const catalog = buildSeriesCatalog(dailyPoints, y, data.data_last_date);
-  const resolvedCustomScenes = (customScenes ?? []).map((c) => resolveCustomScene(c, catalog));
+  const scalarCatalog = buildScalarCatalog(stats, rolling, basis, longMd);
+  const resolvedCustomScenes = (customScenes ?? []).map((c) => resolveCustomScene(c, catalog, scalarCatalog));
 
   const scenes = stats ? buildLongScenes(stats, longMd, basis, rolling, instrumentNameKana, sections, customScenes) : [];
-  return { longMd, stats, basis, scenes, rolling, customScenes: resolvedCustomScenes, catalog };
+  return { longMd, stats, basis, scenes, rolling, customScenes: resolvedCustomScenes, catalog, scalarCatalog };
 }

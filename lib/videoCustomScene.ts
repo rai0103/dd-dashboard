@@ -70,6 +70,24 @@ export function catalogKeyOptions(catalog: SeriesCatalog): { key: string; label:
   return Object.entries(catalog).map(([key, v]) => ({ key, label: v.label }));
 }
 
+// [Stage D-5] カスタム場面の「型」。折れ線グラフ（line、既存）に加え、棒グラフ（bar）・円グラフ（donut）を
+// 選べるようにする。いずれもlib/videoLongAnalysisRendererの既存の描画メソッド（hbar/drawDonut）を
+// そのまま使い、AIには「どの型を使うか」と「どのデータ系列を使うか（存在するキーのみ）」しか
+// 生成させない（コードや任意の描画命令は一切生成させない、という既存方針を維持）。
+export type ChartType = 'line' | 'bar' | 'donut';
+
+/** 棒グラフ・円グラフ用の、名前付きスカラー値の辞書（1時点の数値。系列＝パスのSeriesCatalogとは別物） */
+export interface ScalarCatalogEntry {
+  label: string;
+  value: number;
+}
+export type ScalarCatalog = Record<string, ScalarCatalogEntry>;
+
+/** AIのtoolスキーマに渡す、利用可能なスカラーキーの一覧（ラベル付き） */
+export function scalarCatalogKeyOptions(catalog: ScalarCatalog): { key: string; label: string }[] {
+  return Object.entries(catalog).map(([key, v]) => ({ key, label: v.label }));
+}
+
 export interface CustomSceneSeriesSpec {
   key: string;
   label: string;
@@ -77,12 +95,24 @@ export interface CustomSceneSeriesSpec {
   emphasis: boolean;
 }
 
+export interface CustomSceneBarSpec {
+  key: string;
+  label: string;
+}
+
+export interface CustomSceneDonutSpec {
+  items: CustomSceneBarSpec[];
+}
+
 export interface CustomSceneSpec {
   id: string; // `custom:${uuid}` 形式
   title: string;
   subtitle: string;
-  series: CustomSceneSeriesSpec[];
+  chartType: ChartType;
+  series: CustomSceneSeriesSpec[]; // chartType==='line'のときのみ使う
   yUnit: 'index' | 'pct';
+  bars: CustomSceneBarSpec[]; // chartType==='bar'のときのみ使う（1〜6件）
+  donut: CustomSceneDonutSpec | null; // chartType==='donut'のときのみ使う（2〜4件）
   reading: string;   // ひらがなのみのナレーション文
   caption: string;   // 字幕用の短い要点
   minSec: number;
@@ -94,20 +124,62 @@ export interface ResolvedCustomSceneSeries extends CustomSceneSeriesSpec {
   rgb: string;
 }
 
+export interface ResolvedCustomSceneBar {
+  label: string;
+  value: number;
+}
+
+export interface ResolvedCustomSceneDonutSegment {
+  label: string;
+  value: number;
+  rgb: string;
+}
+
 export interface ResolvedCustomScene {
   id: string;
   title: string;
   subtitle: string;
+  chartType: ChartType;
   series: ResolvedCustomSceneSeries[];
   yUnit: 'index' | 'pct';
+  bars: ResolvedCustomSceneBar[];
+  donut: { segments: ResolvedCustomSceneDonutSegment[] } | null;
 }
 
 const PALETTE = ['46,230,184', '255,190,80', '90,169,255', '255,107,107', '200,210,225', '186,104,255'];
 
-/** CustomSceneSpecのseries[].keyを、実際の系列データ（catalog）に解決する。存在しないキーは除外する（事前検証はAI呼び出し側で行う） */
-export function resolveCustomScene(spec: CustomSceneSpec, catalog: SeriesCatalog): ResolvedCustomScene {
-  const series: ResolvedCustomSceneSeries[] = spec.series
+/**
+ * CustomSceneSpecを、chartTypeに応じて実際のデータに解決する。
+ * - line：series[].keyをcatalog（SeriesCatalog）に解決する（既存ロジック）
+ * - bar：bars[].keyをscalarCatalogに解決する
+ * - donut：donut.items[].keyをscalarCatalogに解決する
+ * いずれも存在しないキーは除外する（AI呼び出し側でも事前検証を行う。ここは二重の安全網）。
+ */
+export function resolveCustomScene(spec: CustomSceneSpec, catalog: SeriesCatalog, scalarCatalog: ScalarCatalog = {}): ResolvedCustomScene {
+  const series: ResolvedCustomSceneSeries[] = (spec.series ?? [])
     .filter((s) => catalog[s.key])
     .map((s, i) => ({ ...s, pts: catalog[s.key].pts, rgb: PALETTE[i % PALETTE.length] }));
-  return { id: spec.id, title: spec.title, subtitle: spec.subtitle, series, yUnit: spec.yUnit };
+  const bars: ResolvedCustomSceneBar[] = (spec.bars ?? [])
+    .filter((b) => scalarCatalog[b.key])
+    .map((b) => ({ label: b.label || scalarCatalog[b.key].label, value: scalarCatalog[b.key].value }));
+  const donutItems = (spec.donut?.items ?? []).filter((it) => scalarCatalog[it.key]);
+  const donut = donutItems.length
+    ? {
+        segments: donutItems.map((it, i) => ({
+          label: it.label || scalarCatalog[it.key].label,
+          value: scalarCatalog[it.key].value,
+          rgb: PALETTE[i % PALETTE.length],
+        })),
+      }
+    : null;
+  return {
+    id: spec.id,
+    title: spec.title,
+    subtitle: spec.subtitle,
+    chartType: spec.chartType,
+    series,
+    yUnit: spec.yUnit,
+    bars,
+    donut,
+  };
 }

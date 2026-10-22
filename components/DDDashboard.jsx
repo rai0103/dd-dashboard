@@ -5827,32 +5827,47 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
     setCustomChatError("");
     try {
       const catalog = video.catalog || {};
+      const scalarCatalog = video.scalarCatalog || {};
       const keyOptions = Object.entries(catalog).map(([key, v]) => ({ key, label: v.label }));
-      if (!keyOptions.length) throw new Error("比較できるデータがまだありません。");
+      const scalarKeyOptions = Object.entries(scalarCatalog).map(([key, v]) => ({ key, label: v.label }));
+      if (!keyOptions.length && !scalarKeyOptions.length) throw new Error("比較できるデータがまだありません。");
       const existing = customChatEditingId ? customScenes[customChatEditingId] : null;
+      const describeExisting = (sp) => {
+        if (!sp) return "";
+        if (sp.chartType === "bar") return `棒グラフ［${(sp.bars || []).map((b) => b.label).join("、")}］`;
+        if (sp.chartType === "donut") return `円グラフ［${(sp.donut?.items || []).map((b) => b.label).join("、")}］`;
+        return `折れ線グラフ［${(sp.series || []).map((se) => se.label).join("、")}］`;
+      };
       const system = [
         "あなたは投資データ解説動画の構成作家です。",
-        "折れ線グラフに重ねて表示できるデータ系列は、次の一覧のキーからのみ選んでください（存在しないキーは使えません）：",
+        "場面は3種類の型（chartType）から1つ選んでください：",
+        "- line：複数データの時間的な推移（年初来の動き等）を折れ線グラフで重ねて比較する",
+        "- bar：1時点の値を項目ごとに棒グラフで比較する",
+        "- donut：割合・比率を円グラフで比較する",
+        "chartType='line'のとき、重ねて表示する系列（series、1〜6個）は、次の一覧のキーからのみ選んでください（存在しないキーは使えません）：",
         ...keyOptions.map((o) => `- ${o.key}：${o.label}`),
+        "chartType='bar'（bars、1〜6個）またはchartType='donut'（donut.items、2〜4個）のとき、使える数値は次の一覧のキーからのみ選んでください：",
+        ...scalarKeyOptions.map((o) => `- ${o.key}：${o.label}`),
         "ナレーション文（reading）は必ずひらがなのみで書いてください（漢字・カタカナ・英数字は使わない）。句読点は「、」「。」のみ使えます。",
         "caption（字幕用の短い要点）は通常の日本語の文章で書いてください。",
       ].join("\n");
       const prompt = existing
-        ? `現在のカスタム場面：タイトル『${existing.title}』、系列［${existing.series.map((s) => s.label).join("、")}］、ナレーション『${existing.reading}』。\n次の追加の指示に従って修正してください：\n『${instruction}』`
-        : `次の指示に従って、データを比較する折れ線グラフの場面を1つ作ってください：\n『${instruction}』`;
+        ? `現在のカスタム場面：タイトル『${existing.title}』、${describeExisting(existing)}、ナレーション『${existing.reading}』。\n次の追加の指示に従って修正してください：\n『${instruction}』`
+        : `次の指示に従って、データを比較する場面を1つ作ってください：\n『${instruction}』`;
       const result = await callAiTool({
         system,
         prompt,
-        toolName: "build_overlay_chart",
-        toolDescription: "指定したデータ系列を重ねた折れ線グラフの場面を1つ作る。",
+        toolName: "build_data_scene",
+        toolDescription: "指定した型（折れ線・棒・円グラフ）とデータで、データを比較する場面を1つ作る。",
         inputSchema: {
           type: "object",
           properties: {
             title: { type: "string", description: "場面のタイトル（短く）" },
             subtitle: { type: "string", description: "場面の副題（データの説明）" },
+            chartType: { type: "string", enum: ["line", "bar", "donut"], description: "折れ線／棒／円グラフのいずれか" },
             series: {
               type: "array",
-              description: "重ねて表示する系列（1〜6個）",
+              description: "chartType='line'のときのみ使う。重ねて表示する系列（1〜6個）",
               items: {
                 type: "object",
                 properties: {
@@ -5864,25 +5879,69 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
                 required: ["key", "label", "style", "emphasis"],
               },
             },
-            yUnit: { type: "string", enum: ["index", "pct"] },
+            yUnit: { type: "string", enum: ["index", "pct"], description: "chartType='line'のときのみ使う" },
+            bars: {
+              type: "array",
+              description: "chartType='bar'のときのみ使う。比較する項目（1〜6個）",
+              items: {
+                type: "object",
+                properties: { key: { type: "string", enum: scalarKeyOptions.map((o) => o.key) }, label: { type: "string" } },
+                required: ["key", "label"],
+              },
+            },
+            donut: {
+              type: "object",
+              description: "chartType='donut'のときのみ使う",
+              properties: {
+                items: {
+                  type: "array",
+                  description: "比較する項目（2〜4個）",
+                  items: {
+                    type: "object",
+                    properties: { key: { type: "string", enum: scalarKeyOptions.map((o) => o.key) }, label: { type: "string" } },
+                    required: ["key", "label"],
+                  },
+                },
+              },
+              required: ["items"],
+            },
             reading: { type: "string", description: "ひらがなのみのナレーション文" },
             caption: { type: "string", description: "字幕用の短い要点（通常の日本語）" },
           },
-          required: ["title", "subtitle", "series", "yUnit", "reading", "caption"],
+          required: ["title", "subtitle", "chartType", "reading", "caption"],
         },
         maxTokens: 1536,
       });
+      const chartType = ["line", "bar", "donut"].includes(result?.chartType) ? result.chartType : "line";
       const validKeys = new Set(keyOptions.map((o) => o.key));
-      const seriesIn = Array.isArray(result?.series) ? result.series : [];
-      const seriesOut = seriesIn.filter((s) => s && typeof s.key === "string" && validKeys.has(s.key));
-      if (!seriesOut.length) throw new Error("不明な系列が指定されました。もう一度お試しください。");
+      const validScalarKeys = new Set(scalarKeyOptions.map((o) => o.key));
+      let seriesOut = [];
+      let barsOut = [];
+      let donutOut = null;
+      if (chartType === "line") {
+        const seriesIn = Array.isArray(result?.series) ? result.series : [];
+        seriesOut = seriesIn.filter((se) => se && typeof se.key === "string" && validKeys.has(se.key));
+        if (!seriesOut.length) throw new Error("不明な系列が指定されました。もう一度お試しください。");
+      } else if (chartType === "bar") {
+        const barsIn = Array.isArray(result?.bars) ? result.bars : [];
+        barsOut = barsIn.filter((b) => b && typeof b.key === "string" && validScalarKeys.has(b.key));
+        if (!barsOut.length) throw new Error("不明なデータが指定されました。もう一度お試しください。");
+      } else {
+        const itemsIn = Array.isArray(result?.donut?.items) ? result.donut.items : [];
+        const itemsOut = itemsIn.filter((it) => it && typeof it.key === "string" && validScalarKeys.has(it.key));
+        if (!itemsOut.length) throw new Error("不明なデータが指定されました。もう一度お試しください。");
+        donutOut = { items: itemsOut };
+      }
       const id = customChatEditingId || `custom:${(typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.floor(Math.random() * 1e6)}`}`;
       const spec = {
         id,
         title: String(result.title || "カスタム場面"),
         subtitle: String(result.subtitle || ""),
-        series: seriesOut.map((s) => ({ key: s.key, label: String(s.label || catalog[s.key]?.label || s.key), style: s.style === "dashed" ? "dashed" : "solid", emphasis: !!s.emphasis })),
+        chartType,
+        series: seriesOut.map((se) => ({ key: se.key, label: String(se.label || catalog[se.key]?.label || se.key), style: se.style === "dashed" ? "dashed" : "solid", emphasis: !!se.emphasis })),
         yUnit: result.yUnit === "pct" ? "pct" : "index",
+        bars: barsOut.map((b) => ({ key: b.key, label: String(b.label || scalarCatalog[b.key]?.label || b.key) })),
+        donut: donutOut ? { items: donutOut.items.map((it) => ({ key: it.key, label: String(it.label || scalarCatalog[it.key]?.label || it.key) })) } : null,
         reading: String(result.reading || ""),
         caption: String(result.caption || ""),
         minSec: 18,
@@ -6457,11 +6516,16 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
                     )}
                   </div>
                   {customChatError && <div className="text-[10px] mt-1" style={{ color: "#ff6b6b" }}>{customChatError}</div>}
-                  {customChatEditingId && customScenes[customChatEditingId] && (
-                    <div className="text-[10px] mt-1.5" style={{ color: C.textDim }}>
-                      プレビュー中：『{customScenes[customChatEditingId].title}』（系列：{customScenes[customChatEditingId].series.map((s) => s.label).join("、")}）
-                    </div>
-                  )}
+                  {customChatEditingId && customScenes[customChatEditingId] && (() => {
+                    const sp = customScenes[customChatEditingId];
+                    const kind = sp.chartType === "bar" ? "棒グラフ" : sp.chartType === "donut" ? "円グラフ" : "折れ線グラフ";
+                    const items = sp.chartType === "bar" ? (sp.bars || []).map((b) => b.label) : sp.chartType === "donut" ? (sp.donut?.items || []).map((b) => b.label) : (sp.series || []).map((se) => se.label);
+                    return (
+                      <div className="text-[10px] mt-1.5" style={{ color: C.textDim }}>
+                        プレビュー中：『{sp.title}』（{kind}：{items.join("、")}）
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
             </div>
