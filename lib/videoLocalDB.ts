@@ -8,6 +8,7 @@ export const STORE_BACKGROUNDS_LONG = 'backgrounds-long';
 export const STORE_BGMS_LONG = 'bgms-long';
 export const STORE_ANALYSTS = 'analysts'; // 長尺のアナリスト画像
 export const STORE_AVATARS = 'avatars'; // 長尺のアバター（人物の動画）
+export const STORE_CUSTOM_PROMPTS = 'custom-scene-prompts'; // Stage D-4：カスタム場面の指示文（記憶する機能）
 
 export function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -15,9 +16,9 @@ export function openDB(): Promise<IDBDatabase> {
       reject(new Error('IndexedDB unavailable'));
       return;
     }
-    const req = indexedDB.open(DB_NAME, 5);
+    const req = indexedDB.open(DB_NAME, 6);
     req.onupgradeneeded = () => {
-      for (const name of [STORE_BACKGROUNDS, STORE_BGMS, STORE_BACKGROUNDS_LONG, STORE_BGMS_LONG, STORE_ANALYSTS, STORE_AVATARS]) {
+      for (const name of [STORE_BACKGROUNDS, STORE_BGMS, STORE_BACKGROUNDS_LONG, STORE_BGMS_LONG, STORE_ANALYSTS, STORE_AVATARS, STORE_CUSTOM_PROMPTS]) {
         if (!req.result.objectStoreNames.contains(name)) {
           req.result.createObjectStore(name, { keyPath: 'id' });
         }

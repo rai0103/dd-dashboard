@@ -8,7 +8,8 @@
 // `d` は同ファイルの computeAll() 相当が返す価格系列オブジェクト（FULL/currentDD/mode/athDate等）。
 // dd-dashboard本体はJS（.jsx）で型を持たないため、ここでは data/d を緩く受け取る。
 
-import { LongMd, buildMdScenes, SP500_KANA, tickerKana, ContentSectionId } from './videoLongMd';
+import { LongMd, buildMdScenes, SP500_KANA, tickerKana, ComposedSectionId } from './videoLongMd';
+import { buildSeriesCatalog, resolveCustomScene, CustomSceneSpec, ResolvedCustomScene, SeriesCatalog } from './videoCustomScene';
 import { CrashRow, UpdateStats, computeUpdateStats } from './videoMarketUpdate';
 import { StockDataPoint } from './videoTypes';
 import { LongBasis, buildBasis } from './videoLongBasis';
@@ -77,6 +78,8 @@ export interface VideoLongformResult {
   basis: LongBasis | null;
   scenes: LongScene[];
   rolling: { label: string; v: number }[];
+  customScenes: ResolvedCustomScene[]; // Stage D-4：チャットで生成したカスタム場面（系列データ解決済み）
+  catalog: SeriesCatalog; // Stage D-4：カスタム場面で選べるデータ系列の一覧（AIのtoolスキーマ・UIで使う）
 }
 
 /**
@@ -84,7 +87,7 @@ export interface VideoLongformResult {
  * 動画生成に必要な構造化データ一式（LongMd・UpdateStats・LongBasis・シーン配列）を直接組み立てる。
  * instrumentNameKana省略時はS&P500として読む（既存のSP500専用パスの挙動を維持）。
  */
-export function buildVideoLongform(data: any, d: any, instrumentNameKana: string = SP500_KANA, sections?: ContentSectionId[]): VideoLongformResult {
+export function buildVideoLongform(data: any, d: any, instrumentNameKana: string = SP500_KANA, sections?: ComposedSectionId[], customScenes?: CustomSceneSpec[]): VideoLongformResult {
   const dailyPoints = dailyPointsFromFull(d.FULL);
   const crashRows = crashRowsFromAnalysis(data.crash_analysis);
   const stats = computeUpdateStats(dailyPoints, crashRows);
@@ -138,6 +141,9 @@ export function buildVideoLongform(data: any, d: any, instrumentNameKana: string
     } : null,
   };
 
-  const scenes = stats ? buildLongScenes(stats, longMd, basis, rolling, instrumentNameKana, sections) : [];
-  return { longMd, stats, basis, scenes, rolling };
+  const catalog = buildSeriesCatalog(dailyPoints, y, data.data_last_date);
+  const resolvedCustomScenes = (customScenes ?? []).map((c) => resolveCustomScene(c, catalog));
+
+  const scenes = stats ? buildLongScenes(stats, longMd, basis, rolling, instrumentNameKana, sections, customScenes) : [];
+  return { longMd, stats, basis, scenes, rolling, customScenes: resolvedCustomScenes, catalog };
 }

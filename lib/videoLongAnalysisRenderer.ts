@@ -7,6 +7,7 @@ import { DISCLAIMERS } from './videoDisclaimer';
 import { LongMd } from './videoLongMd';
 import { LongBasis, valueAt } from './videoLongBasis';
 import { LongScene, LongSceneId } from './videoLongAnalysis';
+import { ResolvedCustomScene } from './videoCustomScene';
 import { MarketUpdateRenderer } from './videoMarketUpdateRenderer';
 import { VideoAvatar } from './videoAvatarRender';
 import { LONG_COLUMN_X, drawLongBackground } from './videoAnalysts';
@@ -20,6 +21,7 @@ export interface LongAnalysisConfig {
   rolling?: { label: string; v: number }[];
   basis?: LongBasis | null; // 年末見通しの根拠（CSVから算出）
   md?: LongMd | null; // DDダッシュボードの長尺分析データ（あれば内容・数値はこちらを正とする）
+  customScenes?: ResolvedCustomScene[]; // Stage D-4：チャットで生成したカスタム場面（系列データ解決済み）
 }
 
 const LW = 960, LH = 540;
@@ -203,6 +205,62 @@ export class LongAnalysisRenderer {
     }
   }
 
+  // Stage D-4：カスタム場面（チャットで生成した自由記述の比較チャート）用の汎用オーバーレイ折れ線チャート。
+  // basis10/basisCycleシーンの「グリッド＋折れ線＋凡例」の描き方と同じ考え方の汎用版（系列数は可変）。
+  // 既存のbasis10/basisCycle自体はこのメソッドを使わず、見た目・コードともに変更しない。
+  private drawOverlayChart(title: string, subtitle: string, series: { label: string; pts: { t: number; v: number }[]; style: 'solid' | 'dashed'; emphasis: boolean; rgb: string }[], yUnit: 'index' | 'pct', p: number): void {
+    const ctx = this.ctx;
+    this.heading(title, subtitle, p);
+    if (!series.length) return;
+    const L = 46, R = PW - 20, T = 112, B = 340;
+    ctx.fillStyle = 'rgba(255,255,255,0.04)'; ctx.fillRect(L, T, R - L, B - T);
+    const all = series.flatMap(s => s.pts.map(q => q.v));
+    if (!all.length) return;
+    const lo = Math.floor(Math.max(40, Math.min(...all, 90)) / 10) * 10;
+    const hi = Math.ceil(Math.min(200, Math.max(...all, 110)) / 10) * 10;
+    const yv = (v: number) => B - ((Math.min(hi, Math.max(lo, v)) - lo) / Math.max(1, hi - lo)) * (B - T);
+    const step = hi - lo > 60 ? 20 : 10;
+    for (let v = lo; v <= hi; v += step) {
+      ctx.strokeStyle = v === 100 ? 'rgba(255,255,255,0.4)' : 'rgba(255,255,255,0.1)'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(L, yv(v)); ctx.lineTo(R, yv(v)); ctx.stroke();
+      const label = yUnit === 'pct' ? `${v - 100 >= 0 ? '+' : ''}${v - 100}%` : String(v);
+      this.txt(label, L - 6, yv(v) + 4, 11, WHITE, { alpha: 0.55, align: 'right' });
+    }
+    for (let m = 0; m < 12; m++) this.txt(`${m + 1}月`, L + ((m + 0.5) / 12) * (R - L), B + 15, 11, WHITE, { alpha: 0.55, align: 'center' });
+
+    const drawLine = (pts: { t: number; v: number }[], tMax: number, rgb: string, w: number, alpha: number, dash: boolean, glow: boolean) => {
+      ctx.save(); ctx.lineJoin = 'round'; ctx.strokeStyle = `rgba(${rgb},${alpha})`; ctx.lineWidth = w;
+      if (dash) ctx.setLineDash([6, 4]);
+      if (glow) { ctx.shadowColor = `rgba(${rgb},0.55)`; ctx.shadowBlur = 7; }
+      ctx.beginPath(); let f = true; let last: { t: number; v: number } | null = null;
+      for (const q of pts) { if (q.t > tMax) break; const x = L + q.t * (R - L); if (f) { ctx.moveTo(x, yv(q.v)); f = false; } else ctx.lineTo(x, yv(q.v)); last = q; }
+      ctx.stroke(); ctx.restore();
+      return last;
+    };
+
+    series.forEach((sr, i) => {
+      const delay = i * 0.04;
+      const k = ease(sub(p, 0.08 + delay, 0.6 + delay));
+      const tMax = k * (sr.pts[sr.pts.length - 1]?.t ?? 1);
+      const w = sr.emphasis ? 3.2 : 1.6;
+      const alpha = sr.emphasis ? 1 : 0.75;
+      const last = drawLine(sr.pts, tMax, sr.rgb, w, alpha, sr.style === 'dashed', sr.emphasis);
+      if (last && sr.emphasis) { ctx.fillStyle = `rgba(${sr.rgb},1)`; ctx.beginPath(); ctx.arc(L + last.t * (R - L), yv(last.v), 4.5, 0, Math.PI * 2); ctx.fill(); }
+    });
+
+    const la = ease(sub(p, 0.5, 0.85));
+    ctx.save(); ctx.globalAlpha *= la;
+    series.forEach((sr, i) => {
+      const col = i % 3, row = Math.floor(i / 3);
+      const x = L + 8 + col * 200, y = T + 16 + row * 16;
+      ctx.strokeStyle = `rgba(${sr.rgb},0.95)`; ctx.lineWidth = sr.emphasis ? 3 : 1.6;
+      if (sr.style === 'dashed') ctx.setLineDash([5, 3]); else ctx.setLineDash([]);
+      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 20, y); ctx.stroke();
+      this.txt(sr.label, x + 26, y + 4, 12, WHITE, { alpha: 0.9, maxW: 165 });
+    });
+    ctx.restore();
+  }
+
   private drawTitleBar() {
     const s = this.cfg.stats;
     const ctx = this.ctx;
@@ -323,6 +381,11 @@ export class LongAnalysisRenderer {
     const DATE = `${md ? md.y : s.year}年${md ? md.m : s.month}月${md ? md.d : s.day}日`;
     const sg = (v: number, d = 1) => `${v >= 0 ? '+' : '-'}${Math.abs(v).toFixed(d)}%`;
     const kuro = (v: number) => (v >= 0 ? UP : DOWN);
+    if (typeof id === 'string' && id.startsWith('custom:')) {
+      const cs = (this.cfg.customScenes ?? []).find(c => c.id === id);
+      if (cs) { this.drawOverlayChart(cs.title, cs.subtitle, cs.series, cs.yUnit, p); }
+      return;
+    }
     if (md && id === 'status' && md.status) {
       const st = md.status;
       this.heading('現在の状況', `${DATE}（米国時間）基準`, p);

@@ -37,6 +37,7 @@ import { listAvatars, saveAvatar, deleteAvatar, newAvatar, MAX_CLIPS } from "@/l
 import { VideoAvatar } from "@/lib/videoAvatarRender";
 import { segmentReading, displayOf, readingOf, applyMixedEdit } from "@/lib/videoNarrText";
 import { callAiTool, AiClientError } from "@/lib/videoAiClient";
+import { listCustomPrompts, saveCustomPrompt } from "@/lib/videoCustomScenePrompts";
 import NarrMixedBox from "@/components/NarrMixedBox";
 
 // Cloudflare Worker（当日のVOO/QQQ終値を返す。SP500はここでは扱わず引き続きCSV取り込み/直接入力で更新する）のエンドポイント。
@@ -5782,10 +5783,13 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
 
   // --- 構成（場面の追加・削除・並べ替え） ---
   const [sections, setSections] = useState(DEFAULT_CONTENT_SECTIONS);
+  // --- カスタム場面（チャットでAIに自由記述の比較チャートを生成させる。Stage D-4） ---
+  const [customScenes, setCustomScenes] = useState({}); // id("custom:...") -> CustomSceneSpec
+  const customSceneList = useMemo(() => Object.values(customScenes), [customScenes]);
   const video = useMemo(() => {
     if (!jsonOutput) return null;
-    try { return buildVideoLongform(jsonOutput, d, instrumentNameKana, sections); } catch (e) { console.error("buildVideoLongform error:", e); return null; }
-  }, [jsonOutput, d, instrumentNameKana, sections]);
+    try { return buildVideoLongform(jsonOutput, d, instrumentNameKana, sections, customSceneList); } catch (e) { console.error("buildVideoLongform error:", e); return null; }
+  }, [jsonOutput, d, instrumentNameKana, sections, customSceneList]);
   const scenes = video?.scenes ?? [];
   const availableSectionIds = useMemo(() => (video?.longMd ? availableContentSections(video.longMd, video.basis, video.stats) : []), [video]);
   const dragSectionIndexRef = useRef(null);
@@ -5798,8 +5802,114 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
       return next;
     });
   };
-  const removeSection = (id) => setSections((prev) => prev.filter((x) => x !== id));
+  const removeSection = (id) => {
+    setSections((prev) => prev.filter((x) => x !== id));
+    if (typeof id === "string" && id.startsWith("custom:")) {
+      setCustomScenes((prev) => { const nx = { ...prev }; delete nx[id]; return nx; });
+      setCustomChatEditingId((prev) => (prev === id ? null : prev));
+    }
+  };
   const addSection = (id) => setSections((prev) => (prev.includes(id) ? prev : [...prev, id]));
+
+  const [customChatOpen, setCustomChatOpen] = useState(false);
+  const [customChatText, setCustomChatText] = useState("");
+  const [customChatLoading, setCustomChatLoading] = useState(false);
+  const [customChatError, setCustomChatError] = useState("");
+  const [customChatEditingId, setCustomChatEditingId] = useState(null); // nullなら新規追加、既存idなら「もう少し直す」対象
+  const [savedPrompts, setSavedPrompts] = useState([]);
+  const refreshSavedPrompts = async () => { try { setSavedPrompts(await listCustomPrompts()); } catch (e) { /* 読み込めなくても動作は続ける */ } };
+  useEffect(() => { refreshSavedPrompts(); }, []);
+
+  const generateCustomScene = async () => {
+    const instruction = customChatText.trim();
+    if (!instruction || !video) return;
+    setCustomChatLoading(true);
+    setCustomChatError("");
+    try {
+      const catalog = video.catalog || {};
+      const keyOptions = Object.entries(catalog).map(([key, v]) => ({ key, label: v.label }));
+      if (!keyOptions.length) throw new Error("比較できるデータがまだありません。");
+      const existing = customChatEditingId ? customScenes[customChatEditingId] : null;
+      const system = [
+        "あなたは投資データ解説動画の構成作家です。",
+        "折れ線グラフに重ねて表示できるデータ系列は、次の一覧のキーからのみ選んでください（存在しないキーは使えません）：",
+        ...keyOptions.map((o) => `- ${o.key}：${o.label}`),
+        "ナレーション文（reading）は必ずひらがなのみで書いてください（漢字・カタカナ・英数字は使わない）。句読点は「、」「。」のみ使えます。",
+        "caption（字幕用の短い要点）は通常の日本語の文章で書いてください。",
+      ].join("\n");
+      const prompt = existing
+        ? `現在のカスタム場面：タイトル『${existing.title}』、系列［${existing.series.map((s) => s.label).join("、")}］、ナレーション『${existing.reading}』。\n次の追加の指示に従って修正してください：\n『${instruction}』`
+        : `次の指示に従って、データを比較する折れ線グラフの場面を1つ作ってください：\n『${instruction}』`;
+      const result = await callAiTool({
+        system,
+        prompt,
+        toolName: "build_overlay_chart",
+        toolDescription: "指定したデータ系列を重ねた折れ線グラフの場面を1つ作る。",
+        inputSchema: {
+          type: "object",
+          properties: {
+            title: { type: "string", description: "場面のタイトル（短く）" },
+            subtitle: { type: "string", description: "場面の副題（データの説明）" },
+            series: {
+              type: "array",
+              description: "重ねて表示する系列（1〜6個）",
+              items: {
+                type: "object",
+                properties: {
+                  key: { type: "string", enum: keyOptions.map((o) => o.key) },
+                  label: { type: "string" },
+                  style: { type: "string", enum: ["solid", "dashed"] },
+                  emphasis: { type: "boolean" },
+                },
+                required: ["key", "label", "style", "emphasis"],
+              },
+            },
+            yUnit: { type: "string", enum: ["index", "pct"] },
+            reading: { type: "string", description: "ひらがなのみのナレーション文" },
+            caption: { type: "string", description: "字幕用の短い要点（通常の日本語）" },
+          },
+          required: ["title", "subtitle", "series", "yUnit", "reading", "caption"],
+        },
+        maxTokens: 1536,
+      });
+      const validKeys = new Set(keyOptions.map((o) => o.key));
+      const seriesIn = Array.isArray(result?.series) ? result.series : [];
+      const seriesOut = seriesIn.filter((s) => s && typeof s.key === "string" && validKeys.has(s.key));
+      if (!seriesOut.length) throw new Error("不明な系列が指定されました。もう一度お試しください。");
+      const id = customChatEditingId || `custom:${(typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.floor(Math.random() * 1e6)}`}`;
+      const spec = {
+        id,
+        title: String(result.title || "カスタム場面"),
+        subtitle: String(result.subtitle || ""),
+        series: seriesOut.map((s) => ({ key: s.key, label: String(s.label || catalog[s.key]?.label || s.key), style: s.style === "dashed" ? "dashed" : "solid", emphasis: !!s.emphasis })),
+        yUnit: result.yUnit === "pct" ? "pct" : "index",
+        reading: String(result.reading || ""),
+        caption: String(result.caption || ""),
+        minSec: 18,
+        sourcePrompt: instruction,
+      };
+      setCustomScenes((prev) => ({ ...prev, [id]: spec }));
+      if (!customChatEditingId) setSections((prev) => (prev.includes(id) ? prev : [...prev, id]));
+      setCustomChatEditingId(id);
+    } catch (e) {
+      const msg = e instanceof AiClientError ? e.message : (e && e.message ? e.message : String(e));
+      setCustomChatError(msg);
+    } finally {
+      setCustomChatLoading(false);
+    }
+  };
+
+  const saveCurrentPromptAsMemory = async () => {
+    const spec = customChatEditingId ? customScenes[customChatEditingId] : null;
+    if (!spec || !spec.sourcePrompt) return;
+    try {
+      const name = spec.sourcePrompt.slice(0, 20) || spec.title;
+      await saveCustomPrompt({ name, prompt: spec.sourcePrompt });
+      await refreshSavedPrompts();
+    } catch (e) { setCustomChatError("保存に失敗しました: " + (e && e.message ? e.message : String(e))); }
+  };
+
+  const recallSavedPrompt = (sp) => setCustomChatText(sp.prompt);
 
   // --- ナレーション文の編集（場面ごと） ---
   // 通常の文章（漢字・英字・数字まじり）で表示し、読み方が違う箇所だけひらがなに直す（直した箇所は緑）。
@@ -6075,6 +6185,7 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
         stats: video.stats, scenes, analyst: avatarObj ? { kind: "video", avatar: avatarObj } : null,
         backgroundImage: backgroundImgEl, backgroundOpacity: backgroundOpacity / 100,
         md: video.longMd, basis: video.basis, rolling: video.rolling,
+        customScenes: video.customScenes,
       });
       rendererRef.current = renderer;
       renderer.draw(seekPos);
@@ -6278,10 +6389,17 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
                   style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, cursor: "grab" }}
                 >
                   <GripVertical size={13} style={{ color: C.textDim, flexShrink: 0 }} />
-                  <span className="text-[11px]" style={{ color: C.text }}>{i + 1}. {CONTENT_SECTION_LABELS[id] ?? id}</span>
-                  <button onClick={() => removeSection(id)} className="ml-auto" style={{ color: C.textDim, background: "transparent", border: "none", cursor: "pointer", padding: 2 }} title="この場面を削除">
-                    <X size={13} />
-                  </button>
+                  <span className="text-[11px] flex-1" style={{ color: C.text }}>{i + 1}. {customScenes[id]?.title ?? (CONTENT_SECTION_LABELS[id] ?? id)}</span>
+                  <div className="flex items-center gap-1 ml-auto">
+                    {typeof id === "string" && id.startsWith("custom:") && (
+                      <button onClick={() => { setCustomChatOpen(true); setCustomChatEditingId(id); setCustomChatText(""); setCustomChatError(""); }} style={{ color: C.textDim, background: "transparent", border: "none", cursor: "pointer", padding: 2 }} title="チャットで編集">
+                        <MessageSquare size={13} />
+                      </button>
+                    )}
+                    <button onClick={() => removeSection(id)} style={{ color: C.textDim, background: "transparent", border: "none", cursor: "pointer", padding: 2 }} title="この場面を削除">
+                      <X size={13} />
+                    </button>
+                  </div>
                 </div>
               ))}
               {sections.length === 0 && <p className="text-[10px]" style={{ color: C.textDim }}>場面が選択されていません。下から追加してください。</p>}
@@ -6302,6 +6420,50 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
                   </button>
                 );
               })}
+            </div>
+            <div className="mt-2 pt-2" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+              <button
+                onClick={() => { setCustomChatOpen((v) => !v); setCustomChatEditingId(null); setCustomChatText(""); setCustomChatError(""); }}
+                className="text-[11px] px-2 py-1 rounded flex items-center gap-1"
+                style={{ color: C.teal, background: "transparent", border: `1px solid ${C.teal}66`, cursor: "pointer" }}
+              ><MessageSquare size={11} /> ＋カスタム場面を追加（チャットで指示）</button>
+              {customChatOpen && (
+                <div className="mt-1.5 p-2 rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
+                  {savedPrompts.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mb-1.5">
+                      {savedPrompts.map((sp) => (
+                        <button key={sp.id} onClick={() => recallSavedPrompt(sp)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: C.textDim, background: "transparent", border: `1px solid ${C.borderSoft}`, cursor: "pointer" }} title={sp.prompt}>{sp.name}</button>
+                      ))}
+                    </div>
+                  )}
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="text"
+                      value={customChatText}
+                      onChange={(e) => setCustomChatText(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter" && !customChatLoading) generateCustomScene(); }}
+                      placeholder={customChatEditingId ? "もう少し直す指示を入力" : "例：大統領中間選挙年の平均と今年と全期間平均を重ねて、比較をアナウンスして"}
+                      className="flex-1 text-[11px] rounded px-2 py-1"
+                      style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, color: C.text }}
+                    />
+                    <button
+                      onClick={generateCustomScene}
+                      disabled={customChatLoading || !customChatText.trim()}
+                      className="text-[10px] px-2 py-1 rounded"
+                      style={{ background: C.teal, color: "#04201a", border: "none", cursor: customChatLoading ? "default" : "pointer", opacity: customChatLoading || !customChatText.trim() ? 0.5 : 1 }}
+                    >{customChatLoading ? "生成中…" : "生成"}</button>
+                    {customChatEditingId && (
+                      <button onClick={saveCurrentPromptAsMemory} className="text-[10px] px-2 py-1 rounded" style={{ color: C.textDim, background: "transparent", border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>記憶する</button>
+                    )}
+                  </div>
+                  {customChatError && <div className="text-[10px] mt-1" style={{ color: "#ff6b6b" }}>{customChatError}</div>}
+                  {customChatEditingId && customScenes[customChatEditingId] && (
+                    <div className="text-[10px] mt-1.5" style={{ color: C.textDim }}>
+                      プレビュー中：『{customScenes[customChatEditingId].title}』（系列：{customScenes[customChatEditingId].series.map((s) => s.label).join("、")}）
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 

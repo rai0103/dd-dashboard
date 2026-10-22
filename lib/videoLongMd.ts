@@ -6,6 +6,7 @@
 import { integerToKana, numberStringToKana, yearsToKana } from './videoReading';
 import { monthDayKana, pctKana, nichiKana, UpdateStats, buildUpdateScenes } from './videoMarketUpdate';
 import { LongBasis } from './videoLongBasis';
+import { CustomSceneSpec } from './videoCustomScene';
 
 export interface LongMd {
   y: number; m: number; d: number;
@@ -85,6 +86,8 @@ export function tickerKana(symbol: string): string {
 export const SP500_KANA = 'えすあんどぴーごひゃく';
 
 export type ContentSectionId = 'ytdChange' | 'athDrop' | 'yearEndTrack' | 'crashFreq' | 'status' | 'bottom' | 'rolling' | 'forecast' | 'basis10' | 'basisCycle' | 'ddpace' | 'crashmd' | 'daily';
+/** 既存の構成候補（ContentSectionId）に、AIがチャットで生成したカスタム場面（`custom:${uuid}`）を混在させた型（Stage D-4） */
+export type ComposedSectionId = ContentSectionId | `custom:${string}`;
 /** 既定の構成：ショート動画（近況解説）と同じ4項目（騰落率／ATHからの下落率／年末までの過去実績／調整下落の頻度）。ショートから長尺への導線として、同じ切り口で始める */
 export const DEFAULT_CONTENT_SECTIONS: ContentSectionId[] = ['ytdChange', 'athDrop', 'yearEndTrack', 'crashFreq'];
 export const CONTENT_SECTION_LABELS: Record<ContentSectionId, string> = {
@@ -233,15 +236,21 @@ export function availableContentSections(md: LongMd, basis?: LongBasis | null, s
 }
 
 /** md から長尺シーンを作る。順序：オープニング→sections（指定順）→エンディング。instrumentNameKana省略時は従来どおりS&P500として読む。sections省略時は近況のみ（DEFAULT_CONTENT_SECTIONS） */
-export function buildMdScenes(md: LongMd, basis?: LongBasis | null, instrumentNameKana: string = SP500_KANA, sections: ContentSectionId[] = DEFAULT_CONTENT_SECTIONS, stats?: UpdateStats | null): MdScene[] {
+export function buildMdScenes(md: LongMd, basis?: LongBasis | null, instrumentNameKana: string = SP500_KANA, sections: ComposedSectionId[] = DEFAULT_CONTENT_SECTIONS, stats?: UpdateStats | null, customScenes?: CustomSceneSpec[]): MdScene[] {
   const sc: MdScene[] = [];
   const dateK = `${yearsToKana(md.y)}、${monthDayKana(md.m, md.d)}`;
   const dateJ = `${md.y}年${md.m}月${md.d}日`;
   sc.push({ id: 'open', minSec: 5, reading: `${dateK}、${instrumentNameKana}の、ぶんせきを、れぽーとします。`, caption: `${dateJ}、S&P500の分析をレポートします。` });
 
   const builders = contentSectionBuilders(md, basis, stats);
+  const customById = new Map((customScenes ?? []).map((c) => [c.id, c] as const));
   for (const id of sections) {
-    const scene = builders[id]?.();
+    if (typeof id === 'string' && id.startsWith('custom:')) {
+      const spec = customById.get(id);
+      if (spec) sc.push({ id: spec.id, minSec: spec.minSec, reading: spec.reading, caption: spec.caption });
+      continue;
+    }
+    const scene = builders[id as ContentSectionId]?.();
     if (scene) sc.push(scene);
   }
 
