@@ -15,10 +15,34 @@
 const http = require('http');
 const { execFile } = require('child_process');
 const fs = require('fs').promises;
+const fsSync = require('fs');
 const os = require('os');
 const path = require('path');
 
 const PORT = Number(process.env.TTS_PORT) || 4100;
+
+// tts-server/.env（gitignore対象）があれば読み込み、process.envへ反映する（dotenv非依存・ゼロ依存維持のための自前の簡易パーサー）。
+// 既存の環境変数は上書きしない。Stage D-2：チャット機能（/api/chat）用のANTHROPIC_API_KEY等をここで読む。
+function loadEnvFile() {
+  const envPath = path.join(__dirname, '.env');
+  try {
+    if (!fsSync.existsSync(envPath)) return;
+    const raw = fsSync.readFileSync(envPath, 'utf8');
+    raw.split(/\r?\n/).forEach((line) => {
+      const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
+      if (!m) return;
+      const key = m[1];
+      let val = m[2];
+      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+        val = val.slice(1, -1);
+      }
+      if (process.env[key] === undefined) process.env[key] = val;
+    });
+  } catch (e) {
+    console.error('[tts-server] .env の読み込みに失敗しました:', e && e.message ? e.message : e);
+  }
+}
+loadEnvFile();
 
 const PS_LIST = `[Console]::OutputEncoding = [Text.Encoding]::UTF8
 Add-Type -AssemblyName System.Speech
@@ -120,6 +144,48 @@ function readJsonBody(req) {
   });
 }
 
+// Stage D-2：ローカルAIチャットプロキシ。dd-dashboardは静的エクスポートのためNext.js Route Handlerを持てず、
+// TTSサーバーと同じ理由でここに実装する。リクエストをそのままAnthropic Messages APIへ中継するだけで、
+// APIキーはユーザー自身のtts-server/.env（gitignore対象）から読む（Claudeが入力・保持することはない）。
+async function handlePostChat(req, res) {
+  const body = await readJsonBody(req);
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({
+      error: 'NO_API_KEY',
+      message: 'tts-server/.env に ANTHROPIC_API_KEY が設定されていません（tts-server/.env.example を参考に設定してください）。',
+    }));
+    return;
+  }
+  const model = (process.env.ANTHROPIC_MODEL || 'claude-sonnet-5-5');
+  const payload = {
+    model,
+    max_tokens: (body && Number(body.max_tokens)) || 1024,
+    system: body && body.system,
+    messages: (body && Array.isArray(body.messages)) ? body.messages : [],
+  };
+  if (body && body.tools) payload.tools = body.tools;
+  if (body && body.tool_choice) payload.tool_choice = body.tool_choice;
+  try {
+    const upstream = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+    const text = await upstream.text();
+    res.writeHead(upstream.status, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(text);
+  } catch (e) {
+    res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ error: 'UPSTREAM_FAILED', message: String(e && e.message ? e.message : e) }));
+  }
+}
+
 async function handlePostSpeak(req, res) {
   const body = await readJsonBody(req);
   const text = body && typeof body.text === 'string' ? body.text : '';
@@ -162,6 +228,7 @@ const server = http.createServer((req, res) => {
   if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
   if (pathname === '/api/tts' && req.method === 'GET') { handleGetVoices(req, res); return; }
   if (pathname === '/api/tts' && req.method === 'POST') { handlePostSpeak(req, res); return; }
+  if (pathname === '/api/chat' && req.method === 'POST') { handlePostChat(req, res); return; }
   if (pathname === '/' || pathname === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({ ok: true, service: 'dd-dashboard tts-server', port: PORT }));
