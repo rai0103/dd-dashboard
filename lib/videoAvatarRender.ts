@@ -148,7 +148,7 @@ export class VideoAvatar {
     // 影の濃淡をたどって誤って透明にしてしまう（人物側への「染み出し」）のを防ぐための安全弁
     const ksum = key[0] + key[1] + key[2] + 1;
     const keyRn = key[0] / ksum, keyGn = key[1] / ksum;
-    const CHROMA_TOL2 = 0.06 * 0.06;
+    const CHROMA_TOL2 = 0.05 * 0.05;
     const chromaOk = (k: number) => {
       const total = d[k] + d[k + 1] + d[k + 2] + 1;
       const rn = d[k] / total - keyRn, gn = d[k + 1] / total - keyGn;
@@ -164,12 +164,14 @@ export class VideoAvatar {
     for (let x = 0; x < mw; x++) { seed(x); seed((mh - 1) * mw + x); }
     for (let y = 0; y < mh; y++) { seed(y * mw); seed(y * mw + mw - 1); }
     // ふちの種まきは厳しめのtolのまま（人物が端に写り込んでいても種にしないため）だが、
-    // そこから先への伝播（歩幅）はゆるめる。被写体の近くでは背景にも照明の当たり方の違いで
-    // 明るいムラ（ハロー）が出やすく、歩幅の判定が厳しいとそこで広がりが止まってしまい、
-    // 人物のすぐ周りだけキーが抜けきらずに残ることがあったため
-    const growT2 = (this.opt.tol * 1.8) * (this.opt.tol * 1.8);
+    // そこから先への伝播（歩幅）は少しゆるめる。被写体の近くでは背景にも照明の当たり方の違いで
+    // 明るいムラ（ハロー）が出やすく、歩幅の判定が厳しすぎるとそこで広がりが止まってしまい、
+    // 人物のすぐ周りだけキーが抜けきらずに残ることがある一方、ゆるめすぎると今度は被写体の服の色が
+    // 背景と近い場合（グレーの上着とグレーがかった背景など）に、服の縁が誤って透明になってしまう。
+    // この両者はトレードオフのため、以前より控えめな倍率にして折衷している
+    const growT2 = (this.opt.tol * 1.4) * (this.opt.tol * 1.4);
     // 隣との色の近さ（歩幅）に加えて、キー色からの総移動量（RGB・クロマ双方）にも上限を設ける
-    const gt2 = (this.opt.tol * 2.8) * (this.opt.tol * 2.8);
+    const gt2 = (this.opt.tol * 2.3) * (this.opt.tol * 2.3);
     const grow = (from: number, to: number) => {
       if (vis[to]) return;
       const kf = from * 4, kt = to * 4;
