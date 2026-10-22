@@ -148,11 +148,18 @@ export class VideoAvatar {
     const seed = (i: number) => { if (!vis[i] && nearKey(i)) { vis[i] = 1; st[sp++] = i; } };
     for (let x = 0; x < mw; x++) { seed(x); seed((mh - 1) * mw + x); }
     for (let y = 0; y < mh; y++) { seed(y * mw); seed(y * mw + mw - 1); }
+    // 隣との色の近さ（歩幅）に加えて、キー色からの総移動量にも上限を設ける。
+    // 歩幅だけで判定すると、首の影など被写体側のグラデーションを背景の縁からたどって
+    // 透明にしてしまう（人物側への「染み出し」）ことがあったための安全弁
+    const gt2 = (this.opt.tol * 2.2) * (this.opt.tol * 2.2);
     const grow = (from: number, to: number) => {
       if (vis[to]) return;
       const kf = from * 4, kt = to * 4;
       const dr = d[kf] - d[kt], dg = d[kf + 1] - d[kt + 1], db = d[kf + 2] - d[kt + 2];
-      if (dr * dr + dg * dg + db * db < t2) { vis[to] = 1; st[sp++] = to; }
+      if (dr * dr + dg * dg + db * db >= t2) return;
+      const gr = d[kt] - key[0], gg = d[kt + 1] - key[1], gb = d[kt + 2] - key[2];
+      if (gr * gr + gg * gg + gb * gb >= gt2) return;
+      vis[to] = 1; st[sp++] = to;
     };
     while (sp > 0) {
       const i = st[--sp];

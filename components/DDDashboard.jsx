@@ -5927,8 +5927,12 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
   // --- 背景（アップロードして保存・選択） ---
   const [backgrounds, setBackgrounds] = useState([]);
   const [activeBackgroundId, setActiveBackgroundId] = useState("");
-  const [backgroundOpacity, setBackgroundOpacity] = useState(28);
-  const refreshBackgrounds = () => listBackgrounds(true).then(setBackgrounds).catch(() => {});
+  const [backgroundOpacity, setBackgroundOpacity] = useState(85); // 右側の背景は人物のうしろに全面表示する想定のため、最初から見えやすい不透明度にしておく
+  const refreshBackgrounds = () => listBackgrounds(true).then((items) => {
+    setBackgrounds(items);
+    // 背景が1つ以上あれば、未選択（なし）のままにせず最初から選んだ状態にしておく
+    setActiveBackgroundId((prev) => (prev && items.some((b) => b.id === prev) ? prev : items[0]?.id ?? ""));
+  }).catch(() => {});
   useEffect(() => { refreshBackgrounds(); }, []);
   const activeBackground = backgrounds.find((b) => b.id === activeBackgroundId) || null;
   const [backgroundImgEl, setBackgroundImgEl] = useState(null);
