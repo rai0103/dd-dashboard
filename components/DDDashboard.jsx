@@ -6002,6 +6002,20 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
   const sceneRefs = useRef([]);
   useEffect(() => { setCurrentSceneIdx((i) => Math.min(i, Math.max(0, scenes.length - 1))); }, [scenes.length]);
   useEffect(() => { sceneRefs.current[currentSceneIdx]?.scrollIntoView({ block: "nearest", behavior: "smooth" }); }, [currentSceneIdx]);
+  // 今の場面の文章のどこまで読み上げ済みか（文字数。NarrMixedBoxのハイライトに渡す）。
+  // ナレーション音声の長さは再生準備（prepareAudio）の結果でしか分からないため、再生のたびにnarrDursRefへ保存しておく
+  const narrDursRef = useRef([]);
+  const [readCharIdx, setReadCharIdx] = useState(0);
+  const updateSceneProgress = (progress) => {
+    const r = rendererRef.current;
+    if (!r) return;
+    const idx = r.getSceneIndexAt(progress);
+    setCurrentSceneIdx(idx);
+    const localT = r.getSceneLocalTimeAt(progress);
+    const dur = narrDursRef.current[idx] || 0;
+    const frac = dur > 0 ? Math.min(1, Math.max(0, (localT - 0.3) / dur)) : 0;
+    setReadCharIdx(Math.round(frac * (shownTexts[idx]?.length ?? 0)));
+  };
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -6015,7 +6029,7 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
       });
       rendererRef.current = renderer;
       renderer.draw(seekPos);
-      setCurrentSceneIdx(renderer.getSceneIndexAt(seekPos));
+      updateSceneProgress(seekPos);
     } catch (e) { console.error("LongAnalysisRenderer init error:", e); rendererRef.current = null; }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [video, scenes, avatarObj, backgroundImgEl, backgroundOpacity]);
@@ -6032,6 +6046,7 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
       catch (e) { console.error("TTS error:", e); failed = true; bufs.push(null); }
     }
     const durs = scenes.map((sc, i) => Math.max(sc.minSec, bufs[i] ? 0.3 + bufs[i].duration + 0.8 : 0));
+    narrDursRef.current = bufs.map((b) => (b ? b.duration : 0));
     const starts = [];
     durs.reduce((acc, dur) => { starts.push(acc); return acc + dur; }, 0);
     const total = durs.reduce((a, b) => a + b, 0);
@@ -6058,7 +6073,7 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
       const progress = Math.min(1, (now - startTime) / totalMs);
       setSeekPos(progress);
       rendererRef.current.draw(progress);
-      setCurrentSceneIdx(rendererRef.current.getSceneIndexAt(progress));
+      updateSceneProgress(progress);
       if (progress < 1) { animationFrameRef.current = requestAnimationFrame(tick); }
       else { isPlayingRef.current = false; setIsPlaying(false); mixer().fadeBGM(1); rendererRef.current?.pauseAvatar?.(); }
     };
@@ -6076,7 +6091,7 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
     if (isPlayingRef.current) { stopLoop(); setIsPlaying(false); mixer().stopBGM(); mixer().stopNarration(); }
     setSeekPos(v);
     rendererRef.current?.draw(v);
-    if (rendererRef.current) setCurrentSceneIdx(rendererRef.current.getSceneIndexAt(v));
+    updateSceneProgress(v);
   };
 
   const previewScene = async (i) => {
@@ -6340,7 +6355,7 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
               {voiceChoices.map((v) => <option key={v} value={v}>{v}</option>)}
             </select>
             <div className="flex items-center gap-3">
-              <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>速さ<input type="range" min={0.6} max={1.6} step={0.05} value={rate} onChange={(e) => setRate(Number(e.target.value))} />{rate.toFixed(2)}x</label>
+              <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>速さ<input type="range" min={0.6} max={2.0} step={0.05} value={rate} onChange={(e) => setRate(Number(e.target.value))} />{rate.toFixed(2)}x</label>
               <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>高さ<input type="range" min={0.8} max={1.3} step={0.02} value={pitch} onChange={(e) => setPitch(Number(e.target.value))} />{pitch.toFixed(2)}x</label>
             </div>
           </div>
@@ -6384,7 +6399,7 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
                         <button onClick={() => previewScene(i)} className="text-[10px] flex items-center gap-1" style={{ color: C.teal, background: "none", border: "none", cursor: "pointer" }}><Play size={10} /> 試聴</button>
                       </div>
                     </div>
-                    <NarrMixedBox value={shownTexts[i]} base={baseShown[i]} onChange={(t) => handleSceneTextChange(i, sc, t)} onBlur={() => commitSceneText(i, sc)} colors={{ text: C.text, border: C.borderSoft }} />
+                    <NarrMixedBox value={shownTexts[i]} base={baseShown[i]} onChange={(t) => handleSceneTextChange(i, sc, t)} onBlur={() => commitSceneText(i, sc)} colors={{ text: C.text, border: C.borderSoft }} readUpTo={isCurrent && isPlaying ? readCharIdx : null} />
                   </div>
                 );
               })}

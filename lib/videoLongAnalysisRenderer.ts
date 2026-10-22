@@ -106,6 +106,14 @@ export class LongAnalysisRenderer {
     return i;
   }
 
+  /** 指定の進捗（0〜1）の時点で、今の場面が始まってから何秒経過しているか（draw()のtと同じ値。副作用なし） */
+  getSceneLocalTimeAt(progress: number): number {
+    const gt = clamp01(progress) * this.totalSeconds;
+    let t = gt, i = 0;
+    while (i < this.durs.length - 1 && t >= this.durs[i]) { t -= this.durs[i]; i++; }
+    return t;
+  }
+
   draw(progress: number): void {
     const ctx = this.ctx;
     ctx.setTransform(this.k, 0, 0, this.k, 0, 0);

@@ -3,7 +3,8 @@ import { useEffect, useRef } from "react";
 import { changedMask } from "@/lib/videoNarrText";
 
 // 通常の文章の枠。表示文から変えた（ひらがなにした）箇所を緑の文字で示す
-export default function NarrMixedBox({ value, base, onChange, onBlur, colors }) {
+// readUpTo（文字数。null/undefinedなら無効）を渡すと、そこまでを「読み上げ済み」として背景をハイライトし、まだの部分は少し薄く表示する（再生に合わせて文字を追えるように）
+export default function NarrMixedBox({ value, base, onChange, onBlur, colors, readUpTo = null }) {
   const ta = useRef(null);
   const mir = useRef(null);
   useEffect(() => {
@@ -11,9 +12,21 @@ export default function NarrMixedBox({ value, base, onChange, onBlur, colors }) 
     if (mir.current) {
       const esc = (x) => x.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
       const mask = changedMask(base, value);
-      let o = "", run = "", on = false;
-      const fl = () => { if (run) o += on ? `<span style="color:#2ee6b8;font-weight:600">${esc(run)}</span>` : esc(run); run = ""; };
-      for (let i = 0; i < value.length; i++) { const m = !!mask[i]; if (m !== on) { fl(); on = m; } run += value[i]; }
+      let o = "", run = "", on = false, onRead = false;
+      const fl = () => {
+        if (!run) return;
+        const st = [];
+        if (on) st.push("color:#2ee6b8", "font-weight:600");
+        if (readUpTo != null) { if (onRead) st.push("background:rgba(46,230,184,0.25)", "border-radius:2px"); else st.push("opacity:0.5"); }
+        o += st.length ? `<span style="${st.join(";")}">${esc(run)}</span>` : esc(run);
+        run = "";
+      };
+      for (let i = 0; i < value.length; i++) {
+        const m = !!mask[i];
+        const r = readUpTo != null && i < readUpTo;
+        if (m !== on || r !== onRead) { fl(); on = m; onRead = r; }
+        run += value[i];
+      }
       fl();
       mir.current.innerHTML = o + " ";
     }
