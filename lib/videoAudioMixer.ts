@@ -2,6 +2,11 @@
 // investment-shorts側はNext.jsの相対パス `/api/tts` を叩いていたが、dd-dashboardは `output: "export"` の
 // 完全静的サイトのためRoute Handlerを持てない。代わりにスタンドアロンのローカルTTSヘルパーサーバー（tts-server/、既定で
 // http://localhost:4100）を呼び出す。ポートは setTtsBaseUrl() で変更可能（investment-shortsは無改変）。
+// [AivisSpeech対応] voiceが "aivis:" で始まる場合だけ、tts-serverを経由せずブラウザから直接AivisSpeechエンジンへ
+// つなぐ（lib/videoAivisClient.ts）。CORS等で失敗したときの既存の声への自動フォールバックは
+// fetchNarrationBufferSmart() で提供する（呼び出し側のDDDashboard.jsxが使う）。
+import { isAivisVoice, parseAivisSpeakerId, synthesizeAivis } from './videoAivisClient';
+
 let TTS_BASE_URL = 'http://localhost:4100';
 /** ローカルTTSヘルパーサーバーのベースURLを変更する（既定: http://localhost:4100） */
 export function setTtsBaseUrl(url: string): void { TTS_BASE_URL = url.replace(/\/$/, ''); }
@@ -65,24 +70,50 @@ export class AudioMixer {
     } catch { return []; }
   }
 
-  /** サーバー音声でナレーションのWAVを取得（同じ条件はキャッシュ） */
+  /** 声（ローカルTTSサーバー、またはAivisSpeech）でナレーションのWAVを取得（同じ条件はキャッシュ） */
   async fetchNarrationBuffer(text: string, rate: number, voice: string, pitch = 1): Promise<AudioBuffer> {
     const ctx = this.getContext();
     if (!ctx) throw new Error('音声を初期化できません');
     const key = `${voice}|${rate}|${pitch}|${text}`;
     const cached = this.narrationCache.get(key);
     if (cached) return cached;
-    const res = await fetch(ttsUrl('/api/tts'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      // 高さを変える分、合成時の速さを逆に補正する（最終的な話速は rate のまま）
-      body: JSON.stringify({ text, rate: rate / pitch, voice }),
-    });
-    if (!res.ok) throw new Error(await res.text());
-    let buf = await ctx.decodeAudioData(await res.arrayBuffer());
+    let buf: AudioBuffer;
+    if (isAivisVoice(voice)) {
+      const speakerId = parseAivisSpeakerId(voice);
+      if (speakerId === null) throw new Error('AivisSpeechの声の指定が不正です: ' + voice);
+      // 高さを変える分、合成時の速さを逆に補正する（最終的な話速は rate のまま。tts-server側の仕組みと同じ）
+      const wav = await synthesizeAivis(text, speakerId, rate / pitch);
+      buf = await ctx.decodeAudioData(wav);
+    } else {
+      const res = await fetch(ttsUrl('/api/tts'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // 高さを変える分、合成時の速さを逆に補正する（最終的な話速は rate のまま）
+        body: JSON.stringify({ text, rate: rate / pitch, voice }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      buf = await ctx.decodeAudioData(await res.arrayBuffer());
+    }
     if (Math.abs(pitch - 1) > 0.001) buf = await this.resample(buf, pitch);
     this.narrationCache.set(key, buf);
     return buf;
+  }
+
+  /**
+   * 声を合成する。AivisSpeechの声で、エンジンが止まっている・CORS等で接続できない場合は、
+   * fallbackVoice（ローカルTTSサーバーの声）で合成し直す。usedFallback が true のときは、
+   * 呼び出し側（UI）で選択中の声を fallbackVoice に切り替えること。
+   */
+  async fetchNarrationBufferSmart(text: string, rate: number, voice: string, pitch: number, fallbackVoice: string): Promise<{ buffer: AudioBuffer; usedFallback: boolean }> {
+    if (!isAivisVoice(voice) || !fallbackVoice) {
+      return { buffer: await this.fetchNarrationBuffer(text, rate, voice, pitch), usedFallback: false };
+    }
+    try {
+      return { buffer: await this.fetchNarrationBuffer(text, rate, voice, pitch), usedFallback: false };
+    } catch (e) {
+      console.warn('AivisSpeechに接続できないため、既存の声に切り替えます:', e);
+      return { buffer: await this.fetchNarrationBuffer(text, rate, fallbackVoice, pitch), usedFallback: true };
+    }
   }
 
   /** 再生速度を pitch 倍にして書き出し直す（声の高さが pitch 倍になり、長さは 1/pitch になる） */

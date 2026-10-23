@@ -31,6 +31,7 @@ import { DEFAULT_CONTENT_SECTIONS, CONTENT_SECTION_LABELS, availableContentSecti
 import { voiceGender } from "@/lib/videoAnalysts";
 import { LongAnalysisRenderer } from "@/lib/videoLongAnalysisRenderer";
 import { AudioMixer, setTtsBaseUrl, getTtsBaseUrl } from "@/lib/videoAudioMixer";
+import { listAivisVoices, isAivisVoice, getAivisUrl } from "@/lib/videoAivisClient";
 import { VideoExporter } from "@/lib/videoExporter";
 import { listBgms, saveBgm, deleteBgm } from "@/lib/videoBgmLibrary";
 import { listBackgrounds, saveBackground, deleteBackground } from "@/lib/videoBackgroundLibrary";
@@ -6298,7 +6299,11 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
   const mixer = () => (mixerRef.current ??= new AudioMixer());
   const [voices, setVoices] = useState([]);
   const [voicesLoaded, setVoicesLoaded] = useState(false);
-  const [voiceIndex, setVoiceIndex] = useState("");
+  // [AivisSpeech対応] 選んだ声は次回も使えるように保存する
+  const [voiceIndex, setVoiceIndexState] = useState(() => { try { return localStorage.getItem("video-voice-v1") || ""; } catch (e) { return ""; } });
+  const setVoiceIndex = (v) => { setVoiceIndexState(v); try { localStorage.setItem("video-voice-v1", v); } catch (e) { /* 保存できなくても動作は続ける */ } };
+  // AivisSpeechに接続できなかった等の通知（声の選択欄の下に短く表示）
+  const [voiceNote, setVoiceNote] = useState("");
   // 速さ・高さ・不透明度・音量は、鍵ボタンでロックすると次回もこの値で再開する（localStorage）
   const [sliderLocks, setSliderLocks] = useState(loadSliderLocks);
   const toggleSliderLock = (key, currentValue) => {
@@ -6319,10 +6324,22 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
   const [rate, setRate] = useState(() => sliderInitValue("rate", 1.0));
   const [pitch, setPitch] = useState(() => sliderInitValue("pitch", 1.0));
   useEffect(() => {
-    mixer().listServerVoices().then((v) => { setVoices(v); setVoicesLoaded(true); }).catch(() => setVoicesLoaded(true));
+    let cancelled = false;
+    // [AivisSpeech対応] 既存のローカルTTSサーバーの声に加え、AivisSpeechが起動していれば末尾にその声を追加する。
+    // AivisSpeechが起動していない・接続できない場合は（listAivisVoices内部で）空配列になり、エラー表示は出さない。
+    (async () => {
+      const serverVoices = await mixer().listServerVoices().catch(() => []);
+      const aivisVoices = await listAivisVoices().catch(() => []);
+      if (cancelled) return;
+      setVoices([...serverVoices, ...aivisVoices]);
+      setVoicesLoaded(true);
+    })();
+    return () => { cancelled = true; };
   }, []);
   const avatarGender = avatarObj && curAvatar ? curAvatar.gender : "male"; // 動画のアバターが未登録のときは、声の候補を標準（男性）にする
   const voiceChoices = useMemo(() => voices.filter((v) => { const g = voiceGender(v); return g === null || g === avatarGender; }), [voices, avatarGender]);
+  // AivisSpeechの声が失敗したときに切り替える「既存の声」（ローカルTTSサーバーの声）の候補
+  const nonAivisVoiceChoices = useMemo(() => voiceChoices.filter((v) => !isAivisVoice(v)), [voiceChoices]);
   useEffect(() => {
     if (voiceChoices.length > 0 && !voiceChoices.includes(voiceIndex)) setVoiceIndex(voiceChoices[0]);
   }, [voiceChoices, voiceIndex]);
@@ -6450,8 +6467,19 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
     setTtsError(false);
     let failed = false;
     const bufs = [];
+    // [AivisSpeech対応] AivisSpeechの声で失敗したら、既存の声（ローカルTTSサーバー）に自動で切り替える
+    const fallbackVoice = nonAivisVoiceChoices[0] ?? "";
+    let activeVoice = voiceIndex;
     for (let i = 0; i < scenes.length; i++) {
-      try { bufs.push(await mixer().fetchNarrationBuffer(readings[i], r, voiceIndex, pitch)); }
+      try {
+        const { buffer, usedFallback } = await mixer().fetchNarrationBufferSmart(readings[i], r, activeVoice, pitch, fallbackVoice);
+        bufs.push(buffer);
+        if (usedFallback && activeVoice !== fallbackVoice) {
+          activeVoice = fallbackVoice;
+          setVoiceIndex(fallbackVoice);
+          setVoiceNote("AivisSpeechに接続できなかったため、既存の声に切り替えました。");
+        }
+      }
       catch (e) { console.error("TTS error:", e); failed = true; bufs.push(null); }
     }
     const durs = scenes.map((sc, i) => Math.max(sc.minSec, bufs[i] ? 0.3 + bufs[i].duration + 0.8 : 0));
@@ -6517,7 +6545,14 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
   };
 
   const previewScene = async (i) => {
-    try { mixer().stopNarration(); const b = await mixer().fetchNarrationBuffer(readings[i], rate, voiceIndex, pitch); if (b) mixer().playBufferAfter(b, 0); }
+    try {
+      mixer().stopNarration();
+      // [AivisSpeech対応] AivisSpeechの声で失敗したら、既存の声（ローカルTTSサーバー）に自動で切り替える
+      const fallbackVoice = nonAivisVoiceChoices[0] ?? "";
+      const { buffer: b, usedFallback } = await mixer().fetchNarrationBufferSmart(readings[i], rate, voiceIndex, pitch, fallbackVoice);
+      if (usedFallback) { setVoiceIndex(fallbackVoice); setVoiceNote("AivisSpeechに接続できなかったため、既存の声に切り替えました。"); }
+      if (b) mixer().playBufferAfter(b, 0);
+    }
     catch (e) { console.error(e); alert(`音声合成に失敗しました（ローカルTTSサーバー ${getTtsBaseUrl()} が起動しているか確認してください）\n${e?.message ?? e}`); }
   };
 
@@ -6969,10 +7004,14 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
           {/* 声・速度 */}
           <div>
             <div className="text-[11px] font-semibold mb-1.5" style={{ color: C.textMuted }}>声</div>
-            <select value={voiceIndex} onChange={(e) => setVoiceIndex(e.target.value)} className="text-xs px-2 py-1.5 rounded w-full mb-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }}>
+            <select value={voiceIndex} onChange={(e) => setVoiceIndex(e.target.value)} className="text-xs px-2 py-1.5 rounded w-full mb-1" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }}>
               {voiceChoices.length === 0 && <option value="">（音声が見つかりません）</option>}
-              {voiceChoices.map((v) => <option key={v} value={v}>{v}</option>)}
+              {voiceChoices.map((v) => <option key={v} value={v}>{v.replace(/^aivis:\d+:/, "Aivis：").replace(/^(sapi|oc):/, "")}</option>)}
             </select>
+            {voiceNote && <div className="text-[10px] mb-1.5" style={{ color: C.rust }}>{voiceNote}</div>}
+            <p className="text-[10px] mb-2" style={{ color: C.textDim }}>
+              AivisSpeech（無料のローカル音声合成）を起動しておくと、声の候補に自動で追加されます。候補に出ない場合は、AivisSpeechの設定（エンジン起動オプション）でCORSを「all」にしてください。本番ページからの接続はブラウザの制限でブロックされることがあり、その場合は既存の声に自動で切り替わります（既定 {getAivisUrl()}）。
+            </p>
             <div className="flex items-center gap-3 flex-wrap">
               <div className="flex items-center gap-1.5">
                 <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>速さ<input type="range" min={0.6} max={2.0} step={0.05} value={rate} onChange={(e) => { const v = Number(e.target.value); setRate(v); updateLockedValueIfLocked("rate", v); }} />{rate.toFixed(2)}x</label>
