@@ -9,6 +9,7 @@
 // dd-dashboard本体はJS（.jsx）で型を持たないため、ここでは data/d を緩く受け取る。
 
 import { LongMd, buildMdScenes, SP500_KANA, tickerKana, ComposedSectionId } from './videoLongMd';
+import { classifyDdCategory, freqPerYearFromP, freqLabelFromP } from './ddCategory';
 import { buildSeriesCatalog, resolveCustomScene, CustomSceneSpec, ResolvedCustomScene, SeriesCatalog, ScalarCatalog } from './videoCustomScene';
 import { CrashRow, UpdateStats, computeUpdateStats } from './videoMarketUpdate';
 import { StockDataPoint } from './videoTypes';
@@ -200,6 +201,37 @@ export function buildVideoLongform(data: any, d: any, instrumentNameKana: string
       avg: data.daily_distribution.avg_daily_return_pct,
       buckets: (data.daily_distribution.buckets || []).map((b: any) => ({ label: b.label, v: b.share_pct })),
     } : null,
+    dayChange: (() => {
+      // [Stage D-6] 冒頭「前日比」スライド用。頻度はcrashFrequency（-45%まで）ではなく、
+      // ダッシュボードのtrackRecord.finalReach（DD-3%到達局面からの最終到達確率×ddFreqPerYear）を使う
+      // （ユーザー確認済み：添付のダッシュボード実績グラフと同じ統計源を使うため）。
+      const tr = d.trackRecord;
+      if (!tr || !stats) return null;
+      const bucket = classifyDdCategory(stats.dd);
+      const bucketLabel = bucket.thresholdPct === 0 ? '-3%' : `${bucket.thresholdPct}%`;
+      const bucketRow = (tr.finalReach ?? []).find((r: any) => r.label === bucketLabel) ?? null;
+      return {
+        pct: stats.dayChange,
+        ddPct: stats.dd,
+        isNewAth: stats.dd >= -0.005,
+        category: {
+          label: bucket.label,
+          freqPerYear: bucketRow ? freqPerYearFromP(bucketRow.p, tr.ddFreqPerYear) : null,
+          freqLabel: bucketRow ? freqLabelFromP(bucketRow.p, tr.ddFreqPerYear) : null,
+        },
+        recent7: d.FULL.slice(-7).map((pt: any) => ({ date: pt.date.toISOString().slice(0, 10), price: pt.price })),
+      };
+    })(),
+    finalReach: (() => {
+      const tr = d.trackRecord;
+      if (!tr) return null;
+      return {
+        totalYears: tr.totalYears,
+        n: tr.n,
+        currentLabel: d.currentTLabel ?? null,
+        rows: (tr.finalReach ?? []).map((r: any) => ({ label: r.label, p: r.p, hits: r.hits })),
+      };
+    })(),
   };
 
   const catalog = buildSeriesCatalog(dailyPoints, y, data.data_last_date);

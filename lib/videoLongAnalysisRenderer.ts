@@ -2,7 +2,7 @@
 // SummaryMd（sm）・xScene（buildSummaryScenes由来のx_*シーン）は移植しない（dd-dashboardはLongMdを直接組み立てるため発生しない経路）。
 // 長尺（16:9）「S&P500の分析」の描画。論理サイズは 960×540（実際のキャンバスはその倍率）。
 // 左：ショート用チャート（縦）＋要点カード／詳細分析は左〜中央を使って大きく描く／右：アナリストと吹き出し
-import { UpdateStats, fmtPct, crashList } from './videoMarketUpdate';
+import { UpdateStats, fmtPct } from './videoMarketUpdate';
 import { DISCLAIMERS } from './videoDisclaimer';
 import { LongMd } from './videoLongMd';
 import { LongBasis, valueAt } from './videoLongBasis';
@@ -842,6 +842,66 @@ export class LongAnalysisRenderer {
       ctx.restore();
       return;
     }
+    if (id === 'dayChange') {
+      // [Stage D-6] 冒頭「前日比」スライド。前日比・現在のDD・その節目の発生頻度＋カテゴリー名
+      // （最高値更新中はDD文の代わりに「最高値を更新しました」）・直近7営業日の折れ線（最初の点=0%基準）を表示する。
+      const dc = md?.dayChange;
+      if (!dc) { this.heading('近況：前日比', `${DATE}（米国時間）基準`, p); return; }
+      this.heading('近況：前日比', `${DATE}（米国時間）基準`, p);
+      const chgColor = dc.pct >= 0 ? UP : DOWN;
+      ctx0.save(); ctx0.globalAlpha *= ease(sub(p, 0.05, 0.25));
+      this.txt(`前日比 ${sg(dc.pct)}`, 24, 156, 48, chgColor, { bold: true });
+      ctx0.restore();
+
+      ctx0.save(); ctx0.globalAlpha *= ease(sub(p, 0.22, 0.42));
+      if (dc.isNewAth) {
+        this.txt('最高値を更新しました', 24, 206, 22, GREEN, { bold: true, maxW: PW - 48 });
+      } else {
+        this.txt(`現在のDD（ドローダウン） ${dc.ddPct.toFixed(1)}%`, 24, 206, 20, DOWN, { bold: true, maxW: 340 });
+        if (dc.category.freqLabel) this.txt(`${dc.category.freqLabel}発生する`, PW - 24, 184, 13, WHITE, { alpha: 0.75, align: 'right', maxW: 300 });
+        this.txt(`「${dc.category.label}」`, PW - 24, 210, 22, AMBER, { bold: true, align: 'right', maxW: 300 });
+      }
+      ctx0.restore();
+
+      const pts7 = dc.recent7 ?? [];
+      if (pts7.length >= 2) {
+        const L = 24, R = PW - 24, T = 248, B = 452;
+        ctx0.fillStyle = 'rgba(255,255,255,0.04)'; ctx0.fillRect(L, T, R - L, B - T);
+        const base = pts7[0].price;
+        const changes = pts7.map(pt => base !== 0 ? ((pt.price / base) - 1) * 100 : 0);
+        const maxAbs = Math.max(2, ...changes.map(v => Math.abs(v))) * 1.25;
+        const yv = (v: number) => T + ((maxAbs - v) / (maxAbs * 2)) * (B - T);
+        ctx0.strokeStyle = 'rgba(255,255,255,0.4)'; ctx0.lineWidth = 1;
+        ctx0.beginPath(); ctx0.moveTo(L, yv(0)); ctx0.lineTo(R, yv(0)); ctx0.stroke();
+        this.txt('0%（7営業日前）', L + 2, yv(0) - 6, 10, WHITE, { alpha: 0.5 });
+
+        const n = pts7.length;
+        const xAt = (i: number) => L + (i / (n - 1)) * (R - L);
+        const netChg = changes[n - 1];
+        const lineColor = netChg >= 0 ? UP : DOWN;
+        const k = ease(sub(p, 0.4, 0.92));
+        const visibleCount = Math.max(1, Math.min(n, Math.round(k * (n - 1)) + 1));
+
+        ctx0.save(); ctx0.strokeStyle = `rgba(${lineColor},1)`; ctx0.lineWidth = 2.4; ctx0.lineJoin = 'round';
+        ctx0.beginPath();
+        for (let i = 0; i < visibleCount; i++) { const x = xAt(i), y = yv(changes[i]); if (i === 0) ctx0.moveTo(x, y); else ctx0.lineTo(x, y); }
+        ctx0.stroke(); ctx0.restore();
+
+        for (let i = 0; i < visibleCount; i++) {
+          const x = xAt(i), y = yv(changes[i]);
+          ctx0.fillStyle = `rgba(${lineColor},1)`;
+          ctx0.beginPath(); ctx0.arc(x, y, 3.5, 0, Math.PI * 2); ctx0.fill();
+          const dtm = pts7[i].date.match(/^\d{4}-(\d{2})-(\d{2})$/);
+          const label = dtm ? `${parseInt(dtm[1], 10)}/${parseInt(dtm[2], 10)}` : pts7[i].date;
+          this.txt(label, x, B + 16, 10, WHITE, { alpha: 0.55, align: 'center' });
+        }
+        if (visibleCount === n) {
+          const lastX = xAt(n - 1), lastY = yv(changes[n - 1]);
+          this.txt(sg(netChg), lastX, lastY - 12, 13, lineColor, { bold: true, align: 'center' });
+        }
+      }
+      return;
+    }
     if (id === 'ytdChange') {
       // 2026-10-22のユーザー指示により、棒グラフ（今年/過去の平均/過去の中央値の単純比較）から
       // 動的な折れ線グラフ（今年の年初来推移と、過去の平均・中央値の推移を重ねる）に変更。
@@ -954,17 +1014,27 @@ export class LongAnalysisRenderer {
       return;
     }
     if (id === 'crashFreq') {
-      this.heading('近況：調整下落の頻度', '過去の実績から見た、下落の発生頻度', p);
-      const rowsC = crashList(s);
-      this.txt('下落幅ごとの発生間隔', 24, 118, 15, WHITE, { bold: true, alpha: 0.85 });
-      rowsC.forEach((r, i) => {
-        const y = 140 + i * 58;
-        const a = ease(sub(p, 0.12 + i * 0.12, 0.4 + i * 0.12));
-        ctx0.save(); ctx0.globalAlpha *= a;
-        ctx0.fillStyle = 'rgba(255,255,255,0.07)'; ctx0.fillRect(24, y, PW - 48, 48);
-        this.txt(`-${r.level}%超の下落（${r.name}）`, 38, y + 20, 15, WHITE, { bold: true, maxW: 320 });
-        this.txt(r.interval || '—', 400, y + 20, 18, r.level >= 30 ? DOWN : AMBER, { bold: true });
-        this.txt(r.lastYear ? `前回 ${r.lastYear}年` : '発生なし', 38, y + 40, 13, WHITE, { alpha: 0.8 });
+      // [Stage D-6] 「下落の頻度」スライド。ダッシュボードのtrackRecord.finalReach（DD-3%到達局面からの
+      // 最終到達確率、15行）をコンパクトな横棒リストで表示し、現在の到達節目の行を枠で囲って強調する。
+      const fr = md?.finalReach;
+      if (!fr || !fr.rows.length) { this.heading('近況：下落の頻度', 'データ不足のため表示できません', p); return; }
+      this.heading('近況：下落の頻度', `DD-3%到達からの最終到達確率（過去${fr.totalYears.toFixed(0)}年・${fr.n}局面）`, p);
+      const rows = fr.rows;
+      const rowH = Math.min(25, Math.floor(362 / rows.length));
+      const top = 104;
+      const barX = 230, barW = 300;
+      const maxP = Math.max(...rows.map(r => r.p ?? 0), 10);
+      rows.forEach((r, i) => {
+        const y = top + i * rowH;
+        const k = ease(sub(p, 0.03 + i * 0.045, 0.35 + i * 0.045));
+        const isCurrent = !!fr.currentLabel && r.label === fr.currentLabel;
+        ctx0.save(); ctx0.globalAlpha *= k;
+        this.txt(r.label, 28, y + rowH - 7, 12, isCurrent ? AMBER : WHITE, { bold: isCurrent, maxW: 80 });
+        const pv = r.p ?? 0;
+        ctx0.fillStyle = 'rgba(255,255,255,0.08)'; ctx0.fillRect(barX, y, barW, rowH - 5);
+        ctx0.fillStyle = `rgba(${isCurrent ? AMBER : GREEN},0.85)`; ctx0.fillRect(barX, y, (pv / maxP) * barW, rowH - 5);
+        this.txt(r.p !== null ? `${r.p.toFixed(1)}%（${r.hits}件）` : '—', barX + barW + 10, y + rowH - 7, 11, WHITE, { alpha: 0.9, maxW: 96 });
+        if (isCurrent) { ctx0.strokeStyle = `rgba(${AMBER},0.9)`; ctx0.lineWidth = 2; ctx0.strokeRect(20, y - 2, PW - 40, rowH - 2); }
         ctx0.restore();
       });
       return;

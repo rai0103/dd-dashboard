@@ -26,6 +26,7 @@ import { buildStatsTable, computeMddHoldProbability, depthBucketIndex, DEPTH_BUC
 import { computeYearForecast, yearForecastTrajectory, yearEndProjectionPath, computeNextYearForecast, computeQqqSpxCorrelation, buildAnnualReturns, presidentialCycleAverage, seasonalMonthlyAverages } from "@/lib/yearForecast";
 import { buildQqqEquivalentSeries, parseNdxPreQqqCsv } from "@/lib/qqqSynthetic";
 import { buildVideoLongform, SP500_KANA, tickerKana } from "@/lib/videoDataAdapter";
+import { classifyDdCategory } from "@/lib/ddCategory";
 import { DEFAULT_CONTENT_SECTIONS, CONTENT_SECTION_LABELS, availableContentSections } from "@/lib/videoLongMd";
 import { voiceGender } from "@/lib/videoAnalysts";
 import { LongAnalysisRenderer } from "@/lib/videoLongAnalysisRenderer";
@@ -482,20 +483,14 @@ function dayChangePct(dObj) {
   const prevPrice = dObj.FULL[dObj.FULL.length - 2].price;
   return ((dObj.last.price / prevPrice) - 1) * 100;
 }
-// 現在のDD（ドローダウン）の深さを「調整・下落・暴落・大暴落・歴史的暴落」の5段階に分類し、
-// その節目（crashFrequencyの該当行）の発生頻度（年に1度程度）をあわせて返す。
-// まだどの節目にも到達していない浅い下落は、最も軽い「調整」の節目（DD-10%超）を暫定カテゴリーとする。
-const DD_CATEGORY_BUCKETS = [
-  { label: "調整", thresholdPct: -10 },
-  { label: "下落", thresholdPct: -20 },
-  { label: "暴落", thresholdPct: -30 },
-  { label: "大暴落", thresholdPct: -40 },
-  { label: "歴史的暴落", thresholdPct: -45 },
-];
+// 現在のDD（ドローダウン）の深さを「調整・下落・暴落・大暴落・歴史的暴落」の5段階に分類し（lib/ddCategory.tsの共通定義）、
+// その節目の発生頻度（年に1度程度）をcrashFrequency（閾値は-10%〜-45%までしか無い）から引いて返す。
+// 歴史的暴落（-50%）の節目はcrashFrequencyに該当行が無いため、頻度の参照だけ実データの最深値-45%の行にクランプする
+// （カテゴリーの境界自体は-50%のまま。頻度表示のみの便宜的な代用）。
 function ddCategoryInfo(currentDD, crashFrequency) {
-  let bucket = DD_CATEGORY_BUCKETS[0];
-  for (const b of DD_CATEGORY_BUCKETS) { if (currentDD <= b.thresholdPct) bucket = b; }
-  const row = (crashFrequency || []).find((r) => r.threshold === bucket.thresholdPct);
+  const bucket = classifyDdCategory(currentDD);
+  const lookupThreshold = Math.max(bucket.thresholdPct, -45);
+  const row = (crashFrequency || []).find((r) => r.threshold === lookupThreshold);
   return { label: bucket.label, thresholdPct: bucket.thresholdPct, avgIntervalYears: row?.avgIntervalYears ?? null };
 }
 // 直近n営業日分の{date, price, dd}を古い順で返す（動画・ショート動画制作用の直近チャートデータとして利用）。
@@ -6060,6 +6055,8 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
   const [sceneEdits, setSceneEdits] = useState({});
   const [learned, setLearned] = useState(() => { try { const v = JSON.parse(localStorage.getItem("video-narr-learned-v1") || "{}"); return v && typeof v === "object" ? v : {}; } catch (e) { return {}; } });
   const [narrNote, setNarrNote] = useState("");
+  // [Stage D-6] 「場面とナレーション」の使い方説明・学習した読み方タグは、デフォルトで折りたたんで隠す
+  const [narrHelpOpen, setNarrHelpOpen] = useState(false);
   // --- AIチャットによるナレーション書き直し（Stage D-3） ---
   const [chatOpenKey, setChatOpenKey] = useState(null);
   const [chatText, setChatText] = useState("");
@@ -6315,6 +6312,9 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
   useEffect(() => { seekPosRef.current = seekPos; }, [seekPos]);
   // 動画の総時間（秒）。実測はprepareAudio（再生・書き出し時）で確定する。それまでは場面の最短秒数の合計を概算として使う
   const [totalSec, setTotalSec] = useState(0);
+  // [Stage D-6] 各場面の実秒数（ナレーション音声の長さ込み）。prepareAudio()の結果で確定する。
+  // 場面カードの所要時間バッジ（20秒以上は赤字）に使う。未確定（再生前）はsc.minSecを概算として使う
+  const [sceneDurs, setSceneDurs] = useState([]);
   const estimatedTotalSec = useMemo(() => scenes.reduce((a, sc) => a + (sc.minSec || 0), 0), [scenes]);
   const displayTotalSec = totalSec > 0 ? totalSec : estimatedTotalSec;
   const [isExporting, setIsExporting] = useState(false);
@@ -6375,6 +6375,7 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
     durs.reduce((acc, dur) => { starts.push(acc); return acc + dur; }, 0);
     const total = durs.reduce((a, b) => a + b, 0);
     setTotalSec(total);
+    setSceneDurs(durs);
     if (failed) setTtsError(true);
     return { bufs, durs, starts, total, failed };
   };
@@ -6779,18 +6780,27 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
 
           {/* 場面ごとのナレーション編集（通常の文章で表示。場面の長さは音声の長さに自動で合わせます） */}
           <div>
-            <div className="text-[11px] font-semibold mb-1.5" style={{ color: C.textMuted }}>場面とナレーション（{scenes.length}場面）</div>
-            <div className="text-[10px] mb-1.5" style={{ color: C.textDim }}>通常の文章で表示します。「試聴」で音声を確かめ、読み方が違う箇所だけを<b>ひらがな</b>に直して枠の外をクリックすると、直した箇所が<span style={{ color: "#2ee6b8", fontWeight: 600 }}>緑</span>になり、読み上げだけが変わります（動画の表示は変わりません）。S&P500 などの用語は学習して、次回以降も同じ読みになります。</div>
-            {narrNote && <div className="text-[10px] mb-1.5" style={{ color: "#2ee6b8" }}>{narrNote}</div>}
-            {Object.keys(learned).length > 0 && (
-              <div className="text-[10px] mb-1.5" style={{ color: C.textDim }}>学習した読み方：
-                {Object.entries(learned).map(([k, v]) => (
-                  <span key={k} className="inline-flex items-center gap-1 mr-1.5 px-1 rounded" style={{ border: `1px solid ${C.borderSoft}`, color: C.text }}>{v.surface} → {v.to}
-                    <button title="削除" onClick={() => { const nx = { ...learned }; delete nx[k]; saveLearnedMap(nx); }} style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer" }}>×</button>
-                  </span>
-                ))}
-              </div>
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="text-[11px] font-semibold" style={{ color: C.textMuted }}>場面とナレーション（{scenes.length}場面）</div>
+              <button onClick={() => setNarrHelpOpen((v) => !v)} className="text-[10px] flex items-center gap-0.5" style={{ color: C.textDim, background: "transparent", border: "none", cursor: "pointer" }}>
+                使い方<ChevronRight size={11} style={{ transform: narrHelpOpen ? "rotate(90deg)" : "none", transition: "transform 0.15s" }} />
+              </button>
+            </div>
+            {narrHelpOpen && (
+              <>
+                <div className="text-[10px] mb-1.5" style={{ color: C.textDim }}>通常の文章で表示します。「試聴」で音声を確かめ、読み方が違う箇所だけを<b>ひらがな</b>に直して枠の外をクリックすると、直した箇所が<span style={{ color: "#2ee6b8", fontWeight: 600 }}>緑</span>になり、読み上げだけが変わります（動画の表示は変わりません）。S&P500 などの用語は学習して、次回以降も同じ読みになります。</div>
+                {Object.keys(learned).length > 0 && (
+                  <div className="text-[10px] mb-1.5" style={{ color: C.textDim }}>学習した読み方：
+                    {Object.entries(learned).map(([k, v]) => (
+                      <span key={k} className="inline-flex items-center gap-1 mr-1.5 px-1 rounded" style={{ border: `1px solid ${C.borderSoft}`, color: C.text }}>{v.surface} → {v.to}
+                        <button title="削除" onClick={() => { const nx = { ...learned }; delete nx[k]; saveLearnedMap(nx); }} style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer" }}>×</button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </>
             )}
+            {narrNote && <div className="text-[10px] mb-1.5" style={{ color: "#2ee6b8" }}>{narrNote}</div>}
             <div className="flex flex-col gap-1.5 max-h-96 overflow-y-auto pr-1">
               {scenes.map((sc, i) => {
                 const edited = sceneEdits[sceneKey(i, sc.id)];
@@ -6810,6 +6820,11 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
                       <span className="text-[10px] flex items-center gap-1" style={{ color: isCurrent ? C.teal : C.textDim, fontWeight: isCurrent ? 600 : 400 }}>
                         {isCurrent && <Play size={9} />}
                         {i + 1}. {sc.caption}
+                        {(() => {
+                          const estDur = sceneDurs[i] ?? sc.minSec;
+                          const isLong = estDur >= 20;
+                          return <span className="ml-1" style={{ color: isLong ? C.rust : C.textDim, fontWeight: isLong ? 700 : 400 }}>（{estDur.toFixed(0)}秒）</span>;
+                        })()}
                       </span>
                       <div className="flex items-center gap-2">
                         {edited && <button onClick={() => resetSceneText(i, sc)} className="text-[10px]" style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer" }}>元に戻す</button>}

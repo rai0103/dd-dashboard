@@ -8,7 +8,7 @@ import { LongMd, buildMdScenes, SP500_KANA, ComposedSectionId } from './videoLon
 import { CustomSceneSpec } from './videoCustomScene';
 import { LongBasis } from './videoLongBasis';
 
-export type LongSceneId = 'open' | 'ytd' | 'ytdvs' | 'ath' | 'athcount' | 'updown' | 'outlook' | 'crash' | 'end' | 'position' | 'momentum' | 'risk' | 'range' | 'status' | 'bottom' | 'rolling' | 'forecast' | 'ddpace' | 'crashmd' | 'daily' | 'basis10' | 'basisCycle' | 'ytdChange' | 'athDrop' | 'yearEndTrack' | 'crashFreq' | 'x_open' | 'x_ytd' | 'x_recent' | 'x_ytdvs' | 'x_rolling' | 'x_ath' | 'x_episodes' | 'x_athcount' | 'x_updown' | 'x_outlook' | 'x_range' | 'x_crash' | 'x_end' | `custom:${string}`;
+export type LongSceneId = 'open' | 'ytd' | 'ytdvs' | 'ath' | 'athcount' | 'updown' | 'outlook' | 'crash' | 'end' | 'position' | 'momentum' | 'risk' | 'range' | 'status' | 'bottom' | 'rolling' | 'forecast' | 'ddpace' | 'crashmd' | 'daily' | 'basis10' | 'basisCycle' | 'dayChange' | 'ytdChange' | 'athDrop' | 'yearEndTrack' | 'crashFreq' | 'x_open' | 'x_ytd' | 'x_recent' | 'x_ytdvs' | 'x_rolling' | 'x_ath' | 'x_episodes' | 'x_athcount' | 'x_updown' | 'x_outlook' | 'x_range' | 'x_crash' | 'x_end' | `custom:${string}`;
 
 export interface LongScene {
   id: LongSceneId;

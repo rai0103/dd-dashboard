@@ -7,6 +7,7 @@ import { integerToKana, numberStringToKana, yearsToKana } from './videoReading';
 import { monthDayKana, pctKana, nichiKana, UpdateStats, buildUpdateScenes } from './videoMarketUpdate';
 import { LongBasis } from './videoLongBasis';
 import { CustomSceneSpec } from './videoCustomScene';
+import { DD_CATEGORY_KANA } from './ddCategory';
 
 export interface LongMd {
   y: number; m: number; d: number;
@@ -19,6 +20,17 @@ export interface LongMd {
   ddpace: { athCount: number; perYear: number; every: number; buckets: { range: string; n: number; ref: boolean; days: number; clean: number }[]; phases: number | null } | null;
   crash: { level: number; count: string; ref: boolean; interval: string; last: string; prob: number; prevAvg: string; prevPlus: string; a1: string; a3: string; a5: string }[];
   daily: { up: number; down: number; avg: number; buckets: { label: string; v: number }[] } | null;
+  /** [Stage D-6] 冒頭「前日比」スライド用。前日比・現在のDD・その節目の発生頻度・直近7営業日の推移 */
+  dayChange: {
+    pct: number; ddPct: number; isNewAth: boolean;
+    category: { label: string; freqPerYear: number | null; freqLabel: string | null };
+    recent7: { date: string; price: number }[];
+  } | null;
+  /** [Stage D-6] 「下落の頻度」スライド用。trackRecord.finalReach（DD-3%到達局面からの最終到達確率、15行）そのもの */
+  finalReach: {
+    totalYears: number; n: number; currentLabel: string | null;
+    rows: { label: string; p: number | null; hits: number }[];
+  } | null;
 }
 
 // ---------- 読み（ひらがな） ----------
@@ -45,6 +57,13 @@ export const pk = (v: number, signed = true) => {
   if (Number.isInteger(r)) return `${signed && r !== 0 ? (v >= 0 ? 'ぷらす' : 'まいなす') : ''}${integerToKana(r)}ぱーせんと`;
   return pctKana(v, signed);
 };
+/** [Stage D-6] 「年に1.7回」「3.0年に1度」等の頻度を読み上げる（ddCategory.freqLabelFromPと同じ数値を、かなで読む版） */
+function freqKana(perYear: number | null): string {
+  if (perYear === null || !Number.isFinite(perYear) || perYear <= 0) return 'ひんどが、ふめいで';
+  if (perYear >= 1) return `ねんに、やく、${numberStringToKana(perYear.toFixed(1))}かい`;
+  const years = 1 / perYear;
+  return `${numberStringToKana(years.toFixed(1))}ねんに、やく、いちど`;
+}
 export const lvKana = (n: number) => `${integerToKana(n)}ぱーせんと`.replace(/じゅうぱー/, 'じゅっぱー');
 const rangeKana = (r: string): string => {
   const m = r.match(/^-(\d+)〜-(\d+)%$/);
@@ -85,16 +104,17 @@ export function tickerKana(symbol: string): string {
 }
 export const SP500_KANA = 'えすあんどぴーごひゃく';
 
-export type ContentSectionId = 'ytdChange' | 'athDrop' | 'yearEndTrack' | 'crashFreq' | 'status' | 'bottom' | 'rolling' | 'forecast' | 'basis10' | 'basisCycle' | 'ddpace' | 'crashmd' | 'daily';
+export type ContentSectionId = 'dayChange' | 'ytdChange' | 'athDrop' | 'yearEndTrack' | 'crashFreq' | 'status' | 'bottom' | 'rolling' | 'forecast' | 'basis10' | 'basisCycle' | 'ddpace' | 'crashmd' | 'daily';
 /** 既存の構成候補（ContentSectionId）に、AIがチャットで生成したカスタム場面（`custom:${uuid}`）を混在させた型（Stage D-4） */
 export type ComposedSectionId = ContentSectionId | `custom:${string}`;
-/** 既定の構成：ショート動画（近況解説）と同じ4項目（騰落率／ATHからの下落率／年末までの過去実績／調整下落の頻度）。ショートから長尺への導線として、同じ切り口で始める */
-export const DEFAULT_CONTENT_SECTIONS: ContentSectionId[] = ['ytdChange', 'athDrop', 'yearEndTrack', 'crashFreq'];
+/** 既定の構成：ショート動画（近況解説）と同じ切り口＋冒頭の前日比（Stage D-6で追加）。ショートから長尺への導線として、同じ切り口で始める */
+export const DEFAULT_CONTENT_SECTIONS: ContentSectionId[] = ['dayChange', 'ytdChange', 'athDrop', 'yearEndTrack', 'crashFreq'];
 export const CONTENT_SECTION_LABELS: Record<ContentSectionId, string> = {
+  dayChange: '近況：前日比',
   ytdChange: '近況：騰落率',
   athDrop: '近況：ATHからの下落率',
   yearEndTrack: '近況：年末までの過去実績',
-  crashFreq: '近況：調整下落の頻度',
+  crashFreq: '近況：下落の頻度',
   status: '近況（詳細一括版）',
   bottom: '底値判定',
   rolling: 'ローリングリターン',
@@ -109,8 +129,18 @@ export const CONTENT_SECTION_LABELS: Record<ContentSectionId, string> = {
 export interface MdScene { id: string; reading: string; minSec: number; caption: string }
 
 /** 「近況」「底値判定」等の場面を1つだけ作るビルダーの一覧。対象データが無いものはnullを返す（構成UIの選択可否判定にも使う） */
-function contentSectionBuilders(md: LongMd, basis: LongBasis | null | undefined, stats?: UpdateStats | null): Record<ContentSectionId, () => MdScene | null> {
+function contentSectionBuilders(md: LongMd, basis: LongBasis | null | undefined, stats?: UpdateStats | null, instrumentNameKana: string = SP500_KANA): Record<ContentSectionId, () => MdScene | null> {
   return {
+    dayChange: () => {
+      const dc = md.dayChange;
+      if (!dc) return null;
+      const ddPart = dc.isNewAth
+        ? 'さいたかねを、こうしんしました。'
+        : `げんざいの、どろーだうんは、${pk(dc.ddPct)}で、${freqKana(dc.category.freqPerYear)}、はっせいする、${DD_CATEGORY_KANA[dc.category.label] ?? kz(dc.category.label)}です。`;
+      const r = `${instrumentNameKana}は、まえびひ、${pk(dc.pct)}。${ddPart}`;
+      const sign = dc.pct >= 0 ? '+' : '';
+      return { id: 'dayChange', minSec: 9, reading: r, caption: `近況：前日比 ${sign}${dc.pct.toFixed(2)}%` };
+    },
     ytdChange: () => {
       if (!stats) return null;
       const upd = buildUpdateScenes(stats);
@@ -141,11 +171,14 @@ function contentSectionBuilders(md: LongMd, basis: LongBasis | null | undefined,
       return { id: 'yearEndTrack', minSec: outlook.minSec, reading: outlook.reading, caption: `近況：年末までに上昇した年は ${o.posCount}/${o.n}年（${o.posProb.toFixed(0)}%）` };
     },
     crashFreq: () => {
-      if (!stats) return null;
-      const upd = buildUpdateScenes(stats);
-      const crash = upd.find(x => x.id === 'crash');
-      if (!crash) return null;
-      return { id: 'crashFreq', minSec: crash.minSec, reading: crash.reading, caption: '近況：調整〜暴落の発生頻度' };
+      const fr = md.finalReach;
+      if (!fr) return null;
+      const row = (label: string) => fr.rows.find(x => x.label === label) ?? null;
+      const pOf = (row: { p: number | null } | null) => (row && row.p !== null ? pk(row.p, false) : 'ふめい');
+      const r5 = row('-5%'), r10 = row('-10%'), r20 = row('-20%'), r30 = row('-30%'), r50 = row('-50%以上');
+      const totalYearsInt = Math.round(fr.totalYears);
+      const r = `かこ、${integerToKana(totalYearsInt)}ねんかんの、どろーだうん、さいしゅうとうたつかくりつは、まいなす、さんぱーせんとに、たっした、${integerToKana(fr.n)}かいに、たいして、まいなす、ごぱーせんとが、${pOf(r5)}、まいなす、じゅっぱーせんとが、${pOf(r10)}、まいなす、にじゅっぱーせんとが、${pOf(r20)}、まいなす、さんじゅっぱーせんとが、${pOf(r30)}、まいなす、ごじゅっぱーせんと、いじょうが、${pOf(r50)}、はっせい、しています。`;
+      return { id: 'crashFreq', minSec: 18, reading: r, caption: `近況：下落の頻度（過去${fr.totalYears.toFixed(0)}年・${fr.n}局面）` };
     },
     status: () => {
       const st = md.status;
@@ -242,7 +275,7 @@ export function buildMdScenes(md: LongMd, basis?: LongBasis | null, instrumentNa
   const dateJ = `${md.y}年${md.m}月${md.d}日`;
   sc.push({ id: 'open', minSec: 5, reading: `${dateK}、${instrumentNameKana}の、ぶんせきを、れぽーとします。`, caption: `${dateJ}、S&P500の分析をレポートします。` });
 
-  const builders = contentSectionBuilders(md, basis, stats);
+  const builders = contentSectionBuilders(md, basis, stats, instrumentNameKana);
   const customById = new Map((customScenes ?? []).map((c) => [c.id, c] as const));
   for (const id of sections) {
     if (typeof id === 'string' && id.startsWith('custom:')) {

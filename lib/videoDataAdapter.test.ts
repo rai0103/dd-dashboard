@@ -66,6 +66,15 @@ function makeData(FULL: { date: Date; price: number }[]) {
   };
 }
 
+// [Stage D-6] d.trackRecord（DD-3%到達局面からの最終到達確率等）の最小合成データ。
+// 実際のcomputeTrackRecordStats()と同じ形（FINAL_REACH_LEVELS + "-50%以上"の計15行）を手で用意する。
+function makeTrackRecord() {
+  const levels = [-5, -8, -10, -12, -15, -18, -20, -25, -30, -35, -40, -45, -50];
+  const rows = [{ label: "-3%", p: 100, hits: 40 }, ...levels.map((t, i) => ({ label: `${t}%`, p: Math.max(2, 60 - i * 4), hits: Math.max(1, 20 - i) }))];
+  rows.push({ label: "-50%以上", p: 3, hits: 1 });
+  return { totalYears: 95, n: 40, ddFreqPerYear: 2, finalReach: rows };
+}
+
 test("buildVideoLongform：MDテキストを経由せず、LongMd/UpdateStats/シーンを直接組み立てる", () => {
   const FULL = makeFull(11);
   const data = makeData(FULL);
@@ -105,11 +114,11 @@ test("crashRowsFromAnalysis / dailyPointsFromFull：単純なフィールド変�
 test("buildVideoLongform：sections引数で構成（場面の種類・順番）を指定できる。既定は近況（status）のみ", () => {
   const FULL = makeFull(15); // 大統領サイクル根拠（cycleSampleYears: 2014/2018/2022）が全てカバーされるよう十分な年数を用意
   const data = makeData(FULL);
-  const d = { FULL, currentDD: -4.2, mode: "調整", daysSinceATH: 12, athDate: FULL[FULL.length - 1].date };
+  const d = { FULL, currentDD: -4.2, mode: "調整", daysSinceATH: 12, athDate: FULL[FULL.length - 1].date, trackRecord: makeTrackRecord(), currentTLabel: "-3%" };
 
-  // 既定（sections省略）：ショート動画と同じ近況4点（騰落率→ATHからの下落率→年末までの過去実績→調整下落の頻度）
+  // 既定（sections省略）：Stage D-6で先頭に「前日比」が追加された近況5点（前日比→騰落率→ATHからの下落率→年末までの過去実績→下落の頻度）
   const def = buildVideoLongform(data, d);
-  assert.deepEqual(def.scenes.map((s) => s.id), ["open", "ytdChange", "athDrop", "yearEndTrack", "crashFreq", "end"], "既定はopen→近況4点→endの順");
+  assert.deepEqual(def.scenes.map((s) => s.id), ["open", "dayChange", "ytdChange", "athDrop", "yearEndTrack", "crashFreq", "end"], "既定はopen→近況5点→endの順");
 
   // 明示的に指定した順番・組み合わせでシーンが並ぶ（大統領サイクル根拠→底値判定→近況、の順）
   const custom = buildVideoLongform(data, d, SP500_KANA, ["basisCycle", "bottom", "status"]);
@@ -123,10 +132,10 @@ test("buildVideoLongform：sections引数で構成（場面の種類・順番）
 test("availableContentSections：このテストデータで選択可能な構成候補がすべて揃う", () => {
   const FULL = makeFull(15);
   const data = makeData(FULL);
-  const d = { FULL, currentDD: -4.2, mode: "調整", daysSinceATH: 12, athDate: FULL[FULL.length - 1].date };
+  const d = { FULL, currentDD: -4.2, mode: "調整", daysSinceATH: 12, athDate: FULL[FULL.length - 1].date, trackRecord: makeTrackRecord(), currentTLabel: "-3%" };
   const result = buildVideoLongform(data, d);
   const avail = availableContentSections(result.longMd, result.basis, result.stats);
-  for (const id of ["ytdChange", "athDrop", "yearEndTrack", "crashFreq", "status", "bottom", "rolling", "forecast", "basis10", "basisCycle", "ddpace", "crashmd", "daily"]) {
+  for (const id of ["dayChange", "ytdChange", "athDrop", "yearEndTrack", "crashFreq", "status", "bottom", "rolling", "forecast", "basis10", "basisCycle", "ddpace", "crashmd", "daily"]) {
     assert.ok(avail.includes(id), `${id}が選択候補に含まれる`);
   }
 });
@@ -206,4 +215,48 @@ test("buildVideoLongform：カスタム場面（chartType別）がscalarCatalog�
   assert.ok(donut.donut, "donutが解決される");
   assert.equal(donut.donut!.segments.length, 2);
   assert.deepEqual(donut.donut!.segments.map((sgm) => sgm.value), [54.0, 46.0]);
+});
+
+test("buildVideoLongform：dayChange/finalReach（Stage D-6）がtrackRecordから正しく構築される", () => {
+  const FULL = makeFull(11);
+  const data = makeData(FULL);
+  const trackRecord = makeTrackRecord();
+  const d = { FULL, currentDD: -4.2, mode: "調整", daysSinceATH: 12, athDate: FULL[FULL.length - 1].date, trackRecord, currentTLabel: "-3%" };
+  const result = buildVideoLongform(data, d);
+
+  // finalReach：trackRecordの値がそのまま（totalYears/n/currentLabel/各行）伝わる
+  const fr = result.longMd.finalReach;
+  assert.ok(fr, "finalReachが構築される");
+  assert.equal(fr!.totalYears, trackRecord.totalYears);
+  assert.equal(fr!.n, trackRecord.n);
+  assert.equal(fr!.currentLabel, "-3%");
+  assert.equal(fr!.rows.length, trackRecord.finalReach.length);
+  assert.deepEqual(fr!.rows[0], { label: "-3%", p: 100, hits: 40 });
+  assert.ok(fr!.rows.some((r) => r.label === "-50%以上"), "-50%以上の行が含まれる");
+
+  // dayChange：pct/ddPctはstats（価格系列から計算）由来、categoryはclassifyDdCategory(stats.dd)と一致、recent7は直近7点
+  const dc = result.longMd.dayChange;
+  assert.ok(dc, "dayChangeが構築される");
+  assert.equal(dc!.pct, result.stats!.dayChange);
+  assert.equal(dc!.ddPct, result.stats!.dd);
+  assert.equal(dc!.isNewAth, result.stats!.dd >= -0.005);
+  assert.ok(["調整", "下落", "暴落", "大暴落", "歴史的暴落"].includes(dc!.category.label));
+  assert.equal(dc!.recent7.length, 7, "直近7営業日が入る");
+  assert.deepEqual(
+    dc!.recent7.map((pt) => pt.price),
+    FULL.slice(-7).map((pt) => pt.price),
+  );
+  // 調整カテゴリー（-3%行、p=100、ddFreqPerYear=2）なら、年に2.0回程度の頻度になる
+  if (dc!.category.label === "調整") {
+    assert.equal(dc!.category.freqPerYear, 2);
+    assert.equal(dc!.category.freqLabel, "年に2.0回");
+  }
+
+  // trackRecordが無い（d.trackRecordが未定義）場合は、dayChange/finalReachともにnullになる（例外にならない）
+  const dNoTrack = { FULL, currentDD: -4.2, mode: "調整", daysSinceATH: 12, athDate: FULL[FULL.length - 1].date };
+  const resultNoTrack = buildVideoLongform(data, dNoTrack);
+  assert.equal(resultNoTrack.longMd.dayChange, null);
+  assert.equal(resultNoTrack.longMd.finalReach, null);
+  // crashFreq（finalReach依存）・dayChangeは構成から自然に外れ、open/endのみになる
+  assert.deepEqual(resultNoTrack.scenes.map((s) => s.id), ["open", "ytdChange", "athDrop", "yearEndTrack", "end"]);
 });
