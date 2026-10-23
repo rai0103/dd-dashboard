@@ -22,6 +22,7 @@ export interface LongAnalysisConfig {
   basis?: LongBasis | null; // 年末見通しの根拠（CSVから算出）
   md?: LongMd | null; // DDダッシュボードの長尺分析データ（あれば内容・数値はこちらを正とする）
   customScenes?: ResolvedCustomScene[]; // Stage D-4：チャットで生成したカスタム場面（系列データ解決済み）
+  sectionLabels?: Record<string, string>; // Stage D-7：「構成」リストの表示名（改名可）。見出し文言はこれを正とする
 }
 
 const LW = 960, LH = 540;
@@ -428,7 +429,7 @@ export class LongAnalysisRenderer {
     }
     if (md && id === 'status' && md.status) {
       const st = md.status;
-      this.heading('現在の状況', `${DATE}（米国時間）基準`, p);
+      this.heading(this.cfg.sectionLabels?.status ?? '近況（詳細一括版）', `${DATE}（米国時間）基準`, p);
       const cards: [string, string, string][] = [
         ['最高値（ATH）からの下落率', sg(st.dd), st.dd < -0.005 ? DOWN : GREEN],
         ['モード', st.mode || '—', GREEN],
@@ -486,7 +487,7 @@ export class LongAnalysisRenderer {
     }
     if (md && id === 'bottom' && md.bottom) {
       const bt = md.bottom;
-      this.heading('底値判定', '現在の下落が、底値として確定する確率', p);
+      this.heading(this.cfg.sectionLabels?.bottom ?? '底値判定', '現在の下落が、底値として確定する確率', p);
       const a = ease(sub(p, 0.15, 0.4));
       ctx0.save(); ctx0.globalAlpha *= a;
       if (bt.excluded && bt.mdd !== null && bt.level !== null) {
@@ -521,7 +522,7 @@ export class LongAnalysisRenderer {
       return;
     }
     if (md && id === 'rolling') {
-      this.heading('ローリングリターン', '基準日からさかのぼった各期間の騰落率（その期間、持ち続けた場合の成績）', p);
+      this.heading(this.cfg.sectionLabels?.rolling ?? 'ローリングリターン', '基準日からさかのぼった各期間の騰落率（その期間、持ち続けた場合の成績）', p);
       const mx = Math.max(1, ...md.rolling.map(r => Math.abs(r.v)));
       md.rolling.forEach((r, i) => {
         const a = ease(sub(p, 0.08 + i * 0.07, 0.3 + i * 0.07));
@@ -546,7 +547,7 @@ export class LongAnalysisRenderer {
     }
     if (md && id === 'forecast' && md.forecast) {
       const f = md.forecast;
-      this.heading('年末までの見通し', '複数指標の加重合成（過去の実績にもとづく目安です）', p);
+      this.heading(this.cfg.sectionLabels?.forecast ?? '年末見通し', '複数指標の加重合成（過去の実績にもとづく目安です）', p);
 
       // ---- フェーズA：表の各行（分析手法）が参照する年を、上から順にチャートへ重ね合わせる ----
       // 複数の行で同じ年が参照される場合は、最初に登場した行でだけ描く（重複なし）。
@@ -648,7 +649,7 @@ export class LongAnalysisRenderer {
       const bs = this.cfg.basis;
       const rec = bs.recent;
       const row = md.forecast?.rows.find(x => /直近10年平均/.test(x.name));
-      this.heading('年末見通しの根拠①　直近10年平均', '直近10年の各年の推移（前年末=100）と、今年の比較', p);
+      this.heading(this.cfg.sectionLabels?.basis10 ?? '直近10年根拠', '直近10年の各年の推移（前年末=100）と、今年の比較', p);
       const a0 = ease(sub(p, 0.05, 0.2));
       const up = rec.filter(x => x.ret > 0).length;
       const avg = rec.reduce((x, y) => x + y.ret, 0) / Math.max(1, rec.length);
@@ -714,7 +715,7 @@ export class LongAnalysisRenderer {
     if (md && id === 'basisCycle' && this.cfg.basis) {
       const bs = this.cfg.basis;
       const row = md.forecast?.rows.find(x => /大統領サイクル平均/.test(x.name));
-      this.heading('年末見通しの根拠②　大統領サイクル', `${md.status?.cycle ?? ''}　同じ区分の過去${bs.cycle.length}年と、今年の推移`, p);
+      this.heading(this.cfg.sectionLabels?.basisCycle ?? '大統領サイクル根拠', `${md.status?.cycle ?? ''}　同じ区分の過去${bs.cycle.length}年と、今年の推移`, p);
       const L = 46, R = PW - 20, T = 108, B = 292;
       ctx0.fillStyle = 'rgba(255,255,255,0.04)'; ctx0.fillRect(L, T, R - L, B - T);
       const all = bs.cycle.flatMap(c => c.pts.map(q => q.v));
@@ -766,7 +767,7 @@ export class LongAnalysisRenderer {
     }
     if (md && id === 'ddpace' && md.ddpace) {
       const dp = md.ddpace;
-      this.heading('DD局面とATH更新ペース', '最高値からの下落の深さ別に見た、回復までの実績', p);
+      this.heading(this.cfg.sectionLabels?.ddpace ?? 'DD局面・ATH更新ペース', '最高値からの下落の深さ別に見た、回復までの実績', p);
       const a0 = ease(sub(p, 0.08, 0.25));
       ctx0.save(); ctx0.globalAlpha *= a0;
       if (dp.athCount) this.txt(`ATH更新：全期間 ${dp.athCount}回（年平均 ${dp.perYear}回・平均 ${dp.every}日に1度）`, 24, 124, 17, GREEN, { bold: true, maxW: PW - 100 });
@@ -802,7 +803,7 @@ export class LongAnalysisRenderer {
       return;
     }
     if (md && id === 'crashmd') {
-      this.heading('暴落の発生確率と発生後のリターン', 'DDが節目を超える頻度と、その後の平均リターン', p);
+      this.heading(this.cfg.sectionLabels?.crashmd ?? '暴落の発生確率', 'DDが節目を超える頻度と、その後の平均リターン', p);
       const hy = 126;
       const hd: [string, number, CanvasTextAlign][] = [['節目', 24, 'left'], ['発生', 152, 'right'], ['間隔', 224, 'right'], ['前回発生', 234, 'left'], ['今後1年以内の確率', 346, 'left'], ['発生後1年', 524, 'right'], ['3年', 584, 'right'], ['5年', 640, 'right']];
       ctx0.save(); ctx0.globalAlpha *= ease(sub(p, 0.05, 0.2));
@@ -830,7 +831,7 @@ export class LongAnalysisRenderer {
     }
     if (md && id === 'daily' && md.daily) {
       const dl = md.daily;
-      this.heading('日次リターンの分布', '1日の騰落率ごとの割合', p);
+      this.heading(this.cfg.sectionLabels?.daily ?? '日次リターンの分布', '1日の騰落率ごとの割合', p);
       const a0 = ease(sub(p, 0.08, 0.25));
       ctx0.save(); ctx0.globalAlpha *= a0;
       this.txt('上昇日', 24, 134, 14, WHITE, { alpha: 0.7 }); this.txt(`${dl.up}%`, 24, 168, 32, UP, { bold: true });
@@ -907,8 +908,8 @@ export class LongAnalysisRenderer {
       // [Stage D-6] 冒頭「前日比」スライド。前日比・現在のDD・その節目の発生頻度＋カテゴリー名
       // （最高値更新中はDD文の代わりに「最高値を更新しました」）・直近7営業日の折れ線（最初の点=0%基準）を表示する。
       const dc = md?.dayChange;
-      if (!dc) { this.heading('近況：前日比', `${DATE}（米国時間）基準`, p); return; }
-      this.heading('近況：前日比', `${DATE}（米国時間）基準`, p);
+      if (!dc) { this.heading(this.cfg.sectionLabels?.dayChange ?? '前日比', `${DATE}（米国時間）基準`, p); return; }
+      this.heading(this.cfg.sectionLabels?.dayChange ?? '前日比', `${DATE}（米国時間）基準`, p);
       const chgColor = dc.pct >= 0 ? UP : DOWN;
       ctx0.save(); ctx0.globalAlpha *= ease(sub(p, 0.05, 0.25));
       this.txt(`前日比 ${sg(dc.pct)}`, 24, 156, 48, chgColor, { bold: true });
@@ -997,7 +998,7 @@ export class LongAnalysisRenderer {
         return;
       }
       // フォールバック：basisデータが無い場合（データ不足等）は従来の棒グラフ比較を表示
-      this.heading('近況：騰落率', `過去${s.pastYtd.length}年の同時期と比べる`, p);
+      this.heading(this.cfg.sectionLabels?.ytdChange ?? '騰落率', `過去${s.pastYtd.length}年の同時期と比べる`, p);
       const limY = Math.max(Math.abs(s.ytd), Math.abs(s.ytdAvg), Math.abs(s.ytdMedian), 5) * 1.15;
       const rowsY: [string, number][] = [[`今年（${s.year}年）`, s.ytd], ['過去の平均', s.ytdAvg], ['過去の中央値', s.ytdMedian]];
       rowsY.forEach(([l, v], i) => this.hbar(l, v, limY, 140 + i * 70, sub(p, 0.12 + i * 0.12, 0.5 + i * 0.12), fmtPct(v)));
@@ -1011,7 +1012,7 @@ export class LongAnalysisRenderer {
       // 2026-10-22のユーザー指示により、上側の棒グラフ・文章を詰めて、空いた下側に当年の
       // ドローダウン（ATHからの下落率）の推移を動的な面グラフで表示するよう変更。
       // 最大下落・現在値をハイライトする。データはstats.ddPath（既存、当年の下落率の推移）を使う。
-      this.heading('近況：ATHからの下落率', `${DATE}（米国時間）基準`, p);
+      this.heading(this.cfg.sectionLabels?.athDrop ?? 'ATHからの下落率', `${DATE}（米国時間）基準`, p);
       const limA = Math.max(10, Math.abs(s.ddMin) * 1.3);
       this.hbar('現在の最高値からの下落', s.dd, limA, 108, sub(p, 0.06, 0.3), `${s.dd.toFixed(1)}%`);
       this.hbar('今年の最大下落', s.ddMin, limA, 160, sub(p, 0.1, 0.34), `${s.ddMin.toFixed(1)}%`);
@@ -1078,8 +1079,8 @@ export class LongAnalysisRenderer {
       // [Stage D-6] 「下落の頻度」スライド。ダッシュボードのtrackRecord.finalReach（DD-3%到達局面からの
       // 最終到達確率、15行）をコンパクトな横棒リストで表示し、現在の到達節目の行を枠で囲って強調する。
       const fr = md?.finalReach;
-      if (!fr || !fr.rows.length) { this.heading('近況：下落の頻度', 'データ不足のため表示できません', p); return; }
-      this.heading('近況：下落の頻度', `DD-3%到達からの最終到達確率（過去${fr.totalYears.toFixed(0)}年・${fr.n}局面）`, p);
+      if (!fr || !fr.rows.length) { this.heading(this.cfg.sectionLabels?.crashFreq ?? '下落の頻度', 'データ不足のため表示できません', p); return; }
+      this.heading(this.cfg.sectionLabels?.crashFreq ?? '下落の頻度', `DD-3%到達からの最終到達確率（過去${fr.totalYears.toFixed(0)}年・${fr.n}局面）`, p);
       const rows = fr.rows;
       const rowH = Math.min(25, Math.floor(362 / rows.length));
       const top = 104;
@@ -1148,7 +1149,7 @@ export class LongAnalysisRenderer {
         ctx.restore();
       });
     } else if (id === 'range' || id === 'yearEndTrack') {
-      this.heading('分析④ 年末までの幅（過去の実績）', `過去${o.n}年、今と同じ時期から年末までの変化`, p);
+      this.heading(id === 'yearEndTrack' ? (this.cfg.sectionLabels?.yearEndTrack ?? '年末までの過去実績') : '分析④ 年末までの幅（過去の実績）', `過去${o.n}年、今と同じ時期から年末までの変化`, p);
       const ends = o.paths.map(q => q.end);
       const lo = Math.min(...ends, -5), hi = Math.max(...ends, 5);
       const L = 40, R = PW - 40, y0 = 270;

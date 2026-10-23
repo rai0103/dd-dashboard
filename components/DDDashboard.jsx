@@ -5,7 +5,7 @@ import {
   ComposedChart, LineChart, Area, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ReferenceLine, ReferenceDot, ResponsiveContainer, PieChart, Pie, Cell, Brush, Customized,
 } from "recharts";
-import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Download, RefreshCw, Database, Trash2, Zap, Copy, FileText, Activity, Layers, ListChecks, Smartphone, Monitor, Wallet, Gauge, Film, Clapperboard, Play, Pause, Square, GripVertical, Camera, MessageSquare, Lock, Unlock } from "lucide-react";
+import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Download, RefreshCw, Database, Trash2, Zap, Copy, FileText, Activity, Layers, ListChecks, Smartphone, Monitor, Wallet, Gauge, Film, Clapperboard, Play, Pause, Square, GripVertical, Camera, MessageSquare, Lock, Unlock, Pencil } from "lucide-react";
 import { storage } from "@/lib/storage";
 import { pullSyncAndApply, pushSyncNow, scheduleSyncPush, getLastSyncedAt, onSyncMergedFromRemote } from "@/lib/sync";
 import { parseInvestmentExcel, computeOwnAssetDrawdown, computeBenchmarkCAGR, latestUsdJpyRates, fxImpact, simulateDcaBenchmark, simulateMonthlyRebasedBenchmark, accountChanges, resolveBeginnerTrial, trialAxis } from "@/lib/investmentPerformance";
@@ -36,7 +36,7 @@ import { listBgms, saveBgm, deleteBgm } from "@/lib/videoBgmLibrary";
 import { listBackgrounds, saveBackground, deleteBackground } from "@/lib/videoBackgroundLibrary";
 import { listAvatars, saveAvatar, deleteAvatar, newAvatar, MAX_CLIPS } from "@/lib/videoAvatarLibrary";
 import { VideoAvatar } from "@/lib/videoAvatarRender";
-import { segmentReading, displayOf, readingOf, applyMixedEdit } from "@/lib/videoNarrText";
+import { segmentReading, displayOf, readingOf, applyMixedEdit, buildNarrTemplate, applyNarrTemplate } from "@/lib/videoNarrText";
 import { callAiTool, AiClientError } from "@/lib/videoAiClient";
 import { listCustomPrompts, saveCustomPrompt } from "@/lib/videoCustomScenePrompts";
 import NarrMixedBox from "@/components/NarrMixedBox";
@@ -5860,10 +5860,53 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
   const instrumentNameKana = instrumentLabel === "SP500" ? SP500_KANA : tickerKana(instrumentLabel);
 
   // --- 構成（場面の追加・削除・並べ替え） ---
-  const [sections, setSections] = useState(DEFAULT_CONTENT_SECTIONS);
+  // [Stage D-7] 保存された既定構成（video-section-default-v1）があれば、それを初期値にする
+  const [sections, setSections] = useState(() => {
+    try {
+      const v = JSON.parse(localStorage.getItem("video-section-default-v1") || "null");
+      if (v && Array.isArray(v.sections) && v.sections.length) return v.sections;
+    } catch (e) { /* ignore */ }
+    return DEFAULT_CONTENT_SECTIONS;
+  });
   // --- カスタム場面（チャットでAIに自由記述の比較チャートを生成させる。Stage D-4） ---
-  const [customScenes, setCustomScenes] = useState({}); // id("custom:...") -> CustomSceneSpec
+  const [customScenes, setCustomScenes] = useState(() => {
+    try {
+      const v = JSON.parse(localStorage.getItem("video-section-default-v1") || "null");
+      if (v && v.customScenes && typeof v.customScenes === "object") return v.customScenes;
+    } catch (e) { /* ignore */ }
+    return {}; // id("custom:...") -> CustomSceneSpec
+  });
   const customSceneList = useMemo(() => Object.values(customScenes), [customScenes]);
+  // [Stage D-7] 構成項目の改名（表示名＝スライド見出しと統一）。既定文言からの上書き分だけ保存する
+  const [sectionLabelOverrides, setSectionLabelOverrides] = useState(() => { try { const v = JSON.parse(localStorage.getItem("video-section-labels-v1") || "{}"); return v && typeof v === "object" ? v : {}; } catch (e) { return {}; } });
+  const saveSectionLabelOverrides = (m) => { setSectionLabelOverrides(m); try { localStorage.setItem("video-section-labels-v1", JSON.stringify(m)); } catch (e) { /* 保存できなくても動作は続ける */ } };
+  const sectionLabel = (id) => sectionLabelOverrides[id] ?? CONTENT_SECTION_LABELS[id] ?? id;
+  const [editingLabelId, setEditingLabelId] = useState(null);
+  const [editingLabelText, setEditingLabelText] = useState("");
+  const commitLabelEdit = () => {
+    if (editingLabelId == null) return;
+    const id = editingLabelId;
+    const text = editingLabelText.trim();
+    const defLabel = CONTENT_SECTION_LABELS[id] ?? id;
+    const next = { ...sectionLabelOverrides };
+    if (!text || text === defLabel) delete next[id]; else next[id] = text;
+    saveSectionLabelOverrides(next);
+    setEditingLabelId(null);
+  };
+  // [Stage D-7] この構成（sections・customScenes）を既定として保存／既定に戻す
+  const [sectionDefaultNote, setSectionDefaultNote] = useState("");
+  const setAsDefaultSections = () => {
+    try { localStorage.setItem("video-section-default-v1", JSON.stringify({ sections, customScenes })); } catch (e) { /* ignore */ }
+    setSectionDefaultNote("この構成を既定にしました。");
+    setTimeout(() => setSectionDefaultNote(""), 2500);
+  };
+  const resetDefaultSections = () => {
+    try { localStorage.removeItem("video-section-default-v1"); } catch (e) { /* ignore */ }
+    setSections(DEFAULT_CONTENT_SECTIONS);
+    setCustomScenes({});
+    setSectionDefaultNote("既定の構成に戻しました。");
+    setTimeout(() => setSectionDefaultNote(""), 2500);
+  };
   const video = useMemo(() => {
     if (!jsonOutput) return null;
     try { return buildVideoLongform(jsonOutput, d, instrumentNameKana, sections, customSceneList); } catch (e) { console.error("buildVideoLongform error:", e); return null; }
@@ -6066,30 +6109,56 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
   const [chatErrors, setChatErrors] = useState({});
   const saveLearnedMap = (m) => { setLearned(m); try { localStorage.setItem("video-narr-learned-v1", JSON.stringify(m)); } catch (e) { /* 保存できなくても動作は続ける */ } };
   const extraVocab = useMemo(() => (instrumentLabel === "SP500" ? [] : [[instrumentNameKana, instrumentLabel]]), [instrumentLabel, instrumentNameKana]);
-  const segsList = useMemo(() => scenes.map((sc) => segmentReading(sc.reading, extraVocab, learned)), [scenes, extraVocab, learned]);
-  const baseShown = useMemo(() => scenes.map((sc) => displayOf(segmentReading(sc.reading, extraVocab, {}))), [scenes, extraVocab]);
-  const readings = useMemo(() => scenes.map((sc, i) => { const e = sceneEdits[sceneKey(i, sc.id)]; return e && e.base === sc.reading ? e.text : readingOf(segsList[i]); }), [scenes, sceneEdits, segsList]);
-  const shownTexts = scenes.map((sc, i) => { const e = sceneEdits[sceneKey(i, sc.id)]; return e && e.base === sc.reading ? e.shown : displayOf(segsList[i]); });
-  const handleSceneTextChange = (i, sc, typed) => setSceneEdits((prev) => { const k = sceneKey(i, sc.id); const old = prev[k]; return { ...prev, [k]: { base: sc.reading, shown: typed, text: old && old.base === sc.reading ? old.text : readingOf(segsList[i]) } }; });
+  // [Stage D-7] ナレーションの言い回し記憶：場面id→NarrTemplate。変動要素（日付・％・方向語）以外の直した言い回しを記憶し、
+  // 次回以降は自動生成文（sc.reading）に適用してから表示・編集の基準（effectiveReadings）にする。
+  const [narrTemplates, setNarrTemplates] = useState(() => { try { const v = JSON.parse(localStorage.getItem("video-narr-template-v1") || "{}"); return v && typeof v === "object" ? v : {}; } catch (e) { return {}; } });
+  const saveNarrTemplates = (m) => { setNarrTemplates(m); try { localStorage.setItem("video-narr-template-v1", JSON.stringify(m)); } catch (e) { /* 保存できなくても動作は続ける */ } };
+  const effectiveReadings = useMemo(() => scenes.map((sc) => {
+    const tpl = narrTemplates[sc.id];
+    if (!tpl) return sc.reading;
+    const applied = applyNarrTemplate(tpl, sc.reading, extraVocab, learned);
+    return applied ?? sc.reading;
+  }), [scenes, narrTemplates, extraVocab, learned]);
+  // baseReading（直す前の文）とfinalReading（直した後の文）から言い回しを記憶する。記憶できればtrueを返す
+  const learnNarrTemplate = (sceneId, baseReading, finalReading) => {
+    if (baseReading === finalReading) return false;
+    const tpl = buildNarrTemplate(baseReading, finalReading, extraVocab, learned);
+    if (!tpl) return false;
+    saveNarrTemplates({ ...narrTemplates, [sceneId]: tpl });
+    return true;
+  };
+  const forgetNarrTemplate = (sceneId) => { const nx = { ...narrTemplates }; delete nx[sceneId]; saveNarrTemplates(nx); };
+  const segsList = useMemo(() => effectiveReadings.map((r) => segmentReading(r, extraVocab, learned)), [effectiveReadings, extraVocab, learned]);
+  const baseShown = useMemo(() => effectiveReadings.map((r) => displayOf(segmentReading(r, extraVocab, {}))), [effectiveReadings, extraVocab]);
+  const readings = useMemo(() => scenes.map((sc, i) => { const e = sceneEdits[sceneKey(i, sc.id)]; return e && e.base === effectiveReadings[i] ? e.text : readingOf(segsList[i]); }), [scenes, sceneEdits, segsList, effectiveReadings]);
+  const shownTexts = scenes.map((sc, i) => { const e = sceneEdits[sceneKey(i, sc.id)]; return e && e.base === effectiveReadings[i] ? e.shown : displayOf(segsList[i]); });
+  const handleSceneTextChange = (i, sc, typed) => setSceneEdits((prev) => { const k = sceneKey(i, sc.id); const old = prev[k]; const base = effectiveReadings[i]; return { ...prev, [k]: { base, shown: typed, text: old && old.base === base ? old.text : readingOf(segsList[i]) } }; });
   const resetSceneText = (i, sc) => setSceneEdits((prev) => { const next = { ...prev }; delete next[sceneKey(i, sc.id)]; return next; });
-  // 枠の外へ出たとき：直した内容から読みを組み立て直し、用語の読みは学習する
+  // 枠の外へ出たとき：直した内容から読みを組み立て直し、用語の読みは学習する。言い回し自体も次回以降の既定として記憶する
   const commitSceneText = (i, sc) => {
     const k = sceneKey(i, sc.id);
+    const base = effectiveReadings[i];
     const e = sceneEdits[k];
-    if (!e || e.base !== sc.reading) return;
+    if (!e || e.base !== base) return;
     const r = applyMixedEdit(segsList[i], e.shown);
     if (!r.changed) { resetSceneText(i, sc); return; }
+    let finalReading = r.reading;
+    let termMsg = "";
     if (r.learn.length > 0) {
       const nx = { ...learned };
       r.learn.forEach((l) => { nx[l.key] = { surface: l.surface, to: l.to }; });
       saveLearnedMap(nx);
-      setNarrNote(`学習しました：${r.learn.map((l) => `${l.surface} → ${l.to}`).join("、")}（次回以降も同じ読みになります）`);
-      const r2 = applyMixedEdit(segmentReading(sc.reading, extraVocab, nx), e.shown);
+      termMsg = `学習しました：${r.learn.map((l) => `${l.surface} → ${l.to}`).join("、")}（次回以降も同じ読みになります）`;
+      const r2 = applyMixedEdit(segmentReading(base, extraVocab, nx), e.shown);
       if (!r2.changed) { resetSceneText(i, sc); return; }
-      setSceneEdits((prev) => ({ ...prev, [k]: { base: sc.reading, shown: e.shown, text: r2.reading } }));
-      return;
+      finalReading = r2.reading;
+      setSceneEdits((prev) => ({ ...prev, [k]: { base, shown: e.shown, text: r2.reading } }));
+    } else {
+      setSceneEdits((prev) => ({ ...prev, [k]: { base, shown: e.shown, text: r.reading } }));
     }
-    setSceneEdits((prev) => ({ ...prev, [k]: { base: sc.reading, shown: e.shown, text: r.reading } }));
+    const tplMsg = learnNarrTemplate(sc.id, base, finalReading) ? "言い回しも記憶しました（次回以降の既定になります）" : "";
+    const combined = [termMsg, tplMsg].filter(Boolean).join(termMsg && tplMsg ? "。" : "");
+    if (combined) setNarrNote(combined);
   };
 
   // AIに指示して場面のナレーションを書き直す（Stage D-3）。既存のsceneEdits（手動編集と同じ仕組み）に
@@ -6123,8 +6192,10 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
       });
       const newReading = typeof result?.reading === "string" ? result.reading.trim() : "";
       if (!newReading) throw new Error("AIから空の応答が返りました。");
+      const base = effectiveReadings[i];
       const shown = displayOf(segmentReading(newReading, extraVocab, learned));
-      setSceneEdits((prev) => ({ ...prev, [k]: { base: sc.reading, shown, text: newReading } }));
+      setSceneEdits((prev) => ({ ...prev, [k]: { base, shown, text: newReading } }));
+      if (learnNarrTemplate(sc.id, base, newReading)) setNarrNote("言い回しも記憶しました（次回以降の既定になります）");
       setChatOpenKey(null);
       setChatText("");
     } catch (e) {
@@ -6363,13 +6434,14 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
         backgroundImage: backgroundImgEl, backgroundOpacity: backgroundOpacity / 100,
         md: video.longMd, basis: video.basis, rolling: video.rolling,
         customScenes: video.customScenes,
+        sectionLabels: { ...CONTENT_SECTION_LABELS, ...sectionLabelOverrides },
       });
       rendererRef.current = renderer;
       renderer.draw(seekPos);
       updateSceneProgress(seekPos);
     } catch (e) { console.error("LongAnalysisRenderer init error:", e); rendererRef.current = null; }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [video, scenes, avatarObj, backgroundImgEl, backgroundOpacity]);
+  }, [video, scenes, avatarObj, backgroundImgEl, backgroundOpacity, sectionLabelOverrides]);
 
   const stopLoop = () => { if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current); animationFrameRef.current = 0; isPlayingRef.current = false; };
 
@@ -6589,7 +6661,14 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
         <div className="flex flex-col gap-4 text-xs flex-1 min-w-0" style={{ color: C.text }}>
           {/* 構成（場面の追加・削除・並べ替え） */}
           <div>
-            <div className="text-[11px] font-semibold mb-1.5" style={{ color: C.textMuted }}>構成（場面の追加・削除・並べ替え）</div>
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="text-[11px] font-semibold" style={{ color: C.textMuted }}>構成（場面の追加・削除・並べ替え）</div>
+              <div className="flex items-center gap-2">
+                {sectionDefaultNote && <span className="text-[10px]" style={{ color: C.teal }}>{sectionDefaultNote}</span>}
+                <button onClick={setAsDefaultSections} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: C.teal, background: "transparent", border: `1px solid ${C.teal}66`, cursor: "pointer" }} title="現在の構成（並び・カスタム場面を含む）を既定として保存します">この構成を既定にする</button>
+                <button onClick={resetDefaultSections} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: C.textDim, background: "transparent", border: `1px solid ${C.borderSoft}`, cursor: "pointer" }} title="保存した既定構成を削除し、元の既定構成に戻します">既定に戻す</button>
+              </div>
+            </div>
             <div className="flex flex-col gap-1 mb-2">
               {sections.map((id, i) => {
                 const sceneIdxOfRow = scenes.findIndex((sc) => sc.id === id);
@@ -6612,11 +6691,29 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
                   }}
                 >
                   <GripVertical size={13} style={{ color: C.textDim, flexShrink: 0 }} />
-                  <span className="text-[11px] flex-1" style={{ color: isCurrentRow ? C.teal : C.text, fontWeight: isCurrentRow ? 600 : 400 }}>{i + 1}. {customScenes[id]?.title ?? (CONTENT_SECTION_LABELS[id] ?? id)}</span>
+                  {editingLabelId === id ? (
+                    <input
+                      autoFocus
+                      value={editingLabelText}
+                      onChange={(e) => setEditingLabelText(e.target.value)}
+                      onClick={(e) => e.stopPropagation()}
+                      onBlur={commitLabelEdit}
+                      onKeyDown={(e) => { if (e.key === "Enter") { e.currentTarget.blur(); } else if (e.key === "Escape") { e.stopPropagation(); setEditingLabelId(null); } }}
+                      className="text-[11px] flex-1 px-1 py-0.5 rounded"
+                      style={{ color: C.text, background: C.panel, border: `1px solid ${C.teal}`, outline: "none" }}
+                    />
+                  ) : (
+                    <span className="text-[11px] flex-1" style={{ color: isCurrentRow ? C.teal : C.text, fontWeight: isCurrentRow ? 600 : 400 }}>{i + 1}. {customScenes[id]?.title ?? sectionLabel(id)}</span>
+                  )}
                   <div className="flex items-center gap-1 ml-auto">
                     {typeof id === "string" && id.startsWith("custom:") && (
                       <button onClick={(e) => { e.stopPropagation(); setCustomChatOpen(true); setCustomChatEditingId(id); setCustomChatText(""); setCustomChatError(""); }} style={{ color: C.textDim, background: "transparent", border: "none", cursor: "pointer", padding: 2 }} title="チャットで編集">
                         <MessageSquare size={13} />
+                      </button>
+                    )}
+                    {!(typeof id === "string" && id.startsWith("custom:")) && editingLabelId !== id && (
+                      <button onClick={(e) => { e.stopPropagation(); setEditingLabelId(id); setEditingLabelText(sectionLabel(id)); }} style={{ color: C.textDim, background: "transparent", border: "none", cursor: "pointer", padding: 2 }} title="項目名を変更（スライドの見出しにも反映されます）">
+                        <Pencil size={13} />
                       </button>
                     )}
                     <button onClick={(e) => { e.stopPropagation(); removeSection(id); }} style={{ color: C.textDim, background: "transparent", border: "none", cursor: "pointer", padding: 2 }} title="この場面を削除">
@@ -6647,7 +6744,7 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
                         className="text-[11px] px-2 py-1 rounded"
                         style={{ color: available ? C.teal : C.textDim, background: "transparent", border: `1px solid ${available ? C.teal + "66" : C.borderSoft}`, cursor: available ? "pointer" : "not-allowed", opacity: available ? 1 : 0.5 }}
                       >
-                        ＋ {CONTENT_SECTION_LABELS[id]}
+                        ＋ {sectionLabel(id)}
                       </button>
                     );
                   })}
@@ -6721,6 +6818,15 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
                     {Object.entries(learned).map(([k, v]) => (
                       <span key={k} className="inline-flex items-center gap-1 mr-1.5 px-1 rounded" style={{ border: `1px solid ${C.borderSoft}`, color: C.text }}>{v.surface} → {v.to}
                         <button title="削除" onClick={() => { const nx = { ...learned }; delete nx[k]; saveLearnedMap(nx); }} style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer" }}>×</button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {Object.keys(narrTemplates).length > 0 && (
+                  <div className="text-[10px] mb-1.5" style={{ color: C.textDim }}>記憶した言い回し：
+                    {Object.keys(narrTemplates).map((sid) => (
+                      <span key={sid} className="inline-flex items-center gap-1 mr-1.5 px-1 rounded" style={{ border: `1px solid ${C.borderSoft}`, color: C.text }}>{customScenes[sid]?.title ?? sectionLabel(sid)}
+                        <button title="この場面の記憶を削除" onClick={() => forgetNarrTemplate(sid)} style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer" }}>×</button>
                       </span>
                     ))}
                   </div>

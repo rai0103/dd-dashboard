@@ -237,3 +237,102 @@ export function applyMixedEdit(segs: Seg[], text: string): EditResult {
 export function termSurface(key: string, extra: [string, string][] = []): string {
   return extra.find(x => x[0] === key)?.[1] ?? TERMS.find(x => x[0] === key)?.[1] ?? key;
 }
+
+// ---- Stage D-7：ナレーションの言い回し記憶（変動要素のみ自動差し替え） ----
+// 「変動要素」＝ kind:'num'（日付・％・数値）と、方向・カテゴリを表す辞書語（上昇・下落・暴落・大暴落・調整・歴史的）。
+// これ以外（言い回し）をユーザーが直した内容として記憶し、次回以降は変動要素だけ最新の値に差し替える。
+
+/** 変動要素として扱う辞書語（方向・カテゴリ）のキー一覧 */
+export const VARIABLE_TERM_KEYS: string[] = ['じょうしょう', 'げらく', 'ぼうらく', 'だいぼうらく', 'ちょうせい', 'れきしてき'];
+
+/** そのセグメントが「変動要素」（日付・％・数値、または上昇/下落等の方向語）かどうか */
+export function isVariableSeg(s: Seg): boolean {
+  if (s.kind === 'num') return true;
+  if (s.kind === 'term' && s.key && VARIABLE_TERM_KEYS.includes(s.key)) return true;
+  return false;
+}
+
+export interface CopyRun { aAt: number; bAt: number; len: number }
+
+/**
+ * a・b の間で「変化していない」一致範囲を求める（diffOpsと同じLCSのDPテーブルを使い、
+ * 差分の代わりに一致部分を集める。diffOps自体は変更しない）。
+ */
+export function alignedCopyRuns(a: string, b: string): CopyRun[] {
+  const n = a.length, m = b.length;
+  if (n * m > 3_000_000) return a === b ? (n ? [{ aAt: 0, bAt: 0, len: n }] : []) : [];
+  const dp: Uint16Array[] = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const runs: CopyRun[] = [];
+  let i = 0, j = 0, cur: CopyRun | null = null;
+  const flush = () => { if (cur) { runs.push(cur); cur = null; } };
+  while (i < n || j < m) {
+    if (i < n && j < m && a[i] === b[j]) { if (!cur) cur = { aAt: i, bAt: j, len: 0 }; cur.len++; i++; j++; continue; }
+    flush();
+    if (j < m && (i >= n || dp[i][j + 1] >= dp[i + 1][j])) { j++; } else { i++; }
+  }
+  flush();
+  return runs;
+}
+
+export type NarrTemplateChunk = { kind: 'fixed'; text: string } | { kind: 'var' };
+export interface NarrTemplate { chunks: NarrTemplateChunk[] }
+
+/** segsの各セグメントの、元の読み（defaultReading）内での開始位置（学習による読み替え後の長さではなく、元の消費文字数を使う） */
+function segOffsets(segs: Seg[]): number[] {
+  const starts: number[] = [];
+  let p = 0;
+  for (const s of segs) { starts.push(p); p += (s.kind === 'term' && s.key) ? s.key.length : s.kana.length; }
+  return starts;
+}
+
+/**
+ * デフォルトの読み（defaultReading）を直した後の読み（editedReading）から、
+ * 「変動要素（数値・日付・方向語）以外」の言い回しをテンプレート化する。
+ * 変動要素が1つも対応付かなければ null（テンプレート化しない＝安全側）。
+ */
+export function buildNarrTemplate(defaultReading: string, editedReading: string, extraVocab: [string, string][] = [], learned: LearnedMap = {}): NarrTemplate | null {
+  if (defaultReading === editedReading) return null; // 変更なし＝記憶の必要なし
+  const segs = segmentReading(defaultReading, extraVocab, learned);
+  const starts = segOffsets(segs);
+  const runs = alignedCopyRuns(defaultReading, editedReading);
+  const findRun = (start: number, end: number) => runs.find(r => r.aAt <= start && r.aAt + r.len >= end) ?? null;
+  const slots: { aStart: number; bStart: number; bEnd: number }[] = [];
+  segs.forEach((s, k) => {
+    if (!isVariableSeg(s)) return;
+    const start = starts[k];
+    const len = (s.kind === 'term' && s.key) ? s.key.length : s.kana.length;
+    const end = start + len;
+    const run = findRun(start, end);
+    if (!run) return; // 編集で変わった・対応が取れない変数は無視（＝そのまま固定文字列扱い）
+    const bStart = run.bAt + (start - run.aAt);
+    slots.push({ aStart: start, bStart, bEnd: bStart + len });
+  });
+  if (!slots.length) return null;
+  slots.sort((x, y) => x.aStart - y.aStart);
+  const chunks: NarrTemplateChunk[] = [];
+  let pos = 0;
+  for (const sl of slots) {
+    if (sl.bStart < pos) continue; // 重なりは無視（安全側）
+    if (sl.bStart > pos) chunks.push({ kind: 'fixed', text: editedReading.slice(pos, sl.bStart) });
+    chunks.push({ kind: 'var' });
+    pos = sl.bEnd;
+  }
+  if (pos < editedReading.length) chunks.push({ kind: 'fixed', text: editedReading.slice(pos) });
+  return { chunks };
+}
+
+/**
+ * テンプレートに、新しいデフォルトの読み（freshDefaultReading）から取り出した変動要素を差し込んで、最新の読みを組み立てる。
+ * 変動要素の個数が記憶時と変わっていれば（文の構造が変わった等）null（＝その場の既定文へフォールバック）。
+ */
+export function applyNarrTemplate(tpl: NarrTemplate, freshDefaultReading: string, extraVocab: [string, string][] = [], learned: LearnedMap = {}): string | null {
+  const segs = segmentReading(freshDefaultReading, extraVocab, learned);
+  const values = segs.filter(isVariableSeg).map(s => s.kana);
+  const varCount = tpl.chunks.filter(c => c.kind === 'var').length;
+  if (values.length !== varCount) return null;
+  let vi = 0;
+  let out = '';
+  for (const c of tpl.chunks) out += c.kind === 'var' ? values[vi++] : c.text;
+  return out;
+}

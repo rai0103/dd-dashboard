@@ -110,11 +110,11 @@ export type ComposedSectionId = ContentSectionId | `custom:${string}`;
 /** 既定の構成：ショート動画（近況解説）と同じ切り口＋冒頭の前日比（Stage D-6で追加）。ショートから長尺への導線として、同じ切り口で始める */
 export const DEFAULT_CONTENT_SECTIONS: ContentSectionId[] = ['dayChange', 'ytdChange', 'athDrop', 'yearEndTrack', 'crashFreq'];
 export const CONTENT_SECTION_LABELS: Record<ContentSectionId, string> = {
-  dayChange: '近況：前日比',
-  ytdChange: '近況：騰落率',
-  athDrop: '近況：ATHからの下落率',
-  yearEndTrack: '近況：年末までの過去実績',
-  crashFreq: '近況：下落の頻度',
+  dayChange: '前日比',
+  ytdChange: '騰落率',
+  athDrop: 'ATHからの下落率',
+  yearEndTrack: '年末までの過去実績',
+  crashFreq: '下落の頻度',
   status: '近況（詳細一括版）',
   bottom: '底値判定',
   rolling: 'ローリングリターン',
