@@ -61,7 +61,7 @@ export async function listAivisVoices(timeoutMs = 1500): Promise<string[]> {
  * speedScale は1.0が通常の速さ（呼び出し側の「速さ」「高さ」の補正をそのまま渡す）。失敗時は例外を投げる
  * （呼び出し側で既存の声へのフォールバックに使う）。
  */
-export async function synthesizeAivis(text: string, speakerId: number, speedScale: number, timeoutMs = 20000): Promise<ArrayBuffer> {
+export async function synthesizeAivis(text: string, speakerId: number, speedScale: number, timeoutMs = 90000): Promise<ArrayBuffer> {
   const q = await aFetch(`${AIVIS_URL}/audio_query?speaker=${speakerId}&text=${encodeURIComponent(text)}`, { method: 'POST' }, timeoutMs);
   if (!q.ok) throw new Error(`AivisSpeechの音声クエリに失敗しました（${q.status}）`);
   const query = await q.json();
