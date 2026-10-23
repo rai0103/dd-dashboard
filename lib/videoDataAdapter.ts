@@ -13,7 +13,7 @@ import { classifyDdCategory, freqPerYearFromP, freqLabelFromP } from './ddCatego
 import { buildSeriesCatalog, resolveCustomScene, CustomSceneSpec, ResolvedCustomScene, SeriesCatalog, ScalarCatalog } from './videoCustomScene';
 import { CrashRow, UpdateStats, computeUpdateStats } from './videoMarketUpdate';
 import { StockDataPoint } from './videoTypes';
-import { LongBasis, buildBasis } from './videoLongBasis';
+import { LongBasis, buildBasis, yearPath } from './videoLongBasis';
 import { LongScene, buildLongScenes } from './videoLongAnalysis';
 
 export { SP500_KANA, tickerKana };
@@ -164,6 +164,16 @@ export function buildVideoLongform(data: any, d: any, instrumentNameKana: string
   const rr = data.rolling_returns || {};
   const rolling = rollingLabels.filter(([k]) => rr[k] != null).map(([k, label]) => ({ label, v: rr[k] as number }));
 
+  // 年末見通しチャート用：各行（分析手法）が参照する年と、その年1年分の価格推移（前年末=100）。
+  // ダッシュボードの「年比較」と同じ見た目で、動画側でも表の行の順に年の線を重ね合わせて表示するために使う。
+  const forecastRows = (data.outlook_from_today?.factors || []).map((f: any) => ({
+    name: f.label, mean: f.forecast_pct, prob: f.probability_pct, weight: f.weight_pct, n: f.sample_n,
+    refYears: (f.ref_years || []).map((r: any) => r.year as number),
+  }));
+  const forecastYears: number[] = Array.from(new Set(forecastRows.flatMap((r) => r.refYears as number[])));
+  const forecastYearPaths: Record<number, { t: number; v: number }[]> = {};
+  for (const yr of forecastYears) forecastYearPaths[yr] = yearPath(dailyPoints, yr);
+
   const longMd: LongMd = {
     y, m, d: dd,
     status: {
@@ -185,7 +195,8 @@ export function buildVideoLongform(data: any, d: any, instrumentNameKana: string
       prob: data.outlook_from_today.blended_probability_pct ?? 0,
       cycleYears: cycleSampleYears,
       monthly: (seasonFactor?.detail?.months ?? []).map((mm: any) => ({ m: mm.month, v: mm.avg_return_pct })),
-      rows: (data.outlook_from_today.factors || []).map((f: any) => ({ name: f.label, mean: f.forecast_pct, prob: f.probability_pct, weight: f.weight_pct, n: f.sample_n })),
+      rows: forecastRows,
+      yearPaths: forecastYearPaths,
     } : null,
     ddpace: data.ath_count ? {
       athCount: data.ath_count.total_count,

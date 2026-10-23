@@ -547,7 +547,68 @@ export class LongAnalysisRenderer {
     if (md && id === 'forecast' && md.forecast) {
       const f = md.forecast;
       this.heading('年末までの見通し', '複数指標の加重合成（過去の実績にもとづく目安です）', p);
-      const a0 = ease(sub(p, 0.08, 0.25));
+
+      // ---- フェーズA：表の各行（分析手法）が参照する年を、上から順にチャートへ重ね合わせる ----
+      // 複数の行で同じ年が参照される場合は、最初に登場した行でだけ描く（重複なし）。
+      // 参照年が無い行（「対象なし」）はスキップする。最後に今年の推移を太い緑線で重ねる。
+      const bs = this.cfg.basis;
+      const yearPaths = f.yearPaths || {};
+      const seenYears = new Set<number>();
+      const groups: { year: number; pts: { t: number; v: number }[] }[][] = f.rows.map((r) => {
+        const g = (r.refYears || []).filter((yy) => !seenYears.has(yy) && (yearPaths[yy]?.length ?? 0) > 0).map((yy) => ({ year: yy, pts: yearPaths[yy] }));
+        g.forEach((x) => seenYears.add(x.year));
+        return g;
+      });
+      const SLOT = 0.06, GAP = 0.01, START = 0.04;
+      const todayS0 = START + groups.length * SLOT, todayS1 = todayS0 + 0.08;
+      const chartOut = 1 - ease(sub(p, 0.58, 0.68));
+      if (bs && chartOut > 0.001) {
+        const allVals = [...groups.flat().flatMap((g) => g.pts.map((q) => q.v)), ...(bs.curPath || []).map((q) => q.v)];
+        if (allVals.length) {
+          const L = 46, R = PW - 20, T = 110, B = 400;
+          ctx0.save(); ctx0.globalAlpha *= chartOut;
+          ctx0.fillStyle = 'rgba(255,255,255,0.04)'; ctx0.fillRect(L, T, R - L, B - T);
+          const lo = Math.floor(Math.max(40, Math.min(...allVals, 90)) / 10) * 10, hi = Math.ceil(Math.min(200, Math.max(...allVals, 110)) / 10) * 10;
+          const yv = (v: number) => B - ((Math.min(hi, Math.max(lo, v)) - lo) / (hi - lo)) * (B - T);
+          const step = hi - lo > 60 ? 20 : 10;
+          for (let v = lo; v <= hi; v += step) {
+            ctx0.strokeStyle = v === 100 ? 'rgba(255,255,255,0.4)' : 'rgba(255,255,255,0.1)'; ctx0.lineWidth = 1;
+            ctx0.beginPath(); ctx0.moveTo(L, yv(v)); ctx0.lineTo(R, yv(v)); ctx0.stroke();
+            this.txt(String(v), L - 6, yv(v) + 4, 11, WHITE, { alpha: 0.55, align: 'right' });
+          }
+          for (let m = 0; m < 12; m++) this.txt(`${m + 1}月`, L + ((m + 0.5) / 12) * (R - L), B + 15, 11, WHITE, { alpha: 0.55, align: 'center' });
+          const drawLine2 = (pts: { t: number; v: number }[], tMax: number, rgb: string, w: number, alpha: number, glow = false) => {
+            ctx0.save(); ctx0.lineJoin = 'round'; ctx0.strokeStyle = `rgba(${rgb},${alpha})`; ctx0.lineWidth = w;
+            if (glow) { ctx0.shadowColor = `rgba(${rgb},0.55)`; ctx0.shadowBlur = 7; }
+            ctx0.beginPath(); let first = true; let last: { t: number; v: number } | null = null;
+            for (const q of pts) { if (q.t > tMax) break; const x = L + q.t * (R - L); if (first) { ctx0.moveTo(x, yv(q.v)); first = false; } else ctx0.lineTo(x, yv(q.v)); last = q; }
+            ctx0.stroke(); ctx0.restore();
+            return last;
+          };
+          let curLabel = '', curLabelA = 0;
+          groups.forEach((g, i) => {
+            const s0 = START + i * SLOT, s1 = s0 + (SLOT - GAP);
+            const a = ease(sub(p, s0, s1));
+            if (a > 0.001) {
+              g.forEach(({ pts }) => { const last = pts[pts.length - 1]; const ret = last ? last.v - 100 : 0; drawLine2(pts, 1, ret >= 0 ? GREEN : DOWN, 1.1, 0.4 * a); });
+              if (g.length && a > curLabelA) { curLabel = f.rows[i].name; curLabelA = a; }
+            }
+          });
+          if (bs.curPath?.length) {
+            const kc = ease(sub(p, todayS0, todayS1)) * (bs.curPath[bs.curPath.length - 1]?.t ?? 0);
+            const head = drawLine2(bs.curPath, kc, GREEN, 3.2, 1, true);
+            if (head) { ctx0.fillStyle = `rgba(${GREEN},1)`; ctx0.beginPath(); ctx0.arc(L + head.t * (R - L), yv(head.v), 4.5, 0, Math.PI * 2); ctx0.fill(); }
+            if (kc > 0.001) { curLabel = `${bs.curYear}年（今年）`; curLabelA = 1; }
+          }
+          this.txt('グレーの細線：各手法が参照する過去の年　／　太い緑：今年', L + 8, T + 16, 12, WHITE, { alpha: 0.75 });
+          if (curLabel) this.txt(curLabel, R - 6, T + 16, 13, AMBER, { bold: true, align: 'right', alpha: Math.min(1, curLabelA), maxW: 260 });
+          ctx0.restore();
+        }
+      }
+
+      // ---- フェーズB・C：総合予測／上昇確率、そして元の表（既存の見た目のまま、表示タイミングだけチャートの後ろにずらす） ----
+      const p2 = sub(p, 0.66, 1);
+      const a0 = ease(sub(p2, 0.08, 0.25));
       ctx0.save(); ctx0.globalAlpha *= a0;
       ctx0.fillStyle = 'rgba(255,255,255,0.08)'; ctx0.fillRect(24, 104, PW - 48, 54);
       ctx0.fillStyle = `rgba(${GREEN},0.95)`; ctx0.fillRect(24, 104, 4, 54);
@@ -555,13 +616,13 @@ export class LongAnalysisRenderer {
       this.txt(sg(f.total), 190, 142, 34, kuro(f.total), { bold: true });
       this.txt(`上昇確率 ${f.prob}%`, PW - 36, 142, 24, AMBER, { bold: true, align: 'right' });
       ctx0.restore();
-      this.txt('指標', 24, 180, 11, WHITE, { alpha: 0.55 });
-      this.txt('年末までの平均騰落率', 330, 180, 11, WHITE, { alpha: 0.55, align: 'center' });
-      this.txt('上昇確率', 548, 180, 11, WHITE, { alpha: 0.55, align: 'right' });
-      this.txt('重み', 626, 180, 11, WHITE, { alpha: 0.55, align: 'right' });
+      this.txt('指標', 24, 180, 11, WHITE, { alpha: 0.55 * a0 });
+      this.txt('年末までの平均騰落率', 330, 180, 11, WHITE, { alpha: 0.55 * a0, align: 'center' });
+      this.txt('上昇確率', 548, 180, 11, WHITE, { alpha: 0.55 * a0, align: 'right' });
+      this.txt('重み', 626, 180, 11, WHITE, { alpha: 0.55 * a0, align: 'right' });
       const mx = Math.max(10, ...f.rows.map(r => Math.abs(r.mean ?? 0)));
       f.rows.forEach((r, i) => {
-        const a = ease(sub(p, 0.2 + i * 0.07, 0.4 + i * 0.07));
+        const a = ease(sub(p2, 0.18 + i * 0.03, 0.34 + i * 0.03));
         const y = 188 + i * 40;
         ctx0.save(); ctx0.globalAlpha *= Math.max(a, 0.001);
         const dim = r.mean === null;

@@ -16,7 +16,7 @@ export interface LongMd {
   bottom: { lines: string[]; excluded: boolean; mdd: number | null; level: number | null; pHold: number | null; pBreak: number | null; tierLabel: string | null } | null;
   rolling: { label: string; v: number }[];
   ytdNote: { ytd: number; years: number; pct: number } | null;
-  forecast: { total: number; prob: number; cycleYears: number[]; monthly: { m: number; v: number }[]; rows: { name: string; mean: number | null; prob: number | null; weight: number | null; n: number | null }[] } | null;
+  forecast: { total: number; prob: number; cycleYears: number[]; monthly: { m: number; v: number }[]; rows: { name: string; mean: number | null; prob: number | null; weight: number | null; n: number | null; refYears?: number[] }[]; yearPaths?: Record<number, { t: number; v: number }[]> } | null;
   ddpace: { athCount: number; perYear: number; every: number; buckets: { range: string; n: number; ref: boolean; days: number; clean: number }[]; phases: number | null } | null;
   crash: { level: number; count: string; ref: boolean; interval: string; last: string; prob: number; prevAvg: string; prevPlus: string; a1: string; a3: string; a5: string }[];
   daily: { up: number; down: number; avg: number; buckets: { label: string; v: number }[] } | null;
@@ -211,7 +211,7 @@ function contentSectionBuilders(md: LongMd, basis: LongBasis | null | undefined,
       let r = `つぎに、ねんまつまでの、みとおしです。ふくすうの、しひょうを、かじゅうごうせいした、そうごうよそくは、${pk(f.total)}、じょうしょうかくりつは、${pk(f.prob, false).replace('ぱーせんと', 'ぱーせんと')}です。`;
       f.rows.filter(x => x.mean !== null).forEach(x => { r += `${nameKana(x.name)}は、${pk(x.mean!)}、じょうしょうかくりつは、${pk(x.prob!, false)}。`; });
       r += 'これは、かこの、じっせきからの、みとおしで、しょうらいを、ほしょうするものでは、ありません。';
-      return { id: 'forecast', minSec: 24, reading: r, caption: `年末までの見通し：総合予測 ${f.total >= 0 ? '+' : ''}${f.total}%（上昇確率 ${f.prob}%）` };
+      return { id: 'forecast', minSec: 30, reading: r, caption: `年末までの見通し：総合予測 ${f.total >= 0 ? '+' : ''}${f.total}%（上昇確率 ${f.prob}%）` };
     },
     basis10: () => {
       const f = md.forecast;
