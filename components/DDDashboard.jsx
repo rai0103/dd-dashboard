@@ -32,6 +32,7 @@ import { voiceGender } from "@/lib/videoAnalysts";
 import { LongAnalysisRenderer } from "@/lib/videoLongAnalysisRenderer";
 import { AudioMixer, setTtsBaseUrl, getTtsBaseUrl } from "@/lib/videoAudioMixer";
 import { listAivisVoices, isAivisVoice, getAivisUrl } from "@/lib/videoAivisClient";
+import { loadVoicePresets, saveVoicePresets } from "@/lib/videoVoicePresets";
 import { VideoExporter } from "@/lib/videoExporter";
 import { listBgms, saveBgm, deleteBgm } from "@/lib/videoBgmLibrary";
 import { listBackgrounds, saveBackground, deleteBackground } from "@/lib/videoBackgroundLibrary";
@@ -6344,6 +6345,48 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
     if (voiceChoices.length > 0 && !voiceChoices.includes(voiceIndex)) setVoiceIndex(voiceChoices[0]);
   }, [voiceChoices, voiceIndex]);
 
+  // --- オリジナル音声（声の種類＋速さ＋高さを登録して次回も選べる。YouTube動画作成＝investment-shortsと同じ仕様） ---
+  const [voicePresets, setVoicePresets] = useState(loadVoicePresets);
+  const [activePresetId, setActivePresetId] = useState(null);
+  const [presetName, setPresetName] = useState("");
+  const savePresetsList = (list) => { setVoicePresets(list); saveVoicePresets(list); };
+  // 声を選んだ・話速/高さを調整し終えたときの試聴サンプル文（場面に依存しない固定文）
+  const VOICE_SAMPLE_READING = "げんざいの、どろーだうんは、まいなす、じゅっぱーせんとです。";
+  const previewVoice = async (voiceId, r = rate, p = pitch) => {
+    if (!voiceId) return;
+    try {
+      mixer().stopNarration();
+      const fallbackVoice = nonAivisVoiceChoices[0] ?? "";
+      const { buffer: b, usedFallback } = await mixer().fetchNarrationBufferSmart(VOICE_SAMPLE_READING, r, voiceId, p, fallbackVoice);
+      if (usedFallback) { setVoiceIndex(fallbackVoice); setVoiceNote("AivisSpeechに接続できなかったため、既存の声に切り替えました。"); }
+      if (b) mixer().playBufferAfter(b, 0);
+    } catch (e) { console.error("声の試聴に失敗しました:", e); }
+  };
+  const applyPreset = (p) => {
+    setVoiceIndex(p.voice);
+    setRate(p.rate);
+    setPitch(p.pitch);
+    updateLockedValueIfLocked("rate", p.rate);
+    updateLockedValueIfLocked("pitch", p.pitch);
+    setActivePresetId(p.id);
+    previewVoice(p.voice, p.rate, p.pitch);
+  };
+  const handleSavePreset = () => {
+    const name = presetName.trim();
+    if (!name) { alert("登録する声の名前を入力してください"); return; }
+    const existing = voicePresets.find((p) => p.name === name);
+    const preset = { id: existing?.id ?? `${Date.now()}`, name, voice: voiceIndex, pitch, rate };
+    const next = existing ? voicePresets.map((p) => (p.id === existing.id ? preset : p)) : [...voicePresets, preset];
+    savePresetsList(next);
+    setActivePresetId(preset.id);
+    setPresetName("");
+  };
+  const removePreset = (id) => {
+    const next = voicePresets.filter((p) => p.id !== id);
+    savePresetsList(next);
+    if (activePresetId === id) setActivePresetId(null);
+  };
+
   // --- BGM（アップロードして保存・選択） ---
   const [bgms, setBgms] = useState([]);
   const [activeBgmId, setActiveBgmId] = useState("");
@@ -7004,7 +7047,26 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
           {/* 声・速度 */}
           <div>
             <div className="text-[11px] font-semibold mb-1.5" style={{ color: C.textMuted }}>声</div>
-            <select value={voiceIndex} onChange={(e) => setVoiceIndex(e.target.value)} className="text-xs px-2 py-1.5 rounded w-full mb-1" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }}>
+            <select
+              value={activePresetId ? `preset:${activePresetId}` : voiceIndex}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v.startsWith("preset:")) {
+                  const p = voicePresets.find((x) => `preset:${x.id}` === v);
+                  if (p) applyPreset(p);
+                  return;
+                }
+                setActivePresetId(null);
+                setVoiceIndex(v);
+                previewVoice(v);
+              }}
+              className="text-xs px-2 py-1.5 rounded w-full mb-1" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }}
+            >
+              {voicePresets.length > 0 && (
+                <optgroup label="登録したオリジナル音声">
+                  {voicePresets.map((p) => <option key={p.id} value={`preset:${p.id}`}>★ {p.name}</option>)}
+                </optgroup>
+              )}
               {voiceChoices.length === 0 && <option value="">（音声が見つかりません）</option>}
               {voiceChoices.map((v) => <option key={v} value={v}>{v.replace(/^aivis:\d+:/, "Aivis：").replace(/^(sapi|oc):/, "")}</option>)}
             </select>
@@ -7014,14 +7076,50 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
             </p>
             <div className="flex items-center gap-3 flex-wrap">
               <div className="flex items-center gap-1.5">
-                <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>速さ<input type="range" min={0.6} max={2.0} step={0.05} value={rate} onChange={(e) => { const v = Number(e.target.value); setRate(v); updateLockedValueIfLocked("rate", v); }} />{rate.toFixed(2)}x</label>
+                <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>
+                  速さ
+                  <input
+                    type="range" min={0.6} max={2.0} step={0.05} value={rate}
+                    onChange={(e) => { const v = Number(e.target.value); setRate(v); updateLockedValueIfLocked("rate", v); setActivePresetId(null); }}
+                    onMouseUp={() => previewVoice(voiceIndex, rate, pitch)}
+                    onTouchEnd={() => previewVoice(voiceIndex, rate, pitch)}
+                  />
+                  {rate.toFixed(2)}x
+                </label>
                 <SliderLockButton locked={!!sliderLocks.rate?.locked} onClick={() => toggleSliderLock("rate", rate)} />
               </div>
               <div className="flex items-center gap-1.5">
-                <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>高さ<input type="range" min={0.8} max={1.3} step={0.02} value={pitch} onChange={(e) => { const v = Number(e.target.value); setPitch(v); updateLockedValueIfLocked("pitch", v); }} />{pitch.toFixed(2)}x</label>
+                <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>
+                  高さ
+                  <input
+                    type="range" min={0.8} max={1.3} step={0.02} value={pitch}
+                    onChange={(e) => { const v = Number(e.target.value); setPitch(v); updateLockedValueIfLocked("pitch", v); setActivePresetId(null); }}
+                    onMouseUp={() => previewVoice(voiceIndex, rate, pitch)}
+                    onTouchEnd={() => previewVoice(voiceIndex, rate, pitch)}
+                  />
+                  {pitch.toFixed(2)}x
+                </label>
                 <SliderLockButton locked={!!sliderLocks.pitch?.locked} onClick={() => toggleSliderLock("pitch", pitch)} />
               </div>
             </div>
+            <div className="flex items-center gap-1 mt-1.5">
+              <input
+                type="text" value={presetName} onChange={(e) => setPresetName(e.target.value)}
+                placeholder="この声に名前を付けて登録（例：低めの男性）"
+                className="flex-1 min-w-0 px-1.5 py-1 rounded text-[11px]" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }}
+              />
+              <button onClick={handleSavePreset} className="text-[11px] px-2 py-1 rounded whitespace-nowrap" style={{ color: C.teal, background: "transparent", border: `1px solid ${C.teal}66`, cursor: "pointer" }}>★ 登録</button>
+            </div>
+            {voicePresets.length > 0 && (
+              <div className="flex flex-wrap gap-1 mt-1">
+                {voicePresets.map((p) => (
+                  <span key={p.id} className="text-[10px] px-1.5 py-0.5 rounded inline-flex items-center gap-1" style={{ border: `1px solid ${C.borderSoft}`, color: C.textMuted }}>
+                    ★ {p.name}
+                    <button onClick={() => removePreset(p.id)} title="削除" style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer" }}>×</button>
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* 背景 */}
