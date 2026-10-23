@@ -6325,8 +6325,19 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
   // 今どの場面を再生・表示しているか（「場面とナレーション」リストのハイライト・自動スクロール用）
   const [currentSceneIdx, setCurrentSceneIdx] = useState(0);
   const sceneRefs = useRef([]);
+  const narrListRef = useRef(null); // 「場面とナレーション」のスクロール領域本体（自動スクロールをこの中だけに閉じるため）
   useEffect(() => { setCurrentSceneIdx((i) => Math.min(i, Math.max(0, scenes.length - 1))); }, [scenes.length]);
-  useEffect(() => { sceneRefs.current[currentSceneIdx]?.scrollIntoView({ block: "nearest", behavior: "smooth" }); }, [currentSceneIdx]);
+  // 対象のナレーションカードを、一覧（narrListRef）の中だけでできるだけ一番上に表示する。
+  // scrollIntoViewだと外側（モーダル全体）まで一緒にスクロールしてしまい構成パネルが見えなくなるため、
+  // narrListRefのscrollTopだけを直接操作する（コンテナの最大スクロール量を超える分は自動的にそこで止まる＝可能な範囲でOK）
+  useEffect(() => {
+    const container = narrListRef.current;
+    const el = sceneRefs.current[currentSceneIdx];
+    if (!container || !el) return;
+    const delta = el.getBoundingClientRect().top - container.getBoundingClientRect().top;
+    const targetScrollTop = container.scrollTop + delta;
+    container.scrollTo({ top: Math.max(0, targetScrollTop), behavior: "smooth" });
+  }, [currentSceneIdx]);
   // 今の場面の文章のどこまで読み上げ済みか（文字数。NarrMixedBoxのハイライトに渡す）。
   // ナレーション音声の長さは再生準備（prepareAudio）の結果でしか分からないため、再生のたびにnarrDursRefへ保存しておく
   const narrDursRef = useRef([]);
@@ -6448,10 +6459,13 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
     if (isPlayingRef.current) { stopLoop(); setIsPlaying(false); mixer().stopBGM(); mixer().stopNarration(); }
     const durs = sceneDurs.length === scenes.length ? sceneDurs : scenes.map((sc) => sc.minSec || 1);
     const total = durs.reduce((a, b) => a + b, 0) || 1;
-    const cum = durs.slice(0, idx + 1).reduce((a, b) => a + b, 0);
-    // 境界ちょうどだと次の場面の先頭（p=0）に乗ってしまうため、わずかに手前で止めて「描き終わった最終形」にする
-    const eps = Math.min(0.05, (durs[idx] || 1) * 0.02);
-    const target = Math.min(1, Math.max(0, (cum - eps) / total));
+    const cumBefore = durs.slice(0, idx).reduce((a, b) => a + b, 0);
+    const dur = durs[idx] || 1;
+    // 場面の終了間際（最後の0.3秒）はクロスフェードで薄くなる演出があるため、それより数秒手前で止めて
+    // 「描き終わった最終形」をはっきり見せる（短い場面では場面の長さに応じて手前の時間を縮める）
+    const margin = Math.min(2, dur * 0.15);
+    const localT = Math.max(0, dur - margin);
+    const target = Math.min(1, Math.max(0, (cumBefore + localT) / total));
     setSeekPos(target);
     rendererRef.current.draw(target);
     updateSceneProgress(target);
@@ -6714,7 +6728,7 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
               </>
             )}
             {narrNote && <div className="text-[10px] mb-1.5" style={{ color: "#2ee6b8" }}>{narrNote}</div>}
-            <div className="flex flex-col gap-1.5 max-h-96 overflow-y-auto pr-1">
+            <div ref={narrListRef} className="flex flex-col gap-1.5 max-h-96 overflow-y-auto pr-1">
               {scenes.map((sc, i) => {
                 const edited = sceneEdits[sceneKey(i, sc.id)];
                 const isCurrent = i === currentSceneIdx;
