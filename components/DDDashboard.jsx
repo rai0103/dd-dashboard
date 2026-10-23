@@ -5890,6 +5890,8 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
   const addSection = (id) => setSections((prev) => (prev.includes(id) ? prev : [...prev, id]));
 
   const [customChatOpen, setCustomChatOpen] = useState(false);
+  // 構成の追加候補（＋近況(詳細一括版)〜＋カスタム場面を追加）は、デフォルトで畳んでおき「＋追加」で開く
+  const [sectionAddOpen, setSectionAddOpen] = useState(false);
   const [customChatText, setCustomChatText] = useState("");
   const [customChatLoading, setCustomChatLoading] = useState(false);
   const [customChatError, setCustomChatError] = useState("");
@@ -6436,6 +6438,25 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
     catch (e) { console.error(e); alert(`音声合成に失敗しました（ローカルTTSサーバー ${getTtsBaseUrl()} が起動しているか確認してください）\n${e?.message ?? e}`); }
   };
 
+  // 構成リストの項目をクリックしたら、その場面をプレビューに表示する（動的な場面は描き終わった最終形で止める）。
+  // 併せて「場面とナレーション」側の該当カードまで自動スクロールする（updateSceneProgressがcurrentSceneIdxを更新し、
+  // 既存のuseEffect([currentSceneIdx])がscrollIntoViewする）。
+  const previewSection = (id) => {
+    if (!rendererRef.current || !scenes.length) return;
+    const idx = scenes.findIndex((sc) => sc.id === id);
+    if (idx < 0) return;
+    if (isPlayingRef.current) { stopLoop(); setIsPlaying(false); mixer().stopBGM(); mixer().stopNarration(); }
+    const durs = sceneDurs.length === scenes.length ? sceneDurs : scenes.map((sc) => sc.minSec || 1);
+    const total = durs.reduce((a, b) => a + b, 0) || 1;
+    const cum = durs.slice(0, idx + 1).reduce((a, b) => a + b, 0);
+    // 境界ちょうどだと次の場面の先頭（p=0）に乗ってしまうため、わずかに手前で止めて「描き終わった最終形」にする
+    const eps = Math.min(0.05, (durs[idx] || 1) * 0.02);
+    const target = Math.min(1, Math.max(0, (cum - eps) / total));
+    setSeekPos(target);
+    rendererRef.current.draw(target);
+    updateSceneProgress(target);
+  };
+
   // プレビューの今の1コマを、サムネイル用のPNG画像として保存する
   const handleCaptureThumbnail = () => {
     const canvas = canvasRef.current;
@@ -6550,232 +6571,124 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
           {ttsError && <div className="text-[11px]" style={{ color: C.rust }}>一部の場面でナレーション音声の生成に失敗しました（TTSサーバーをご確認ください）。</div>}
         </div>
 
-        {/* 設定パネル（右側で縦にスクロール：アバター→ナレーション→声→BGM→背景） */}
+        {/* 設定パネル（右側で縦にスクロール：構成→場面とナレーション→アバター→声→背景→BGM） */}
         <div className="flex flex-col gap-4 text-xs flex-1 min-w-0" style={{ color: C.text }}>
           {/* 構成（場面の追加・削除・並べ替え） */}
           <div>
             <div className="text-[11px] font-semibold mb-1.5" style={{ color: C.textMuted }}>構成（場面の追加・削除・並べ替え）</div>
             <div className="flex flex-col gap-1 mb-2">
-              {sections.map((id, i) => (
+              {sections.map((id, i) => {
+                const sceneIdxOfRow = scenes.findIndex((sc) => sc.id === id);
+                const isCurrentRow = sceneIdxOfRow >= 0 && sceneIdxOfRow === currentSceneIdx;
+                return (
                 <div
                   key={id}
                   draggable
                   onDragStart={() => { dragSectionIndexRef.current = i; }}
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={(e) => { e.preventDefault(); const from = dragSectionIndexRef.current; if (from !== null) moveSectionTo(from, i); dragSectionIndexRef.current = null; }}
-                  className="flex items-center gap-2 px-2 py-1.5 rounded"
-                  style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, cursor: "grab" }}
+                  onClick={() => previewSection(id)}
+                  title="クリックでこの場面をプレビュー表示"
+                  className="flex items-center gap-2 px-2 py-1.5 rounded transition-colors"
+                  style={{
+                    background: isCurrentRow ? "rgba(46, 230, 184, 0.08)" : C.panel2,
+                    border: `1px solid ${isCurrentRow ? C.teal : C.borderSoft}`,
+                    boxShadow: isCurrentRow ? `inset 3px 0 0 ${C.teal}` : "none",
+                    cursor: "grab",
+                  }}
                 >
                   <GripVertical size={13} style={{ color: C.textDim, flexShrink: 0 }} />
-                  <span className="text-[11px] flex-1" style={{ color: C.text }}>{i + 1}. {customScenes[id]?.title ?? (CONTENT_SECTION_LABELS[id] ?? id)}</span>
+                  <span className="text-[11px] flex-1" style={{ color: isCurrentRow ? C.teal : C.text, fontWeight: isCurrentRow ? 600 : 400 }}>{i + 1}. {customScenes[id]?.title ?? (CONTENT_SECTION_LABELS[id] ?? id)}</span>
                   <div className="flex items-center gap-1 ml-auto">
                     {typeof id === "string" && id.startsWith("custom:") && (
-                      <button onClick={() => { setCustomChatOpen(true); setCustomChatEditingId(id); setCustomChatText(""); setCustomChatError(""); }} style={{ color: C.textDim, background: "transparent", border: "none", cursor: "pointer", padding: 2 }} title="チャットで編集">
+                      <button onClick={(e) => { e.stopPropagation(); setCustomChatOpen(true); setCustomChatEditingId(id); setCustomChatText(""); setCustomChatError(""); }} style={{ color: C.textDim, background: "transparent", border: "none", cursor: "pointer", padding: 2 }} title="チャットで編集">
                         <MessageSquare size={13} />
                       </button>
                     )}
-                    <button onClick={() => removeSection(id)} style={{ color: C.textDim, background: "transparent", border: "none", cursor: "pointer", padding: 2 }} title="この場面を削除">
+                    <button onClick={(e) => { e.stopPropagation(); removeSection(id); }} style={{ color: C.textDim, background: "transparent", border: "none", cursor: "pointer", padding: 2 }} title="この場面を削除">
                       <X size={13} />
                     </button>
                   </div>
                 </div>
-              ))}
-              {sections.length === 0 && <p className="text-[10px]" style={{ color: C.textDim }}>場面が選択されていません。下から追加してください。</p>}
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              {Object.keys(CONTENT_SECTION_LABELS).filter((id) => !sections.includes(id)).map((id) => {
-                const available = availableSectionIds.includes(id);
-                return (
-                  <button
-                    key={id}
-                    onClick={() => available && addSection(id)}
-                    disabled={!available}
-                    title={available ? undefined : "現在のデータでは利用できません"}
-                    className="text-[11px] px-2 py-1 rounded"
-                    style={{ color: available ? C.teal : C.textDim, background: "transparent", border: `1px solid ${available ? C.teal + "66" : C.borderSoft}`, cursor: available ? "pointer" : "not-allowed", opacity: available ? 1 : 0.5 }}
-                  >
-                    ＋ {CONTENT_SECTION_LABELS[id]}
-                  </button>
                 );
               })}
+              {sections.length === 0 && <p className="text-[10px]" style={{ color: C.textDim }}>場面が選択されていません。下の「＋追加」から追加してください。</p>}
             </div>
-            <div className="mt-2 pt-2" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
-              <button
-                onClick={() => { setCustomChatOpen((v) => !v); setCustomChatEditingId(null); setCustomChatText(""); setCustomChatError(""); }}
-                className="text-[11px] px-2 py-1 rounded flex items-center gap-1"
-                style={{ color: C.teal, background: "transparent", border: `1px solid ${C.teal}66`, cursor: "pointer" }}
-              ><MessageSquare size={11} /> ＋カスタム場面を追加（チャットで指示）</button>
-              {customChatOpen && (
-                <div className="mt-1.5 p-2 rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
-                  {savedPrompts.length > 0 && (
-                    <div className="flex flex-wrap gap-1 mb-1.5">
-                      {savedPrompts.map((sp) => (
-                        <button key={sp.id} onClick={() => recallSavedPrompt(sp)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: C.textDim, background: "transparent", border: `1px solid ${C.borderSoft}`, cursor: "pointer" }} title={sp.prompt}>{sp.name}</button>
-                      ))}
+            <button
+              onClick={() => setSectionAddOpen((v) => !v)}
+              className="text-[11px] px-2 py-1 rounded flex items-center gap-1"
+              style={{ color: C.teal, background: "transparent", border: `1px solid ${C.teal}66`, cursor: "pointer" }}
+            >＋ 追加<ChevronRight size={11} style={{ transform: sectionAddOpen ? "rotate(90deg)" : "none", transition: "transform 0.15s" }} /></button>
+            {sectionAddOpen && (
+              <>
+                <div className="flex flex-wrap gap-1.5 mt-1.5">
+                  {Object.keys(CONTENT_SECTION_LABELS).filter((id) => !sections.includes(id)).map((id) => {
+                    const available = availableSectionIds.includes(id);
+                    return (
+                      <button
+                        key={id}
+                        onClick={() => available && addSection(id)}
+                        disabled={!available}
+                        title={available ? undefined : "現在のデータでは利用できません"}
+                        className="text-[11px] px-2 py-1 rounded"
+                        style={{ color: available ? C.teal : C.textDim, background: "transparent", border: `1px solid ${available ? C.teal + "66" : C.borderSoft}`, cursor: available ? "pointer" : "not-allowed", opacity: available ? 1 : 0.5 }}
+                      >
+                        ＋ {CONTENT_SECTION_LABELS[id]}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="mt-2 pt-2" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+                  <button
+                    onClick={() => { setCustomChatOpen((v) => !v); setCustomChatEditingId(null); setCustomChatText(""); setCustomChatError(""); }}
+                    className="text-[11px] px-2 py-1 rounded flex items-center gap-1"
+                    style={{ color: C.teal, background: "transparent", border: `1px solid ${C.teal}66`, cursor: "pointer" }}
+                  ><MessageSquare size={11} /> ＋カスタム場面を追加（チャットで指示）</button>
+                  {customChatOpen && (
+                    <div className="mt-1.5 p-2 rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
+                      {savedPrompts.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mb-1.5">
+                          {savedPrompts.map((sp) => (
+                            <button key={sp.id} onClick={() => recallSavedPrompt(sp)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: C.textDim, background: "transparent", border: `1px solid ${C.borderSoft}`, cursor: "pointer" }} title={sp.prompt}>{sp.name}</button>
+                          ))}
+                        </div>
+                      )}
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          type="text"
+                          value={customChatText}
+                          onChange={(e) => setCustomChatText(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === "Enter" && !customChatLoading) generateCustomScene(); }}
+                          placeholder={customChatEditingId ? "もう少し直す指示を入力" : "例：大統領中間選挙年の平均と今年と全期間平均を重ねて、比較をアナウンスして"}
+                          className="flex-1 text-[11px] rounded px-2 py-1"
+                          style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, color: C.text }}
+                        />
+                        <button
+                          onClick={generateCustomScene}
+                          disabled={customChatLoading || !customChatText.trim()}
+                          className="text-[10px] px-2 py-1 rounded"
+                          style={{ background: C.teal, color: "#04201a", border: "none", cursor: customChatLoading ? "default" : "pointer", opacity: customChatLoading || !customChatText.trim() ? 0.5 : 1 }}
+                        >{customChatLoading ? "生成中…" : "生成"}</button>
+                        {customChatEditingId && (
+                          <button onClick={saveCurrentPromptAsMemory} className="text-[10px] px-2 py-1 rounded" style={{ color: C.textDim, background: "transparent", border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>記憶する</button>
+                        )}
+                      </div>
+                      {customChatError && <div className="text-[10px] mt-1" style={{ color: "#ff6b6b" }}>{customChatError}</div>}
+                      {customChatEditingId && customScenes[customChatEditingId] && (() => {
+                        const sp = customScenes[customChatEditingId];
+                        const kind = sp.chartType === "bar" ? "棒グラフ" : sp.chartType === "donut" ? "円グラフ" : "折れ線グラフ";
+                        const items = sp.chartType === "bar" ? (sp.bars || []).map((b) => b.label) : sp.chartType === "donut" ? (sp.donut?.items || []).map((b) => b.label) : (sp.series || []).map((se) => se.label);
+                        return (
+                          <div className="text-[10px] mt-1.5" style={{ color: C.textDim }}>
+                            プレビュー中：『{sp.title}』（{kind}：{items.join("、")}）
+                          </div>
+                        );
+                      })()}
                     </div>
                   )}
-                  <div className="flex items-center gap-1.5">
-                    <input
-                      type="text"
-                      value={customChatText}
-                      onChange={(e) => setCustomChatText(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === "Enter" && !customChatLoading) generateCustomScene(); }}
-                      placeholder={customChatEditingId ? "もう少し直す指示を入力" : "例：大統領中間選挙年の平均と今年と全期間平均を重ねて、比較をアナウンスして"}
-                      className="flex-1 text-[11px] rounded px-2 py-1"
-                      style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, color: C.text }}
-                    />
-                    <button
-                      onClick={generateCustomScene}
-                      disabled={customChatLoading || !customChatText.trim()}
-                      className="text-[10px] px-2 py-1 rounded"
-                      style={{ background: C.teal, color: "#04201a", border: "none", cursor: customChatLoading ? "default" : "pointer", opacity: customChatLoading || !customChatText.trim() ? 0.5 : 1 }}
-                    >{customChatLoading ? "生成中…" : "生成"}</button>
-                    {customChatEditingId && (
-                      <button onClick={saveCurrentPromptAsMemory} className="text-[10px] px-2 py-1 rounded" style={{ color: C.textDim, background: "transparent", border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>記憶する</button>
-                    )}
-                  </div>
-                  {customChatError && <div className="text-[10px] mt-1" style={{ color: "#ff6b6b" }}>{customChatError}</div>}
-                  {customChatEditingId && customScenes[customChatEditingId] && (() => {
-                    const sp = customScenes[customChatEditingId];
-                    const kind = sp.chartType === "bar" ? "棒グラフ" : sp.chartType === "donut" ? "円グラフ" : "折れ線グラフ";
-                    const items = sp.chartType === "bar" ? (sp.bars || []).map((b) => b.label) : sp.chartType === "donut" ? (sp.donut?.items || []).map((b) => b.label) : (sp.series || []).map((se) => se.label);
-                    return (
-                      <div className="text-[10px] mt-1.5" style={{ color: C.textDim }}>
-                        プレビュー中：『{sp.title}』（{kind}：{items.join("、")}）
-                      </div>
-                    );
-                  })()}
                 </div>
-              )}
-            </div>
-          </div>
-
-          {/* アバター（人物の動画・MP4最大MAX_CLIPS本） */}
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <div className="text-[11px] font-semibold" style={{ color: C.textMuted }}>アバター（人物の動画・1人につき最大{MAX_CLIPS}本）</div>
-              <button onClick={addAvatar} className="text-[11px] px-2 py-1 rounded" style={{ color: C.teal, background: "transparent", border: `1px solid ${C.teal}66`, cursor: "pointer" }}>＋ アバターを追加</button>
-            </div>
-            {avatars.length === 0 && <p className="text-[10px] mb-1.5" style={{ color: C.textDim }}>未登録のあいだは人物は表示されません。MP4を登録すると、ランダムな順番でつなぎ目を重ねながらくり返し再生します。</p>}
-            <div className="flex flex-wrap gap-1.5 mb-2">
-              {avatars.map((a) => (
-                <span key={a.id} className="inline-flex items-center gap-1 text-[11px] pl-2 pr-1 py-1 rounded" style={{ color: avatarId === a.id ? C.bg : C.textMuted, background: avatarId === a.id ? C.teal : "transparent", border: `1px solid ${C.borderSoft}`, fontWeight: avatarId === a.id ? 700 : 400 }}>
-                  <button onClick={() => setAvatarId(a.id)} style={{ background: "none", border: "none", color: "inherit", cursor: "pointer", fontWeight: "inherit" }}>{a.gender === "male" ? "♂" : "♀"} {a.name}（{a.clips.filter(Boolean).length}本）</button>
-                  <X size={11} style={{ cursor: "pointer" }} onClick={() => removeAvatarHandler(a.id)} />
-                </span>
-              ))}
-            </div>
-            {curAvatar && (
-              <div className="rounded p-2 flex flex-col gap-1.5" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
-                <button
-                  onClick={() => setAvatarEditorOpen((v) => !v)}
-                  className="flex items-center justify-between w-full text-[11px]"
-                  style={{ color: C.textMuted, background: "transparent", border: "none", padding: 0, cursor: "pointer" }}
-                >
-                  <span>{curAvatar.gender === "male" ? "♂" : "♀"} {curAvatar.name}（動画{curAvatar.clips.filter(Boolean).length}本・{curAvatar.keyOn ? `背景消去あり/感度${curAvatar.tol}` : "背景消去なし"}・大きさ{Math.round(curAvatar.zoom * 100)}%）</span>
-                  <span style={{ color: C.teal, flexShrink: 0 }}>{avatarEditorOpen ? "▲ 閉じる" : "▼ 編集"}</span>
-                </button>
-                {avatarEditorOpen && (
-                  <>
-                    <div className="flex items-center flex-wrap gap-1.5 text-[11px]" style={{ color: C.textDim }}>
-                      <span>名前</span>
-                      <input type="text" value={curAvatar.name} onChange={(e) => patchAvatar(curAvatar.id, { name: e.target.value })} className="px-1.5 py-0.5 rounded text-xs" style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, color: C.text, width: 120 }} />
-                      <span className="ml-1">性別</span>
-                      {["male", "female"].map((g) => (
-                        <button key={g} onClick={() => patchAvatar(curAvatar.id, { gender: g })} className="text-[11px] px-2 py-0.5 rounded" style={{ color: curAvatar.gender === g ? C.bg : C.textMuted, background: curAvatar.gender === g ? C.teal : "transparent", border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>{g === "male" ? "男性" : "女性"}</button>
-                      ))}
-                      <span className="text-[10px]">（声の候補が変わります）</span>
-                    </div>
-                    {Array.from({ length: MAX_CLIPS }).map((_, i) => {
-                      const clip = curAvatar.clips[i] ?? null;
-                      return (
-                        <div key={i} className="flex items-center gap-1.5 text-[11px]" style={{ color: C.textDim }}>
-                          <span style={{ width: 40, flexShrink: 0 }}>動画{i + 1}</span>
-                          <label className="px-2 py-0.5 rounded cursor-pointer" style={{ color: C.teal, border: `1px solid ${C.teal}66` }}>
-                            {clip ? "差し替え" : "MP4を選択"}
-                            <input type="file" accept="video/mp4,video/*,.mp4,.m4v,.mov,.webm" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0] ?? null; e.target.value = ""; if (f) setAvatarClip(curAvatar.id, i, f); }} />
-                          </label>
-                          <span className="truncate flex-1" title={clip?.name}>{clip ? clip.name : "未登録"}</span>
-                          {clip && <X size={12} style={{ cursor: "pointer", flexShrink: 0 }} onClick={() => setAvatarClip(curAvatar.id, i, null)} />}
-                        </div>
-                      );
-                    })}
-                    <p className="text-[10px]" style={{ color: C.textDim }}>登録した動画の中から、ランダムな順番でつないで、つなぎ目を自然に重ねながらくり返し再生します（1〜2本でもその範囲でくり返します）。動画の音声は使いません。</p>
-                    <label className="flex items-center gap-1.5 text-[11px]" style={{ color: C.textDim }}>
-                      <input type="checkbox" checked={curAvatar.keyOn} onChange={(e) => patchAvatar(curAvatar.id, { keyOn: e.target.checked })} />
-                      背景を消す（動画の四隅の色を基準）
-                    </label>
-                    {curAvatar.keyOn && (
-                      <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>背景を消す感度 {curAvatar.tol}<input type="range" min={8} max={60} step={1} value={curAvatar.tol} onChange={(e) => patchAvatar(curAvatar.id, { tol: parseInt(e.target.value, 10) })} /></label>
-                    )}
-                    <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>人物の大きさ {Math.round(curAvatar.zoom * 100)}%<input type="range" min={0.5} max={1.4} step={0.05} value={curAvatar.zoom} onChange={(e) => patchAvatar(curAvatar.id, { zoom: parseFloat(e.target.value) })} /></label>
-                  </>
-                )}
-              </div>
+              </>
             )}
-          </div>
-
-          {/* 背景 */}
-          <div>
-            <div className="text-[11px] font-semibold mb-1.5" style={{ color: C.textMuted }}>背景画像</div>
-            <div className="flex flex-wrap gap-1.5 mb-1.5">
-              <button onClick={() => setActiveBackgroundId("")} className="text-[11px] px-2 py-1 rounded" style={{ color: activeBackgroundId === "" ? C.bg : C.textMuted, background: activeBackgroundId === "" ? C.teal : "transparent", border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>なし</button>
-              {backgrounds.map((b) => (
-                <span key={b.id} className="inline-flex items-center gap-1 text-[11px] pl-2 pr-1 py-1 rounded" style={{ color: activeBackgroundId === b.id ? C.bg : C.textMuted, background: activeBackgroundId === b.id ? C.teal : "transparent", border: `1px solid ${C.borderSoft}` }}>
-                  <button onClick={() => setActiveBackgroundId(b.id)} style={{ background: "none", border: "none", color: "inherit", cursor: "pointer", fontWeight: activeBackgroundId === b.id ? 700 : 400 }}>{b.name}</button>
-                  <X size={11} style={{ cursor: "pointer" }} onClick={() => handleBackgroundDelete(b.id)} />
-                </span>
-              ))}
-              <label className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded" style={{ color: C.textMuted, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
-                <Upload size={11} /> 追加
-                <input type="file" accept="image/*" onChange={handleBackgroundUpload} style={{ display: "none" }} />
-              </label>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>不透明度<input type="range" min={0} max={100} value={backgroundOpacity} onChange={(e) => { const v = Number(e.target.value); setBackgroundOpacity(v); updateLockedValueIfLocked("backgroundOpacity", v); }} />{backgroundOpacity}%</label>
-              <SliderLockButton locked={!!sliderLocks.backgroundOpacity?.locked} onClick={() => toggleSliderLock("backgroundOpacity", backgroundOpacity)} />
-            </div>
-          </div>
-
-          {/* BGM */}
-          <div>
-            <div className="text-[11px] font-semibold mb-1.5" style={{ color: C.textMuted }}>BGM</div>
-            <div className="flex flex-wrap gap-1.5 mb-1.5">
-              <button onClick={() => setActiveBgmId("")} className="text-[11px] px-2 py-1 rounded" style={{ color: activeBgmId === "" ? C.bg : C.textMuted, background: activeBgmId === "" ? C.teal : "transparent", border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>なし</button>
-              {bgms.map((b) => (
-                <span key={b.id} className="inline-flex items-center gap-1 text-[11px] pl-2 pr-1 py-1 rounded" style={{ color: activeBgmId === b.id ? C.bg : C.textMuted, background: activeBgmId === b.id ? C.teal : "transparent", border: `1px solid ${C.borderSoft}` }}>
-                  <button onClick={() => setActiveBgmId(b.id)} style={{ background: "none", border: "none", color: "inherit", cursor: "pointer", fontWeight: activeBgmId === b.id ? 700 : 400 }}>{b.name}</button>
-                  <X size={11} style={{ cursor: "pointer" }} onClick={() => handleBgmDelete(b.id)} />
-                </span>
-              ))}
-              <label className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded" style={{ color: C.textMuted, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
-                <Upload size={11} /> 追加
-                <input type="file" accept="audio/*" onChange={handleBgmUpload} style={{ display: "none" }} />
-              </label>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>音量<input type="range" min={0} max={100} value={bgmVolume} onChange={(e) => { const v = Number(e.target.value); setBgmVolume(v); updateLockedValueIfLocked("bgmVolume", v); }} />{bgmVolume}%</label>
-              <SliderLockButton locked={!!sliderLocks.bgmVolume?.locked} onClick={() => toggleSliderLock("bgmVolume", bgmVolume)} />
-            </div>
-          </div>
-
-          {/* 声・速度 */}
-          <div>
-            <div className="text-[11px] font-semibold mb-1.5" style={{ color: C.textMuted }}>声</div>
-            <select value={voiceIndex} onChange={(e) => setVoiceIndex(e.target.value)} className="text-xs px-2 py-1.5 rounded w-full mb-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }}>
-              {voiceChoices.length === 0 && <option value="">（音声が見つかりません）</option>}
-              {voiceChoices.map((v) => <option key={v} value={v}>{v}</option>)}
-            </select>
-            <div className="flex items-center gap-3 flex-wrap">
-              <div className="flex items-center gap-1.5">
-                <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>速さ<input type="range" min={0.6} max={2.0} step={0.05} value={rate} onChange={(e) => { const v = Number(e.target.value); setRate(v); updateLockedValueIfLocked("rate", v); }} />{rate.toFixed(2)}x</label>
-                <SliderLockButton locked={!!sliderLocks.rate?.locked} onClick={() => toggleSliderLock("rate", rate)} />
-              </div>
-              <div className="flex items-center gap-1.5">
-                <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>高さ<input type="range" min={0.8} max={1.3} step={0.02} value={pitch} onChange={(e) => { const v = Number(e.target.value); setPitch(v); updateLockedValueIfLocked("pitch", v); }} />{pitch.toFixed(2)}x</label>
-                <SliderLockButton locked={!!sliderLocks.pitch?.locked} onClick={() => toggleSliderLock("pitch", pitch)} />
-              </div>
-            </div>
           </div>
 
           {/* 場面ごとのナレーション編集（通常の文章で表示。場面の長さは音声の長さに自動で合わせます） */}
@@ -6865,6 +6778,134 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
                   </div>
                 );
               })}
+            </div>
+          </div>
+
+          {/* アバター（人物の動画・MP4最大MAX_CLIPS本） */}
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="text-[11px] font-semibold" style={{ color: C.textMuted }}>アバター（人物の動画・1人につき最大{MAX_CLIPS}本）</div>
+              <button onClick={addAvatar} className="text-[11px] px-2 py-1 rounded" style={{ color: C.teal, background: "transparent", border: `1px solid ${C.teal}66`, cursor: "pointer" }}>＋ アバターを追加</button>
+            </div>
+            {avatars.length === 0 && <p className="text-[10px] mb-1.5" style={{ color: C.textDim }}>未登録のあいだは人物は表示されません。MP4を登録すると、ランダムな順番でつなぎ目を重ねながらくり返し再生します。</p>}
+            <div className="flex flex-wrap gap-1.5 mb-2">
+              {avatars.map((a) => (
+                <span key={a.id} className="inline-flex items-center gap-1 text-[11px] pl-2 pr-1 py-1 rounded" style={{ color: avatarId === a.id ? C.bg : C.textMuted, background: avatarId === a.id ? C.teal : "transparent", border: `1px solid ${C.borderSoft}`, fontWeight: avatarId === a.id ? 700 : 400 }}>
+                  <button onClick={() => setAvatarId(a.id)} style={{ background: "none", border: "none", color: "inherit", cursor: "pointer", fontWeight: "inherit" }}>{a.gender === "male" ? "♂" : "♀"} {a.name}（{a.clips.filter(Boolean).length}本）</button>
+                  <X size={11} style={{ cursor: "pointer" }} onClick={() => removeAvatarHandler(a.id)} />
+                </span>
+              ))}
+            </div>
+            {curAvatar && (
+              <div className="rounded p-2 flex flex-col gap-1.5" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
+                <button
+                  onClick={() => setAvatarEditorOpen((v) => !v)}
+                  className="flex items-center justify-between w-full text-[11px]"
+                  style={{ color: C.textMuted, background: "transparent", border: "none", padding: 0, cursor: "pointer" }}
+                >
+                  <span>{curAvatar.gender === "male" ? "♂" : "♀"} {curAvatar.name}（動画{curAvatar.clips.filter(Boolean).length}本・{curAvatar.keyOn ? `背景消去あり/感度${curAvatar.tol}` : "背景消去なし"}・大きさ{Math.round(curAvatar.zoom * 100)}%）</span>
+                  <span style={{ color: C.teal, flexShrink: 0 }}>{avatarEditorOpen ? "▲ 閉じる" : "▼ 編集"}</span>
+                </button>
+                {avatarEditorOpen && (
+                  <>
+                    <div className="flex items-center flex-wrap gap-1.5 text-[11px]" style={{ color: C.textDim }}>
+                      <span>名前</span>
+                      <input type="text" value={curAvatar.name} onChange={(e) => patchAvatar(curAvatar.id, { name: e.target.value })} className="px-1.5 py-0.5 rounded text-xs" style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, color: C.text, width: 120 }} />
+                      <span className="ml-1">性別</span>
+                      {["male", "female"].map((g) => (
+                        <button key={g} onClick={() => patchAvatar(curAvatar.id, { gender: g })} className="text-[11px] px-2 py-0.5 rounded" style={{ color: curAvatar.gender === g ? C.bg : C.textMuted, background: curAvatar.gender === g ? C.teal : "transparent", border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>{g === "male" ? "男性" : "女性"}</button>
+                      ))}
+                      <span className="text-[10px]">（声の候補が変わります）</span>
+                    </div>
+                    {Array.from({ length: MAX_CLIPS }).map((_, i) => {
+                      const clip = curAvatar.clips[i] ?? null;
+                      return (
+                        <div key={i} className="flex items-center gap-1.5 text-[11px]" style={{ color: C.textDim }}>
+                          <span style={{ width: 40, flexShrink: 0 }}>動画{i + 1}</span>
+                          <label className="px-2 py-0.5 rounded cursor-pointer" style={{ color: C.teal, border: `1px solid ${C.teal}66` }}>
+                            {clip ? "差し替え" : "MP4を選択"}
+                            <input type="file" accept="video/mp4,video/*,.mp4,.m4v,.mov,.webm" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0] ?? null; e.target.value = ""; if (f) setAvatarClip(curAvatar.id, i, f); }} />
+                          </label>
+                          <span className="truncate flex-1" title={clip?.name}>{clip ? clip.name : "未登録"}</span>
+                          {clip && <X size={12} style={{ cursor: "pointer", flexShrink: 0 }} onClick={() => setAvatarClip(curAvatar.id, i, null)} />}
+                        </div>
+                      );
+                    })}
+                    <p className="text-[10px]" style={{ color: C.textDim }}>登録した動画の中から、ランダムな順番でつないで、つなぎ目を自然に重ねながらくり返し再生します（1〜2本でもその範囲でくり返します）。動画の音声は使いません。</p>
+                    <label className="flex items-center gap-1.5 text-[11px]" style={{ color: C.textDim }}>
+                      <input type="checkbox" checked={curAvatar.keyOn} onChange={(e) => patchAvatar(curAvatar.id, { keyOn: e.target.checked })} />
+                      背景を消す（動画の四隅の色を基準）
+                    </label>
+                    {curAvatar.keyOn && (
+                      <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>背景を消す感度 {curAvatar.tol}<input type="range" min={8} max={60} step={1} value={curAvatar.tol} onChange={(e) => patchAvatar(curAvatar.id, { tol: parseInt(e.target.value, 10) })} /></label>
+                    )}
+                    <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>人物の大きさ {Math.round(curAvatar.zoom * 100)}%<input type="range" min={0.5} max={1.4} step={0.05} value={curAvatar.zoom} onChange={(e) => patchAvatar(curAvatar.id, { zoom: parseFloat(e.target.value) })} /></label>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* 声・速度 */}
+          <div>
+            <div className="text-[11px] font-semibold mb-1.5" style={{ color: C.textMuted }}>声</div>
+            <select value={voiceIndex} onChange={(e) => setVoiceIndex(e.target.value)} className="text-xs px-2 py-1.5 rounded w-full mb-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }}>
+              {voiceChoices.length === 0 && <option value="">（音声が見つかりません）</option>}
+              {voiceChoices.map((v) => <option key={v} value={v}>{v}</option>)}
+            </select>
+            <div className="flex items-center gap-3 flex-wrap">
+              <div className="flex items-center gap-1.5">
+                <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>速さ<input type="range" min={0.6} max={2.0} step={0.05} value={rate} onChange={(e) => { const v = Number(e.target.value); setRate(v); updateLockedValueIfLocked("rate", v); }} />{rate.toFixed(2)}x</label>
+                <SliderLockButton locked={!!sliderLocks.rate?.locked} onClick={() => toggleSliderLock("rate", rate)} />
+              </div>
+              <div className="flex items-center gap-1.5">
+                <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>高さ<input type="range" min={0.8} max={1.3} step={0.02} value={pitch} onChange={(e) => { const v = Number(e.target.value); setPitch(v); updateLockedValueIfLocked("pitch", v); }} />{pitch.toFixed(2)}x</label>
+                <SliderLockButton locked={!!sliderLocks.pitch?.locked} onClick={() => toggleSliderLock("pitch", pitch)} />
+              </div>
+            </div>
+          </div>
+
+          {/* 背景 */}
+          <div>
+            <div className="text-[11px] font-semibold mb-1.5" style={{ color: C.textMuted }}>背景画像</div>
+            <div className="flex flex-wrap gap-1.5 mb-1.5">
+              <button onClick={() => setActiveBackgroundId("")} className="text-[11px] px-2 py-1 rounded" style={{ color: activeBackgroundId === "" ? C.bg : C.textMuted, background: activeBackgroundId === "" ? C.teal : "transparent", border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>なし</button>
+              {backgrounds.map((b) => (
+                <span key={b.id} className="inline-flex items-center gap-1 text-[11px] pl-2 pr-1 py-1 rounded" style={{ color: activeBackgroundId === b.id ? C.bg : C.textMuted, background: activeBackgroundId === b.id ? C.teal : "transparent", border: `1px solid ${C.borderSoft}` }}>
+                  <button onClick={() => setActiveBackgroundId(b.id)} style={{ background: "none", border: "none", color: "inherit", cursor: "pointer", fontWeight: activeBackgroundId === b.id ? 700 : 400 }}>{b.name}</button>
+                  <X size={11} style={{ cursor: "pointer" }} onClick={() => handleBackgroundDelete(b.id)} />
+                </span>
+              ))}
+              <label className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded" style={{ color: C.textMuted, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+                <Upload size={11} /> 追加
+                <input type="file" accept="image/*" onChange={handleBackgroundUpload} style={{ display: "none" }} />
+              </label>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>不透明度<input type="range" min={0} max={100} value={backgroundOpacity} onChange={(e) => { const v = Number(e.target.value); setBackgroundOpacity(v); updateLockedValueIfLocked("backgroundOpacity", v); }} />{backgroundOpacity}%</label>
+              <SliderLockButton locked={!!sliderLocks.backgroundOpacity?.locked} onClick={() => toggleSliderLock("backgroundOpacity", backgroundOpacity)} />
+            </div>
+          </div>
+
+          {/* BGM */}
+          <div>
+            <div className="text-[11px] font-semibold mb-1.5" style={{ color: C.textMuted }}>BGM</div>
+            <div className="flex flex-wrap gap-1.5 mb-1.5">
+              <button onClick={() => setActiveBgmId("")} className="text-[11px] px-2 py-1 rounded" style={{ color: activeBgmId === "" ? C.bg : C.textMuted, background: activeBgmId === "" ? C.teal : "transparent", border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>なし</button>
+              {bgms.map((b) => (
+                <span key={b.id} className="inline-flex items-center gap-1 text-[11px] pl-2 pr-1 py-1 rounded" style={{ color: activeBgmId === b.id ? C.bg : C.textMuted, background: activeBgmId === b.id ? C.teal : "transparent", border: `1px solid ${C.borderSoft}` }}>
+                  <button onClick={() => setActiveBgmId(b.id)} style={{ background: "none", border: "none", color: "inherit", cursor: "pointer", fontWeight: activeBgmId === b.id ? 700 : 400 }}>{b.name}</button>
+                  <X size={11} style={{ cursor: "pointer" }} onClick={() => handleBgmDelete(b.id)} />
+                </span>
+              ))}
+              <label className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded" style={{ color: C.textMuted, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+                <Upload size={11} /> 追加
+                <input type="file" accept="audio/*" onChange={handleBgmUpload} style={{ display: "none" }} />
+              </label>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>音量<input type="range" min={0} max={100} value={bgmVolume} onChange={(e) => { const v = Number(e.target.value); setBgmVolume(v); updateLockedValueIfLocked("bgmVolume", v); }} />{bgmVolume}%</label>
+              <SliderLockButton locked={!!sliderLocks.bgmVolume?.locked} onClick={() => toggleSliderLock("bgmVolume", bgmVolume)} />
             </div>
           </div>
         </div>
