@@ -186,6 +186,88 @@ async function handlePostChat(req, res) {
   }
 }
 
+// ニュース・キーワード解説動画（/explainer）用：参考URLの本文を取得する。
+// ブラウザからは他サイトを直接読めない（CORS）ため、このローカルサーバーが代わりに取得し、
+// HTMLは本文らしき部分だけをテキストにして返す。PDFならbase64のまま返す（AIにPDFとして渡す）。
+//   GET /api/fetch-url?url=https://... -> { kind:'text', title, text } | { kind:'pdf', title, base64 }
+const FETCH_MAX_BYTES = 15 * 1024 * 1024;
+const ENTITY = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', hellip: '…', mdash: '—', ndash: '–', laquo: '«', raquo: '»', yen: '¥', copy: '©' };
+function decodeEntities(s) {
+  return s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e) => {
+    if (e[0] === '#') {
+      const code = e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
+      try { return String.fromCodePoint(code); } catch { return m; }
+    }
+    return ENTITY[e.toLowerCase()] ?? m;
+  });
+}
+function htmlToText(html) {
+  let h = html.replace(/<!--[\s\S]*?-->/g, ' ');
+  h = h.replace(/<(script|style|noscript|svg|iframe|template|form|button|select)\b[\s\S]*?<\/\1>/gi, ' ');
+  const titleM = h.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  const ogM = h.match(/<meta[^>]+property=["']og:title["'][^>]*content=["']([^"']*)["']/i);
+  const descM = h.match(/<meta[^>]+name=["']description["'][^>]*content=["']([^"']*)["']/i);
+  const title = decodeEntities(((ogM && ogM[1]) || (titleM && titleM[1]) || '').replace(/\s+/g, ' ').trim());
+  // 本文らしき部分：<article>（複数あれば最長）→<main>→<body>
+  const pickLongest = (re) => { let best = ''; let m; while ((m = re.exec(h))) { if (m[1].length > best.length) best = m[1]; } return best; };
+  let body = pickLongest(/<article\b[^>]*>([\s\S]*?)<\/article>/gi) || pickLongest(/<main\b[^>]*>([\s\S]*?)<\/main>/gi);
+  if (!body || body.length < 500) {
+    const b = h.match(/<body\b[^>]*>([\s\S]*)<\/body>/i);
+    body = (b ? b[1] : h).replace(/<(nav|header|footer|aside)\b[\s\S]*?<\/\1>/gi, ' ');
+  }
+  let text = body
+    .replace(/<(br|\/p|\/div|\/li|\/h[1-6]|\/tr|\/section|\/article|\/blockquote)\b[^>]*>/gi, '\n')
+    .replace(/<li\b[^>]*>/gi, '\n・')
+    .replace(/<[^>]+>/g, ' ');
+  text = decodeEntities(text).replace(/[ \t　]+/g, ' ').replace(/ *\n */g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+  const desc = descM ? decodeEntities(descM[1]).trim() : '';
+  if (desc && !text.includes(desc.slice(0, 30))) text = `${desc}\n\n${text}`;
+  return { title, text: text.slice(0, 60000) };
+}
+function charsetOf(contentType, headBytes) {
+  const m = /charset=([^;\s]+)/i.exec(contentType || '');
+  if (m) return m[1].replace(/["']/g, '');
+  const head = Buffer.from(headBytes).toString('latin1');
+  const m2 = /<meta[^>]+charset=["']?([a-z0-9_\-]+)/i.exec(head);
+  return m2 ? m2[1] : 'utf-8';
+}
+async function handleFetchUrl(req, res) {
+  const u = new URL(req.url, 'http://localhost');
+  const target = u.searchParams.get('url') || '';
+  const send = (status, obj) => { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(obj)); };
+  let parsed;
+  try { parsed = new URL(target); } catch { send(400, { error: 'BAD_URL', message: 'URLの形式が正しくありません' }); return; }
+  if (!/^https?:$/.test(parsed.protocol)) { send(400, { error: 'BAD_URL', message: 'http/httpsのURLだけ取得できます' }); return; }
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 25000);
+  try {
+    const r = await fetch(parsed.href, {
+      redirect: 'follow',
+      signal: ctl.signal,
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36', 'Accept-Language': 'ja,en;q=0.8' },
+    });
+    if (!r.ok) { send(502, { error: 'FETCH_FAILED', message: `取得できませんでした（HTTP ${r.status}）` }); return; }
+    const buf = Buffer.from(await r.arrayBuffer());
+    if (buf.length > FETCH_MAX_BYTES) { send(413, { error: 'TOO_LARGE', message: 'ファイルが大きすぎます（15MBまで）' }); return; }
+    const ct = r.headers.get('content-type') || '';
+    const fileName = decodeURIComponent(parsed.pathname.split('/').pop() || parsed.hostname);
+    if (/application\/pdf/i.test(ct) || buf.slice(0, 5).toString('latin1') === '%PDF-') {
+      send(200, { kind: 'pdf', title: fileName, base64: buf.toString('base64') });
+      return;
+    }
+    let html;
+    try { html = new TextDecoder(charsetOf(ct, buf.slice(0, 4096))).decode(buf); } catch { html = buf.toString('utf8'); }
+    if (/text\/plain/i.test(ct)) { send(200, { kind: 'text', title: fileName, text: html.slice(0, 60000) }); return; }
+    const { title, text } = htmlToText(html);
+    if (text.length < 80) { send(422, { error: 'NO_TEXT', message: '本文を読み取れませんでした（ログインが必要なページ・画像中心のページなど）。本文をコピーして「テキスト」で追加してください。' }); return; }
+    send(200, { kind: 'text', title: title || parsed.hostname, text });
+  } catch (e) {
+    send(502, { error: 'FETCH_FAILED', message: e && e.name === 'AbortError' ? '時間内に取得できませんでした' : String(e && e.message ? e.message : e) });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function handlePostSpeak(req, res) {
   const body = await readJsonBody(req);
   const text = body && typeof body.text === 'string' ? body.text : '';
@@ -229,6 +311,7 @@ const server = http.createServer((req, res) => {
   if (pathname === '/api/tts' && req.method === 'GET') { handleGetVoices(req, res); return; }
   if (pathname === '/api/tts' && req.method === 'POST') { handlePostSpeak(req, res); return; }
   if (pathname === '/api/chat' && req.method === 'POST') { handlePostChat(req, res); return; }
+  if (pathname === '/api/fetch-url' && req.method === 'GET') { handleFetchUrl(req, res); return; }
   if (pathname === '/' || pathname === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({ ok: true, service: 'dd-dashboard tts-server', port: PORT }));

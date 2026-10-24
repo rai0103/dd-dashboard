@@ -10232,6 +10232,9 @@ export default function DDDashboard() {
           <button onClick={() => setModal({ type: "videoCreate" })} title="長尺動画作成（S&P500）" className="shrink-0 flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
             <Clapperboard size={12} /> 長尺動画作成
           </button>
+          <a href={`${process.env.NEXT_PUBLIC_BASE_PATH || ""}/explainer/`} title="ニュース・キーワード解説動画（長尺＋ショート）" className="shrink-0 flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer", textDecoration: "none" }}>
+            <Clapperboard size={12} /> 解説動画作成
+          </a>
           <button onClick={() => setModal({ type: "videoTicker" })} title="動画用ティッカー分析（SP500以外の銘柄）" className="shrink-0 flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
             <Layers size={12} /> 動画用ティッカー
           </button>
