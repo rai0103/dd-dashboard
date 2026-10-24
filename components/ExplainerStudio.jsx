@@ -20,7 +20,7 @@ import { ExplainerRenderer, RENDER_SIZE } from "@/lib/explainer/renderer";
 import { generateProject, generateShort, rewriteScene, CHARS_PER_MIN } from "@/lib/explainer/aiScript";
 import { AiClientError } from "@/lib/explainer/aiClient";
 import { referenceBlocks, referenceTexts, fetchUrlReference, fileToBase64, newRefId, refLabel, MAX_PDF_BYTES } from "@/lib/explainer/references";
-import { lintScenes, buildDescription, normalizeVisual, minSecFor, sanitizeReading, isKanaReading } from "@/lib/explainer/scriptModel";
+import { lintScenes, buildDescription, sourcesScene, normalizeVisual, minSecFor, sanitizeReading, isKanaReading } from "@/lib/explainer/scriptModel";
 import { saveImage, listImages, deleteImage } from "@/lib/explainer/imageStore";
 import { VISUAL_KINDS, ICON_NAMES } from "@/lib/explainer/types";
 
@@ -82,7 +82,7 @@ export default function ExplainerStudio() {
   const [topic, setTopic] = useState(saved0?.topic ?? "");
   const [mode, setMode] = useState(saved0?.mode ?? "news");
   const [audience, setAudience] = useState(saved0?.audience ?? "beginner");
-  const [targetMinutes, setTargetMinutes] = useState(saved0?.targetMinutes ?? 8);
+  const [targetMinutes, setTargetMinutes] = useState(saved0?.targetMinutes ?? 5);
   const [extraInstruction, setExtraInstruction] = useState(saved0?.extraInstruction ?? "");
   const [refs, setRefs] = useState(() => (saved0?.refs ?? []).filter((r) => r.kind !== "pdf"));
   useEffect(() => {
@@ -130,7 +130,15 @@ export default function ExplainerStudio() {
   };
 
   // ---------------- プロジェクト（台本） ----------------
-  const [project, setProject] = useState(() => { try { const v = JSON.parse(localStorage.getItem(PROJECT_KEY) || "null"); return v && v.version === 1 ? v : null; } catch (e) { return null; } });
+  const [project, setProject] = useState(() => {
+    try {
+      const v = JSON.parse(localStorage.getItem(PROJECT_KEY) || "null");
+      if (!v || v.version !== 1) return null;
+      // 「参考資料を動画に入れる」がオフなら、以前の台本に入っている参考資料の場面を外す
+      if (localStorage.getItem("explainer-sources-in-video-v1") !== "1") v.longScenes = v.longScenes.filter((s) => s.visual.kind !== "sources");
+      return v;
+    } catch (e) { return null; }
+  });
   useEffect(() => { if (project) { try { localStorage.setItem(PROJECT_KEY, JSON.stringify(project)); } catch (e) { /* ignore */ } } }, [project]);
   useEffect(() => { if (project) setInputOpen(false); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
   const [format, setFormat] = useState("long");
@@ -157,7 +165,7 @@ export default function ExplainerStudio() {
     setGenBusy(true); setGenError("");
     const ac = new AbortController(); abortRef.current = ac;
     try {
-      const p = await generateProject(genInput(), setGenProgress, ac.signal, true);
+      const p = await generateProject(genInput(), setGenProgress, ac.signal, true, sourcesInVideo);
       setProject(p); setFormat("long"); setInputOpen(false); setSeekPos(0);
     } catch (e) { setGenError(errMsg(e)); }
     finally { setGenBusy(false); setGenProgress(null); abortRef.current = null; }
@@ -384,6 +392,18 @@ export default function ExplainerStudio() {
   const handleBackgroundDelete = async (id) => { await deleteBackground(id, true); if (activeBackgroundId === id) setActiveBackgroundId(""); refreshBackgrounds(); };
 
   const [showSubtitles, setShowSubtitles] = useState(true);
+  // 参考資料：既定では動画に入れず、概要欄にだけ記載する（入れる場合は長尺の最後に「参考資料」の場面を足す）
+  const [sourcesInVideo, setSourcesInVideoState] = useState(() => { try { return localStorage.getItem("explainer-sources-in-video-v1") === "1"; } catch (e) { return false; } });
+  const setSourcesInVideo = (on) => {
+    setSourcesInVideoState(on);
+    try { localStorage.setItem("explainer-sources-in-video-v1", on ? "1" : "0"); } catch (e) { /* ignore */ }
+    setProject((p) => {
+      if (!p) return p;
+      const rest = p.longScenes.filter((s) => s.visual.kind !== "sources");
+      if (!on || !p.sources.length) return { ...p, longScenes: rest };
+      return { ...p, longScenes: [...rest, sourcesScene(p.sources, Math.max(0, p.chapters.length - 1))] };
+    });
+  };
 
   // ---------------- プレビュー・再生・書き出し ----------------
   const canvasRef = useRef(null);
@@ -690,6 +710,7 @@ export default function ExplainerStudio() {
                   <button onClick={handleThumbnail} title={format === "long" ? "サムネ用の画像（大きな文字＋人物）をPNGで保存" : "いま表示中の1コマをPNGで保存"} className="text-xs px-3 py-1.5 rounded flex items-center gap-1.5" style={{ background: C.panel2, color: C.textMuted, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}><Camera size={12} /> サムネ保存</button>
                   <button onClick={handleExport} disabled={isExporting} className="text-xs px-3 py-1.5 rounded flex items-center gap-1.5 ml-auto" style={{ ...btn("amber"), background: isExporting ? C.panel2 : C.amber, color: isExporting ? C.textMuted : C.bg }}><Download size={13} /> {isExporting ? `書き出し中… ${exportProgress}%` : "動画を書き出す（MP4）"}</button>
                 </div>
+                {format === "long" && <label className="flex items-center gap-1.5 text-[11px]" style={{ color: C.textDim }}><input type="checkbox" checked={sourcesInVideo} onChange={(e) => setSourcesInVideo(e.target.checked)} /> 最後に「参考資料」の場面を入れる（オフでも概要欄には記載します）</label>}
                 <label className="flex items-center gap-1.5 text-[11px]" style={{ color: C.textDim }}><input type="checkbox" checked={showSubtitles} onChange={(e) => setShowSubtitles(e.target.checked)} /> 字幕（ナレーション）を表示（オフでテロップ）</label>
                 {ttsError && <div className="text-[11px]" style={{ color: C.rust }}>一部の場面でナレーション音声の生成に失敗しました（TTSサーバーをご確認ください）。</div>}
                 <div className="text-[10px] leading-relaxed" style={{ color: C.textDim }}>書き出しは実時間で録画します（{fmtTime(displayTotal)}かかります）。録画中はこのタブを前面に表示したままにしてください。</div>

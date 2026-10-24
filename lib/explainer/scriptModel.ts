@@ -129,8 +129,8 @@ export function sourcesScene(sources: SourceNote[], chapterNo: number): Explaine
   };
 }
 
-/** 章ごとに生成した場面を並べ、本編の章の前に章の扉、最後に参考資料を入れて長尺の場面一覧にする */
-export function assembleLong(chapters: ChapterPlan[], perChapter: ExplainerScene[][], sources: SourceNote[], withChapterCards = true): ExplainerScene[] {
+/** 章ごとに生成した場面を並べ、本編の章の前に章の扉を入れて長尺の場面一覧にする（参考資料の場面は既定では入れず、概要欄に記載する） */
+export function assembleLong(chapters: ChapterPlan[], perChapter: ExplainerScene[][], sources: SourceNote[], withChapterCards = true, withSourcesScene = false): ExplainerScene[] {
   const out: ExplainerScene[] = [];
   let bodyNo = 0;
   chapters.forEach((ch, i) => {
@@ -141,7 +141,7 @@ export function assembleLong(chapters: ChapterPlan[], perChapter: ExplainerScene
     }
     scenes.forEach((s) => out.push({ ...s, chapter: i }));
   });
-  if (sources.length) out.push(sourcesScene(sources, Math.max(0, chapters.length - 1)));
+  if (withSourcesScene && sources.length) out.push(sourcesScene(sources, Math.max(0, chapters.length - 1)));
   return out;
 }
 

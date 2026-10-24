@@ -326,7 +326,7 @@ export async function rewriteScene(inp: GenerateInput, videoTitle: string, instr
 export interface GenerateProgress { step: string; done: number; total: number }
 
 /** 目次→章ごと（最初の1章のあとは3並列）→ショート の順に生成し、プロジェクト一式を返す */
-export async function generateProject(inp: GenerateInput, onProgress: (p: GenerateProgress) => void, signal?: AbortSignal, withShort = true): Promise<ExplainerProject> {
+export async function generateProject(inp: GenerateInput, onProgress: (p: GenerateProgress) => void, signal?: AbortSignal, withShort = true, withSourcesScene = false): Promise<ExplainerProject> {
   onProgress({ step: '目次を作成中…', done: 0, total: 1 });
   const step = async <T,>(label: string, fn: () => Promise<T>): Promise<T> => {
     try { return await fn(); } catch (e: any) { if (e && typeof e.message === 'string' && e.code !== 'ABORTED') e.message = `【${label}】${e.message}`; throw e; }
@@ -351,7 +351,7 @@ export async function generateProject(inp: GenerateInput, onProgress: (p: Genera
   const rest = Array.from({ length: n - 1 }, (_, k) => k + 1);
   const workers = Array.from({ length: Math.min(3, rest.length) }, async () => { while (rest.length) { const i = rest.shift()!; await runOne(i); } });
   await Promise.all(workers);
-  const longScenes = assembleLong(o.chapters, per, o.sources);
+  const longScenes = assembleLong(o.chapters, per, o.sources, true, withSourcesScene);
   let shortScenes: ExplainerScene[] = [];
   if (withShort) {
     onProgress({ step: '宣伝用ショートを作成中…', done, total });

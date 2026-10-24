@@ -46,7 +46,8 @@ test("章の扉と参考資料を入れて長尺を組み立てる", () => {
     { title: "まとめ", reading: "まとめ", role: "outro", goal: "", keyPoints: "", sceneCount: 1 },
   ] as const;
   const sc = (n: string) => normalizeScene({ title: n, caption: n, narration: `${n}です。`, reading: "です。", visual: { kind: "point", emphasis: n } }, 0);
-  const out = assembleLong(chapters as any, [[sc("a"), sc("b")], [sc("c")], [sc("d")]], [{ title: "参考1", detail: "" }]);
+  const out = assembleLong(chapters as any, [[sc("a"), sc("b")], [sc("c")], [sc("d")]], [{ title: "参考1", detail: "" }], true, true);
+  assert.equal(assembleLong(chapters as any, [[sc("a")], [sc("c")], [sc("d")]], [{ title: "参考1", detail: "" }]).some((s) => s.visual.kind === "sources"), false);
   assert.deepEqual(out.map((s) => s.visual.kind), ["point", "point", "chapter", "point", "point", "sources"]);
   assert.equal(out[2].visual.emphasis, "1");
   assert.equal(out[3].chapter, 1);
