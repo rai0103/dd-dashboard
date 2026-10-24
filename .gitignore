@@ -26,3 +26,4 @@ sample-data/
 
 # build id written by next.config.ts at build time
 public/version.json
+*.tsbuildinfo
