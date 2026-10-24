@@ -177,7 +177,7 @@ export async function generateOutline(inp: GenerateInput, signal?: AbortSignal):
       },
       required: ['videoTitle', 'kicker', 'chapters', 'youtube', 'sources'],
     },
-    maxTokens: 4000,
+    maxTokens: 8000,
     signal,
   });
   let chapters: ChapterPlan[] = (Array.isArray(r?.chapters) ? r.chapters : []).map((c: any) => ({
@@ -206,13 +206,17 @@ function outlineText(o: Outline): string {
   return o.chapters.map((c, i) => `${i + 1}. [${c.role}] ${c.title}（場面${c.sceneCount}個）— ${c.goal}／要点：${c.keyPoints}`).join('\n');
 }
 
-export async function generateChapter(inp: GenerateInput, o: Outline, idx: number, signal?: AbortSignal): Promise<ExplainerScene[]> {
+/** 1回の呼び出しで作る場面の上限（日本語のナレーション＋ひらがなの読み上げ文は長くなりやすいため、少しずつ作る） */
+export const SCENES_PER_CALL = 4;
+
+async function generateChapterPart(inp: GenerateInput, o: Outline, idx: number, count: number, partNo: number, partTotal: number, prev: ExplainerScene[], signal?: AbortSignal): Promise<ExplainerScene[]> {
   const ch = o.chapters[idx];
+  const first = prev.length === 0;
   const roleNote = ch.role === 'intro'
-    ? '- これは動画の冒頭です。1場面目は visual.kind=title（動画タイトル）で、視聴者の疑問や驚きを引き出す「つかみ」のナレーションにする。続けて「この動画でわかること」を示す。'
+    ? (first ? '- これは動画の冒頭です。1場面目は visual.kind=title（動画タイトル）で、視聴者の疑問や驚きを引き出す「つかみ」のナレーションにする。続けて「この動画でわかること」を示す。' : '- 動画の冒頭部分の続きです。')
     : ch.role === 'outro'
       ? '- これは動画の最後です。summary で要点をまとめ、最後の場面は visual.kind=cta で、チャンネル登録や関連動画への短い呼びかけで締める。'
-      : '- 章の扉（章タイトルの場面）は自動で入るので作らない。章の1場面目は、前の章から自然につながる導入にする。';
+      : (first ? '- 章の扉（章タイトルの場面）は自動で入るので作らない。章の1場面目は、前の章から自然につながる導入にする。' : '- 章の扉は作らない。');
   const task = [
     header(inp),
     '',
@@ -220,24 +224,49 @@ export async function generateChapter(inp: GenerateInput, o: Outline, idx: numbe
     '【全体の目次】',
     outlineText(o),
     '',
-    `この中の「${idx + 1}. ${ch.title}」の章の場面を、${ch.sceneCount}個作ってください。`,
+    partTotal > 1
+      ? `この中の「${idx + 1}. ${ch.title}」の章（全${ch.sceneCount}場面）を${partTotal}回に分けて作ります。今回はその${partNo}回目として、場面を${count}個作ってください。`
+      : `この中の「${idx + 1}. ${ch.title}」の章の場面を、${count}個作ってください。`,
     `- 章で伝えること：${ch.goal}`,
     `- 扱う要点：${ch.keyPoints}（他の章の要点は扱わない）`,
     roleNote,
+    prev.length ? `【この章ですでに作った場面（続きから書き、内容を繰り返さない）】\n${prev.map((s) => `・[${s.visual.kind}] ${s.narration}`).join('\n')}` : '',
+    partTotal > 1 && partNo < partTotal ? '- 章の途中なので、締めの言葉は入れない。' : '',
     '- 図解の種類を毎場面変え、数値の図解・流れ図・比較・イメージ図などをバランスよく使う。',
-  ].join('\n');
-  const r = await callTool<any>({
-    system: system(),
-    content: [...inp.refBlocks, { type: 'text', text: task }],
-    toolName: 'write_chapter_scenes',
-    toolDescription: '解説動画の1章分の場面（ナレーション・読み上げ文・図解の指定）を作る。',
-    inputSchema: SCENES_SCHEMA,
-    maxTokens: 6000,
-    signal,
-  });
-  const scenes = (Array.isArray(r?.scenes) ? r.scenes : []).map((s: any) => normalizeScene(s, idx)).filter((s: ExplainerScene) => s.narration);
-  if (!scenes.length) throw new Error(`「${ch.title}」の場面を作れませんでした。`);
-  return scenes;
+  ].filter(Boolean).join('\n');
+  try {
+    const r = await callTool<any>({
+      system: system(),
+      content: [...inp.refBlocks, { type: 'text', text: task }],
+      toolName: 'write_chapter_scenes',
+      toolDescription: '解説動画の1章分（またはその一部）の場面（ナレーション・読み上げ文・図解の指定）を作る。',
+      inputSchema: SCENES_SCHEMA,
+      maxTokens: 12000,
+      signal,
+    });
+    return (Array.isArray(r?.scenes) ? r.scenes : []).slice(0, count + 1).map((s: any) => normalizeScene(s, idx)).filter((s: ExplainerScene) => s.narration);
+  } catch (e: any) {
+    // 途中で切れたら、半分ずつに分けて作り直す
+    if (e?.code === 'MAX_TOKENS' && count > 1) {
+      const a = Math.ceil(count / 2);
+      const p1 = await generateChapterPart(inp, o, idx, a, partNo, partTotal, prev, signal);
+      const p2 = await generateChapterPart(inp, o, idx, count - a, partNo, partTotal, [...prev, ...p1], signal);
+      return [...p1, ...p2];
+    }
+    throw e;
+  }
+}
+
+export async function generateChapter(inp: GenerateInput, o: Outline, idx: number, signal?: AbortSignal): Promise<ExplainerScene[]> {
+  const ch = o.chapters[idx];
+  const partTotal = Math.ceil(ch.sceneCount / SCENES_PER_CALL);
+  const out: ExplainerScene[] = [];
+  for (let k = 0; k < partTotal; k++) {
+    const count = Math.min(SCENES_PER_CALL, ch.sceneCount - k * SCENES_PER_CALL);
+    out.push(...await generateChapterPart(inp, o, idx, count, k + 1, partTotal, out, signal));
+  }
+  if (!out.length) throw new Error(`「${ch.title}」の場面を作れませんでした。`);
+  return out;
 }
 
 /** 長尺の内容をもとに、本編へ誘導する宣伝用ショート（縦型・35〜55秒）を作る */
@@ -260,7 +289,7 @@ export async function generateShort(inp: GenerateInput, o: Outline, longScenes: 
     toolName: 'write_short_scenes',
     toolDescription: '本編へ誘導する縦型ショート動画の場面を作る。',
     inputSchema: SCENES_SCHEMA,
-    maxTokens: 4000,
+    maxTokens: 12000,
     signal,
   });
   const scenes = (Array.isArray(r?.scenes) ? r.scenes : []).map((s: any) => normalizeScene(s, 0)).filter((s: ExplainerScene) => s.narration);
@@ -285,7 +314,7 @@ export async function rewriteScene(inp: GenerateInput, videoTitle: string, instr
     toolName: 'write_scene',
     toolDescription: '解説動画の場面を1つ作る（または指示どおりに作り直す）。',
     inputSchema: SCENES_SCHEMA,
-    maxTokens: 2000,
+    maxTokens: 4000,
     signal,
   });
   const raw = Array.isArray(r?.scenes) ? r.scenes[0] : null;
@@ -299,7 +328,10 @@ export interface GenerateProgress { step: string; done: number; total: number }
 /** 目次→章ごと（最初の1章のあとは3並列）→ショート の順に生成し、プロジェクト一式を返す */
 export async function generateProject(inp: GenerateInput, onProgress: (p: GenerateProgress) => void, signal?: AbortSignal, withShort = true): Promise<ExplainerProject> {
   onProgress({ step: '目次を作成中…', done: 0, total: 1 });
-  const o = await generateOutline(inp, signal);
+  const step = async <T,>(label: string, fn: () => Promise<T>): Promise<T> => {
+    try { return await fn(); } catch (e: any) { if (e && typeof e.message === 'string' && e.code !== 'ABORTED') e.message = `【${label}】${e.message}`; throw e; }
+  };
+  const o = await step('目次', () => generateOutline(inp, signal));
   const n = o.chapters.length;
   const total = n + 1 + (withShort ? 1 : 0);
   let done = 1;
@@ -307,7 +339,7 @@ export async function generateProject(inp: GenerateInput, onProgress: (p: Genera
   const runOne = async (i: number) => {
     let lastErr: unknown = null;
     for (let attempt = 0; attempt < 2; attempt++) {
-      try { per[i] = await generateChapter(inp, o, i, signal); lastErr = null; break; }
+      try { per[i] = await step(`${i + 1}章「${o.chapters[i].title}」`, () => generateChapter(inp, o, i, signal)); lastErr = null; break; }
       catch (e: any) { lastErr = e; if (e?.code === 'NO_API_KEY' || e?.code === 'SERVER_UNREACHABLE' || e?.code === 'ABORTED') break; }
     }
     if (lastErr) throw lastErr;
@@ -323,7 +355,7 @@ export async function generateProject(inp: GenerateInput, onProgress: (p: Genera
   let shortScenes: ExplainerScene[] = [];
   if (withShort) {
     onProgress({ step: '宣伝用ショートを作成中…', done, total });
-    shortScenes = await generateShort(inp, o, longScenes, signal);
+    shortScenes = await step('ショート', () => generateShort(inp, o, longScenes, signal));
     done += 1;
   }
   onProgress({ step: '完了', done: total, total });
