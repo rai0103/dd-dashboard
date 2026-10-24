@@ -306,16 +306,31 @@ export default function ExplainerStudio() {
   const updateLocked = (key, value) => setSliderLocks((prev) => { if (!prev[key]?.locked) return prev; const nx = { ...prev, [key]: { locked: true, value } }; saveSliderLocks(nx); return nx; });
   const [rate, setRate] = useState(() => sliderInitValue("rate", 1.0));
   const [pitch, setPitch] = useState(() => sliderInitValue("pitch", 1.0));
+  // 声の一覧（ローカルTTSサーバー＋AivisSpeech）。AivisSpeechは起動に時間がかかるため、
+  // ページを開いた後に起動した場合も拾えるよう、AivisSpeechの声が見つかるまで画面に戻ったとき・一定間隔で読み直す
+  const [voicesRefreshing, setVoicesRefreshing] = useState(false);
+  const refreshVoices = async () => {
+    setVoicesRefreshing(true);
+    const serverVoices = await mixer().listServerVoices().catch(() => []);
+    const aivisVoices = await listAivisVoices(4000).catch(() => []);
+    setVoices([...serverVoices, ...aivisVoices]); setVoicesLoaded(true); setVoicesRefreshing(false);
+    return aivisVoices.length > 0;
+  };
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const serverVoices = await mixer().listServerVoices().catch(() => []);
-      const aivisVoices = await listAivisVoices().catch(() => []);
-      if (cancelled) return;
-      setVoices([...serverVoices, ...aivisVoices]); setVoicesLoaded(true);
-    })();
-    return () => { cancelled = true; };
+    let stop = false, timer = 0, tries = 0;
+    const loop = async () => {
+      const found = await refreshVoices();
+      tries += 1;
+      if (!stop && !found && tries < 12) timer = window.setTimeout(loop, 10000);
+    };
+    loop();
+    const onFocus = () => { if (!voicesRef.current.some(isAivisVoice)) refreshVoices(); };
+    window.addEventListener("focus", onFocus);
+    return () => { stop = true; clearTimeout(timer); window.removeEventListener("focus", onFocus); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  const voicesRef = useRef([]);
+  useEffect(() => { voicesRef.current = voices; }, [voices]);
   const avatarGender = avatarObj && curAvatar ? curAvatar.gender : "male";
   const voiceChoices = useMemo(() => voices.filter((v) => { const g = voiceGender(v); return g === null || g === avatarGender; }), [voices, avatarGender]);
   const nonAivisVoiceChoices = useMemo(() => voiceChoices.filter((v) => !isAivisVoice(v)), [voiceChoices]);
@@ -855,7 +870,12 @@ export default function ExplainerStudio() {
                     {voiceChoices.map((v) => <option key={v} value={v}>{v.replace(/^aivis:\d+:/, "Aivis：").replace(/^(sapi|oc):/, "")}</option>)}
                   </select>
                   {voiceNote && <div className="text-[10px] mb-1.5" style={{ color: C.rust }}>{voiceNote}</div>}
-                  <p className="text-[10px] mb-2" style={{ color: C.textDim }}>AivisSpeechを起動しておくと声の候補に追加されます（既定 {getAivisUrl()}）。</p>
+                  <div className="flex items-start gap-2 mb-2">
+                    <p className="text-[10px] flex-1" style={{ color: C.textDim }}>
+                      AivisSpeechを起動しておくと声の候補に追加されます（既定 {getAivisUrl()}）。{voices.some(isAivisVoice) ? "" : "候補に出ない場合は、AivisSpeechの起動完了を待って「声の一覧を更新」を押してください。それでも出ない場合は、AivisSpeechの設定でCORSを「all」にしてください。"}
+                    </p>
+                    <button onClick={refreshVoices} disabled={voicesRefreshing} className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-1 shrink-0" style={{ ...btn(), opacity: voicesRefreshing ? 0.5 : 1 }}><RefreshCw size={10} /> {voicesRefreshing ? "確認中…" : "声の一覧を更新"}</button>
+                  </div>
                   <div className="flex items-center gap-3 flex-wrap">
                     <div className="flex items-center gap-1.5">
                       <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>速さ<input type="range" min={0.6} max={2.0} step={0.05} value={rate} onChange={(e) => { const v = Number(e.target.value); setRate(v); updateLocked("rate", v); setActivePresetId(null); }} onMouseUp={() => speak(SAMPLE)} onTouchEnd={() => speak(SAMPLE)} />{rate.toFixed(2)}x</label>
