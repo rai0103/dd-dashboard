@@ -25,6 +25,8 @@ export interface VisualEnv {
   portrait: boolean;
   image?: HTMLImageElement | null;
   accent: string;
+  /** スライド内に「出典：…」を表示するか（既定は表示しない。出典は概要欄に記載） */
+  showSource?: boolean;
 }
 
 // ---------- 文字 ----------
@@ -129,7 +131,7 @@ function heading(c: Ctx, e: VisualEnv, title: string, subtitle: string, rgb: str
   return y + 10;
 }
 function sourceNote(c: Ctx, e: VisualEnv, src: string) {
-  if (!src) return;
+  if (!src || !e.showSource) return;
   text(c, `出典：${src}`, 8, e.H - 6, 11, WHITE, { alpha: 0.55 * ease(sub(e.p, 0.15, 0.3)), maxW: e.W - 16 });
 }
 const colorAt = (i: number) => PALETTE[i % PALETTE.length];

@@ -21,6 +21,8 @@ export interface ExplainerRenderConfig {
   backgroundOpacity: number; // 0〜1
   images?: Record<string, HTMLImageElement>;
   showSubtitles: boolean;
+  /** スライド内の出典表記を出すか */
+  showSourceNotes?: boolean;
 }
 
 const LONG = { W: 960, H: 540, colX: 672 };
@@ -261,7 +263,7 @@ export class ExplainerRenderer {
     oc.setTransform(1, 0, 0, 1, 0, 0);
     oc.clearRect(0, 0, this.off.width, this.off.height);
     oc.setTransform((this.k * vis.w) / vis.W, 0, 0, (this.k * vis.h) / vis.H, 0, 0);
-    drawVisual(oc, sc, { W: vis.W, H: vis.H, p, t, portrait: !long, image: sc.imageId ? this.cfg.images?.[sc.imageId] ?? null : null, accent });
+    drawVisual(oc, sc, { W: vis.W, H: vis.H, p, t, portrait: !long, image: sc.imageId ? this.cfg.images?.[sc.imageId] ?? null : null, accent, showSource: !!this.cfg.showSourceNotes });
     const mode = i % 3;
     const ein = ease(fadeIn);
     c.save();

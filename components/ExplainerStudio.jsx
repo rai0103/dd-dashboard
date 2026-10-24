@@ -35,6 +35,8 @@ const KIND_LABEL = {
   timeline: "年表", flow: "流れ図", compare: "比較", cycle: "循環図", illustration: "イメージ図", image: "画像", point: "ポイント", qa: "Q&A",
   summary: "まとめ", cta: "締め", chapter: "章の扉", sources: "参考資料",
 };
+// 取り込み元のページのConsoleで実行する1行：localStorageの中から「登録した声」の形の配列を探してクリップボードにコピーする
+const PRESET_EXPORT_SNIPPET = `copy(JSON.stringify(Object.keys(localStorage).flatMap(k=>{try{const v=JSON.parse(localStorage.getItem(k));return Array.isArray(v)&&v.length&&v.every(p=>p&&typeof p.name==='string'&&typeof p.voice==='string')?v:[]}catch(e){return[]}})))`;
 const PROJECT_KEY = "explainer-project-v1";
 const INPUT_KEY = "explainer-input-v1";
 // 長尺動画作成（DDDashboard.jsx）と同じキー：スライダーのロック値を共有する
@@ -359,6 +361,26 @@ export default function ExplainerStudio() {
     } catch (e) { alert(`音声合成に失敗しました（ローカルTTSサーバー ${getTtsBaseUrl()} が起動しているか確認してください）\n${e?.message ?? e}`); }
   };
   const applyPreset = (p) => { setVoiceIndex(p.voice); setRate(p.rate); setPitch(p.pitch); updateLocked("rate", p.rate); updateLocked("pitch", p.pitch); setActivePresetId(p.id); speak(SAMPLE, p.voice, p.rate, p.pitch); };
+  // 他のサイト（investment-shorts等）で登録した声を取り込む。ブラウザの保存領域はサイトごとに別のため、JSONで受け渡す
+  const [presetIoOpen, setPresetIoOpen] = useState(false);
+  const [presetIoText, setPresetIoText] = useState("");
+  const [presetIoNote, setPresetIoNote] = useState("");
+  const importPresets = () => {
+    let arr;
+    try { arr = JSON.parse(presetIoText.trim()); } catch (e) { setPresetIoNote("読み取れませんでした（JSONを貼り付けてください）"); return; }
+    if (arr && !Array.isArray(arr)) arr = Array.isArray(arr.presets) ? arr.presets : Object.values(arr);
+    const valid = (Array.isArray(arr) ? arr : []).filter((p) => p && typeof p.name === "string" && typeof p.voice === "string").map((p) => ({
+      id: typeof p.id === "string" ? p.id : `${Date.now()}-${Math.floor(Math.random() * 1e6)}`,
+      name: p.name, voice: p.voice, rate: Number(p.rate) || 1, pitch: Number(p.pitch) || 1,
+    }));
+    if (!valid.length) { setPresetIoNote("取り込める声が見つかりませんでした"); return; }
+    const byName = new Map(voicePresets.map((p) => [p.name, p]));
+    valid.forEach((p) => byName.set(p.name, { ...p, id: byName.get(p.name)?.id ?? p.id }));
+    savePresetsList(Array.from(byName.values()));
+    setPresetIoNote(`${valid.length}件の声を取り込みました：${valid.map((p) => p.name).join("、")}`);
+    setPresetIoText("");
+  };
+  const removePreset = (id) => { savePresetsList(voicePresets.filter((p) => p.id !== id)); if (activePresetId === id) setActivePresetId(null); };
   const handleSavePreset = () => {
     const name = presetName.trim(); if (!name) { alert("登録する声の名前を入力してください"); return; }
     const ex = voicePresets.find((p) => p.name === name);
@@ -443,7 +465,7 @@ export default function ExplainerStudio() {
         format, scenes, videoTitle: format === "short" && project.youtube.shortTitle ? project.youtube.shortTitle.replace(/#\S+/g, "").trim() : project.videoTitle,
         kicker: project.kicker, chapterTitles: project.chapters.map((c) => c.title),
         avatar: avatarObj, backgroundImage: backgroundImgEl, backgroundOpacity: backgroundOpacity / 100,
-        images: imageEls, showSubtitles,
+        images: imageEls, showSubtitles, showSourceNotes: sourcesInVideo,
       });
       r.setDurations(sceneDurs.length === scenes.length ? sceneDurs : estDurs);
       r.setNarrationDurations((sceneDurs.length === scenes.length ? sceneDurs : estDurs).map((d) => Math.max(0, d - 1.1)));
@@ -452,7 +474,7 @@ export default function ExplainerStudio() {
       updateSceneProgress(seekPosRef.current);
     } catch (e) { console.error("ExplainerRenderer init error:", e); rendererRef.current = null; }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project, scenes, format, avatarObj, backgroundImgEl, backgroundOpacity, imageEls, showSubtitles, estDurs]);
+  }, [project, scenes, format, avatarObj, backgroundImgEl, backgroundOpacity, imageEls, showSubtitles, sourcesInVideo, estDurs]);
 
   const stopLoop = () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); rafRef.current = 0; isPlayingRef.current = false; };
   const prepareAudio = async () => {
@@ -710,7 +732,7 @@ export default function ExplainerStudio() {
                   <button onClick={handleThumbnail} title={format === "long" ? "サムネ用の画像（大きな文字＋人物）をPNGで保存" : "いま表示中の1コマをPNGで保存"} className="text-xs px-3 py-1.5 rounded flex items-center gap-1.5" style={{ background: C.panel2, color: C.textMuted, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}><Camera size={12} /> サムネ保存</button>
                   <button onClick={handleExport} disabled={isExporting} className="text-xs px-3 py-1.5 rounded flex items-center gap-1.5 ml-auto" style={{ ...btn("amber"), background: isExporting ? C.panel2 : C.amber, color: isExporting ? C.textMuted : C.bg }}><Download size={13} /> {isExporting ? `書き出し中… ${exportProgress}%` : "動画を書き出す（MP4）"}</button>
                 </div>
-                {format === "long" && <label className="flex items-center gap-1.5 text-[11px]" style={{ color: C.textDim }}><input type="checkbox" checked={sourcesInVideo} onChange={(e) => setSourcesInVideo(e.target.checked)} /> 最後に「参考資料」の場面を入れる（オフでも概要欄には記載します）</label>}
+                {format === "long" && <label className="flex items-center gap-1.5 text-[11px]" style={{ color: C.textDim }}><input type="checkbox" checked={sourcesInVideo} onChange={(e) => setSourcesInVideo(e.target.checked)} /> 動画に出典を表示（各スライドの「出典：…」と最後の「参考資料」の場面。オフでも概要欄には記載します）</label>}
                 <label className="flex items-center gap-1.5 text-[11px]" style={{ color: C.textDim }}><input type="checkbox" checked={showSubtitles} onChange={(e) => setShowSubtitles(e.target.checked)} /> 字幕（ナレーション）を表示（オフでテロップ）</label>
                 {ttsError && <div className="text-[11px]" style={{ color: C.rust }}>一部の場面でナレーション音声の生成に失敗しました（TTSサーバーをご確認ください）。</div>}
                 <div className="text-[10px] leading-relaxed" style={{ color: C.textDim }}>書き出しは実時間で録画します（{fmtTime(displayTotal)}かかります）。録画中はこのタブを前面に表示したままにしてください。</div>
@@ -911,6 +933,36 @@ export default function ExplainerStudio() {
                     <input value={presetName} onChange={(e) => setPresetName(e.target.value)} placeholder="この声に名前を付けて登録" className="flex-1 min-w-0 px-1.5 py-1 rounded text-[11px]" style={inputStyle} />
                     <button onClick={handleSavePreset} className="text-[11px] px-2 py-1 rounded whitespace-nowrap" style={btn()}>★ 登録</button>
                   </div>
+                  {voicePresets.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {voicePresets.map((p) => (
+                        <span key={p.id} className="text-[10px] px-1.5 py-0.5 rounded inline-flex items-center gap-1" style={{ border: `1px solid ${C.borderSoft}`, color: C.textMuted }}>
+                          ★ {p.name}<button onClick={() => removePreset(p.id)} title="削除" style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer" }}>×</button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  <button onClick={() => { setPresetIoOpen((v) => !v); setPresetIoNote(""); }} className="text-[10px] mt-1.5 flex items-center gap-0.5" style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer", padding: 0 }}>
+                    他のサイトで登録した声を取り込む／書き出す<ChevronRight size={10} style={{ transform: presetIoOpen ? "rotate(90deg)" : "none" }} />
+                  </button>
+                  {presetIoOpen && (
+                    <div className="mt-1 p-2 rounded flex flex-col gap-1.5" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
+                      <div className="text-[10px] leading-relaxed" style={{ color: C.textDim }}>
+                        取り込み元のページ（investment-shorts）を開き、F12 →「Console」に次の1行を貼り付けてEnterを押すと、登録した声がコピーされます。それを下の枠に貼り付けてください。
+                      </div>
+                      <div className="flex items-start gap-1">
+                        <code className="mono text-[10px] flex-1 p-1 rounded break-all" style={{ background: C.panel, color: C.text }}>{PRESET_EXPORT_SNIPPET}</code>
+                        <button onClick={() => copyText(PRESET_EXPORT_SNIPPET)} title="コピー" style={{ color: C.teal, background: "none", border: "none", cursor: "pointer" }}><Copy size={12} /></button>
+                      </div>
+                      <textarea value={presetIoText} onChange={(e) => setPresetIoText(e.target.value)} rows={3} placeholder='[{"name":"Aivis1","voice":"aivis:…","rate":1.2,"pitch":1}]' className="px-1.5 py-1 rounded text-[10px] mono" style={{ ...inputStyle, background: C.panel, resize: "vertical" }} />
+                      <div className="flex items-center gap-2">
+                        <button onClick={importPresets} disabled={!presetIoText.trim()} className="text-[10px] px-2 py-1 rounded" style={{ ...btn("primary"), opacity: presetIoText.trim() ? 1 : 0.5 }}>取り込む</button>
+                        <button onClick={() => { copyText(JSON.stringify(voicePresets)); setPresetIoNote("この画面の登録済みの声をコピーしました"); }} className="text-[10px] px-2 py-1 rounded" style={btn()}>この画面の声をコピー（書き出し）</button>
+                      </div>
+                      {presetIoNote && <div className="text-[10px]" style={{ color: C.teal }}>{presetIoNote}</div>}
+                      <div className="text-[10px]" style={{ color: C.textDim }}>取り込んだ声は、同じサイトのDD戦略ダッシュボード（長尺動画作成）でも選べます。localhost と公開サイトは別扱いのため、それぞれで取り込みが必要です。</div>
+                    </div>
+                  )}
                 </Section>
 
                 {/* 背景 */}
