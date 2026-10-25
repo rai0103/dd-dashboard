@@ -23,6 +23,7 @@ export interface LongAnalysisConfig {
   md?: LongMd | null; // DDダッシュボードの長尺分析データ（あれば内容・数値はこちらを正とする）
   customScenes?: ResolvedCustomScene[]; // Stage D-4：チャットで生成したカスタム場面（系列データ解決済み）
   sectionLabels?: Record<string, string>; // Stage D-7：「構成」リストの表示名（改名可）。見出し文言はこれを正とする
+  instrumentLabel?: string; // 左上タイトルバーに表示する銘柄名（例：S&P500／SOXL）。未指定時はS&P500
 }
 
 const LW = 960, LH = 540;
@@ -305,7 +306,7 @@ export class LongAnalysisRenderer {
     ctx.fillRect(0, 0, LONG_COLUMN_X, 50);
     ctx.fillStyle = `rgba(${GREEN}, 0.9)`;
     ctx.fillRect(0, 48, LONG_COLUMN_X, 2);
-    this.txt('S&P500の分析', 24, 34, 26, WHITE, { bold: true });
+    this.txt(`${this.cfg.instrumentLabel ?? 'S&P500'}の分析`, 24, 34, 26, WHITE, { bold: true });
     this.txt(`${s.year}年${s.month}月${s.day}日時点（米国時間）`, LONG_COLUMN_X - 16, 32, 14, WHITE, { align: 'right', alpha: 0.75 });
   }
 

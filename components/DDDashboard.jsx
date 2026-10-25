@@ -5882,6 +5882,8 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
   const ctx = useMemo(() => ({ d, crashFrequency, generatedAt, bottom, instrumentLabel }), [d, crashFrequency, generatedAt, bottom, instrumentLabel]);
   const jsonOutput = useMemo(() => { try { return computeLongformAnalysisJSON(ctx); } catch (e) { return null; } }, [ctx]);
   const instrumentNameKana = instrumentLabel === "SP500" ? SP500_KANA : instrumentLabel === "SOXL" ? "えすおーえっくすえる" : tickerKana(instrumentLabel);
+  // 動画の左上タイトルバー・「場面とナレーション」キャプションに使う表示名（SP500だけ「S&P500」表記、他はティッカーそのまま）
+  const instrumentDisplayLabel = instrumentLabel === "SP500" ? "S&P500" : instrumentLabel;
 
   // --- 構成（場面の追加・削除・並べ替え） ---
   // [Stage D-7] 保存された既定構成（video-section-default-v1）があれば、それを初期値にする
@@ -5933,8 +5935,8 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
   };
   const video = useMemo(() => {
     if (!jsonOutput) return null;
-    try { return buildVideoLongform(jsonOutput, d, instrumentNameKana, sections, customSceneList); } catch (e) { console.error("buildVideoLongform error:", e); return null; }
-  }, [jsonOutput, d, instrumentNameKana, sections, customSceneList]);
+    try { return buildVideoLongform(jsonOutput, d, instrumentNameKana, sections, customSceneList, instrumentDisplayLabel); } catch (e) { console.error("buildVideoLongform error:", e); return null; }
+  }, [jsonOutput, d, instrumentNameKana, sections, customSceneList, instrumentDisplayLabel]);
   const scenes = video?.scenes ?? [];
   const availableSectionIds = useMemo(() => (video?.longMd ? availableContentSections(video.longMd, video.basis, video.stats) : []), [video]);
   const dragSectionIndexRef = useRef(null);
@@ -6232,7 +6234,9 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
 
   // --- アバター（人物の動画。1人につきMP4を最大{MAX_CLIPS}本・アップロードしてブラウザに保存） ---
   const [avatars, setAvatars] = useState([]);
-  const [avatarId, setAvatarId] = useState(null);
+  // [共通化] 選んだ人物（アバター）は、SP500／SOXL／解説動画作成のどこで選んでも次回・他画面に引き継がれるよう、共通の保存キーに書き込む
+  const [avatarId, setAvatarId] = useState(() => { try { return localStorage.getItem("video-avatar-v1") || null; } catch (e) { return null; } });
+  useEffect(() => { try { if (avatarId) localStorage.setItem("video-avatar-v1", avatarId); } catch (e) { /* 保存できなくても動作は続ける */ } }, [avatarId]);
   const [avatarObj, setAvatarObj] = useState(null);
   const [avatarEditorOpen, setAvatarEditorOpen] = useState(false); // 編集パネルは必要な時だけ開く（既定は折りたたみ）
   const avatarUrlsRef = useRef([]);
@@ -6411,7 +6415,9 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
 
   // --- BGM（アップロードして保存・選択） ---
   const [bgms, setBgms] = useState([]);
-  const [activeBgmId, setActiveBgmId] = useState("");
+  // [共通化] 選んだBGMも、人物と同様に共通の保存キーに書き込み、SP500／SOXL／解説動画作成で同じ選択を使う
+  const [activeBgmId, setActiveBgmId] = useState(() => { try { return localStorage.getItem("video-bgm-v1") || ""; } catch (e) { return ""; } });
+  useEffect(() => { try { localStorage.setItem("video-bgm-v1", activeBgmId); } catch (e) { /* 保存できなくても動作は続ける */ } }, [activeBgmId]);
   const [bgmVolume, setBgmVolume] = useState(() => sliderInitValue("bgmVolume", 25));
   const refreshBgms = () => listBgms(true).then(setBgms).catch(() => {});
   useEffect(() => { refreshBgms(); }, []);
@@ -6432,7 +6438,9 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
 
   // --- 背景（アップロードして保存・選択） ---
   const [backgrounds, setBackgrounds] = useState([]);
-  const [activeBackgroundId, setActiveBackgroundId] = useState("");
+  // [共通化] 選んだ背景も、人物・BGMと同様に共通の保存キーに書き込み、SP500／SOXL／解説動画作成で同じ選択を使う
+  const [activeBackgroundId, setActiveBackgroundId] = useState(() => { try { return localStorage.getItem("video-background-v1") || ""; } catch (e) { return ""; } });
+  useEffect(() => { try { localStorage.setItem("video-background-v1", activeBackgroundId); } catch (e) { /* 保存できなくても動作は続ける */ } }, [activeBackgroundId]);
   const [backgroundOpacity, setBackgroundOpacity] = useState(() => sliderInitValue("backgroundOpacity", 85)); // 右側の背景は人物のうしろに全面表示する想定のため、最初から見えやすい不透明度にしておく
   const refreshBackgrounds = () => listBackgrounds(true).then((items) => {
     setBackgrounds(items);
@@ -6517,13 +6525,14 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
         md: video.longMd, basis: video.basis, rolling: video.rolling,
         customScenes: video.customScenes,
         sectionLabels: { ...CONTENT_SECTION_LABELS, ...sectionLabelOverrides },
+        instrumentLabel: instrumentDisplayLabel,
       });
       rendererRef.current = renderer;
       renderer.draw(seekPos);
       updateSceneProgress(seekPos);
     } catch (e) { console.error("LongAnalysisRenderer init error:", e); rendererRef.current = null; }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [video, scenes, avatarObj, backgroundImgEl, backgroundOpacity, sectionLabelOverrides]);
+  }, [video, scenes, avatarObj, backgroundImgEl, backgroundOpacity, sectionLabelOverrides, instrumentDisplayLabel]);
 
   const stopLoop = () => { if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current); animationFrameRef.current = 0; isPlayingRef.current = false; };
 
@@ -7190,6 +7199,32 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
         </div>
       </div>
       <div className="text-[10px]" style={{ color: C.textDim }}>投資助言ではなく判断補助です。過去確率・統計は傾向であり将来を保証しません。</div>
+    </div>
+  );
+}
+
+/* ---------------- 長尺動画作成：S&P500／SOXLを1つのシート内でタブ切替 ---------------- */
+// 文字・ナレーション（タイトル・キャプション・読み上げ）はinstrumentLabel経由でVideoCreateModalContent内部が
+// 自動的に入れ替える（タブ切替＝instrumentLabelの差し替えのみ）。人物（アバター）・声・BGM・背景は、
+// VideoCreateModalContent内部が共通の保存キー（video-avatar-v1等）を使うため、どちらのタブで選んでも、
+// もう一方のタブや「解説動画作成」でも同じ選択が引き継がれる。構成（場面の並び）・ナレーション編集はタブごとに独立。
+const VIDEO_CREATE_INSTRUMENT_KEY = "video-create-instrument-v1";
+function VideoCreateTabsModalContent({ d, bottom, dSoxl, bottomSoxl }) {
+  const [vcInstrument, setVcInstrumentState] = useState(() => { try { return localStorage.getItem(VIDEO_CREATE_INSTRUMENT_KEY) || "SP500"; } catch (e) { return "SP500"; } });
+  const setVcInstrument = (v) => { setVcInstrumentState(v); try { localStorage.setItem(VIDEO_CREATE_INSTRUMENT_KEY, v); } catch (e) { /* 保存できなくても動作は続ける */ } };
+  const soxlReady = !!(dSoxl && bottomSoxl);
+  return (
+    <div className="flex flex-col">
+      <div className="flex gap-0.5 mb-4">
+        {[{ k: "SP500", l: "S&P500" }, { k: "SOXL", l: "SOXL" }].map((t) => (
+          <button key={t.k} onClick={() => setVcInstrument(t.k)} className="text-xs px-3 py-1.5 rounded" style={{ color: vcInstrument === t.k ? C.bg : C.textMuted, background: vcInstrument === t.k ? C.teal : "transparent", fontWeight: vcInstrument === t.k ? 700 : 400, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>{t.l}</button>
+        ))}
+      </div>
+      {vcInstrument === "SOXL"
+        ? (soxlReady
+          ? <VideoCreateModalContent key="soxl" d={dSoxl} crashFrequency={bottomSoxl.stats.crashFrequency} bottom={bottomSoxl} instrumentLabel="SOXL" />
+          : <div className="text-sm leading-relaxed" style={{ color: C.textMuted }}>SOXLの価格データがまだ取り込まれていません。「データ入力・出力」→「SOXL」タブから、StooqのCSV（<span className="mono">https://stooq.com/q/d/l/?s=soxl.us&amp;i=d</span>）を取り込んでください（2010年3月の上場より前はこのダッシュボードが自動的に補います）。</div>)
+        : <VideoCreateModalContent key="sp500" d={d} crashFrequency={bottom.stats.crashFrequency} bottom={bottom} instrumentLabel="SP500" />}
     </div>
   );
 }
@@ -10215,8 +10250,7 @@ export default function DDDashboard() {
       {modal?.type === "realHoldingsRanking" && <FullScreenModal title="実質保有銘柄ランキング" onClose={() => setModal(null)}><RealHoldingsRankingContent holdings={combinedHoldings} /></FullScreenModal>}
       {modal?.type === "summary" && <FullScreenModal title="詳細サマリー出力（AI相談用）" onClose={() => setModal(null)}><SummaryModalContent d={d} dVoo={dVoo} dQqq={dQqq} holdings={holdings} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} blocks={blocks} rankLabels={rankLabels} lifecycle={lifecycle} onLifecycleChange={handleLifecycleChange} fixedPositions={fixedPositions} onFixedPositionChange={handleFixedPositionChange} checkpoints={checkpoints} prevSnapshot={prevSnapshot} onSaveSnapshot={handleSaveSnapshot} crashFrequency={bottom.stats.crashFrequency} /></FullScreenModal>}
       {modal?.type === "longform" && <FullScreenModal title="長尺用S&P500分析データ出力" onClose={() => setModal(null)}><LongformAnalysisModalContent d={d} crashFrequency={bottom.stats.crashFrequency} bottom={bottom} /></FullScreenModal>}
-      {modal?.type === "videoCreate" && <FullScreenModal title="長尺動画作成（S&P500）" onClose={() => setModal(null)}><VideoCreateModalContent d={d} crashFrequency={bottom.stats.crashFrequency} bottom={bottom} /></FullScreenModal>}
-      {modal?.type === "videoCreateSoxl" && <FullScreenModal title="長尺動画作成（SOXL）" onClose={() => setModal(null)}>{dSoxl && bottomSoxl ? <VideoCreateModalContent d={dSoxl} crashFrequency={bottomSoxl.stats.crashFrequency} bottom={bottomSoxl} instrumentLabel="SOXL" /> : <div className="text-sm leading-relaxed" style={{ color: C.textMuted }}>SOXLの価格データがまだ取り込まれていません。「データ入力・出力」→「SOXL」タブから、StooqのCSV（<span className="mono">https://stooq.com/q/d/l/?s=soxl.us&amp;i=d</span>）を取り込んでください（2010年3月の上場より前はこのダッシュボードが自動的に補います）。</div>}</FullScreenModal>}
+      {modal?.type === "videoCreate" && <FullScreenModal title="長尺動画作成" onClose={() => setModal(null)}><VideoCreateTabsModalContent d={d} bottom={bottom} dSoxl={dSoxl} bottomSoxl={bottomSoxl} /></FullScreenModal>}
       {modal?.type === "videoTicker" && <FullScreenModal title="動画用ティッカー分析" onClose={() => setModal(null)}><TickerVideoModalContent trackRecord={d.trackRecord} /></FullScreenModal>}
       {modal?.type === "mobileChartZoom" && <MobileChartZoomModal onClose={() => setModal(null)} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} sourceViews={sourceViews} chartSources={chartSources} onToggleChartSource={toggleChartSource} yearCompare={yearCompare} setYearCompare={setYearCompare} initialTab={chartTab} isRealDevice={isMobileAuto} />}
 
@@ -10235,10 +10269,7 @@ export default function DDDashboard() {
             <button onClick={() => setModal({ type: "longform" })} title="長尺用S&P500分析データを出力" className="flex items-center justify-center w-[30px] h-[30px] max-[374px]:w-7 max-[374px]:h-7 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
               <Film size={16} />
             </button>
-            <button onClick={() => setModal({ type: "videoCreate" })} title="長尺動画作成（S&P500）" className="flex items-center justify-center w-[30px] h-[30px] max-[374px]:w-7 max-[374px]:h-7 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
-              <Clapperboard size={16} />
-            </button>
-            <button onClick={() => setModal({ type: "videoCreateSoxl" })} title="長尺動画作成（SOXL）" className="flex items-center justify-center w-[30px] h-[30px] max-[374px]:w-7 max-[374px]:h-7 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+            <button onClick={() => setModal({ type: "videoCreate" })} title="長尺動画作成（S&P500／SOXL）" className="flex items-center justify-center w-[30px] h-[30px] max-[374px]:w-7 max-[374px]:h-7 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
               <Clapperboard size={16} />
             </button>
             <button onClick={() => setModal({ type: "videoTicker" })} title="動画用ティッカー分析（SP500以外の銘柄）" className="flex items-center justify-center w-[30px] h-[30px] max-[374px]:w-7 max-[374px]:h-7 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
@@ -10269,11 +10300,8 @@ export default function DDDashboard() {
           <button onClick={() => setModal({ type: "longform" })} title="長尺用S&P500分析データを出力" className="shrink-0 flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
             <Film size={12} /> 長尺用データ出力
           </button>
-          <button onClick={() => setModal({ type: "videoCreate" })} title="長尺動画作成（S&P500）" className="shrink-0 flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+          <button onClick={() => setModal({ type: "videoCreate" })} title="長尺動画作成（S&P500／SOXL）" className="shrink-0 flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
             <Clapperboard size={12} /> 長尺動画作成
-          </button>
-          <button onClick={() => setModal({ type: "videoCreateSoxl" })} title="長尺動画作成（SOXL）" className="shrink-0 flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
-            <Clapperboard size={12} /> 長尺動画作成（SOXL）
           </button>
           <a href={`${process.env.NEXT_PUBLIC_BASE_PATH || ""}/explainer/`} title="ニュース・キーワード解説動画（長尺＋ショート）" className="shrink-0 flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer", textDecoration: "none" }}>
             <Clapperboard size={12} /> 解説動画作成

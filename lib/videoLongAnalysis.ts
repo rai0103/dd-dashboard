@@ -18,8 +18,8 @@ export interface LongScene {
   detail: boolean;      // 詳細分析のシーン（左パネルを自前で描く）
 }
 
-export function buildLongScenes(s: UpdateStats, md?: LongMd | null, basis?: LongBasis | null, rolling?: { label: string; v: number }[], instrumentNameKana: string = SP500_KANA, sections?: ComposedSectionId[], customScenes?: CustomSceneSpec[]): LongScene[] {
-  if (md) return buildMdScenes(md, basis, instrumentNameKana, sections, s, customScenes).map(m => ({ id: m.id as LongSceneId, reading: m.reading, minSec: m.minSec, caption: m.caption, detail: m.id !== 'open' }));
+export function buildLongScenes(s: UpdateStats, md?: LongMd | null, basis?: LongBasis | null, rolling?: { label: string; v: number }[], instrumentNameKana: string = SP500_KANA, sections?: ComposedSectionId[], customScenes?: CustomSceneSpec[], instrumentDisplayLabel: string = 'S&P500'): LongScene[] {
+  if (md) return buildMdScenes(md, basis, instrumentNameKana, sections, s, customScenes, instrumentDisplayLabel).map(m => ({ id: m.id as LongSceneId, reading: m.reading, minSec: m.minSec, caption: m.caption, detail: m.id !== 'open' }));
   const base = buildUpdateScenes(s);
   const cap = (id: string): string => {
     switch (id) {

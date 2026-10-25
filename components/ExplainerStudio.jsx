@@ -312,8 +312,10 @@ export default function ExplainerStudio() {
 
   // ---------------- アバター（長尺動画作成と共通の保存データ） ----------------
   const [avatars, setAvatars] = useState([]);
-  const [avatarId, setAvatarId] = useState(() => { try { return localStorage.getItem("explainer-avatar-v1") || null; } catch (e) { return null; } });
-  useEffect(() => { try { if (avatarId) localStorage.setItem("explainer-avatar-v1", avatarId); } catch (e) { /* ignore */ } }, [avatarId]);
+  // [共通化] 長尺動画作成（S&P500／SOXL）と同じ保存キーを使い、どちらで選んだ人物も引き継ぐ。
+  // 旧キー（explainer-avatar-v1）に既存の選択があれば、初回だけそれを引き継ぐ（今までの選択を失わないため）
+  const [avatarId, setAvatarId] = useState(() => { try { return localStorage.getItem("video-avatar-v1") || localStorage.getItem("explainer-avatar-v1") || null; } catch (e) { return null; } });
+  useEffect(() => { try { if (avatarId) localStorage.setItem("video-avatar-v1", avatarId); } catch (e) { /* ignore */ } }, [avatarId]);
   const [avatarObj, setAvatarObj] = useState(null);
   const [avatarEditorOpen, setAvatarEditorOpen] = useState(false);
   const avatarUrlsRef = useRef([]);
@@ -453,8 +455,10 @@ export default function ExplainerStudio() {
 
   // ---------------- BGM・背景（長尺動画作成の「長尺用」と共通） ----------------
   const [bgms, setBgms] = useState([]);
-  const [activeBgmId, setActiveBgmId] = useState(() => { try { return localStorage.getItem("explainer-bgm-v1") || ""; } catch (e) { return ""; } });
-  useEffect(() => { try { localStorage.setItem("explainer-bgm-v1", activeBgmId); } catch (e) { /* ignore */ } }, [activeBgmId]);
+  // [共通化] 長尺動画作成と同じ保存キーを使い、どちらで選んだBGMも引き継ぐ。
+  // 旧キー（explainer-bgm-v1）に既存の選択があれば、初回だけそれを引き継ぐ
+  const [activeBgmId, setActiveBgmId] = useState(() => { try { return localStorage.getItem("video-bgm-v1") || localStorage.getItem("explainer-bgm-v1") || ""; } catch (e) { return ""; } });
+  useEffect(() => { try { localStorage.setItem("video-bgm-v1", activeBgmId); } catch (e) { /* ignore */ } }, [activeBgmId]);
   const [bgmVolume, setBgmVolume] = useState(() => sliderInitValue("bgmVolume", 25));
   const refreshBgms = () => listBgms(true).then(setBgms).catch(() => {});
   useEffect(() => { refreshBgms(); }, []);
@@ -465,7 +469,9 @@ export default function ExplainerStudio() {
   const handleBgmDelete = async (id) => { await deleteBgm(id, true); if (activeBgmId === id) setActiveBgmId(""); refreshBgms(); };
 
   const [backgrounds, setBackgrounds] = useState([]);
-  const [activeBackgroundId, setActiveBackgroundId] = useState("");
+  // [共通化] 長尺動画作成と同じ保存キーを使い、どちらで選んだ背景も引き継ぐ
+  const [activeBackgroundId, setActiveBackgroundId] = useState(() => { try { return localStorage.getItem("video-background-v1") || ""; } catch (e) { return ""; } });
+  useEffect(() => { try { localStorage.setItem("video-background-v1", activeBackgroundId); } catch (e) { /* ignore */ } }, [activeBackgroundId]);
   const [backgroundOpacity, setBackgroundOpacity] = useState(() => sliderInitValue("backgroundOpacity", 85));
   const refreshBackgrounds = () => listBackgrounds(true).then((items) => { setBackgrounds(items); setActiveBackgroundId((prev) => (prev && items.some((b) => b.id === prev) ? prev : items[0]?.id ?? "")); }).catch(() => {});
   useEffect(() => { refreshBackgrounds(); }, []);

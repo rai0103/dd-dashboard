@@ -269,11 +269,11 @@ export function availableContentSections(md: LongMd, basis?: LongBasis | null, s
 }
 
 /** md から長尺シーンを作る。順序：オープニング→sections（指定順）→エンディング。instrumentNameKana省略時は従来どおりS&P500として読む。sections省略時は近況のみ（DEFAULT_CONTENT_SECTIONS） */
-export function buildMdScenes(md: LongMd, basis?: LongBasis | null, instrumentNameKana: string = SP500_KANA, sections: ComposedSectionId[] = DEFAULT_CONTENT_SECTIONS, stats?: UpdateStats | null, customScenes?: CustomSceneSpec[]): MdScene[] {
+export function buildMdScenes(md: LongMd, basis?: LongBasis | null, instrumentNameKana: string = SP500_KANA, sections: ComposedSectionId[] = DEFAULT_CONTENT_SECTIONS, stats?: UpdateStats | null, customScenes?: CustomSceneSpec[], instrumentDisplayLabel: string = 'S&P500'): MdScene[] {
   const sc: MdScene[] = [];
   const dateK = `${yearsToKana(md.y)}、${monthDayKana(md.m, md.d)}`;
   const dateJ = `${md.y}年${md.m}月${md.d}日`;
-  sc.push({ id: 'open', minSec: 5, reading: `${dateK}、${instrumentNameKana}の、ぶんせきを、れぽーとします。`, caption: `${dateJ}、S&P500の分析をレポートします。` });
+  sc.push({ id: 'open', minSec: 5, reading: `${dateK}、${instrumentNameKana}の、ぶんせきを、れぽーとします。`, caption: `${dateJ}、${instrumentDisplayLabel}の分析をレポートします。` });
 
   const builders = contentSectionBuilders(md, basis, stats, instrumentNameKana);
   const customById = new Map((customScenes ?? []).map((c) => [c.id, c] as const));
@@ -287,6 +287,6 @@ export function buildMdScenes(md: LongMd, basis?: LongBasis | null, instrumentNa
     if (scene) sc.push(scene);
   }
 
-  sc.push({ id: 'end', minSec: 8, reading: `${dateK}の、${instrumentNameKana}の、ぶんせきれぽーとは、いじょうです。`, caption: `${dateJ}のS&P500の分析レポートは以上です。` });
+  sc.push({ id: 'end', minSec: 8, reading: `${dateK}の、${instrumentNameKana}の、ぶんせきれぽーとは、いじょうです。`, caption: `${dateJ}の${instrumentDisplayLabel}の分析レポートは以上です。` });
   return sc;
 }

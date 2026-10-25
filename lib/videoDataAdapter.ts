@@ -149,7 +149,7 @@ function buildScalarCatalog(stats: UpdateStats | null, rolling: { label: string;
  * 動画生成に必要な構造化データ一式（LongMd・UpdateStats・LongBasis・シーン配列）を直接組み立てる。
  * instrumentNameKana省略時はS&P500として読む（既存のSP500専用パスの挙動を維持）。
  */
-export function buildVideoLongform(data: any, d: any, instrumentNameKana: string = SP500_KANA, sections?: ComposedSectionId[], customScenes?: CustomSceneSpec[]): VideoLongformResult {
+export function buildVideoLongform(data: any, d: any, instrumentNameKana: string = SP500_KANA, sections?: ComposedSectionId[], customScenes?: CustomSceneSpec[], instrumentDisplayLabel: string = 'S&P500'): VideoLongformResult {
   const dailyPoints = dailyPointsFromFull(d.FULL);
   const crashRows = crashRowsFromAnalysis(data.crash_analysis);
   const stats = computeUpdateStats(dailyPoints, crashRows);
@@ -249,6 +249,6 @@ export function buildVideoLongform(data: any, d: any, instrumentNameKana: string
   const scalarCatalog = buildScalarCatalog(stats, rolling, basis, longMd);
   const resolvedCustomScenes = (customScenes ?? []).map((c) => resolveCustomScene(c, catalog, scalarCatalog));
 
-  const scenes = stats ? buildLongScenes(stats, longMd, basis, rolling, instrumentNameKana, sections, customScenes) : [];
+  const scenes = stats ? buildLongScenes(stats, longMd, basis, rolling, instrumentNameKana, sections, customScenes, instrumentDisplayLabel) : [];
   return { longMd, stats, basis, scenes, rolling, customScenes: resolvedCustomScenes, catalog, scalarCatalog };
 }
