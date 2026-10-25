@@ -6,6 +6,7 @@
 //    そのまま共有する（同じサイト内のページなので、長尺動画作成で登録したものがここでも選べる）。
 // 違い：台本は「テーマ＋参考情報（テキスト・URL・PDF）」からAIが作る。図解はすべて自作の図形・アイコンで描く（著作権・肖像権への配慮）。
 import { useEffect, useMemo, useRef, useState } from "react";
+import NarrMixedBox from "@/components/NarrMixedBox";
 import { Play, Pause, Square, Camera, Download, Upload, X, GripVertical, MessageSquare, ChevronRight, Lock, Unlock, Link2, FileText, Type, Sparkles, Copy, AlertTriangle, Check, Image as ImageIcon, RefreshCw, Plus, ArrowLeft } from "lucide-react";
 import { voiceGender } from "@/lib/videoAnalysts";
 import { AudioMixer, getTtsBaseUrl } from "@/lib/videoAudioMixer";
@@ -515,6 +516,8 @@ export default function ExplainerStudio() {
   const [exportProgress, setExportProgress] = useState(0);
   const [ttsError, setTtsError] = useState(false);
   const [currentSceneIdx, setCurrentSceneIdx] = useState(0);
+  const scenesRef = useRef([]);
+  useEffect(() => { scenesRef.current = scenes; }, [scenes]);
   const sceneRefs = useRef([]);
   const listRef = useRef(null);
   // 台本・形式が変わったら、実測した長さは使えないので概算に戻す
@@ -526,7 +529,18 @@ export default function ExplainerStudio() {
     if (!box || !el) return;
     box.scrollTo({ top: Math.max(0, box.scrollTop + el.getBoundingClientRect().top - box.getBoundingClientRect().top), behavior: "smooth" });
   }, [currentSceneIdx]);
-  const updateSceneProgress = (progress) => { const r = rendererRef.current; if (r) setCurrentSceneIdx(r.getSceneIndexAt(progress)); };
+  // 読み上げ中の場面の、どの文字まで読み終えたか（ナレーション枠のハイライト用）。音声の長さは prepareAudio で確定する
+  const narrDursRef = useRef([]);
+  const [readCharIdx, setReadCharIdx] = useState(0);
+  const updateSceneProgress = (progress) => {
+    const r = rendererRef.current; if (!r) return;
+    const idx = r.getSceneIndexAt(progress);
+    setCurrentSceneIdx(idx);
+    const localT = r.getSceneLocalTimeAt(progress);
+    const dur = narrDursRef.current[idx] || 0;
+    const len = scenesRef.current[idx]?.narration?.length ?? 0;
+    setReadCharIdx(dur > 0 ? Math.round(Math.min(1, Math.max(0, (localT - 0.3) / dur)) * len) : 0);
+  };
 
   const estDurs = useMemo(() => scenes.map((s) => Math.max(s.minSec || 0, (s.narration.length / CHARS_PER_MIN) * 60 / rate + 1.1)), [scenes, rate]);
   useEffect(() => {
@@ -568,6 +582,7 @@ export default function ExplainerStudio() {
     const starts = []; durs.reduce((acc, d) => { starts.push(acc); return acc + d; }, 0);
     const total = durs.reduce((a, b) => a + b, 0);
     setTotalSec(total); setSceneDurs(durs);
+    narrDursRef.current = bufs.map((b) => (b ? b.duration : 0));
     if (!failed) setNarrMeasure({ rate, secs: bufs.map((b) => (b ? b.duration : 0)) });
     if (failed) setTtsError(true);
     return { bufs, durs, starts, total, failed };
@@ -704,7 +719,7 @@ export default function ExplainerStudio() {
           rendererRef.current?.draw(prog);
           if (!thumbPending && el >= thumbAtMs) thumbPending = canvasPng(canvas).then((b) => { thumbBlob = b; });
           // 画面の表示更新は1秒に4回まで（毎コマ更新すると画面全体の再描画で録画が引っかかり、人物が途切れる原因になる）
-          if (now - lastUi > 250) { lastUi = now; setSeekPos(prog); setExportProgress(Math.round(Math.min(1, el / totalMs) * 95)); }
+          if (now - lastUi > 200) { lastUi = now; setSeekPos(prog); updateSceneProgress(prog); setExportProgress(Math.round(Math.min(1, el / totalMs) * 95)); }
           if (!fading && el >= totalMs - 1400) { fading = true; mixer().fadeBGM(1.4); }
           if (el < totalMs) requestAnimationFrame(tick); else resolve();
         };
@@ -1003,9 +1018,13 @@ export default function ExplainerStudio() {
                             <button onClick={() => { setAiOpenId((v) => (v === sc.id ? null : sc.id)); setAiText(""); setAiError(""); }} className="text-[10px] flex items-center gap-0.5" style={{ color: aiOpenId === sc.id ? C.teal : C.textDim, background: "none", border: "none", cursor: "pointer" }} title="AIに作り直しを指示"><MessageSquare size={10} />AI</button>
                             <button onClick={() => removeScene(sc.id)} title="この場面を削除" style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer" }}><X size={12} /></button>
                           </div>
-                          <textarea value={sc.narration} rows={2}
-                            onChange={(e) => patchScene(sc.id, { narration: e.target.value.replace(/\n/g, ""), readingStale: true })}
-                            className="w-full rounded px-1.5 py-1 text-[11px] leading-relaxed" style={{ ...inputStyle, background: C.panel, resize: "vertical" }} />
+                          <div className="rounded" style={{ background: C.panel }}>
+                            <NarrMixedBox value={sc.narration} base={sc.narration}
+                              onChange={(t) => patchScene(sc.id, { narration: t, readingStale: true })}
+                              onBlur={() => {}}
+                              colors={{ text: C.text, border: C.borderSoft }}
+                              readUpTo={cur && (isPlaying || isExporting) ? readCharIdx : null} />
+                          </div>
                           <div className="flex items-center gap-2 mt-1 flex-wrap">
                             <button onClick={() => setReadingOpenId((v) => (v === sc.id ? null : sc.id))} className="text-[10px] flex items-center gap-0.5" style={{ color: isKanaReading(sc.reading) && !sc.readingStale ? C.textDim : C.amber, background: "none", border: "none", cursor: "pointer", padding: 0 }}>
                               読み上げ文{sc.readingStale ? "（ナレーションと要確認）" : ""}<ChevronRight size={10} style={{ transform: readingOpenId === sc.id ? "rotate(90deg)" : "none" }} />
