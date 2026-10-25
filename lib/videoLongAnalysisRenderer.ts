@@ -24,6 +24,7 @@ export interface LongAnalysisConfig {
   customScenes?: ResolvedCustomScene[]; // Stage D-4：チャットで生成したカスタム場面（系列データ解決済み）
   sectionLabels?: Record<string, string>; // Stage D-7：「構成」リストの表示名（改名可）。見出し文言はこれを正とする
   instrumentLabel?: string; // 左上タイトルバーに表示する銘柄名（例：S&P500／SOXL）。未指定時はS&P500
+  dataSourceLabel?: string; // 冒頭シーンの「（米国時間・◯◯のデータより）」の◯◯部分。未指定時はVOO
 }
 
 const LW = 960, LH = 540;
@@ -82,7 +83,7 @@ export class LongAnalysisRenderer {
     this.offCtx = this.off.getContext('2d')!;
     this.offCtx.scale(this.k, this.k);
     const proxy: any = { width: SCENE_W, height: SCENE_H, getContext: () => this.offCtx };
-    this.inner = new MarketUpdateRenderer(proxy, { stats: cfg.stats, scenes: [], backgroundPattern: 'none', backgroundOpacity: 0, label: '分析', fontScale: 1.2 });
+    this.inner = new MarketUpdateRenderer(proxy, { stats: cfg.stats, scenes: [], backgroundPattern: 'none', backgroundOpacity: 0, label: '分析', fontScale: 1.2, instrumentLabel: cfg.instrumentLabel, dataSourceLabel: cfg.dataSourceLabel });
   }
 
   /** 各シーンの読み上げ音声（口パク用）。音声は各シーンの開始から0.3秒後に流れる */

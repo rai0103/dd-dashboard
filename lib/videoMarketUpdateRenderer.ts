@@ -11,6 +11,8 @@ export interface MarketUpdateConfig {
   backgroundImage?: HTMLImageElement | null;
   label?: string; // 既定は「近況まとめ」
   fontScale?: number; // 横長用：文字を大きくする倍率
+  instrumentLabel?: string; // 冒頭の大きなタイトル文字（例：S&P500／SOXL）。未指定時はS&P500
+  dataSourceLabel?: string; // 「（米国時間・◯◯のデータより）」の◯◯部分。未指定時はVOO（S&P500換算の元データ）
 }
 
 const FONT = '"Segoe UI", "Yu Gothic", "Meiryo", sans-serif';
@@ -206,10 +208,10 @@ export class MarketUpdateRenderer {
     ctx.shadowBlur = 8;
     const a = ease(sub(p, 0, 0.3));
     this.text(this.dateJa(), this.W / 2, 122, 22, WHITE, { bold: true, align: 'center', alpha: a, maxW: this.W - 20 });
-    this.text('S&P500', this.W / 2, 170, 40, WHITE, { bold: true, align: 'center', alpha: a });
+    this.text(this.cfg.instrumentLabel ?? 'S&P500', this.W / 2, 170, 40, WHITE, { bold: true, align: 'center', alpha: a });
     this.text(this.cfg.label ?? '近況まとめ', this.W / 2, 210, 26, GREEN, { bold: true, align: 'center', alpha: a });
     ctx.restore();
-    this.text('（米国時間・VOOのデータより）', this.W / 2, 232, 10, WHITE, { align: 'center', alpha: ease(sub(p, 0.15, 0.45)) * 0.7 });
+    this.text(`（米国時間・${this.cfg.dataSourceLabel ?? 'VOO'}のデータより）`, this.W / 2, 232, 10, WHITE, { align: 'center', alpha: ease(sub(p, 0.15, 0.45)) * 0.7 });
     const tags = ['年初来の騰落率', '最高値（ATH）からの下落', '年末までの過去実績', '調整〜暴落の頻度'];
     tags.forEach((t, i) => this.text(`・${t}`, this.W / 2, 252 + i * 18, 12, WHITE, { align: 'center', alpha: ease(sub(p, 0.3 + i * 0.1, 0.5 + i * 0.1)) * 0.85 }));
   }

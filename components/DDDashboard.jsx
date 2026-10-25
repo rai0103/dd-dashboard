@@ -5884,6 +5884,8 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
   const instrumentNameKana = instrumentLabel === "SP500" ? SP500_KANA : instrumentLabel === "SOXL" ? "えすおーえっくすえる" : tickerKana(instrumentLabel);
   // 動画の左上タイトルバー・「場面とナレーション」キャプションに使う表示名（SP500だけ「S&P500」表記、他はティッカーそのまま）
   const instrumentDisplayLabel = instrumentLabel === "SP500" ? "S&P500" : instrumentLabel;
+  // 冒頭シーンの「（米国時間・◯◯のデータより）」の◯◯部分。SP500は従来通りVOO（換算元データ）のまま、他は銘柄そのもの
+  const instrumentDataSourceLabel = instrumentLabel === "SP500" ? "VOO" : instrumentDisplayLabel;
 
   // --- 構成（場面の追加・削除・並べ替え） ---
   // [Stage D-7] 保存された既定構成（video-section-default-v1）があれば、それを初期値にする
@@ -6526,13 +6528,14 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
         customScenes: video.customScenes,
         sectionLabels: { ...CONTENT_SECTION_LABELS, ...sectionLabelOverrides },
         instrumentLabel: instrumentDisplayLabel,
+        dataSourceLabel: instrumentDataSourceLabel,
       });
       rendererRef.current = renderer;
       renderer.draw(seekPos);
       updateSceneProgress(seekPos);
     } catch (e) { console.error("LongAnalysisRenderer init error:", e); rendererRef.current = null; }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [video, scenes, avatarObj, backgroundImgEl, backgroundOpacity, sectionLabelOverrides, instrumentDisplayLabel]);
+  }, [video, scenes, avatarObj, backgroundImgEl, backgroundOpacity, sectionLabelOverrides, instrumentDisplayLabel, instrumentDataSourceLabel]);
 
   const stopLoop = () => { if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current); animationFrameRef.current = 0; isPlayingRef.current = false; };
 
