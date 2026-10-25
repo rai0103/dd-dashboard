@@ -20,7 +20,7 @@ import { ExplainerRenderer, RENDER_SIZE } from "@/lib/explainer/renderer";
 import { generateProject, generateShort, rewriteScene, CHARS_PER_MIN } from "@/lib/explainer/aiScript";
 import { AiClientError } from "@/lib/explainer/aiClient";
 import { referenceBlocks, referenceTexts, fetchUrlReference, fileToBase64, newRefId, refLabel, MAX_PDF_BYTES } from "@/lib/explainer/references";
-import { lintScenes, buildDescription, sourcesScene, predictTotalSec, suggestRate, COMFORT_RATE, normalizeVisual, minSecFor, sanitizeReading, isKanaReading } from "@/lib/explainer/scriptModel";
+import { lintScenes, buildDescription, sourcesScene, findVerbatimOverlaps, predictTotalSec, suggestRate, COMFORT_RATE, normalizeVisual, minSecFor, sanitizeReading, isKanaReading } from "@/lib/explainer/scriptModel";
 import { saveImage, listImages, deleteImage } from "@/lib/explainer/imageStore";
 import { safeFileName, canPickFolder, getSavedFolder, pickFolder, ensureWritable, saveBundle, descriptionText } from "@/lib/explainer/exportBundle";
 import { VISUAL_KINDS, ICON_NAMES } from "@/lib/explainer/types";
@@ -171,18 +171,69 @@ export default function ExplainerStudio() {
     setGenBusy(true); setGenError("");
     const ac = new AbortController(); abortRef.current = ac;
     try {
-      const p = await generateProject(genInput(minutes), setGenProgress, ac.signal, true, sourcesInVideo);
+      const inp = genInput(minutes);
+      let p = await generateProject(inp, setGenProgress, ac.signal, true, sourcesInVideo);
+      // 参考資料の文章とほぼ同じ箇所は、自動で言い換える（長尺・ショート）
+      const L = await paraphraseScenes(p.longScenes, inp, p.videoTitle, "long", ac.signal, (k, n) => setGenProgress({ step: `参考資料と同じ言い回しを言い換え中…（長尺 ${k}/${n}）`, done: 1, total: 1 }));
+      const S = await paraphraseScenes(p.shortScenes, inp, p.videoTitle, "short", ac.signal, (k, n) => setGenProgress({ step: `参考資料と同じ言い回しを言い換え中…（ショート ${k}/${n}）`, done: 1, total: 1 }));
+      p = { ...p, longScenes: L.scenes, shortScenes: S.scenes };
       setProject(p); setFormat("long"); setInputOpen(false); setSeekPos(0);
     } catch (e) { setGenError(errMsg(e)); }
     finally { setGenBusy(false); setGenProgress(null); abortRef.current = null; }
   };
+  // 参考資料の文章とほぼ同じ箇所があるナレーションを、AIに言い換えさせる（図解・場面の役割はそのまま）
+  const PARA_INSTR = (ov) => `ナレーションの中に、参考資料の文章とほぼ同じ言い回しがあります（${ov.map((x) => `「${x.slice(0, 40)}」`).join("、")}）。事実・数値・固有名詞は変えずに、語順や言い回しを変えて自分の言葉で言い換えてください。長さはほぼ同じに。図解（visual）は変えないこと。読み上げ文（reading）も合わせて作り直すこと。`;
+  const paraphraseScenes = async (list, inp, title, fmt, signal, onStep) => {
+    const texts = referenceTexts(refs);
+    const out = list.slice();
+    const targets = out.map((sc, i) => ({ i, ov: findVerbatimOverlaps(sc.narration, texts) })).filter((x) => x.ov.length);
+    for (let k = 0; k < targets.length; k++) {
+      const { i, ov } = targets[k];
+      onStep?.(k + 1, targets.length);
+      try {
+        const neighbors = [out[i - 1], out[i + 1]].filter(Boolean).map((x) => x.narration);
+        const sc = await rewriteScene(inp, title, PARA_INSTR(ov), out[i], neighbors, fmt, signal);
+        // 図解は元のまま残す（言い換えで図解が変わらないように）
+        out[i] = { ...sc, visual: out[i].visual, minSec: out[i].minSec, title: out[i].title };
+      } catch (e) { if (e?.code === "ABORTED") throw e; /* 1場面失敗しても続ける */ }
+    }
+    return { scenes: out, count: targets.length };
+  };
+  const [paraBusyId, setParaBusyId] = useState(null);
+  const paraphraseOne = async (sc) => {
+    if (!project) return;
+    const ov = findVerbatimOverlaps(sc.narration, referenceTexts(refs));
+    if (!ov.length) return;
+    setParaBusyId(sc.id); setAiError("");
+    try {
+      const idx = scenes.findIndex((x) => x.id === sc.id);
+      const neighbors = [scenes[idx - 1], scenes[idx + 1]].filter(Boolean).map((x) => x.narration);
+      const nsc = await rewriteScene(genInput(), project.videoTitle, PARA_INSTR(ov), sc, neighbors, format);
+      setScenes((list) => list.map((x) => (x.id === sc.id ? { ...nsc, visual: x.visual, minSec: x.minSec, title: x.title } : x)));
+    } catch (e) { setAiError(errMsg(e)); }
+    finally { setParaBusyId(null); }
+  };
+
+  const [paraAllBusy, setParaAllBusy] = useState("");
+  const paraphraseAll = async () => {
+    if (!project) return;
+    setParaAllBusy("言い換え中…"); setAiError("");
+    try {
+      const r = await paraphraseScenes(scenes, genInput(), project.videoTitle, format, undefined, (k, n) => setParaAllBusy(`言い換え中…（${k}/${n}）`));
+      setScenes(r.scenes);
+    } catch (e) { setAiError(errMsg(e)); }
+    finally { setParaAllBusy(""); }
+  };
+
   const handleRegenerateShort = async () => {
     if (!project) return;
     setGenBusy(true); setGenError(""); setGenProgress({ step: "宣伝用ショートを作り直し中…", done: 0, total: 1 });
     const ac = new AbortController(); abortRef.current = ac;
     try {
       const o = { videoTitle: project.videoTitle, kicker: project.kicker, chapters: project.chapters, youtube: project.youtube, sources: project.sources };
-      const sh = await generateShort(genInput(), o, project.longScenes, ac.signal);
+      const inp = genInput();
+      const sh0 = await generateShort(inp, o, project.longScenes, ac.signal);
+      const sh = (await paraphraseScenes(sh0, inp, project.videoTitle, "short", ac.signal, (k, n) => setGenProgress({ step: `参考資料と同じ言い回しを言い換え中…（${k}/${n}）`, done: 0, total: 1 }))).scenes;
       setProject((p) => ({ ...p, shortScenes: sh })); setFormat("short");
     } catch (e) { setGenError(errMsg(e)); }
     finally { setGenBusy(false); setGenProgress(null); abortRef.current = null; }
@@ -896,7 +947,7 @@ export default function ExplainerStudio() {
               {/* ---------- 設定パネル ---------- */}
               <div className="flex flex-col gap-4 text-xs flex-1 min-w-0">
                 {/* 公開前チェック */}
-                <Section title={`公開前チェック（${issues.filter((x) => x.level === "warn").length}件の注意・${issues.filter((x) => x.level === "info").length}件の確認）`}>
+                <Section title={`公開前チェック（${issues.filter((x) => x.level === "warn").length}件の注意・${issues.filter((x) => x.level === "info").length}件の確認）`} right={issues.some((x) => x.message.startsWith("参考資料の文章")) ? <button onClick={paraphraseAll} disabled={!!paraAllBusy} className="text-[10px] px-1.5 py-0.5 rounded" style={{ ...btn("primary"), opacity: paraAllBusy ? 0.5 : 1 }}>{paraAllBusy || "参考資料と同じ言い回しをまとめて言い換える"}</button> : null}>
                   {issues.length === 0 ? (
                     <div className="text-[11px] flex items-center gap-1" style={{ color: C.teal }}><Check size={12} /> 出典の記載・丸写し・図解の連続などに問題は見つかりませんでした。</div>
                   ) : (
@@ -1007,7 +1058,12 @@ export default function ExplainerStudio() {
                               <button onClick={() => runSceneAi(sc.id)} disabled={aiBusy || !aiText.trim()} className="text-[10px] px-2 py-1 rounded" style={{ ...btn("primary"), opacity: aiBusy || !aiText.trim() ? 0.5 : 1 }}>{aiBusy ? "生成中…" : "送信"}</button>
                             </div>
                           )}
-                          {iss.length > 0 && <div className="mt-1 flex flex-col">{iss.map((x, k) => <span key={k} className="text-[10px]" style={{ color: x.level === "warn" ? C.amber : C.textDim }}>・{x.message}</span>)}</div>}
+                          {iss.length > 0 && <div className="mt-1 flex flex-col">{iss.map((x, k) => (
+                            <span key={k} className="text-[10px] flex items-center gap-2 flex-wrap" style={{ color: x.level === "warn" ? C.amber : C.textDim }}>
+                              ・{x.message}
+                              {x.message.startsWith("参考資料の文章") && <button onClick={() => paraphraseOne(sc)} disabled={!!paraBusyId} className="text-[10px] px-1.5 py-0.5 rounded" style={{ ...btn("primary"), opacity: paraBusyId ? 0.5 : 1 }}>{paraBusyId === sc.id ? "言い換え中…" : "AIで言い換える"}</button>}
+                            </span>
+                          ))}</div>}
                         </div>
                       );
                     })}
