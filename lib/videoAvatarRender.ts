@@ -22,7 +22,9 @@ export class VideoAvatar {
   private keyColors: (number[] | null)[];
   private tmp = document.createElement('canvas');
   private mask = document.createElement('canvas');
-  private outs: HTMLCanvasElement[] = [document.createElement('canvas'), document.createElement('canvas')];
+  // 背景を消した1コマの置き場所（動画1本につき1枚）。同じ1コマなら作り直さずに使い回す（処理を軽くして再生の引っかかりを防ぐ）
+  private outs: HTMLCanvasElement[] = [];
+  private outKey: string[] = [];
   private work = document.createElement('canvas');
   private bgBuf = new Uint8Array(0);
   private visBuf = new Uint8Array(0);
@@ -34,13 +36,15 @@ export class VideoAvatar {
     this.clips = clips;
     this.opt = { ...opt };
     this.keyColors = clips.map(() => null);
+    this.outs = clips.map(() => document.createElement('canvas'));
+    this.outKey = clips.map(() => '');
     clips.forEach(v => {
       v.addEventListener('seeked', () => this.onRedraw?.());
       v.addEventListener('loadeddata', () => this.onRedraw?.());
     });
   }
 
-  setOptions(o: Partial<AvatarOptions>) { this.opt = { ...this.opt, ...o }; this.keyColors = this.clips.map(() => null); }
+  setOptions(o: Partial<AvatarOptions>) { this.opt = { ...this.opt, ...o }; this.keyColors = this.clips.map(() => null); this.outKey = this.clips.map(() => ''); }
 
   /** 全体の長さ(秒)に合わせて、「どの動画を、いつから流すか」を決める（動画が2本以上のときは、同じ動画が続けて来ない） */
   ensureSchedule(total: number) {
@@ -78,11 +82,32 @@ export class VideoAvatar {
 
   private sync(v: HTMLVideoElement, u: number, playing: boolean) {
     if (playing) {
-      if (v.paused) { if (Math.abs(v.currentTime - u) > 0.1) v.currentTime = u; v.play().catch(() => {}); }
-      else if (Math.abs(v.currentTime - u) > 0.5) v.currentTime = u;
+      // 再生中は、人物の動画の時刻と全体の時刻が多少ずれても気にしない（口の動きと音声は元々連動していないため）。
+      // 小さなずれのたびに位置を合わせ直すと、そのたびに動画が一瞬止まり、人物がカクついて見える原因になる。
+      // 合わせ直すのは、大きくずれたとき（2秒以上）と、止まっている動画を動かし始めるときだけ。
+      if (v.seeking) return;
+      if (v.paused) {
+        if (Math.abs(v.currentTime - u) > 0.25) v.currentTime = u;
+        v.play().catch(() => {});
+      } else if (Math.abs(v.currentTime - u) > 2.0) {
+        v.currentTime = Math.min(u + 0.15, Math.max(0, (v.duration || u + 1) - 0.1));
+      }
     } else {
       if (!v.paused) v.pause();
       if (Math.abs(v.currentTime - u) > 0.04) v.currentTime = u;
+    }
+  }
+
+  /** まもなく始まる動画を、先頭の位置で止めて待たせておく（切り替えの瞬間に1コマ目がすぐ出せるように） */
+  private preroll(t: number, act: { seg: Seg }[]) {
+    const busy = new Set(act.map(a => a.seg.clip));
+    for (const s of this.segs) {
+      if (s.start <= t) continue;
+      if (s.start - t > 0.8) break;
+      if (busy.has(s.clip)) continue;
+      const v = this.clips[s.clip];
+      if (!v.paused) v.pause();
+      if (!v.seeking && v.currentTime > 0.05) v.currentTime = 0;
     }
   }
 
@@ -103,11 +128,15 @@ export class VideoAvatar {
   }
 
   /** 背景を透明にした1コマ（動画と同じ大きさ）を作る */
-  private keyed(idx: number, slot: number): HTMLCanvasElement | null {
+  private keyed(idx: number): HTMLCanvasElement | null {
     const v = this.clips[idx];
     if (v.readyState < 2 || !v.videoWidth) return null;
     const w = v.videoWidth, h = v.videoHeight;
-    const out = this.outs[slot];
+    const out = this.outs[idx];
+    // 同じ1コマ（動画の時刻が前回と同じ）なら、背景を消し直さずに前回の結果を使う
+    const ck = `${v.currentTime.toFixed(3)}|${v.videoWidth}`;
+    if (this.outKey[idx] === ck && out.width === v.videoWidth) return out;
+    this.outKey[idx] = ck;
     if (out.width !== w || out.height !== h) { out.width = w; out.height = h; }
     const octx = out.getContext('2d')!;
     octx.globalCompositeOperation = 'source-over';
@@ -212,14 +241,17 @@ export class VideoAvatar {
     // 一時停止＋シークが起き、その間は1コマも用意できずに人物が消えてしまうことがあった）
     const playing = this.lastT >= 0 && t > this.lastT && t - this.lastT < 1.0;
     this.lastT = t;
-    const act = this.active(t).slice(-2); // 重なりは最大2本（作業用キャンバスも2枚）
+    let act = this.active(t).slice(-2);
+    // 同じ動画どうしの重なり（動画が1本だけのとき）は、後ろの1本だけを使う（同じ動画を2か所で同時に再生できないため）
+    if (act.length === 2 && act[0].seg.clip === act[1].seg.clip) act = [{ ...act[1], a: 1 }];
     if (!playing) this.clips.forEach((v, i) => { if (!act.some(a => a.seg.clip === i) && !v.paused) v.pause(); });
+    else this.preroll(t, act);
     // 重ねる動画（つなぎ目では2本）のすべての1コマがそろったときだけ、新しい1コマに差し替える。
     // どれかがまだ用意できていない（シーク中・読み込み中）ときは、直前の1コマを描き続けて消えないようにする
     const layers = act.map(({ seg, u, a }, k) => {
       const v = this.clips[seg.clip];
       this.sync(v, u, playing);
-      return { c: this.keyed(seg.clip, k), a };
+      return { c: this.keyed(seg.clip), a };
     });
     const ready = layers.length > 0 && layers.every(l => !!l.c);
     const frame = this.work;
