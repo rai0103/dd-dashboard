@@ -16,7 +16,7 @@ export function fileToBase64(file: Blob): Promise<string> {
 }
 
 /** URLの本文をローカルサーバー（tts-server の /api/fetch-url）経由で取得する */
-export async function fetchUrlReference(url: string): Promise<{ title: string; text: string; pdfBase64?: string }> {
+export async function fetchUrlReference(url: string): Promise<{ title: string; text: string; pdfBase64?: string; note?: string }> {
   let res: Response;
   try {
     res = await fetch(`${getTtsBaseUrl()}/api/fetch-url?url=${encodeURIComponent(url)}`, { cache: 'no-store' });
@@ -30,7 +30,7 @@ export async function fetchUrlReference(url: string): Promise<{ title: string; t
     throw new Error(j?.message || `取得に失敗しました（HTTP ${res.status}）`);
   }
   if (j.kind === 'pdf') return { title: j.title || url, text: '', pdfBase64: j.base64 };
-  return { title: j.title || url, text: String(j.text || '') };
+  return { title: j.title || url, text: String(j.text || ''), note: typeof j.note === 'string' ? j.note : undefined };
 }
 
 /** 参考情報の文字（URL・テキスト）だけを集める（丸写しチェック用。PDFは中身を持たないため対象外） */

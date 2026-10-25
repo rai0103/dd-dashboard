@@ -123,7 +123,7 @@ export interface ExplainerProject {
 // ---- 参考情報 ----
 export type ReferenceItem =
   | { id: string; kind: 'text'; title: string; text: string }
-  | { id: string; kind: 'url'; url: string; title: string; text: string; status: 'pending' | 'ok' | 'error'; error?: string; pdfBase64?: string }
+  | { id: string; kind: 'url'; url: string; title: string; text: string; status: 'pending' | 'ok' | 'error'; error?: string; pdfBase64?: string; note?: string }
   | { id: string; kind: 'pdf'; title: string; base64: string; sizeBytes: number };
 
 export interface ImageAsset { id: string; name: string; blob: Blob; rightsConfirmed: boolean; createdAt: number }

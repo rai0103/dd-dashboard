@@ -212,3 +212,29 @@ export function buildDescription(p: Pick<ExplainerProject, 'youtube' | 'sources'
   if (p.youtube.tags.length) lines.push('', p.youtube.tags.slice(0, 8).map((t) => `#${t.replace(/^#/, '').replace(/\s+/g, '')}`).join(' ') + (short ? ' #shorts' : ''));
   return lines.join('\n').trim();
 }
+
+// ---- 長さと声の速さ ----
+/** 話速1.0での1秒あたりの文字数（aiScript の CHARS_PER_MIN=300 と同じ） */
+const CPS_AT_1 = 5;
+export interface NarrMeasure { rate: number; secs: number[] }
+
+/** 指定の速さで読んだときの動画全体の秒数。実測（measure）があれば、その秒数を速さの比で伸び縮みさせて使う */
+export function predictTotalSec(scenes: Pick<ExplainerScene, 'narration' | 'minSec'>[], rate: number, measure?: NarrMeasure | null): number {
+  return scenes.reduce((sum, s, i) => {
+    const base = measure && measure.secs.length === scenes.length ? measure.secs[i] * (measure.rate / rate) : s.narration.length / (CPS_AT_1 * rate);
+    return sum + Math.max(s.minSec || 3, base > 0 ? base + 1.1 : 0);
+  }, 0);
+}
+
+/**
+ * 目標の秒数に収まる、いちばんゆっくりの速さ（0.6〜2.0）を探す。2.0でも収まらなければ null。
+ * 聞き取りやすさの目安として 0.9〜1.5 を推奨範囲にする。
+ */
+export function suggestRate(scenes: Pick<ExplainerScene, 'narration' | 'minSec'>[], targetSec: number, measure?: NarrMeasure | null): number | null {
+  if (predictTotalSec(scenes, 2.0, measure) > targetSec) return null;
+  let lo = 0.6, hi = 2.0;
+  if (predictTotalSec(scenes, lo, measure) <= targetSec) return lo;
+  for (let k = 0; k < 30; k++) { const mid = (lo + hi) / 2; if (predictTotalSec(scenes, mid, measure) <= targetSec) hi = mid; else lo = mid; }
+  return Math.ceil(hi * 20) / 20; // 0.05刻み（スライダーと同じ）で切り上げ
+}
+export const COMFORT_RATE = { min: 0.9, max: 1.5 };

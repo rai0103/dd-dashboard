@@ -20,7 +20,7 @@ import { ExplainerRenderer, RENDER_SIZE } from "@/lib/explainer/renderer";
 import { generateProject, generateShort, rewriteScene, CHARS_PER_MIN } from "@/lib/explainer/aiScript";
 import { AiClientError } from "@/lib/explainer/aiClient";
 import { referenceBlocks, referenceTexts, fetchUrlReference, fileToBase64, newRefId, refLabel, MAX_PDF_BYTES } from "@/lib/explainer/references";
-import { lintScenes, buildDescription, sourcesScene, normalizeVisual, minSecFor, sanitizeReading, isKanaReading } from "@/lib/explainer/scriptModel";
+import { lintScenes, buildDescription, sourcesScene, predictTotalSec, suggestRate, COMFORT_RATE, normalizeVisual, minSecFor, sanitizeReading, isKanaReading } from "@/lib/explainer/scriptModel";
 import { saveImage, listImages, deleteImage } from "@/lib/explainer/imageStore";
 import { VISUAL_KINDS, ICON_NAMES } from "@/lib/explainer/types";
 
@@ -37,6 +37,7 @@ const KIND_LABEL = {
 };
 // 取り込み元のページのConsoleで実行する1行：localStorageの中から「登録した声」の形の配列を探してクリップボードにコピーする
 const PRESET_EXPORT_SNIPPET = `copy(JSON.stringify(Object.keys(localStorage).flatMap(k=>{try{const v=JSON.parse(localStorage.getItem(k));return Array.isArray(v)&&v.length&&v.every(p=>p&&typeof p.name==='string'&&typeof p.voice==='string')?v:[]}catch(e){return[]}})))`;
+const LENGTH_OPTIONS = [3, 4, 5, 6, 7, 8];
 const PROJECT_KEY = "explainer-project-v1";
 const INPUT_KEY = "explainer-input-v1";
 // 長尺動画作成（DDDashboard.jsx）と同じキー：スライダーのロック値を共有する
@@ -84,7 +85,7 @@ export default function ExplainerStudio() {
   const [topic, setTopic] = useState(saved0?.topic ?? "");
   const [mode, setMode] = useState(saved0?.mode ?? "news");
   const [audience, setAudience] = useState(saved0?.audience ?? "beginner");
-  const [targetMinutes, setTargetMinutes] = useState(saved0?.targetMinutes ?? 5);
+  const [targetMinutes, setTargetMinutes] = useState(Math.min(8, Math.max(3, saved0?.targetMinutes ?? 5)));
   const [extraInstruction, setExtraInstruction] = useState(saved0?.extraInstruction ?? "");
   const [refs, setRefs] = useState(() => (saved0?.refs ?? []).filter((r) => r.kind !== "pdf"));
   useEffect(() => {
@@ -107,7 +108,7 @@ export default function ExplainerStudio() {
     setRefs((p) => p.map((r) => (r.id === id ? { ...r, status: "pending", error: undefined } : r)));
     try {
       const got = await fetchUrlReference(url);
-      setRefs((p) => p.map((r) => (r.id === id ? { ...r, status: "ok", title: got.title, text: got.text, pdfBase64: got.pdfBase64 } : r)));
+      setRefs((p) => p.map((r) => (r.id === id ? { ...r, status: "ok", title: got.title, text: got.text, pdfBase64: got.pdfBase64, note: got.note } : r)));
     } catch (e) {
       setRefs((p) => p.map((r) => (r.id === id ? { ...r, status: "error", error: e?.message || String(e) } : r)));
     }
@@ -444,6 +445,9 @@ export default function ExplainerStudio() {
   useEffect(() => { seekPosRef.current = seekPos; }, [seekPos]);
   const [totalSec, setTotalSec] = useState(0);
   const [sceneDurs, setSceneDurs] = useState([]);
+  // 実測したナレーションの長さ（秒）と、そのときの速さ。速さを変えたときの長さの見込みに使う
+  const [narrMeasure, setNarrMeasure] = useState(null);
+  const [measuring, setMeasuring] = useState(false);
   const estimatedTotal = useMemo(() => scenes.reduce((a, s) => a + Math.max(s.minSec || 0, (s.narration.length / CHARS_PER_MIN) * 60 / rate + 1.1), 0), [scenes, rate]);
   const displayTotal = totalSec > 0 ? totalSec : estimatedTotal;
   const [isExporting, setIsExporting] = useState(false);
@@ -453,7 +457,9 @@ export default function ExplainerStudio() {
   const sceneRefs = useRef([]);
   const listRef = useRef(null);
   // 台本・形式が変わったら、実測した長さは使えないので概算に戻す
-  useEffect(() => { setTotalSec(0); setSceneDurs([]); }, [scenes, format]);
+  useEffect(() => { setTotalSec(0); setSceneDurs([]); setNarrMeasure(null); }, [scenes, format]);
+  // 速さを変えたら、実測した全体の長さは使えないので見込みに戻す（ナレーションの実測値は残して比で計算する）
+  useEffect(() => { setTotalSec(0); setSceneDurs([]); }, [rate]);
   useEffect(() => {
     const box = listRef.current, el = sceneRefs.current[currentSceneIdx];
     if (!box || !el) return;
@@ -501,6 +507,7 @@ export default function ExplainerStudio() {
     const starts = []; durs.reduce((acc, d) => { starts.push(acc); return acc + d; }, 0);
     const total = durs.reduce((a, b) => a + b, 0);
     setTotalSec(total); setSceneDurs(durs);
+    if (!failed) setNarrMeasure({ rate, secs: bufs.map((b) => (b ? b.duration : 0)) });
     if (failed) setTtsError(true);
     return { bufs, durs, starts, total, failed };
   };
@@ -604,6 +611,53 @@ export default function ExplainerStudio() {
   const description = useMemo(() => (project ? buildDescription(project, urlList, format === "short") : ""), [project, urlList, format]);
   const patchYoutube = (patch) => setProject((p) => ({ ...p, youtube: { ...p.youtube, ...patch } }));
 
+  // ---------------- 長さと声の速さのガイド ----------------
+  const targetSec = format === "long" ? (project?.targetMinutes || 5) * 60 : 60;
+  const predicted = useMemo(() => (totalSec > 0 ? totalSec : predictTotalSec(scenes, rate, narrMeasure)), [totalSec, scenes, rate, narrMeasure]);
+  const needRate = useMemo(() => suggestRate(scenes, targetSec * 0.98, narrMeasure), [scenes, targetSec, narrMeasure]);
+  // 目標まで余裕があるときに、ゆっくり読める速さ（目標の90%まで使う・聞き取りやすい範囲の下限まで）
+  const relaxRate = useMemo(() => { const r = suggestRate(scenes, targetSec * 0.9, narrMeasure); return r == null ? null : Math.max(COMFORT_RATE.min, r); }, [scenes, targetSec, narrMeasure]);
+  const applyRate = (r) => { const v = Math.round(r * 100) / 100; setRate(v); updateLocked("rate", v); setActivePresetId(null); };
+  const measureNow = async () => { if (isPlayingRef.current) handlePause(); setMeasuring(true); try { await prepareAudio(); } finally { setMeasuring(false); } };
+  const SpeedGuide = () => {
+    if (!project || !scenes.length) return null;
+    const over = predicted > targetSec;
+    const roomy = !over && predicted < targetSec * 0.8 && relaxRate != null && relaxRate < rate - 0.04;
+    const tone = over ? C.rust : roomy ? C.amber : C.teal;
+    return (
+      <div className="rounded p-2 text-[11px] flex flex-col gap-1.5" style={{ background: `${tone}12`, border: `1px solid ${tone}55`, color: C.textMuted }}>
+        <div className="flex items-center gap-2 flex-wrap">
+          <span style={{ color: tone, fontWeight: 700 }}>{over ? "目標を超えています" : roomy ? "目標まで余裕があります" : "目標の長さに収まっています"}</span>
+          <span>見込み {fmtTime(predicted)}（速さ {rate.toFixed(2)}x）／目標</span>
+          {format === "long" ? (
+            <select value={project.targetMinutes} onChange={(e) => setProject((p) => ({ ...p, targetMinutes: Number(e.target.value) }))} className="px-1 py-0.5 rounded text-[11px]" style={inputStyle}>
+              {LENGTH_OPTIONS.map((m) => <option key={m} value={m}>{m}:00以内</option>)}
+            </select>
+          ) : <span>1:00以内（ショート）</span>}
+          <span style={{ color: C.textDim }}>{totalSec ? "※実測" : narrMeasure ? "※実測から計算" : "※文字数から推計"}</span>
+        </div>
+        {over && needRate != null && (
+          <div className="flex items-center gap-2 flex-wrap">
+            <span>声の速さを <b style={{ color: C.text }}>{needRate.toFixed(2)}x</b> にすると、約{fmtTime(predictTotalSec(scenes, needRate, narrMeasure))}で収まります。</span>
+            <button onClick={() => applyRate(needRate)} className="text-[10px] px-2 py-0.5 rounded" style={btn("primary")}>この速さにする</button>
+            {needRate > COMFORT_RATE.max && <span style={{ color: C.rust }}>（{COMFORT_RATE.max}xを超えると聞き取りにくくなります。場面を減らすか、目標を延ばすのがおすすめです）</span>}
+          </div>
+        )}
+        {over && needRate == null && <div style={{ color: C.rust }}>速さを上げても収まりません。場面を減らすか、目標の長さを延ばしてください。</div>}
+        {roomy && (
+          <div className="flex items-center gap-2 flex-wrap">
+            <span>速さを <b style={{ color: C.text }}>{relaxRate.toFixed(2)}x</b> に下げると、約{fmtTime(predictTotalSec(scenes, relaxRate, narrMeasure))}で、ゆったり聞きやすくなります。</span>
+            <button onClick={() => applyRate(relaxRate)} className="text-[10px] px-2 py-0.5 rounded" style={btn()}>この速さにする</button>
+          </div>
+        )}
+        <div className="flex items-center gap-2 flex-wrap" style={{ color: C.textDim }}>
+          <span>聞き取りやすい速さの目安は {COMFORT_RATE.min}〜{COMFORT_RATE.max}x です。</span>
+          {!totalSec && <button onClick={measureNow} disabled={measuring} className="text-[10px] px-2 py-0.5 rounded" style={{ ...btn(), opacity: measuring ? 0.5 : 1 }}>{measuring ? "音声を作って計測中…" : "実際の音声で長さを計測"}</button>}
+        </div>
+      </div>
+    );
+  };
+
   const sizeKb = (b) => (b > 1024 * 1024 ? `${(b / 1024 / 1024).toFixed(1)}MB` : `${Math.round(b / 1024)}KB`);
 
   // ======================= 画面 =======================
@@ -644,7 +698,7 @@ export default function ExplainerStudio() {
                 </label>
                 <label className="flex items-center gap-1.5">長尺の長さ
                   <select value={targetMinutes} onChange={(e) => setTargetMinutes(Number(e.target.value))} className="px-1.5 py-1 rounded text-[11px]" style={inputStyle}>
-                    {[3, 5, 8, 10, 12, 15].map((m) => <option key={m} value={m}>約{m}分</option>)}
+                    {LENGTH_OPTIONS.map((m) => <option key={m} value={m}>{m}分以内</option>)}
                   </select>
                 </label>
                 <input value={extraInstruction} onChange={(e) => setExtraInstruction(e.target.value)} placeholder="追加の指示（任意）：例）投資家目線の影響を厚めに／例え話を多めに" className="flex-1 min-w-[220px] px-2 py-1 rounded text-[11px]" style={inputStyle} />
@@ -659,7 +713,7 @@ export default function ExplainerStudio() {
                       {r.kind === "url" ? <Link2 size={12} style={{ color: C.blue, flexShrink: 0 }} /> : r.kind === "pdf" ? <FileText size={12} style={{ color: C.rust, flexShrink: 0 }} /> : <Type size={12} style={{ color: C.amber, flexShrink: 0 }} />}
                       <span className="truncate flex-1 text-[11px]" title={r.kind === "url" ? r.url : r.title}>{refLabel(r)}</span>
                       <span className="text-[10px] shrink-0" style={{ color: r.kind === "url" && r.status === "error" ? C.rust : C.textDim }}>
-                        {r.kind === "url" ? (r.status === "pending" ? "読み込み中…" : r.status === "error" ? r.error : r.pdfBase64 ? "PDF" : `${r.text.length.toLocaleString()}字`) : r.kind === "pdf" ? sizeKb(r.sizeBytes) : `${r.text.length.toLocaleString()}字`}
+                        {r.kind === "url" ? (r.status === "pending" ? "読み込み中…" : r.status === "error" ? r.error : r.pdfBase64 ? "PDF" : `${r.note ? `${r.note}・` : ""}${r.text.length.toLocaleString()}字`) : r.kind === "pdf" ? sizeKb(r.sizeBytes) : `${r.text.length.toLocaleString()}字`}
                       </span>
                       {r.kind === "url" && r.status === "error" && <button onClick={() => loadUrl(r.id, r.url)} title="もう一度読み込む" style={{ color: C.textMuted, background: "none", border: "none", cursor: "pointer" }}><RefreshCw size={11} /></button>}
                       <button onClick={() => setRefs((p) => p.filter((x) => x.id !== r.id))} title="削除" style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer" }}><X size={12} /></button>
@@ -667,14 +721,14 @@ export default function ExplainerStudio() {
                   ))}
                 </div>
                 <div className="flex flex-wrap gap-2 items-center">
-                  <input value={urlInput} onChange={(e) => setUrlInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addUrls(); }} placeholder="URLを貼り付け（複数は空白・改行区切り）" className="flex-1 min-w-[240px] px-2 py-1 rounded text-[11px]" style={inputStyle} />
+                  <input value={urlInput} onChange={(e) => setUrlInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addUrls(); }} placeholder="URLを貼り付け：記事・PDF・YouTube動画（複数は空白・改行区切り）" className="flex-1 min-w-[240px] px-2 py-1 rounded text-[11px]" style={inputStyle} />
                   <button onClick={addUrls} className="text-[11px] px-2 py-1 rounded flex items-center gap-1" style={btn()}><Link2 size={11} /> URLを追加</button>
                   <label className="text-[11px] px-2 py-1 rounded flex items-center gap-1" style={btn()}><FileText size={11} /> PDFを追加
                     <input type="file" accept="application/pdf,.pdf" multiple style={{ display: "none" }} onChange={(e) => { const fs = e.target.files; addPdfs(fs); e.target.value = ""; }} />
                   </label>
                   <button onClick={() => setRefTextOpen((v) => !v)} className="text-[11px] px-2 py-1 rounded flex items-center gap-1" style={btn()}><Type size={11} /> テキストを追加</button>
                 </div>
-                <div className="text-[10px] mt-1" style={{ color: C.textDim }}>URLの本文はローカルサーバー（{getTtsBaseUrl()}）が取得します。ログインが必要なページや有料記事は読めないため、本文をコピーして「テキスト」で追加してください。</div>
+                <div className="text-[10px] mt-1" style={{ color: C.textDim }}>URLの本文はローカルサーバー（{getTtsBaseUrl()}）が取得します。YouTube動画はタイトル・概要欄・字幕（公開されている場合）を読み込みます。字幕が取れない動画は、YouTubeの「文字起こしを表示」の内容をコピーして「テキスト」で追加してください。ログインが必要なページや有料記事は読めないため、本文をコピーして「テキスト」で追加してください。</div>
                 {refTextOpen && (
                   <div className="mt-2 flex flex-col gap-1.5 p-2 rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
                     <input value={refTextTitle} onChange={(e) => setRefTextTitle(e.target.value)} placeholder="資料名（例：日銀の公表文、○○新聞 10月25日）" className="px-2 py-1 rounded text-[11px]" style={{ ...inputStyle, background: C.panel }} />
@@ -733,9 +787,9 @@ export default function ExplainerStudio() {
                 </div>
                 <input type="range" min={0} max={1} step={0.001} value={seekPos} onChange={(e) => handleSeek(Number(e.target.value))} className="w-full" />
                 <div className="text-[11px] mono -mt-1" style={{ color: C.textDim }}>
-                  {fmtTime(seekPos * displayTotal)} / <span style={{ color: format === "long" && project.targetMinutes && displayTotal > project.targetMinutes * 60 ? C.rust : C.textDim, fontWeight: format === "long" && project.targetMinutes && displayTotal > project.targetMinutes * 60 ? 700 : 400 }}>{fmtTime(displayTotal)}</span>{totalSec ? "" : "（概算）"}
-                  {format === "long" && project.targetMinutes ? <span>　目標 {project.targetMinutes}:00 以内{displayTotal > project.targetMinutes * 60 ? `（${fmtTime(displayTotal - project.targetMinutes * 60)} 超過：場面を削るか、声の速さを上げてください）` : ""}</span> : null}
+                  {fmtTime(seekPos * displayTotal)} / {fmtTime(displayTotal)}{totalSec ? "" : "（見込み）"}
                 </div>
+                {SpeedGuide()}
                 <div className="flex items-center gap-1.5 text-[11px]" style={{ color: C.textDim }}>
                   ラベル<input value={project.kicker} onChange={(e) => setProject((p) => ({ ...p, kicker: e.target.value }))} className="w-32 px-1.5 py-0.5 rounded text-[11px]" style={inputStyle} title="左上の色付きラベル" />
                   タイトル<input value={project.videoTitle} onChange={(e) => setProject((p) => ({ ...p, videoTitle: e.target.value }))} className="flex-1 min-w-0 px-1.5 py-0.5 rounded text-[11px]" style={inputStyle} title="画面上部に出す動画タイトル" />

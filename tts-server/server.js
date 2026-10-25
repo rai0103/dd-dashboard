@@ -231,6 +231,86 @@ function charsetOf(contentType, headBytes) {
   const m2 = /<meta[^>]+charset=["']?([a-z0-9_\-]+)/i.exec(head);
   return m2 ? m2[1] : 'utf-8';
 }
+
+// ---- YouTube動画（タイトル・チャンネル・概要欄・字幕） ----
+// 字幕は公開されている字幕トラック（手動の日本語→自動生成の日本語→その他の順）を取りにいく。
+// YouTube側の仕様で字幕が取れない動画もあるため、その場合はタイトル・概要欄だけを返し、note で知らせる。
+function youtubeIdOf(u) {
+  const h = u.hostname.replace(/^www\.|^m\./, '');
+  if (h === 'youtu.be') return u.pathname.slice(1).split('/')[0] || null;
+  if (h === 'youtube.com' || h === 'music.youtube.com') {
+    if (u.searchParams.get('v')) return u.searchParams.get('v');
+    const m = /^\/(shorts|live|embed)\/([^/?#]+)/.exec(u.pathname);
+    if (m) return m[2];
+  }
+  return null;
+}
+const YT_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36';
+function pickTrack(tracks) {
+  if (!Array.isArray(tracks) || !tracks.length) return null;
+  const ja = tracks.filter((t) => /^ja/.test(t.languageCode || ''));
+  return ja.find((t) => t.kind !== 'asr') || ja[0] || tracks.find((t) => t.kind !== 'asr') || tracks[0];
+}
+async function fetchTranscript(baseUrl, signal) {
+  if (!baseUrl) return '';
+  try {
+    const r = await fetch(baseUrl + (baseUrl.includes('fmt=') ? '' : '&fmt=json3'), { signal, headers: { 'User-Agent': YT_UA } });
+    const t = await r.text();
+    if (t.trim().startsWith('{')) {
+      const j = JSON.parse(t);
+      const s = (j.events || []).map((ev) => (ev.segs || []).map((x) => x.utf8 || '').join('')).join('');
+      if (s.trim()) return s.replace(/\n+/g, ' ').replace(/\s{2,}/g, ' ').trim();
+    }
+    const xml = t.match(/<text[^>]*>([\s\S]*?)<\/text>/g);
+    if (xml) return decodeEntities(xml.map((x) => x.replace(/<[^>]+>/g, '')).join(' ')).replace(/\s{2,}/g, ' ').trim();
+  } catch { /* 取れなければ空 */ }
+  return '';
+}
+async function fetchYoutube(id, signal) {
+  let pr = null;
+  // 1) 動画ページに埋め込まれた情報
+  try {
+    const r = await fetch(`https://www.youtube.com/watch?v=${encodeURIComponent(id)}&hl=ja`, { signal, headers: { 'User-Agent': YT_UA, 'Accept-Language': 'ja,en;q=0.8', Cookie: 'CONSENT=YES+1; SOCS=CAI' } });
+    const html = await r.text();
+    const m = html.match(/ytInitialPlayerResponse\s*=\s*(\{[\s\S]+?\})\s*;\s*(?:var\s|<\/script>|const\s|let\s)/);
+    if (m) pr = JSON.parse(m[1]);
+  } catch { /* 次の方法へ */ }
+  let track = pickTrack(pr?.captions?.playerCaptionsTracklistRenderer?.captionTracks);
+  let transcript = track ? await fetchTranscript(track.baseUrl, signal) : '';
+  // 2) 字幕が取れなければ、アプリ向けの取得方法でもう一度
+  if (!transcript) {
+    try {
+      const r = await fetch('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', {
+        method: 'POST', signal,
+        headers: { 'Content-Type': 'application/json', 'User-Agent': 'com.google.android.youtube/19.44.38 (Linux; U; Android 14) gzip' },
+        body: JSON.stringify({ videoId: id, context: { client: { clientName: 'ANDROID', clientVersion: '19.44.38', androidSdkVersion: 34, hl: 'ja', gl: 'JP' } } }),
+      });
+      const j = await r.json();
+      if (!pr) pr = j;
+      const t2 = pickTrack(j?.captions?.playerCaptionsTracklistRenderer?.captionTracks);
+      if (t2) { track = t2; transcript = await fetchTranscript(t2.baseUrl, signal); }
+    } catch { /* 字幕なしで続ける */ }
+  }
+  const vd = pr?.videoDetails || {};
+  let title = vd.title || '', author = vd.author || '';
+  if (!title) {
+    try { const o = await (await fetch(`https://www.youtube.com/oembed?format=json&url=${encodeURIComponent('https://www.youtube.com/watch?v=' + id)}`, { signal })).json(); title = o.title || ''; author = o.author_name || ''; } catch { /* ignore */ }
+  }
+  if (!title) return null;
+  const pub = pr?.microformat?.playerMicroformatRenderer?.publishDate || '';
+  const len = Number(vd.lengthSeconds) || 0;
+  const parts = [
+    `【YouTube動画】${title}`,
+    `チャンネル：${author}${pub ? `／公開日：${pub.slice(0, 10)}` : ''}${len ? `／長さ：${Math.floor(len / 60)}分${len % 60}秒` : ''}`,
+    vd.shortDescription ? `【概要欄】\n${vd.shortDescription}` : '',
+    transcript ? `【字幕（${track && track.kind === 'asr' ? '自動生成' : '字幕'}）】\n${transcript}` : '',
+  ].filter(Boolean);
+  return {
+    kind: 'text', title: `${title}（YouTube・${author}）`, text: parts.join('\n\n').slice(0, 60000), youtube: true, transcript: !!transcript,
+    note: transcript ? `字幕${track && track.kind === 'asr' ? '（自動生成）' : ''}あり` : '字幕を取得できず、タイトルと概要欄のみ',
+  };
+}
+
 async function handleFetchUrl(req, res) {
   const u = new URL(req.url, 'http://localhost');
   const target = u.searchParams.get('url') || '';
@@ -241,6 +321,13 @@ async function handleFetchUrl(req, res) {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), 25000);
   try {
+    const ytId = youtubeIdOf(parsed);
+    if (ytId) {
+      const y = await fetchYoutube(ytId, ctl.signal);
+      if (!y) { send(502, { error: 'FETCH_FAILED', message: 'YouTube動画の情報を取得できませんでした（非公開・削除済みの可能性）' }); return; }
+      send(200, y);
+      return;
+    }
     const r = await fetch(parsed.href, {
       redirect: 'follow',
       signal: ctl.signal,

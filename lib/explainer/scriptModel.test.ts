@@ -69,3 +69,16 @@ test("概要欄に参考資料とAI利用の注記を入れる", () => {
   assert.match(d, /#金利 #日銀/);
   assert.match(buildDescription({ youtube: { title: "", description: "", tags: ["x"], thumbnailText: "", shortTitle: "", shortDescription: "短い" }, sources: [] }, [], true), /#shorts/);
 });
+
+import { predictTotalSec, suggestRate } from "./scriptModel.ts";
+test("目標時間に収まる声の速さを提案する", () => {
+  const scenes = Array.from({ length: 20 }, () => ({ narration: "あ".repeat(80), minSec: 6 }));
+  // 80字÷5字/秒=16秒＋1.1秒 → 20場面で342秒
+  assert.equal(Math.round(predictTotalSec(scenes, 1)), 342);
+  const r = suggestRate(scenes, 300)!;
+  assert.ok(r > 1 && r < 1.3);
+  assert.ok(predictTotalSec(scenes, r) <= 300);
+  assert.equal(suggestRate(scenes, 100), null); // 2倍でも収まらない
+  // 実測があれば実測を優先（1.5倍で各10秒 → 1.0倍なら各15秒）
+  assert.equal(Math.round(predictTotalSec(scenes, 1, { rate: 1.5, secs: scenes.map(() => 10) })), 20 * 16.1);
+});
