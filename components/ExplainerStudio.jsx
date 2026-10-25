@@ -159,16 +159,18 @@ export default function ExplainerStudio() {
   const [genProgress, setGenProgress] = useState(null);
   const [genError, setGenError] = useState("");
   const abortRef = useRef(null);
-  const genInput = () => ({ topic: topic.trim(), mode, audience, targetMinutes, extraInstruction, refBlocks: referenceBlocks(refs), today: todayStr(), speechRate: rate });
+  const genInput = (minutes = targetMinutes) => ({ topic: topic.trim(), mode, audience, targetMinutes: minutes, extraInstruction, refBlocks: referenceBlocks(refs), today: todayStr(), speechRate: rate });
   const errMsg = (e) => (e instanceof AiClientError ? e.message : e?.message || String(e));
-  const handleGenerate = async () => {
+  const handleGenerate = async (minutesOverride) => {
+    const minutes = typeof minutesOverride === "number" ? minutesOverride : targetMinutes;
     if (!topic.trim()) { setGenError("テーマ（ニュースやキーワード）を入力してください。"); return; }
     if (refs.some((r) => r.kind === "url" && r.status === "pending")) { setGenError("URLの読み込みが終わるまでお待ちください。"); return; }
-    if (project && !confirm("いまの台本を新しく作り直します。よろしいですか？（現在の台本は「台本を保存」で残せます）")) return;
+    if (project && !confirm(`いまの台本を、${minutes}分以内・声の速さ${rate.toFixed(2)}xに合わせて新しく作り直します。よろしいですか？（現在の台本は「台本を保存」で残せます）`)) return;
+    if (minutes !== targetMinutes) setTargetMinutes(minutes);
     setGenBusy(true); setGenError("");
     const ac = new AbortController(); abortRef.current = ac;
     try {
-      const p = await generateProject(genInput(), setGenProgress, ac.signal, true, sourcesInVideo);
+      const p = await generateProject(genInput(minutes), setGenProgress, ac.signal, true, sourcesInVideo);
       setProject(p); setFormat("long"); setInputOpen(false); setSeekPos(0);
     } catch (e) { setGenError(errMsg(e)); }
     finally { setGenBusy(false); setGenProgress(null); abortRef.current = null; }
@@ -644,6 +646,12 @@ export default function ExplainerStudio() {
           </div>
         )}
         {over && needRate == null && <div style={{ color: C.rust }}>速さを上げても収まりません。場面を減らすか、目標の長さを延ばしてください。</div>}
+        {over && format === "long" && (needRate == null || needRate > COMFORT_RATE.max) && (
+          <div className="flex items-center gap-2 flex-wrap">
+            <button onClick={() => handleGenerate(project.targetMinutes)} disabled={genBusy} className="text-[11px] px-2.5 py-1 rounded flex items-center gap-1" style={{ ...btn("primary"), opacity: genBusy ? 0.5 : 1 }}><RefreshCw size={11} /> {genBusy ? (genProgress?.step || "作り直し中…") : `${project.targetMinutes}分以内に収まるよう台本を作り直す`}</button>
+            <span style={{ color: C.textDim }}>いまの声の速さ（{rate.toFixed(2)}x）で長さを見積もって作ります。テーマ・参考情報はそのまま使います。</span>
+          </div>
+        )}
         {roomy && (
           <div className="flex items-center gap-2 flex-wrap">
             <span>速さを <b style={{ color: C.text }}>{relaxRate.toFixed(2)}x</b> に下げると、約{fmtTime(predictTotalSec(scenes, relaxRate, narrMeasure))}で、ゆったり聞きやすくなります。</span>
@@ -739,7 +747,7 @@ export default function ExplainerStudio() {
               </div>
 
               <div className="flex items-center gap-2 flex-wrap">
-                <button onClick={handleGenerate} disabled={genBusy} className="text-xs px-3 py-1.5 rounded flex items-center gap-1.5" style={{ ...btn("primary"), opacity: genBusy ? 0.6 : 1 }}><Sparkles size={13} /> {project ? "台本を作り直す" : "台本を生成（長尺＋ショート）"}</button>
+                <button onClick={() => handleGenerate()} disabled={genBusy} className="text-xs px-3 py-1.5 rounded flex items-center gap-1.5" style={{ ...btn("primary"), opacity: genBusy ? 0.6 : 1 }}><Sparkles size={13} /> {project ? "台本を作り直す" : "台本を生成（長尺＋ショート）"}</button>
                 {genBusy && <button onClick={() => abortRef.current?.abort()} className="text-[11px] px-2 py-1 rounded" style={{ ...btn(), color: C.rust, borderColor: C.rust + "88" }}>中止</button>}
                 {genProgress && (
                   <div className="flex items-center gap-2 text-[11px]" style={{ color: C.textMuted }}>
