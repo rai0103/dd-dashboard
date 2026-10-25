@@ -158,7 +158,7 @@ export default function ExplainerStudio() {
   const [genProgress, setGenProgress] = useState(null);
   const [genError, setGenError] = useState("");
   const abortRef = useRef(null);
-  const genInput = () => ({ topic: topic.trim(), mode, audience, targetMinutes, extraInstruction, refBlocks: referenceBlocks(refs), today: todayStr() });
+  const genInput = () => ({ topic: topic.trim(), mode, audience, targetMinutes, extraInstruction, refBlocks: referenceBlocks(refs), today: todayStr(), speechRate: rate });
   const errMsg = (e) => (e instanceof AiClientError ? e.message : e?.message || String(e));
   const handleGenerate = async () => {
     if (!topic.trim()) { setGenError("テーマ（ニュースやキーワード）を入力してください。"); return; }
@@ -693,7 +693,7 @@ export default function ExplainerStudio() {
                     {genProgress.step}
                   </div>
                 )}
-                {!genBusy && <span className="text-[10px]" style={{ color: C.textDim }}>AIはローカルサーバー経由（tts-server/.env のAPIキー）で呼び出します。</span>}
+                {!genBusy && <span className="text-[10px]" style={{ color: C.textDim }}>長さは、いま選んでいる声の速さ（{rate.toFixed(2)}x）で約{targetMinutes}分以内に収まるよう見積もって作ります。先に声と速さを決めてから生成すると正確です。</span>}
               </div>
               {genError && <div className="text-[11px] px-2 py-1.5 rounded" style={{ background: `${C.rust}1a`, border: `1px solid ${C.rust}44`, color: C.rust }}>{genError}</div>}
             </div>
@@ -732,7 +732,14 @@ export default function ExplainerStudio() {
                   <canvas ref={canvasRef} className="w-full h-full" />
                 </div>
                 <input type="range" min={0} max={1} step={0.001} value={seekPos} onChange={(e) => handleSeek(Number(e.target.value))} className="w-full" />
-                <div className="text-[11px] mono -mt-1" style={{ color: C.textDim }}>{fmtTime(seekPos * displayTotal)} / {fmtTime(displayTotal)}{totalSec ? "" : "（概算）"}</div>
+                <div className="text-[11px] mono -mt-1" style={{ color: C.textDim }}>
+                  {fmtTime(seekPos * displayTotal)} / <span style={{ color: format === "long" && project.targetMinutes && displayTotal > project.targetMinutes * 60 ? C.rust : C.textDim, fontWeight: format === "long" && project.targetMinutes && displayTotal > project.targetMinutes * 60 ? 700 : 400 }}>{fmtTime(displayTotal)}</span>{totalSec ? "" : "（概算）"}
+                  {format === "long" && project.targetMinutes ? <span>　目標 {project.targetMinutes}:00 以内{displayTotal > project.targetMinutes * 60 ? `（${fmtTime(displayTotal - project.targetMinutes * 60)} 超過：場面を削るか、声の速さを上げてください）` : ""}</span> : null}
+                </div>
+                <div className="flex items-center gap-1.5 text-[11px]" style={{ color: C.textDim }}>
+                  ラベル<input value={project.kicker} onChange={(e) => setProject((p) => ({ ...p, kicker: e.target.value }))} className="w-32 px-1.5 py-0.5 rounded text-[11px]" style={inputStyle} title="左上の色付きラベル" />
+                  タイトル<input value={project.videoTitle} onChange={(e) => setProject((p) => ({ ...p, videoTitle: e.target.value }))} className="flex-1 min-w-0 px-1.5 py-0.5 rounded text-[11px]" style={inputStyle} title="画面上部に出す動画タイトル" />
+                </div>
                 <div className="flex items-center gap-2 flex-wrap">
                   <button onClick={isPlaying ? handlePause : handlePlay} className="text-xs px-3 py-1.5 rounded flex items-center gap-1.5" style={btn("primary")}>{isPlaying ? <><Pause size={13} /> 一時停止</> : <><Play size={13} /> プレビュー再生</>}</button>
                   <button onClick={() => { handlePause(); handleSeek(0); }} className="text-xs px-3 py-1.5 rounded flex items-center gap-1.5" style={{ background: C.panel2, color: C.textMuted, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}><Square size={12} /> 先頭へ</button>

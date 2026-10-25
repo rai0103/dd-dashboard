@@ -15,10 +15,40 @@ export interface GenerateInput {
   /** referenceBlocks() の結果 */
   refBlocks: any[];
   today: string;
+  /** 読み上げの速さ（声の「速さ」。長さの見積もりに使う。既定1.0） */
+  speechRate?: number;
 }
 
 /** 日本語ナレーションの1分あたりの文字数の目安（話速1.0） */
 export const CHARS_PER_MIN = 300;
+/** 章の扉1枚あたりの秒数（scriptModel の minSecFor('chapter') と同じ） */
+const CHAPTER_CARD_SEC = 3.2;
+
+/**
+ * 目標の長さ（分）と読み上げの速さから、場面数と1場面あたりの文字数を決める。
+ * 1場面の長さ ≒ 0.3秒 ＋ 読み上げ ＋ 0.8秒。章の扉（約4枚）と余裕（5%）を差し引いて、目標を超えないようにする。
+ */
+export function planBudget(targetMinutes: number, speechRate = 1, bodyChapters = 4) {
+  const cps = (CHARS_PER_MIN / 60) * Math.max(0.6, Math.min(2, speechRate));
+  const content = targetMinutes * 60 * 0.95 - bodyChapters * CHAPTER_CARD_SEC;
+  const sceneSec = 13;
+  const sceneTotal = Math.max(6, Math.round(content / sceneSec));
+  const perScene = Math.max(35, Math.min(110, Math.round((sceneSec - 1.1) * cps)));
+  return { sceneTotal, perScene, minChars: Math.round(perScene * 0.75), maxChars: Math.round(perScene * 1.1), totalChars: sceneTotal * perScene };
+}
+
+/** 目次の場面数の合計が予算を超えないよう、各章の場面数を比例で縮める（各章2場面以上） */
+export function fitSceneCounts(chapters: ChapterPlan[], sceneTotal: number): ChapterPlan[] {
+  const sum = chapters.reduce((a, c) => a + c.sceneCount, 0);
+  if (sum <= sceneTotal) return chapters;
+  const out = chapters.map((c) => ({ ...c, sceneCount: Math.max(2, Math.floor((c.sceneCount * sceneTotal) / sum)) }));
+  let over = out.reduce((a, c) => a + c.sceneCount, 0) - sceneTotal;
+  for (let i = out.length - 1; over > 0 && i >= 0; i = i === 0 ? out.length - 1 : i - 1) {
+    if (out.every((c) => c.sceneCount <= 2)) break;
+    if (out[i].sceneCount > 2) { out[i].sceneCount -= 1; over -= 1; }
+  }
+  return out;
+}
 
 const AUDIENCE: Record<GenerateInput['audience'], string> = {
   beginner: '予備知識のない初心者（中学生にもわかる言葉。専門用語は必ず言い換えてから使う）',
@@ -128,12 +158,13 @@ export interface Outline {
 }
 
 export async function generateOutline(inp: GenerateInput, signal?: AbortSignal): Promise<Outline> {
-  const totalChars = Math.round(inp.targetMinutes * CHARS_PER_MIN);
-  const sceneTotal = Math.max(8, Math.round((inp.targetMinutes * 60) / 14));
+  const { sceneTotal, totalChars, minChars, maxChars } = planBudget(inp.targetMinutes, inp.speechRate ?? 1);
   const task = [
     header(inp),
     '',
-    `約${inp.targetMinutes}分（ナレーション合計 約${totalChars}文字、場面 約${sceneTotal}個）の長尺解説動画の「目次」を作ってください。`,
+    `${inp.targetMinutes}分以内（ナレーション合計 約${totalChars}文字、場面は合計${sceneTotal}個以内、1場面${minChars}〜${maxChars}文字）の長尺解説動画の「目次」を作ってください。長さは必ず目標以内に収める（要点を絞る）。`,
+    `- 本編の章は${inp.targetMinutes <= 5 ? '3〜4' : '3〜6'}章。各章の sceneCount の合計は${sceneTotal}以下にする。`,
+    '- kicker には分数（○分でわかる 等）を入れない（実際の長さは読み上げで変わるため）。例：ニュース解説、やさしく解説。',
     '- chapters は、最初に role=intro（つかみ＋この動画でわかること、場面2〜3個）、次に role=body の本編を3〜6章、最後に role=outro（まとめ＋締め、場面2〜3個）。',
     inp.mode === 'news'
       ? '- 本編の流れの例：何が起きたか → 背景・そもそもの仕組み → なぜ重要か（影響） → 今後の注目点。'
@@ -152,7 +183,7 @@ export async function generateOutline(inp: GenerateInput, signal?: AbortSignal):
       type: 'object',
       properties: {
         videoTitle: { type: 'string' },
-        kicker: { type: 'string', description: '冒頭に出す短いラベル（例：3分でわかる、ニュース解説）' },
+        kicker: { type: 'string', description: '冒頭に出す短いラベル（分数は入れない。例：ニュース解説、やさしく解説）' },
         chapters: {
           type: 'array',
           items: {
@@ -187,7 +218,7 @@ export async function generateOutline(inp: GenerateInput, signal?: AbortSignal):
     sceneCount: Math.max(2, Math.min(10, Math.round(Number(c?.sceneCount) || 4))),
   })).filter((c: ChapterPlan) => c.title);
   if (!chapters.length) throw new Error('目次を作れませんでした。もう一度お試しください。');
-  chapters = chapters.slice(0, 9);
+  chapters = fitSceneCounts(chapters.slice(0, 9), sceneTotal);
   const y = r?.youtube || {};
   return {
     videoTitle: String(r?.videoTitle || inp.topic),
@@ -233,6 +264,7 @@ async function generateChapterPart(inp: GenerateInput, o: Outline, idx: number, 
     prev.length ? `【この章ですでに作った場面（続きから書き、内容を繰り返さない）】\n${prev.map((s) => `・[${s.visual.kind}] ${s.narration}`).join('\n')}` : '',
     partTotal > 1 && partNo < partTotal ? '- 章の途中なので、締めの言葉は入れない。' : '',
     '- 図解の種類を毎場面変え、数値の図解・流れ図・比較・イメージ図などをバランスよく使う。',
+    `- 動画全体を${inp.targetMinutes}分以内に収めるため、ナレーションは1場面${planBudget(inp.targetMinutes, inp.speechRate ?? 1).minChars}〜${planBudget(inp.targetMinutes, inp.speechRate ?? 1).maxChars}文字にする（超えない）。`,
   ].filter(Boolean).join('\n');
   try {
     const r = await callTool<any>({
