@@ -6633,13 +6633,11 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
     catch (e) { console.error(e); alert(`音声合成に失敗しました（ローカルTTSサーバー ${getTtsBaseUrl()} が起動しているか確認してください）\n${e?.message ?? e}`); }
   };
 
-  // 構成リストの項目をクリックしたら、その場面をプレビューに表示する（動的な場面は描き終わった最終形で止める）。
-  // 併せて「場面とナレーション」側の該当カードまで自動スクロールする（updateSceneProgressがcurrentSceneIdxを更新し、
-  // 既存のuseEffect([currentSceneIdx])がscrollIntoViewする）。
-  const previewSection = (id) => {
-    if (!rendererRef.current || !scenes.length) return;
-    const idx = scenes.findIndex((sc) => sc.id === id);
-    if (idx < 0) return;
+  // 構成リスト・「場面とナレーション」どちらのカードをクリックしても、その場面をプレビューに表示する
+  // （動的な場面は描き終わった最終形で止める）。併せて該当カードまで自動スクロールする
+  // （updateSceneProgressがcurrentSceneIdxを更新し、既存のuseEffect([currentSceneIdx])がscrollIntoViewする）。
+  const previewSceneAt = (idx) => {
+    if (!rendererRef.current || !scenes.length || idx < 0 || idx >= scenes.length) return;
     if (isPlayingRef.current) { stopLoop(); setIsPlaying(false); mixer().stopBGM(); mixer().stopNarration(); }
     const durs = sceneDurs.length === scenes.length ? sceneDurs : scenes.map((sc) => sc.minSec || 1);
     const total = durs.reduce((a, b) => a + b, 0) || 1;
@@ -6653,6 +6651,13 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
     setSeekPos(target);
     rendererRef.current.draw(target);
     updateSceneProgress(target);
+  };
+  // 構成リスト側はidで場面を指定するため、インデックスに変換してpreviewSceneAtに委譲する
+  const previewSection = (id) => {
+    if (!scenes.length) return;
+    const idx = scenes.findIndex((sc) => sc.id === id);
+    if (idx < 0) return;
+    previewSceneAt(idx);
   };
 
   // プレビューの今の1コマを、サムネイル用のPNG画像として保存する
@@ -6954,11 +6959,14 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
                   <div
                     key={sc.id + i}
                     ref={(el) => { sceneRefs.current[i] = el; }}
+                    onClick={() => previewSceneAt(i)}
+                    title="クリックでこの場面をプレビューに表示"
                     className="rounded p-2 transition-colors"
                     style={{
                       background: isCurrent ? "rgba(46, 230, 184, 0.08)" : C.panel2,
                       border: `1px solid ${isCurrent ? C.teal : C.borderSoft}`,
                       boxShadow: isCurrent ? `inset 3px 0 0 ${C.teal}` : "none",
+                      cursor: "pointer",
                     }}
                   >
                     <div className="flex items-center justify-between mb-1">
@@ -6982,9 +6990,11 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
                         ><MessageSquare size={10} /> AIに指示</button>
                       </div>
                     </div>
-                    <NarrMixedBox value={shownTexts[i]} base={baseShown[i]} onChange={(t) => handleSceneTextChange(i, sc, t)} onBlur={() => commitSceneText(i, sc)} colors={{ text: C.text, border: C.borderSoft }} readUpTo={isCurrent && isPlaying ? readCharIdx : null} />
+                    <div onClick={(e) => e.stopPropagation()}>
+                      <NarrMixedBox value={shownTexts[i]} base={baseShown[i]} onChange={(t) => handleSceneTextChange(i, sc, t)} onBlur={() => commitSceneText(i, sc)} colors={{ text: C.text, border: C.borderSoft }} readUpTo={isCurrent && isPlaying ? readCharIdx : null} />
+                    </div>
                     {chatOpenKey === sceneKey(i, sc.id) && (
-                      <div className="mt-1.5 pt-1.5" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+                      <div className="mt-1.5 pt-1.5" onClick={(e) => e.stopPropagation()} style={{ borderTop: `1px solid ${C.borderSoft}` }}>
                         <div className="flex items-center gap-1.5">
                           <input
                             type="text"
