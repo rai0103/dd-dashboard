@@ -135,6 +135,13 @@ function sourceNote(c: Ctx, e: VisualEnv, src: string) {
   text(c, `出典：${src}`, 8, e.H - 6, 11, WHITE, { alpha: 0.55 * ease(sub(e.p, 0.15, 0.3)), maxW: e.W - 16 });
 }
 const colorAt = (i: number) => PALETTE[i % PALETTE.length];
+/** 単位が長い（「修正版以上」など）ときは各値に付けず、右上に「単位：…」として1回だけ出す */
+function unitOf(c: Ctx, e: VisualEnv, unit: string, top: number): string {
+  const u = (unit || '').trim();
+  if (Array.from(u).length <= 4) return u;
+  text(c, `単位：${u}`, e.W - 8, top - 6, 12, WHITE, { align: 'right', alpha: 0.6 * ease(sub(e.p, 0.1, 0.25)), maxW: e.W * 0.5 });
+  return '';
+}
 
 // ---------- 種類ごとの描画 ----------
 type Draw = (c: Ctx, sc: ExplainerScene, e: VisualEnv) => void;
@@ -290,40 +297,51 @@ const drawNumber: Draw = (c, sc, e) => {
   let sz = e.portrait ? 84 : 96; font(c, sz, true);
   const unitSz = 30;
   const maxW = (e.portrait ? e.W - 30 : e.W * 0.6) - 10;
-  while (sz > 30) { font(c, sz, true); const w = c.measureText(numStr).width; font(c, unitSz, true); if (w + c.measureText(v.unit).width + 8 <= maxW) break; sz -= 4; }
-  font(c, sz, true); const nw = c.measureText(numStr).width; font(c, unitSz, true); const uw = c.measureText(v.unit).width;
+  const bigUnit = Array.from(v.unit || '').length <= 6 ? v.unit : '';
+  if (!bigUnit && v.unit) text(c, v.unit, nx, cy + 46, 16, e.accent, { bold: true, align: 'center', maxW: e.portrait ? e.W - 30 : e.W * 0.6 });
+  while (sz > 30) { font(c, sz, true); const w = c.measureText(numStr).width; font(c, unitSz, true); if (w + c.measureText(bigUnit).width + 8 <= maxW) break; sz -= 4; }
+  font(c, sz, true); const nw = c.measureText(numStr).width; font(c, unitSz, true); const uw = c.measureText(bigUnit).width;
   const sx = nx - (nw + uw + 8) / 2;
   marker(c, sx - 6, cy + 2, nw + uw + 20, 18, e.accent, ease(sub(e.p, 0.5, 0.7)));
   text(c, numStr, sx, cy + 10, sz, WHITE, { bold: true, shadow: true });
-  text(c, v.unit, sx + nw + 8, cy + 10, unitSz, e.accent, { bold: true });
-  if (it?.text) textBlock(c, it.text, nx, cy + 56, e.portrait ? e.W - 30 : e.W * 0.6, 17, WHITE, { align, alpha: 0.8 * ease(sub(e.p, 0.45, 0.65)), maxLines: 2 });
-  if (e.portrait) drawIcon(c, it?.icon || 'chartUp', e.W / 2, cy + 150, 70 * back(sub(e.p, 0.5, 0.7)), e.accent, e.t, 0.9);
+  text(c, bigUnit, sx + nw + 8, cy + 10, unitSz, e.accent, { bold: true });
+  if (it?.text) textBlock(c, it.text, nx, cy + (bigUnit || !v.unit ? 56 : 80), e.portrait ? e.W - 30 : e.W * 0.6, 17, WHITE, { align, alpha: 0.8 * ease(sub(e.p, 0.45, 0.65)), maxLines: 2 });
+  if (e.portrait) drawIcon(c, it?.icon || 'chartUp', e.W / 2, Math.min(cy + 150, e.H - 40), 60 * back(sub(e.p, 0.5, 0.7)), e.accent, e.t, 0.9);
   sourceNote(c, e, v.source);
 };
 
 const drawBar: Draw = (c, sc, e) => {
   const v = sc.visual;
   const top = heading(c, e, v.heading, v.subheading, e.accent);
+  const unit = unitOf(c, e, v.unit, top);
   const items = v.items.map((it) => ({ ...it, n: parseValue(it.value) ?? 0 }));
   const n = items.length;
+  const valText = (x: { n: number; value: string }, k = 1) => `${fmtNum(x.n * k, decimalsOf(x.value))}${unit}`;
   const maxAbs = Math.max(1e-9, ...items.map((x) => Math.abs(x.n)));
   const hasNeg = items.some((x) => x.n < 0);
   const maxIdx = items.reduce((b, x, i) => (x.n > items[b].n ? i : b), 0);
   const horizontal = e.portrait || n > 6 || items.some((x) => x.label.length > 6);
   const bottom = e.H - 22;
   if (horizontal) {
-    const lw = Math.min(e.W * 0.32, 150), x0 = 8 + lw + 8, aw = e.W - x0 - 70;
-    const zero = hasNeg ? x0 + aw / 2 : x0;
-    const scaleW = hasNeg ? aw / 2 : aw;
+    const lw = Math.min(e.W * 0.32, 150), x0 = 8 + lw + 8;
+    font(c, 14, true);
+    // 値の文字が枠からはみ出さないよう、いちばん長い値の幅だけ右（負の値があれば左右）に空けておく
+    const valW = Math.min(e.W * 0.3, Math.max(...items.map((x) => c.measureText(valText(x)).width)) + 10);
+    const aw = e.W - x0 - valW - 8 - (hasNeg ? valW : 0);
+    // 正と負の最大値の比で0の位置を決め、棒の長さを同じ縮尺にそろえる
+    const posMax = Math.max(0, ...items.map((x) => x.n)), negMax = Math.max(0, ...items.map((x) => -x.n));
+    const span = Math.max(1e-9, posMax + negMax);
+    const zero = hasNeg ? x0 + valW + (aw * negMax) / span : x0;
+    const unitW = hasNeg ? aw / span : aw / Math.max(1e-9, maxAbs);
     const bh = Math.min(40, (bottom - top - 8) / n - 10);
     items.forEach((it, i) => {
       const y = top + 4 + i * (bh + 10);
       const k = ease(sub(e.p, 0.1 + i * 0.06, 0.5 + i * 0.06));
-      const w = (Math.abs(it.n) / maxAbs) * scaleW * k;
+      const w = Math.abs(it.n) * unitW * k;
       const rgb = i === maxIdx ? e.accent : it.n < 0 ? BLUE : '150,165,190';
       text(c, it.label, x0 - 10, y + bh / 2 + 5, 14, WHITE, { align: 'right', alpha: 0.9, maxW: lw, bold: i === maxIdx });
       rr(c, it.n < 0 ? zero - w : zero, y, Math.max(2, w), bh, 6); c.fillStyle = `rgb(${rgb})`; c.fill();
-      text(c, `${fmtNum(it.n * k, decimalsOf(it.value))}${v.unit}`, it.n < 0 ? zero - w - 6 : zero + w + 6, y + bh / 2 + 5, 14, WHITE, { bold: true, align: it.n < 0 ? 'right' : 'left', alpha: ease(sub(e.p, 0.3, 0.5)) });
+      text(c, valText(it, k), it.n < 0 ? zero - w - 6 : zero + w + 6, y + bh / 2 + 5, 14, WHITE, { bold: true, align: it.n < 0 ? 'right' : 'left', alpha: ease(sub(e.p, 0.3, 0.5)), maxW: valW - 6 });
     });
     if (hasNeg) { c.fillStyle = 'rgba(255,255,255,0.4)'; c.fillRect(zero, top, 1.5, bottom - top); }
   } else {
@@ -339,7 +357,7 @@ const drawBar: Draw = (c, sc, e) => {
       const rgb = i === maxIdx ? e.accent : it.n < 0 ? BLUE : '150,165,190';
       if (i === maxIdx) glowCircle(c, x + bw / 2, baseY - h, 60, e.accent, 0.18 * k);
       rr(c, x, it.n < 0 ? baseY : baseY - h, bw, Math.max(2, h), 8); c.fillStyle = `rgb(${rgb})`; c.fill();
-      text(c, `${fmtNum(it.n * k, decimalsOf(it.value))}${v.unit}`, x + bw / 2, it.n < 0 ? baseY + h + 18 : baseY - h - 8, 15, WHITE, { bold: true, align: 'center', alpha: ease(sub(e.p, 0.3, 0.5)), maxW: slot - 4 });
+      text(c, valText(it, k), x + bw / 2, it.n < 0 ? baseY + h + 18 : baseY - h - 8, 15, WHITE, { bold: true, align: 'center', alpha: ease(sub(e.p, 0.3, 0.5)), maxW: slot - 4 });
       text(c, it.label, x + bw / 2, bottom - 10, 14, WHITE, { align: 'center', alpha: 0.85, maxW: slot - 4, bold: i === maxIdx });
     });
     c.fillStyle = 'rgba(255,255,255,0.4)'; c.fillRect(x0, baseY, aw, 1.5);
@@ -388,7 +406,8 @@ const drawLine: Draw = (c, sc, e) => {
   c.beginPath(); c.arc(head.x, head.y, 6, 0, Math.PI * 2); c.fillStyle = `rgb(${e.accent})`; c.fill();
   if (k > 0.98) {
     const last = pts[n - 1];
-    const lbl = `${last.raw}${v.unit && !String(last.raw).includes(v.unit) ? v.unit : ''}`;
+    const lu = Array.from(v.unit || '').length <= 4 ? v.unit : '';
+    const lbl = `${last.raw}${lu && !String(last.raw).includes(lu) ? lu : ''}`;
     font(c, 16, true); const w = c.measureText(lbl).width + 16;
     const bx = Math.min(e.W - w - 4, head.x - w / 2), by = Math.max(top, head.y - 40);
     rr(c, bx, by, w, 26, 8); c.fillStyle = `rgb(${e.accent})`; c.fill();
@@ -401,6 +420,7 @@ const drawLine: Draw = (c, sc, e) => {
 const drawDonut: Draw = (c, sc, e) => {
   const v = sc.visual;
   const top = heading(c, e, v.heading, v.subheading, e.accent);
+  const dUnit = unitOf(c, e, v.unit, top);
   const items = v.items.map((it) => ({ ...it, n: Math.max(0, parseValue(it.value) ?? 0) }));
   const total = items.reduce((a, b) => a + b.n, 0) || 1;
   const r = Math.min(e.portrait ? Math.min(e.W * 0.24, (e.H - top - items.length * 30 - 40) / 2) : (e.H - top) * 0.42, 130);
@@ -426,7 +446,7 @@ const drawDonut: Draw = (c, sc, e) => {
     c.save(); c.globalAlpha *= kk; c.translate((1 - kk) * 20, 0);
     rr(c, lx, y - 13, 16, 16, 4); c.fillStyle = `rgb(${colorAt(i)})`; c.fill();
     text(c, it.label, lx + 26, y, 16, WHITE, { bold: i === maxI, maxW: e.portrait ? e.W - 150 : e.W * 0.26 });
-    text(c, `${fmtNum(it.n, decimalsOf(it.value))}${v.unit}`, e.portrait ? e.W - 24 : e.W - 14, y, 16, colorAt(i), { bold: true, align: 'right' });
+    text(c, `${fmtNum(it.n, decimalsOf(it.value))}${dUnit}`, e.portrait ? e.W - 24 : e.W - 14, y, 16, colorAt(i), { bold: true, align: 'right', maxW: e.portrait ? 90 : e.W * 0.14 });
     c.restore();
   });
   sourceNote(c, e, v.source);
@@ -750,7 +770,14 @@ const DRAWERS: Record<string, Draw> = {
 };
 
 /** 場面の図解を、仮想サイズ（e.W×e.H）の座標で描く */
-export function drawVisual(c: Ctx, sc: ExplainerScene, e: VisualEnv): void {
+export function drawVisual(c: Ctx, sc0: ExplainerScene, e: VisualEnv): void {
+  let sc = sc0;
+  // 数値として扱えない値（バージョン番号・日付など）しかないグラフは、要点カードとして描く（以前に保存した台本にも効くよう描画時にも確認）
+  const k0 = sc.visual.kind;
+  if (k0 === 'bar' || k0 === 'line' || k0 === 'donut' || k0 === 'number') {
+    const nums = sc.visual.items.filter((it) => parseValue(it.value) !== null).length;
+    if (nums < (k0 === 'number' ? 1 : 2)) sc = { ...sc, visual: { ...sc.visual, kind: 'points', items: sc.visual.items.slice(0, 4).map((it) => ({ ...it, text: [it.value, it.text].filter(Boolean).join(' ') })) } };
+  }
   const fn = DRAWERS[sc.visual.kind] ?? drawPoint;
   c.save();
   c.textBaseline = 'alphabetic';

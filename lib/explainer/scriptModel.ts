@@ -13,6 +13,8 @@ export function parseValue(v: string | number | null | undefined): number | null
   if (typeof v === 'number') return Number.isFinite(v) ? v : null;
   if (!v) return null;
   const s = String(v).normalize('NFKC').replace(/[,，\s]/g, '').replace(/[−–—]/g, '-');
+  // バージョン番号（8.4.27）・日付（2026-10-25、2026/10）・時刻は「量」ではないので数値として扱わない
+  if (/\d+\.\d+\.\d+/.test(s) || /\d{4}[-/年]\d{1,2}/.test(s) || /\d{1,2}:\d{2}/.test(s)) return null;
   const m = /-?\d+(?:\.\d+)?/.exec(s);
   if (!m) return null;
   const n = parseFloat(m[0]);
