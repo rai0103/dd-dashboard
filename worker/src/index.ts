@@ -1,10 +1,11 @@
 // GET /api/stock-prices
-// 当日のVOO・QQQの終値をTwelve Data APIから取得して返す。
+// 当日のVOO・QQQ・SOXLの終値をTwelve Data APIから取得して返す。
 // （Stooqはサーバーサイドfetchに対するBot対策のJS認証チャレンジを導入したため利用不可）
 // S&P500指数そのもの（SPXシンボル）はTwelve Data無料プランでは利用不可（403）のため取得しない。
 // S&P500はダッシュボード側で既存のStooq CSV取り込み・直接入力を使い続ける運用とする。
-// 応答: { date: "YYYY-MM-DD", voo: number, qqq: number, gold?: number, goldDate?: "YYYY-MM-DD" }
+// 応答: { date: "YYYY-MM-DD", voo: number, qqq: number, soxl?: number, gold?: number, goldDate?: "YYYY-MM-DD" }
 //   gold はゴールド（XAU/USD、Twelve Data無料プランで取得可）の最新値。取得できなかった場合は省略し、VOO/QQQだけ返す。
+//   soxl も取得できなかった場合（レート制限・休場日のデータ遅延等）は省略する（失敗してもVOO/QQQの取得は成功扱いにする）。
 //   Twelve Dataの日足には土日の日付（金曜値の据え置き）が混じることがあるため、goldDateが土日の場合も省略する。
 // 失敗時: 502 + { error: "データ取得失敗。稼働時間外の可能性があります" }
 //
@@ -23,7 +24,7 @@ export interface Env {
   DD_SYNC_KV: KVNamespace;
 }
 
-const SYMBOLS = { voo: "VOO", qqq: "QQQ", gold: "XAU/USD" } as const;
+const SYMBOLS = { voo: "VOO", qqq: "QQQ", gold: "XAU/USD", soxl: "SOXL" } as const;
 // GET /api/gold-history の1回あたりの最大取得件数（Twelve Data time_seriesの上限。日次で約20年分、1回=1クレジット）
 const GOLD_HISTORY_MAX_POINTS = 5000;
 // 土日（ゴールド市場の休場日）の日付か。Twelve Dataの日足に混じる金曜値の据え置きレコードを除くために使う。
@@ -206,10 +207,12 @@ export default {
         throw new Error("incomplete quote data");
       }
 
-      // ゴールドは取得できた場合のみ付ける（失敗してもVOO/QQQの取得は成功扱いにする）
+      // ゴールド・SOXLは取得できた場合のみ付ける（失敗してもVOO/QQQの取得は成功扱いにする）
       const gold = get("gold");
       const goldPart = gold.date && !Number.isNaN(gold.close) && !isWeekendDate(gold.date) ? { gold: gold.close, goldDate: gold.date } : {};
-      return jsonResponse({ date: voo.date, voo: voo.close, qqq: qqq.close, ...goldPart });
+      const soxl = get("soxl");
+      const soxlPart = soxl.date && !Number.isNaN(soxl.close) ? { soxl: soxl.close } : {};
+      return jsonResponse({ date: voo.date, voo: voo.close, qqq: qqq.close, ...soxlPart, ...goldPart });
     } catch (e) {
       return jsonResponse({ error: "データ取得失敗。稼働時間外の可能性があります" }, 502);
     }

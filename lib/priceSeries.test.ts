@@ -60,6 +60,15 @@ test("ゴールドの初期化はAPI由来の印も消し、空になった日�
   assert.deepEqual(resetPriceField(series, "gold"), [{ date: d("2026-10-02"), voo: 707.5 }]);
 });
 
+test("SOXLもVOO/QQQ/GOLDと同じ経路で取り込み・初期化できる", () => {
+  const csv = importUserPrices([{ date: d("2026-10-02"), voo: 707.5 }], "soxl", [{ date: d("2026-10-02"), price: 83.56 }]);
+  assert.deepEqual(csv.find((p) => p.date.toISOString().slice(0, 10) === "2026-10-02"), { date: d("2026-10-02"), voo: 707.5, soxl: 83.56 });
+  const reset = resetPriceField(csv, "soxl");
+  assert.deepEqual(reset, [{ date: d("2026-10-02"), voo: 707.5 }]);
+  const soxlOnly: PriceRecord[] = [{ date: d("2026-10-03"), soxl: 85 }];
+  assert.deepEqual(resetPriceField(soxlOnly, "voo"), soxlOnly); // soxlのみのレコードは他フィールドの初期化で消えない
+});
+
 test("履歴の再取得：未登録なら全期間、3日超空いたら最終日以降、週末をまたぐだけなら不要", () => {
   assert.deepEqual(goldHistoryFetchStart([{ date: d("2026-10-02"), voo: 1 }], d("2026-10-05")), { startDate: null });
   assert.deepEqual(goldHistoryFetchStart([{ date: d("2026-09-25"), gold: 1 }], d("2026-10-05")), { startDate: "2026-09-25" });

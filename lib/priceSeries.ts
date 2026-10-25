@@ -1,4 +1,4 @@
-// VOO/QQQ/GOLD（XAUUSD）の終値系列（IndexedDBキー"spy_voo_price_history"、1日1レコード { date, voo?, qqq?, gold?, goldSrc? }）の更新ルール。
+// VOO/QQQ/GOLD（XAUUSD）/SOXLの終値系列（IndexedDBキー"spy_voo_price_history"、1日1レコード { date, voo?, qqq?, gold?, goldSrc?, soxl? }）の更新ルール。
 // ゴールドはStooq CSV取り込み・直接入力と、Twelve Data APIの自動取得（起動時）の2経路で更新されるため、優先順位を次のとおり決める：
 //   CSV取り込み・直接入力 ＞ API自動取得
 //   - CSV/直接入力は常にその日のgoldを上書きし、goldSrcを消す（＝ユーザー登録値として扱う）
@@ -6,9 +6,9 @@
 //     （当日の値は取引中に変わるため、API登録分は後のAPI取得で更新してよい。ユーザー登録値は上書きしない）
 // このファイルは外部importを持たないため、`node --test` から直接実行できる。
 
-export type PriceRecord = { date: Date; voo?: number; qqq?: number; gold?: number; goldSrc?: "api" };
+export type PriceRecord = { date: Date; voo?: number; qqq?: number; gold?: number; goldSrc?: "api"; soxl?: number };
 export type PriceRow = { date: Date; price: number };
-export type PriceField = "voo" | "qqq" | "gold";
+export type PriceField = "voo" | "qqq" | "gold" | "soxl";
 
 const dayKey = (d: Date) => d.toISOString().slice(0, 10);
 const byDate = (series: PriceRecord[]) => new Map(series.map((p) => [dayKey(p.date), p]));
@@ -47,7 +47,7 @@ export function applyApiGold(series: PriceRecord[], rows: PriceRow[]): { series:
 export function resetPriceField(series: PriceRecord[], kind: PriceField): PriceRecord[] {
   return series
     .map((p) => { const c = { ...p }; delete c[kind]; if (kind === "gold") delete c.goldSrc; return c; })
-    .filter((p) => p.voo != null || p.qqq != null || p.gold != null);
+    .filter((p) => p.voo != null || p.qqq != null || p.gold != null || p.soxl != null);
 }
 
 // 起動時にゴールドの履歴をAPIから取り直すかどうか。登録済みのgoldが無ければ全期間（start_date無し）、

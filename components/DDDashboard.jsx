@@ -25,6 +25,7 @@ import { importUserPrices, applyApiGold, resetPriceField, goldHistoryFetchStart 
 import { buildStatsTable, computeMddHoldProbability, depthBucketIndex, DEPTH_BUCKETS, LOW_SAMPLE_N, PROGRESSION_LEVELS, PACE_TIER_LABEL } from "@/lib/bottomScore";
 import { computeYearForecast, yearForecastTrajectory, yearEndProjectionPath, computeNextYearForecast, computeQqqSpxCorrelation, buildAnnualReturns, presidentialCycleAverage, seasonalMonthlyAverages } from "@/lib/yearForecast";
 import { buildQqqEquivalentSeries, parseNdxPreQqqCsv } from "@/lib/qqqSynthetic";
+import { buildSoxlEquivalentSeries, parseSoxlPreListingCsv } from "@/lib/soxlSynthetic";
 import { buildVideoLongform, SP500_KANA, tickerKana } from "@/lib/videoDataAdapter";
 import { classifyDdCategory } from "@/lib/ddCategory";
 import { DEFAULT_CONTENT_SECTIONS, CONTENT_SECTION_LABELS, availableContentSections } from "@/lib/videoLongMd";
@@ -99,6 +100,8 @@ const SEED_SERIES = buildSeedSeries();
 // QQQ ETF上場（1999年3月10日）より前のNasdaq-100指数データ（lib/ndxPreQqqData.ts、出所：Stooq）。
 // 起動のたびに毎回パースし直す必要はないため、モジュール読み込み時に一度だけ計算する。
 const NDX_PRE_QQQ_SERIES = parseNdxPreQqqCsv();
+// SOXL ETF上場（2010年3月11日）より前の合成データ（lib/soxlPreListingData.ts、SOXXから3倍＋補正値で換算・出所：Stooq）。
+const SOXL_PRE_LISTING_SERIES = parseSoxlPreListingCsv();
 
 /* ---------------- CSV parsing (Stooq: Date,Open,High,Low,Close,Volume) ---------------- */
 const BOM_RE = new RegExp("^" + String.fromCharCode(0xfeff)); // Excel等で保存されたUTF-8 CSV先頭のBOMを除去するため（コードポイント指定で明示、ソース上に不可視文字を埋め込まない）
@@ -4165,6 +4168,7 @@ const INSTRUMENT_META = {
   voo: { label: "VOO", stooqSymbol: "VOO.US", stooqQuery: "voo.us", columns: "Date,Open,High,Low,Close,Volume" },
   qqq: { label: "QQQ", stooqSymbol: "QQQ.US", stooqQuery: "qqq.us", columns: "Date,Open,High,Low,Close,Volume" },
   gold: { label: "GOLD", stooqSymbol: "XAUUSD（金スポット・ドル建て）", stooqQuery: "xauusd", columns: "Date,Open,High,Low,Close" },
+  soxl: { label: "SOXL", stooqSymbol: "SOXL.US", stooqQuery: "soxl.us", columns: "Date,Open,High,Low,Close,Volume" },
 };
 function InstrumentPanel({ instrument, vooQqqSeries, fileName, fileMsg, onFileChange, manualDate, setManualDate, manualPrice, setManualPrice, onAddManual, onResetField }) {
   const meta = INSTRUMENT_META[instrument];
@@ -4511,6 +4515,8 @@ function DataInputModal({ onClose, synthetic = null, qqqSynthetic = null, rawSer
   const [vooImportMsg, setVooImportMsg] = useState(null);
   const [goldImportFileName, setGoldImportFileName] = useState(null);
   const [goldImportMsg, setGoldImportMsg] = useState(null);
+  const [soxlImportFileName, setSoxlImportFileName] = useState(null);
+  const [soxlImportMsg, setSoxlImportMsg] = useState(null);
 
   // 「方式B：直接入力」の終値欄のデフォルト表示（プレースホルダー）＝選択中の指数の前日（直近取り込み済み）の評価額。
   const sp500PrevPrice = rawSeries.length ? rawSeries[rawSeries.length - 1].price : null;
@@ -4550,6 +4556,21 @@ function DataInputModal({ onClose, synthetic = null, qqqSynthetic = null, rawSer
       const parsed = parseStooqCSV(String(ev.target.result));
       if (parsed.length) { onImportVooQqq("gold", parsed); setGoldImportMsg(`${parsed.length}件のGOLD（XAUUSD）終値を取り込みました（${parsed[0].date.toLocaleDateString("ja-JP")} 〜 ${parsed[parsed.length - 1].date.toLocaleDateString("ja-JP")}）`); }
       else setGoldImportMsg("CSVを解析できませんでした。Date,Open,High,Low,Close 形式か確認してください。");
+    };
+    reader.readAsText(file);
+  };
+
+  // SOXL：Stooqの日次CSV（Date,Open,High,Low,Close,Volume）のClose列を取り込む（上場日2010/3/11以降の実データ）。
+  // 上場前の期間は lib/soxlPreListingData.ts の合成データ（SOXL_PRE_LISTING_SERIES）で自動的に補われる。
+  const handleSoxlImportFile = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setSoxlImportFileName(file.name);
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const parsed = parseStooqCSV(String(ev.target.result));
+      if (parsed.length) { onImportVooQqq("soxl", parsed); setSoxlImportMsg(`${parsed.length}件のSOXL終値を取り込みました（${parsed[0].date.toLocaleDateString("ja-JP")} 〜 ${parsed[parsed.length - 1].date.toLocaleDateString("ja-JP")}）`); }
+      else setSoxlImportMsg("CSVを解析できませんでした。Date,Open,High,Low,Close,Volume 形式か確認してください。");
     };
     reader.readAsText(file);
   };
@@ -4728,6 +4749,7 @@ function DataInputModal({ onClose, synthetic = null, qqqSynthetic = null, rawSer
             {tabBtn(instrument, setInstrument, "voo", "VOO")}
             {tabBtn(instrument, setInstrument, "qqq", "QQQ")}
             {tabBtn(instrument, setInstrument, "gold", "GOLD（XAUUSD）")}
+            {tabBtn(instrument, setInstrument, "soxl", "SOXL")}
           </div>
 
           {instrument === "sp500" ? (
@@ -4760,9 +4782,9 @@ function DataInputModal({ onClose, synthetic = null, qqqSynthetic = null, rawSer
             <InstrumentPanel
               instrument={instrument}
               vooQqqSeries={vooQqqSeries}
-              fileName={instrument === "voo" ? vooImportFileName : instrument === "gold" ? goldImportFileName : qqqImportFileName}
-              fileMsg={instrument === "voo" ? vooImportMsg : instrument === "gold" ? goldImportMsg : qqqImportMsg}
-              onFileChange={instrument === "voo" ? handleVooImportFile : instrument === "gold" ? handleGoldImportFile : handleQqqImportFile}
+              fileName={instrument === "voo" ? vooImportFileName : instrument === "gold" ? goldImportFileName : instrument === "soxl" ? soxlImportFileName : qqqImportFileName}
+              fileMsg={instrument === "voo" ? vooImportMsg : instrument === "gold" ? goldImportMsg : instrument === "soxl" ? soxlImportMsg : qqqImportMsg}
+              onFileChange={instrument === "voo" ? handleVooImportFile : instrument === "gold" ? handleGoldImportFile : instrument === "soxl" ? handleSoxlImportFile : handleQqqImportFile}
               manualDate={instrManualDate}
               setManualDate={setInstrManualDate}
               manualPrice={instrManualPrice}
@@ -5859,7 +5881,7 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
   const generatedAt = useState(() => new Date())[0];
   const ctx = useMemo(() => ({ d, crashFrequency, generatedAt, bottom, instrumentLabel }), [d, crashFrequency, generatedAt, bottom, instrumentLabel]);
   const jsonOutput = useMemo(() => { try { return computeLongformAnalysisJSON(ctx); } catch (e) { return null; } }, [ctx]);
-  const instrumentNameKana = instrumentLabel === "SP500" ? SP500_KANA : tickerKana(instrumentLabel);
+  const instrumentNameKana = instrumentLabel === "SP500" ? SP500_KANA : instrumentLabel === "SOXL" ? "えすおーえっくすえる" : tickerKana(instrumentLabel);
 
   // --- 構成（場面の追加・削除・並べ替え） ---
   // [Stage D-7] 保存された既定構成（video-section-default-v1）があれば、それを初期値にする
@@ -9555,7 +9577,7 @@ export default function DDDashboard() {
         // 旧レコードのspyフィールドは読み捨てる（SPYは廃止・QQQに置き換え）。
         const resVooQqq = await storage.get("spy_voo_price_history");
         if (resVooQqq && resVooQqq.value) {
-          const parsedVooQqq = JSON.parse(resVooQqq.value).map((p) => ({ date: parseDateOnly(p.date), voo: p.voo, qqq: p.qqq, gold: p.gold, goldSrc: p.goldSrc }));
+          const parsedVooQqq = JSON.parse(resVooQqq.value).map((p) => ({ date: parseDateOnly(p.date), voo: p.voo, qqq: p.qqq, gold: p.gold, goldSrc: p.goldSrc, soxl: p.soxl }));
           if (parsedVooQqq.length) setVooQqqSeries(parsedVooQqq);
           storedVooQqq = parsedVooQqq;
         }
@@ -9567,7 +9589,7 @@ export default function DDDashboard() {
         if (resLive.ok) {
           const live = await resLive.json();
           if (live && live.date && typeof live.voo === "number" && typeof live.qqq === "number") {
-            handleAppendVooQqq({ date: parseDateOnly(live.date), voo: live.voo, qqq: live.qqq });
+            handleAppendVooQqq({ date: parseDateOnly(live.date), voo: live.voo, qqq: live.qqq, ...(typeof live.soxl === "number" ? { soxl: live.soxl } : {}) });
           }
           // ゴールド（XAU/USD）の最新値も同じ応答に含まれる（取得できなかった場合は省略される）
           if (live && live.goldDate && typeof live.gold === "number") handleApplyApiGold([{ date: parseDateOnly(live.goldDate), price: live.gold }]);
@@ -9674,7 +9696,7 @@ export default function DDDashboard() {
     try { await storage.set("voo_price_history", JSON.stringify(series.map((p) => ({ date: p.date.toISOString().slice(0, 10), price: p.price })))); scheduleSyncPush(setSyncOk); } catch (e) { /* storage unavailable */ }
   }
   async function persistVooQqq(series) {
-    try { await storage.set("spy_voo_price_history", JSON.stringify(series.map((p) => ({ date: p.date.toISOString().slice(0, 10), voo: p.voo, qqq: p.qqq, gold: p.gold, goldSrc: p.goldSrc })))); scheduleSyncPush(setSyncOk); } catch (e) { /* storage unavailable */ }
+    try { await storage.set("spy_voo_price_history", JSON.stringify(series.map((p) => ({ date: p.date.toISOString().slice(0, 10), voo: p.voo, qqq: p.qqq, gold: p.gold, goldSrc: p.goldSrc, soxl: p.soxl })))); scheduleSyncPush(setSyncOk); } catch (e) { /* storage unavailable */ }
   }
   function handleAppendVooQqq(entry) {
     setVooQqqSeries((prev) => {
@@ -9924,6 +9946,7 @@ export default function DDDashboard() {
 
   const vooCalcSeries = useMemo(() => seriesFromVooQqq(vooQqqSeries, "voo"), [vooQqqSeries]);
   const qqqCalcSeries = useMemo(() => seriesFromVooQqq(vooQqqSeries, "qqq"), [vooQqqSeries]);
+  const soxlCalcSeries = useMemo(() => seriesFromVooQqq(vooQqqSeries, "soxl"), [vooQqqSeries]);
   // SP500本系列（DDチャート・年比較・トラックレコード等の全機能の入力）＝ VOO換算の合成シリーズ（lib/sp500Synthetic.ts）。
   // SP500指数の手動入力は終了し、これまでの手動データ（rawSeries＝IndexedDB "voo_price_history"）はバックアップ兼「接続点より前の履歴」として使う。
   // 接続点（SP500とVOOの両方がある最も新しい日）より前＝SP500指数×補正係数、以降＝自動取得のVOO終値。初期バンドルデータ（seed）は接続に使わない。
@@ -9933,6 +9956,9 @@ export default function DDDashboard() {
   // QQQ ETF上場（1999/3/10）より前＝Nasdaq-100指数（バンドル済みNDX_PRE_QQQ_SERIES、出所Stooq）×補正係数、以降＝自動取得のQQQ終値。
   const qqqSynthetic = useMemo(() => buildQqqEquivalentSeries(NDX_PRE_QQQ_SERIES, qqqCalcSeries), [qqqCalcSeries]);
   const qqqSeries = qqqSynthetic.series.length ? qqqSynthetic.series : qqqCalcSeries;
+  // SOXL本系列（長尺動画生成で使用）＝ 上場前（lib/soxlPreListingData.ts、SOXXから3倍＋補正値で合成済み）＋ 上場後の実データの合成シリーズ（lib/soxlSynthetic.ts）。
+  const soxlSynthetic = useMemo(() => buildSoxlEquivalentSeries(SOXL_PRE_LISTING_SERIES, soxlCalcSeries), [soxlCalcSeries]);
+  const soxlSeries = soxlSynthetic.series.length ? soxlSynthetic.series : soxlCalcSeries;
   const d = useMemo(() => computeAll(sp500Series), [sp500Series]);
   const goldSeries = useMemo(() => seriesFromVooQqq(vooQqqSeries, "gold"), [vooQqqSeries]); // ゴールド（XAUUSD）終値。暴落比較の重ね描き用（未取り込みなら空配列）
   // VOO/QQQ自身の実績は期間が短いため、進行確率・速度別確率などのトラックレコード統計は最も長い実績があるSP500（d.trackRecord）を使う。
@@ -9946,6 +9972,9 @@ export default function DDDashboard() {
   // 動的配分モデル（買い増し額の抑制等）はd.trackRecord（SP500）のみを参照しており、dQqq.trackRecordは表示専用のため、
   // ここを変更してもモデルの計算結果には影響しない。
   const dQqq = useMemo(() => (qqqSeries.length ? computeAll(qqqSeries) : null), [qqqSeries]);
+  // SOXLは3倍レバレッジ・半導体セクター集中のため、QQQ版と同じく自身の拡張履歴（soxlSeries）から独自にtrackRecordを算出する
+  // （SP500のtrackRecordを借用するとボラティリティの違いにより「下落の頻度」等の統計が実態と大きくずれるため）。
+  const dSoxl = useMemo(() => (soxlSeries.length ? computeAll(soxlSeries) : null), [soxlSeries]);
   // 底値判定：SP500全履歴から統計テーブルと「現在のMDDが底値として確定しATH更新に至る確率」をキャッシュせず都度算出する。
   // rawSeriesが更新（日次終値の追加・CSV再取り込み）されるたびにd.FULLが作り直されるため、自動的に再計算される。
   const bottom = useMemo(() => {
@@ -9961,6 +9990,13 @@ export default function DDDashboard() {
     const stats = buildStatsTable(prices, dates);
     return { stats, hold: computeMddHoldProbability(prices, stats) };
   }, [dQqq]);
+  // 底値判定のSOXL版（長尺動画「長尺動画作成（SOXL）」用）。bottom/bottomQqqと全く同じロジックをdSoxl.FULLに適用するだけ。
+  const bottomSoxl = useMemo(() => {
+    if (!dSoxl) return null;
+    const prices = dSoxl.FULL.map((p) => p.price), dates = dSoxl.FULL.map((p) => p.date);
+    const stats = buildStatsTable(prices, dates);
+    return { stats, hold: computeMddHoldProbability(prices, stats) };
+  }, [dSoxl]);
   // VOO底値判定パネル・モーダルで実際に表示する側（QQQ未取込時はVOOに自動フォールバック）。
   const activeBottomInstrument = bottomScoreInstrument === "qqq" && bottomQqq ? "qqq" : "voo";
   const activeBottom = activeBottomInstrument === "qqq" ? bottomQqq : bottom;
@@ -10180,6 +10216,7 @@ export default function DDDashboard() {
       {modal?.type === "summary" && <FullScreenModal title="詳細サマリー出力（AI相談用）" onClose={() => setModal(null)}><SummaryModalContent d={d} dVoo={dVoo} dQqq={dQqq} holdings={holdings} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} blocks={blocks} rankLabels={rankLabels} lifecycle={lifecycle} onLifecycleChange={handleLifecycleChange} fixedPositions={fixedPositions} onFixedPositionChange={handleFixedPositionChange} checkpoints={checkpoints} prevSnapshot={prevSnapshot} onSaveSnapshot={handleSaveSnapshot} crashFrequency={bottom.stats.crashFrequency} /></FullScreenModal>}
       {modal?.type === "longform" && <FullScreenModal title="長尺用S&P500分析データ出力" onClose={() => setModal(null)}><LongformAnalysisModalContent d={d} crashFrequency={bottom.stats.crashFrequency} bottom={bottom} /></FullScreenModal>}
       {modal?.type === "videoCreate" && <FullScreenModal title="長尺動画作成（S&P500）" onClose={() => setModal(null)}><VideoCreateModalContent d={d} crashFrequency={bottom.stats.crashFrequency} bottom={bottom} /></FullScreenModal>}
+      {modal?.type === "videoCreateSoxl" && <FullScreenModal title="長尺動画作成（SOXL）" onClose={() => setModal(null)}>{dSoxl && bottomSoxl ? <VideoCreateModalContent d={dSoxl} crashFrequency={bottomSoxl.stats.crashFrequency} bottom={bottomSoxl} instrumentLabel="SOXL" /> : <div className="text-sm leading-relaxed" style={{ color: C.textMuted }}>SOXLの価格データがまだ取り込まれていません。「データ入力・出力」→「SOXL」タブから、StooqのCSV（<span className="mono">https://stooq.com/q/d/l/?s=soxl.us&amp;i=d</span>）を取り込んでください（2010年3月の上場より前はこのダッシュボードが自動的に補います）。</div>}</FullScreenModal>}
       {modal?.type === "videoTicker" && <FullScreenModal title="動画用ティッカー分析" onClose={() => setModal(null)}><TickerVideoModalContent trackRecord={d.trackRecord} /></FullScreenModal>}
       {modal?.type === "mobileChartZoom" && <MobileChartZoomModal onClose={() => setModal(null)} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} sourceViews={sourceViews} chartSources={chartSources} onToggleChartSource={toggleChartSource} yearCompare={yearCompare} setYearCompare={setYearCompare} initialTab={chartTab} isRealDevice={isMobileAuto} />}
 
@@ -10199,6 +10236,9 @@ export default function DDDashboard() {
               <Film size={16} />
             </button>
             <button onClick={() => setModal({ type: "videoCreate" })} title="長尺動画作成（S&P500）" className="flex items-center justify-center w-[30px] h-[30px] max-[374px]:w-7 max-[374px]:h-7 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+              <Clapperboard size={16} />
+            </button>
+            <button onClick={() => setModal({ type: "videoCreateSoxl" })} title="長尺動画作成（SOXL）" className="flex items-center justify-center w-[30px] h-[30px] max-[374px]:w-7 max-[374px]:h-7 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
               <Clapperboard size={16} />
             </button>
             <button onClick={() => setModal({ type: "videoTicker" })} title="動画用ティッカー分析（SP500以外の銘柄）" className="flex items-center justify-center w-[30px] h-[30px] max-[374px]:w-7 max-[374px]:h-7 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
@@ -10231,6 +10271,9 @@ export default function DDDashboard() {
           </button>
           <button onClick={() => setModal({ type: "videoCreate" })} title="長尺動画作成（S&P500）" className="shrink-0 flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
             <Clapperboard size={12} /> 長尺動画作成
+          </button>
+          <button onClick={() => setModal({ type: "videoCreateSoxl" })} title="長尺動画作成（SOXL）" className="shrink-0 flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
+            <Clapperboard size={12} /> 長尺動画作成（SOXL）
           </button>
           <a href={`${process.env.NEXT_PUBLIC_BASE_PATH || ""}/explainer/`} title="ニュース・キーワード解説動画（長尺＋ショート）" className="shrink-0 flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer", textDecoration: "none" }}>
             <Clapperboard size={12} /> 解説動画作成
