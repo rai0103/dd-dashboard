@@ -583,6 +583,26 @@ export default function ExplainerStudio() {
   const chooseExportFolder = async () => { const h = await pickFolder(); if (h) setExportFolder(h); return h; };
   const [exportNote, setExportNote] = useState("");
 
+  // ---------------- 新しい動画を作る（リセット） ----------------
+  // テーマ・追加の指示・参考情報・台本・場面に追加した画像を消して、最初の状態に戻す。
+  // 声・アバター・背景・BGM・長さ・視聴者・保存先フォルダなどの「いつもの設定」は残す。
+  const handleReset = async () => {
+    if (genBusy || isExporting) return;
+    if (!confirm("新しい動画を作るために、テーマ・参考情報・台本をすべて消します。よろしいですか？\n（声・アバター・背景・BGM・長さなどの設定は残ります。今の台本を残したい場合は、先に「台本を保存」を押してください）")) return;
+    handlePause();
+    const usedImageIds = project ? [...project.longScenes, ...project.shortScenes].map((sc) => sc.imageId).filter(Boolean) : [];
+    for (const id of usedImageIds) { try { await deleteImage(id); } catch (e) { /* ignore */ } }
+    refreshImages();
+    setProject(null);
+    try { localStorage.removeItem(PROJECT_KEY); } catch (e) { /* ignore */ }
+    setTopic(""); setExtraInstruction(""); setRefs([]);
+    setUrlInput(""); setRefTextBody(""); setRefTextTitle(""); setRefTextOpen(false);
+    setGenError(""); setAiError(""); setAiOpenId(null); setEditVisualId(null); setReadingOpenId(null); setRightsPendingId(null);
+    setExportNote(""); setFormat("long"); setSeekPos(0); setCurrentSceneIdx(0); setTotalSec(0); setSceneDurs([]); setNarrMeasure(null);
+    setInputOpen(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
   const handleThumbnail = async () => {
     const r = rendererRef.current, canvas = canvasRef.current; if (!r || !canvas || !project) return;
     if (isPlayingRef.current) handlePause();
@@ -730,6 +750,7 @@ export default function ExplainerStudio() {
           <span className="text-[11px]" style={{ color: C.textDim }}>長尺（16:9）＋宣伝用ショート（9:16）</span>
           <div className="ml-auto flex items-center gap-2">
             {project && <button onClick={saveProjectFile} className="text-[11px] px-2 py-1 rounded flex items-center gap-1" style={btn()}><Download size={11} /> 台本を保存</button>}
+            <button onClick={handleReset} disabled={genBusy || isExporting} title="テーマ・参考情報・台本を消して、新しい動画を作り始めます（声・アバター等の設定は残ります）" className="text-[11px] px-2 py-1 rounded flex items-center gap-1" style={{ ...btn(), color: C.amber, borderColor: C.amber + "88", opacity: genBusy || isExporting ? 0.5 : 1 }}><Plus size={11} /> 新しい動画を作る</button>
             <label className="text-[11px] px-2 py-1 rounded flex items-center gap-1" style={btn()}><Upload size={11} /> 台本を開く
               <input type="file" accept="application/json,.json" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) loadProjectFile(f); }} />
             </label>
