@@ -219,10 +219,15 @@ export class LongAnalysisRenderer {
     ctx.fillStyle = 'rgba(255,255,255,0.04)'; ctx.fillRect(L, T, R - L, B - T);
     const all = series.flatMap(s => s.pts.map(q => q.v));
     if (!all.length) return;
-    const lo = Math.floor(Math.max(40, Math.min(...all, 90)) / 10) * 10;
-    const hi = Math.ceil(Math.min(200, Math.max(...all, 110)) / 10) * 10;
+    // Y軸の範囲は実データに合わせて動的に決める（以前は40〜200[=-60%〜+100%]に固定していたため、
+    // SOXL等ボラティリティの高い銘柄では実際の年間変動がこの範囲を超え、線が上下端で潰れて
+    // 「過去の推移が穏やか（S&P500のよう）に見える」誤表示が起きていた。S&P500等の穏やかな銘柄では
+    // 90〜110の最低範囲がそのまま使われるため、この変更による見た目の変化は無い）。
+    const lo = Math.floor(Math.min(...all, 90) / 10) * 10;
+    const hi = Math.ceil(Math.max(...all, 110) / 10) * 10;
     const yv = (v: number) => B - ((Math.min(hi, Math.max(lo, v)) - lo) / Math.max(1, hi - lo)) * (B - T);
-    const step = hi - lo > 60 ? 20 : 10;
+    const range = hi - lo;
+    const step = range > 200 ? 50 : range > 60 ? 20 : 10;
     for (let v = lo; v <= hi; v += step) {
       ctx.strokeStyle = v === 100 ? 'rgba(255,255,255,0.4)' : 'rgba(255,255,255,0.1)'; ctx.lineWidth = 1;
       ctx.beginPath(); ctx.moveTo(L, yv(v)); ctx.lineTo(R, yv(v)); ctx.stroke();
