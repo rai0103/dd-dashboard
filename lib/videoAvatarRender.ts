@@ -1,7 +1,9 @@
 // 人物の動画（最大3本）を、ランダムな順番でつなぎ、エンドレスにくり返して表示する。
 // 背景は、動画の四隅の色を基準に、画面の端につながっている部分だけを透明にする（顔や髪の中は消えない）。
 
-const XFADE = 0.5; // つなぎ目を重ねる秒数
+const XFADE = 0.8; // つなぎ目を重ねる秒数（前の動画の終わりと次の動画の始まりを、この長さだけ重ねて溶け合わせる）
+const TAIL = 0.15; // 動画の最後のこの秒数は使わない（最後の1コマで止まって見えるのを防ぐ）
+const smooth = (x: number) => { const k = Math.min(1, Math.max(0, x)); return k * k * (3 - 2 * k); };
 
 export interface AvatarOptions { keyOn: boolean; tol: number; zoom: number }
 
@@ -58,9 +60,10 @@ export class VideoAvatar {
     while (t < total + 1 && segs.length < 2000) {
       let c = Math.floor(r() * n);
       if (n > 1 && c === prev) c = (c + 1 + Math.floor(r() * (n - 1))) % n;
-      const d = dur(c);
+      const d = Math.max(1, dur(c) - TAIL);
       segs.push({ clip: c, start: t, dur: d });
-      t += Math.max(1, d - (d > XFADE * 4 ? XFADE : 0));
+      // 次の動画は、この動画が終わる XFADE 秒前から重ねて始める（短すぎる動画は重ねない）
+      t += Math.max(1, d - (d > XFADE * 3 ? XFADE : 0));
       prev = c;
     }
     this.segs = segs;
@@ -72,7 +75,7 @@ export class VideoAvatar {
       const s = this.segs[i];
       if (t >= s.start && t < s.start + s.dur) {
         const u = Math.min(t - s.start, s.dur - 0.02);
-        const a = i > 0 && u < XFADE ? Math.min(1, u / XFADE) : 1;
+        const a = i > 0 && u < XFADE ? smooth(u / XFADE) : 1;
         out.push({ seg: s, u, a });
       }
       if (s.start > t) break;
@@ -103,7 +106,7 @@ export class VideoAvatar {
     const busy = new Set(act.map(a => a.seg.clip));
     for (const s of this.segs) {
       if (s.start <= t) continue;
-      if (s.start - t > 0.8) break;
+      if (s.start - t > 1.2) break;
       if (busy.has(s.clip)) continue;
       const v = this.clips[s.clip];
       if (!v.paused) v.pause();
@@ -251,27 +254,28 @@ export class VideoAvatar {
     const layers = act.map(({ seg, u, a }, k) => {
       const v = this.clips[seg.clip];
       this.sync(v, u, playing);
-      return { c: this.keyed(seg.clip), a };
+      return { c: this.keyed(seg.clip), a, clip: seg.clip };
     });
-    const ready = layers.length > 0 && layers.every(l => !!l.c);
+    // 使える1コマ：用意できていて、再生中なら最後まで行き着いて止まっていないもの
+    const ok = layers.map(l => !!l.c && !(playing && this.clips[l.clip].ended));
     const frame = this.work;
-    if (ready) {
-      const first = layers[0].c!;
-      if (frame.width !== first.width || frame.height !== first.height) { frame.width = first.width; frame.height = first.height; }
+    if (ok.some(Boolean)) {
+      const firstOk = layers[ok.indexOf(true)].c!;
+      if (frame.width !== firstOk.width || frame.height !== firstOk.height) { frame.width = firstOk.width; frame.height = firstOk.height; this.hasFrame = false; }
       const fctx = frame.getContext('2d')!;
-      fctx.clearRect(0, 0, frame.width, frame.height);
-      layers.forEach(({ c, a }) => { fctx.globalAlpha = a; fctx.drawImage(c!, 0, 0, frame.width, frame.height); });
+      // 下の層（今流れている動画）。用意できていればそれを描き、できていなければ直前の1コマを下地として残す
+      if (ok[0]) { fctx.clearRect(0, 0, frame.width, frame.height); fctx.globalAlpha = 1; fctx.drawImage(layers[0].c!, 0, 0, frame.width, frame.height); }
+      else if (!this.hasFrame) fctx.clearRect(0, 0, frame.width, frame.height);
+      // 上の層（次の動画）を、だんだん濃くしながら重ねる（クロスフェード）
+      for (let k = 1; k < layers.length; k++) {
+        if (!ok[k]) continue;
+        fctx.globalAlpha = layers[k].a;
+        fctx.drawImage(layers[k].c!, 0, 0, frame.width, frame.height);
+      }
       fctx.globalAlpha = 1;
       this.hasFrame = true;
     } else if (!this.hasFrame) {
-      // まだ1コマも描けていない：用意できた分だけでも描く
-      const some = layers.find(l => !!l.c);
-      if (!some) return;
-      if (frame.width !== some.c!.width || frame.height !== some.c!.height) { frame.width = some.c!.width; frame.height = some.c!.height; }
-      const fctx = frame.getContext('2d')!;
-      fctx.clearRect(0, 0, frame.width, frame.height);
-      fctx.drawImage(some.c!, 0, 0);
-      this.hasFrame = true;
+      return;
     }
     const s = (h / frame.height) * this.opt.zoom;
     const dw = frame.width * s, dh = frame.height * s;
