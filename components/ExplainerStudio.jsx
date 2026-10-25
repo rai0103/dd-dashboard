@@ -360,7 +360,14 @@ export default function ExplainerStudio() {
       if (buffer) mixer().playBufferAfter(buffer, 0);
     } catch (e) { alert(`音声合成に失敗しました（ローカルTTSサーバー ${getTtsBaseUrl()} が起動しているか確認してください）\n${e?.message ?? e}`); }
   };
-  const applyPreset = (p) => { setVoiceIndex(p.voice); setRate(p.rate); setPitch(p.pitch); updateLocked("rate", p.rate); updateLocked("pitch", p.pitch); setActivePresetId(p.id); speak(SAMPLE, p.voice, p.rate, p.pitch); };
+  // AivisSpeechの声は「aivis:{スタイルID}:名前」。名前の表記（全角・半角など）が違っても、スタイルIDが同じなら同じ声として扱う
+  const resolveVoice = (v) => {
+    if (voices.includes(v)) return v;
+    const m = /^aivis:(\d+):/.exec(v || "");
+    if (m) { const hit = voices.find((x) => x.startsWith(`aivis:${m[1]}:`)); if (hit) return hit; }
+    return v;
+  };
+  const applyPreset = (p0) => { const p = { ...p0, voice: resolveVoice(p0.voice) }; setVoiceIndex(p.voice); setRate(p.rate); setPitch(p.pitch); updateLocked("rate", p.rate); updateLocked("pitch", p.pitch); setActivePresetId(p.id); speak(SAMPLE, p.voice, p.rate, p.pitch); };
   // 他のサイト（investment-shorts等）で登録した声を取り込む。ブラウザの保存領域はサイトごとに別のため、JSONで受け渡す
   const [presetIoOpen, setPresetIoOpen] = useState(false);
   const [presetIoText, setPresetIoText] = useState("");
@@ -371,7 +378,7 @@ export default function ExplainerStudio() {
     if (arr && !Array.isArray(arr)) arr = Array.isArray(arr.presets) ? arr.presets : Object.values(arr);
     const valid = (Array.isArray(arr) ? arr : []).filter((p) => p && typeof p.name === "string" && typeof p.voice === "string").map((p) => ({
       id: typeof p.id === "string" ? p.id : `${Date.now()}-${Math.floor(Math.random() * 1e6)}`,
-      name: p.name, voice: p.voice, rate: Number(p.rate) || 1, pitch: Number(p.pitch) || 1,
+      name: p.name, voice: resolveVoice(p.voice), rate: Number(p.rate) || 1, pitch: Number(p.pitch) || 1,
     }));
     if (!valid.length) { setPresetIoNote("取り込める声が見つかりませんでした"); return; }
     const byName = new Map(voicePresets.map((p) => [p.name, p]));
