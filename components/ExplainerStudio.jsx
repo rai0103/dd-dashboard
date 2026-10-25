@@ -22,6 +22,7 @@ import { AiClientError } from "@/lib/explainer/aiClient";
 import { referenceBlocks, referenceTexts, fetchUrlReference, fileToBase64, newRefId, refLabel, MAX_PDF_BYTES } from "@/lib/explainer/references";
 import { lintScenes, buildDescription, sourcesScene, predictTotalSec, suggestRate, COMFORT_RATE, normalizeVisual, minSecFor, sanitizeReading, isKanaReading } from "@/lib/explainer/scriptModel";
 import { saveImage, listImages, deleteImage } from "@/lib/explainer/imageStore";
+import { safeFileName, canPickFolder, getSavedFolder, pickFolder, ensureWritable, saveBundle, descriptionText } from "@/lib/explainer/exportBundle";
 import { VISUAL_KINDS, ICON_NAMES } from "@/lib/explainer/types";
 
 const C = {
@@ -442,6 +443,7 @@ export default function ExplainerStudio() {
   const rendererRef = useRef(null);
   const isPlayingRef = useRef(false);
   const rafRef = useRef(0);
+  const lastUiRef = useRef(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [seekPos, setSeekPos] = useState(0);
   useEffect(() => { seekPosRef.current = seekPos; }, [seekPos]);
@@ -535,7 +537,8 @@ export default function ExplainerStudio() {
     const tick = (now) => {
       if (!isPlayingRef.current || !rendererRef.current) return;
       const prog = Math.min(1, (now - t0) / (pr.total * 1000));
-      setSeekPos(prog); rendererRef.current.draw(prog); updateSceneProgress(prog);
+      rendererRef.current.draw(prog);
+      if (now - lastUiRef.current > 100 || prog >= 1) { lastUiRef.current = now; setSeekPos(prog); updateSceneProgress(prog); }
       if (prog < 1) rafRef.current = requestAnimationFrame(tick);
       else { isPlayingRef.current = false; setIsPlaying(false); mixer().fadeBGM(1); rendererRef.current?.pauseAvatar(); }
     };
@@ -554,18 +557,55 @@ export default function ExplainerStudio() {
   };
   const download = (blob, name) => { const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 10000); };
   const stamp = () => new Date().toISOString().slice(0, 10).replace(/-/g, "");
+  // ---- 書き出しの名前 ----
+  // 動画：YouTubeに投稿するタイトル（アップロード時にそのまま動画名になる）／サムネ・概要欄テキスト・フォルダ：サムネの文字
+  const exportNames = () => {
+    const y = project.youtube;
+    const thumb = safeFileName(y.thumbnailText || project.videoTitle);
+    const isShort = format === "short";
+    return {
+      folder: isShort ? `${thumb}_ショート` : thumb,
+      video: safeFileName(isShort ? (y.shortTitle || y.title) : y.title, thumb),
+      thumb: isShort ? `${thumb}_ショート` : thumb,
+      title: isShort ? (y.shortTitle || y.title) : y.title,
+    };
+  };
+  // サムネは「タイトル画面が描き終わったところ」（タイトルの場面の終わり0.5秒前）を撮る
+  const thumbTimeSec = (durs) => {
+    const idx = Math.max(0, scenes.findIndex((s) => s.visual.kind === "title"));
+    const before = durs.slice(0, idx).reduce((a, b) => a + b, 0);
+    return before + Math.max(0.2, (durs[idx] || 1) - 0.5);
+  };
+  const canvasPng = (canvas) => new Promise((res) => canvas.toBlob((b) => res(b), "image/png"));
+
+  const [exportFolder, setExportFolder] = useState(null);
+  useEffect(() => { getSavedFolder().then(setExportFolder); }, []);
+  const chooseExportFolder = async () => { const h = await pickFolder(); if (h) setExportFolder(h); return h; };
+  const [exportNote, setExportNote] = useState("");
+
   const handleThumbnail = async () => {
     const r = rendererRef.current, canvas = canvasRef.current; if (!r || !canvas || !project) return;
-    if (format === "long") {
-      const icon = project.longScenes.find((s) => s.visual.kind === "title")?.visual.items[0]?.icon || "news";
-      await r.drawThumbnail(project.youtube.thumbnailText || project.videoTitle, icon, seekPosRef.current);
-    }
-    canvas.toBlob((b) => { if (b) download(b, `explainer_${format}_thumbnail_${stamp()}.png`); r.draw(seekPosRef.current); }, "image/png");
+    if (isPlayingRef.current) handlePause();
+    const durs = sceneDurs.length === scenes.length ? sceneDurs : estDurs;
+    const total = durs.reduce((a, b) => a + b, 0) || 1;
+    const prog = Math.min(1, thumbTimeSec(durs) / total);
+    await r.prepare(prog); // 人物の動画もその時刻の画面にそろえてから撮る
+    r.draw(prog); setSeekPos(prog); updateSceneProgress(prog);
+    const b = await canvasPng(canvas);
+    if (b) download(b, `${exportNames().thumb}.png`);
   };
+
   const handleExport = async () => {
     const r = rendererRef.current, canvas = canvasRef.current;
-    if (!r || !canvas || !scenes.length) return;
-    stopLoop(); mixer().stopNarration(); setIsPlaying(false); setIsExporting(true); setExportProgress(0);
+    if (!r || !canvas || !scenes.length || !project) return;
+    // 保存先フォルダ（ボタンを押した直後でないと選べない・許可を求められないため、録画の前に確認する）
+    let folder = exportFolder;
+    if (canPickFolder()) {
+      if (!folder) folder = await chooseExportFolder();
+      if (folder && !(await ensureWritable(folder))) folder = await chooseExportFolder();
+    }
+    const names = exportNames();
+    stopLoop(); mixer().stopNarration(); setIsPlaying(false); setIsExporting(true); setExportProgress(0); setExportNote("");
     const exporter = new VideoExporter();
     let handle = null;
     try {
@@ -573,16 +613,21 @@ export default function ExplainerStudio() {
       const pr = await prepareAudio();
       r.setDurations(pr.durs); r.setNarration(pr.bufs);
       const animMs = Math.round(pr.total * 1000), totalMs = animMs + 300;
+      const thumbAtMs = thumbTimeSec(pr.durs) * 1000;
+      let thumbBlob = null, thumbPending = null;
+      await r.prepare(0); // 人物の動画を先頭にそろえてから録画を始める（出だしで人物が消えないように）
       if (bgmUrl) await mixer().playBGM(bgmUrl, bgmVolume, true);
       handle = exporter.startRecording(canvas, audioStream, 30);
       await new Promise((resolve) => {
         const t0 = performance.now();
         pr.bufs.forEach((b, i) => { if (b) mixer().playBufferAfter(b, pr.starts[i] + 0.3); });
-        let fading = false;
+        let fading = false, lastUi = 0;
         const tick = () => {
-          const el = performance.now() - t0, prog = Math.min(1, el / animMs);
-          rendererRef.current?.draw(prog); setSeekPos(prog);
-          setExportProgress(Math.round(Math.min(1, el / totalMs) * 95));
+          const now = performance.now(), el = now - t0, prog = Math.min(1, el / animMs);
+          rendererRef.current?.draw(prog);
+          if (!thumbPending && el >= thumbAtMs) thumbPending = canvasPng(canvas).then((b) => { thumbBlob = b; });
+          // 画面の表示更新は1秒に4回まで（毎コマ更新すると画面全体の再描画で録画が引っかかり、人物が途切れる原因になる）
+          if (now - lastUi > 250) { lastUi = now; setSeekPos(prog); setExportProgress(Math.round(Math.min(1, el / totalMs) * 95)); }
           if (!fading && el >= totalMs - 1400) { fading = true; mixer().fadeBGM(1.4); }
           if (el < totalMs) requestAnimationFrame(tick); else resolve();
         };
@@ -591,8 +636,15 @@ export default function ExplainerStudio() {
       await new Promise((res) => setTimeout(res, 400));
       const blob = await handle.stop();
       mixer().stopBGM(); mixer().stopRecordingTap();
-      exporter.downloadVideo(blob, `explainer_${format}_${stamp()}.${handle.extension}`);
+      if (thumbPending) await thumbPending;
+      setExportProgress(97);
+      const files = [{ name: `${names.video}.${handle.extension}`, blob }];
+      if (thumbBlob) files.push({ name: `${names.thumb}.png`, blob: thumbBlob });
+      const tags = project.youtube.tags || [];
+      files.push({ name: `${names.thumb}_概要欄.txt`, blob: new Blob(["\ufeff" + descriptionText(names.title, description, tags)], { type: "text/plain;charset=utf-8" }) });
+      const where = await saveBundle(folder && (await ensureWritable(folder)) ? folder : null, names.folder, files);
       setExportProgress(100);
+      setExportNote(where ? `保存しました：${where}（${files.map((f) => f.name).join("、")}）` : `ダウンロードフォルダに保存しました：${files.map((f) => f.name).join("、")}`);
       if (pr.failed) alert("一部のナレーションを動画に入れられませんでした。ローカルTTSサーバー（npm run dev:video）またはAivisSpeechが起動しているかご確認ください。");
       if (handle.extension === "webm") alert("このブラウザはMP4で直接保存できないため、WebM形式で保存しました。YouTubeにはそのままアップロードできます。");
     } catch (err) {
@@ -810,6 +862,12 @@ export default function ExplainerStudio() {
                 </div>
                 {format === "long" && <label className="flex items-center gap-1.5 text-[11px]" style={{ color: C.textDim }}><input type="checkbox" checked={sourcesInVideo} onChange={(e) => setSourcesInVideo(e.target.checked)} /> 動画に出典を表示（各スライドの「出典：…」と最後の「参考資料」の場面。オフでも概要欄には記載します）</label>}
                 <label className="flex items-center gap-1.5 text-[11px]" style={{ color: C.textDim }}><input type="checkbox" checked={showSubtitles} onChange={(e) => setShowSubtitles(e.target.checked)} /> 字幕（ナレーション）を表示（オフでテロップ）</label>
+                <div className="flex items-center gap-2 flex-wrap text-[11px]" style={{ color: C.textDim }}>
+                  <span>保存先：{canPickFolder() ? (exportFolder ? <b style={{ color: C.text }}>{exportFolder.name}</b> : "未選択（書き出し時に選びます）") : "ダウンロードフォルダ"}</span>
+                  {canPickFolder() && <button onClick={chooseExportFolder} className="text-[10px] px-1.5 py-0.5 rounded" style={btn()}>{exportFolder ? "変更" : "選ぶ"}</button>}
+                  {project && <span>→ フォルダ「{exportNames().folder}」に、動画「{exportNames().video}」・サムネ「{exportNames().thumb}.png」・概要欄テキストを保存</span>}
+                </div>
+                {exportNote && <div className="text-[11px]" style={{ color: C.teal }}>{exportNote}</div>}
                 {ttsError && <div className="text-[11px]" style={{ color: C.rust }}>一部の場面でナレーション音声の生成に失敗しました（TTSサーバーをご確認ください）。</div>}
                 <div className="text-[10px] leading-relaxed" style={{ color: C.textDim }}>書き出しは実時間で録画します（{fmtTime(displayTotal)}かかります）。録画中はこのタブを前面に表示したままにしてください。</div>
               </div>

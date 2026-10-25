@@ -201,30 +201,46 @@ export class VideoAvatar {
     return out;
   }
 
+  /** 直前に描けた人物の1コマがあるか（動画の切り替え・シーク中で新しい1コマが用意できないときは、これを描き続ける） */
+  private hasFrame = false;
+
   /** 時刻 t(秒) の人物を、枠 (x,y,w,h) の下端に合わせて描く */
   draw(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, t: number): void {
     if (this.clips.length === 0) return;
     this.ensureSchedule(this.schedTotal > 0 ? this.schedTotal : t + 60);
-    const playing = this.lastT >= 0 && t > this.lastT && t - this.lastT < 0.3;
+    // 書き出し中などで描画の間隔が一時的に空いても「再生中」とみなす（0.3秒だと、少し間が空いただけで
+    // 一時停止＋シークが起き、その間は1コマも用意できずに人物が消えてしまうことがあった）
+    const playing = this.lastT >= 0 && t > this.lastT && t - this.lastT < 1.0;
     this.lastT = t;
-    const act = this.active(t);
+    const act = this.active(t).slice(-2); // 重なりは最大2本（作業用キャンバスも2枚）
     if (!playing) this.clips.forEach((v, i) => { if (!act.some(a => a.seg.clip === i) && !v.paused) v.pause(); });
-    const frame = this.work;
-    let drawn = false;
-    act.forEach(({ seg, u, a }, k) => {
+    // 重ねる動画（つなぎ目では2本）のすべての1コマがそろったときだけ、新しい1コマに差し替える。
+    // どれかがまだ用意できていない（シーク中・読み込み中）ときは、直前の1コマを描き続けて消えないようにする
+    const layers = act.map(({ seg, u, a }, k) => {
       const v = this.clips[seg.clip];
       this.sync(v, u, playing);
-      const c = this.keyed(seg.clip, k);
-      if (!c) return;
-      if (frame.width !== c.width || frame.height !== c.height) { frame.width = c.width; frame.height = c.height; }
-      const fctx = frame.getContext('2d')!;
-      if (k === 0) fctx.clearRect(0, 0, frame.width, frame.height);
-      fctx.globalAlpha = a;
-      fctx.drawImage(c, 0, 0);
-      fctx.globalAlpha = 1;
-      drawn = true;
+      return { c: this.keyed(seg.clip, k), a };
     });
-    if (!drawn) return;
+    const ready = layers.length > 0 && layers.every(l => !!l.c);
+    const frame = this.work;
+    if (ready) {
+      const first = layers[0].c!;
+      if (frame.width !== first.width || frame.height !== first.height) { frame.width = first.width; frame.height = first.height; }
+      const fctx = frame.getContext('2d')!;
+      fctx.clearRect(0, 0, frame.width, frame.height);
+      layers.forEach(({ c, a }) => { fctx.globalAlpha = a; fctx.drawImage(c!, 0, 0, frame.width, frame.height); });
+      fctx.globalAlpha = 1;
+      this.hasFrame = true;
+    } else if (!this.hasFrame) {
+      // まだ1コマも描けていない：用意できた分だけでも描く
+      const some = layers.find(l => !!l.c);
+      if (!some) return;
+      if (frame.width !== some.c!.width || frame.height !== some.c!.height) { frame.width = some.c!.width; frame.height = some.c!.height; }
+      const fctx = frame.getContext('2d')!;
+      fctx.clearRect(0, 0, frame.width, frame.height);
+      fctx.drawImage(some.c!, 0, 0);
+      this.hasFrame = true;
+    }
     const s = (h / frame.height) * this.opt.zoom;
     const dw = frame.width * s, dh = frame.height * s;
     ctx.save();
