@@ -954,7 +954,7 @@ export default function ExplainerStudio() {
                         <code className="mono text-[10px] flex-1 p-1 rounded break-all" style={{ background: C.panel, color: C.text }}>{PRESET_EXPORT_SNIPPET}</code>
                         <button onClick={() => copyText(PRESET_EXPORT_SNIPPET)} title="コピー" style={{ color: C.teal, background: "none", border: "none", cursor: "pointer" }}><Copy size={12} /></button>
                       </div>
-                      <textarea value={presetIoText} onChange={(e) => setPresetIoText(e.target.value)} rows={3} placeholder='[{"name":"Aivis1","voice":"aivis:…","rate":1.2,"pitch":1}]' className="px-1.5 py-1 rounded text-[10px] mono" style={{ ...inputStyle, background: C.panel, resize: "vertical" }} />
+                      <textarea value={presetIoText} onChange={(e) => setPresetIoText(e.target.value)} rows={3} placeholder="ここをクリックして Ctrl + V で貼り付け（コピーした声のデータ）" className="px-1.5 py-1 rounded text-[10px] mono" style={{ ...inputStyle, background: C.panel, resize: "vertical" }} />
                       <div className="flex items-center gap-2">
                         <button onClick={importPresets} disabled={!presetIoText.trim()} className="text-[10px] px-2 py-1 rounded" style={{ ...btn("primary"), opacity: presetIoText.trim() ? 1 : 0.5 }}>取り込む</button>
                         <button onClick={() => { copyText(JSON.stringify(voicePresets)); setPresetIoNote("この画面の登録済みの声をコピーしました"); }} className="text-[10px] px-2 py-1 rounded" style={btn()}>この画面の声をコピー（書き出し）</button>
