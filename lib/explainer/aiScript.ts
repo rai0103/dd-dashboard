@@ -173,7 +173,7 @@ export async function generateOutline(inp: GenerateInput, signal?: AbortSignal):
       : '- 本編の流れの例：ひとことで言うと → 仕組み・具体例 → 似た用語との違い・よくある誤解 → 身近な影響・使われ方。',
     '- 各章の sceneCount の合計が、場面の目安数に近くなるようにする。goal は章で伝えること、keyPoints は章で扱う要点（他の章と重複させない）。',
     '- chapters[].reading は章タイトルのひらがな読み。',
-    '- youtube.title は検索されやすく誇張のないタイトル（40字以内）。thumbnailText はサムネ用の短い文字（12字以内）。tags は5〜10個。shortTitle・shortDescription は宣伝用ショート動画用（本編へ誘導）。description は本編の概要（3〜5行、目次付き）。',
+    '- youtube.title は検索されやすく誇張のないタイトル（40字以内）。thumbnailText はサムネ用の短い文字（12字以内）。tags は概要欄末尾のハッシュタグにそのまま使うので、関連する単語を10個（テーマ・固有名詞・分野などを組み合わせて重複なく）。shortTitle・shortDescription は宣伝用ショート動画用（本編へ誘導）。description は本編の概要（3〜5行、目次付き）。',
     '- sources は実際に使う参考資料（資料名と、発行元・日付などの補足）。参考資料がなければ空配列。',
   ].join('\n');
   const r = await callTool<any>({
@@ -201,7 +201,8 @@ export async function generateOutline(inp: GenerateInput, signal?: AbortSignal):
         youtube: {
           type: 'object',
           properties: {
-            title: { type: 'string' }, description: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } },
+            title: { type: 'string' }, description: { type: 'string' },
+            tags: { type: 'array', items: { type: 'string' }, description: '概要欄末尾に付けるハッシュタグ用キーワード。10個。' },
             thumbnailText: { type: 'string' }, shortTitle: { type: 'string' }, shortDescription: { type: 'string' },
           },
           required: ['title', 'description', 'tags', 'thumbnailText', 'shortTitle', 'shortDescription'],

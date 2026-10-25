@@ -209,7 +209,8 @@ export function buildDescription(p: Pick<ExplainerProject, 'youtube' | 'sources'
     }
     lines.push('', '※本動画は、参考資料をもとにAIで構成・原稿を作成し、内容を確認して制作しています。図解・イラストはオリジナルです。', '※内容は制作時点の情報にもとづきます。');
   }
-  if (p.youtube.tags.length) lines.push('', p.youtube.tags.slice(0, 8).map((t) => `#${t.replace(/^#/, '').replace(/\s+/g, '')}`).join(' ') + (short ? ' #shorts' : ''));
+  // 概要欄の末尾に関連ハッシュタグを10個まで並べる（#shortsはショート用に別途追加する、10個のカウントには含めない）
+  if (p.youtube.tags.length) lines.push('', p.youtube.tags.slice(0, 10).map((t) => `#${t.replace(/^#/, '').replace(/\s+/g, '')}`).join(' ') + (short ? ' #shorts' : ''));
   return lines.join('\n').trim();
 }
 

@@ -40,6 +40,9 @@ const KIND_LABEL = {
 // 取り込み元のページのConsoleで実行する1行：localStorageの中から「登録した声」の形の配列を探してクリップボードにコピーする
 const PRESET_EXPORT_SNIPPET = `copy(JSON.stringify(Object.keys(localStorage).flatMap(k=>{try{const v=JSON.parse(localStorage.getItem(k));return Array.isArray(v)&&v.length&&v.every(p=>p&&typeof p.name==='string'&&typeof p.voice==='string')?v:[]}catch(e){return[]}})))`;
 const LENGTH_OPTIONS = [3, 4, 5, 6, 7, 8];
+// 長尺の長さ（分）を選んだら、ラベル（kicker）に自動で入れる文言。あとから自由に書き換えられる（変更後はこのパターンに一致しなくなるので自動更新の対象から外れる）
+const autoKickerFor = (minutes) => `${minutes}分で解説`;
+const KICKER_AUTO_RE = /^\d+分で解説$/;
 const PROJECT_KEY = "explainer-project-v1";
 const INPUT_KEY = "explainer-input-v1";
 // 長尺動画作成（DDDashboard.jsx）と同じキー：スライダーのロック値を共有する
@@ -177,7 +180,8 @@ export default function ExplainerStudio() {
       // 参考資料の文章とほぼ同じ箇所は、自動で言い換える（長尺・ショート）
       const L = await paraphraseScenes(p.longScenes, inp, p.videoTitle, "long", ac.signal, (k, n) => setGenProgress({ step: `参考資料と同じ言い回しを言い換え中…（長尺 ${k}/${n}）`, done: 1, total: 1 }));
       const S = await paraphraseScenes(p.shortScenes, inp, p.videoTitle, "short", ac.signal, (k, n) => setGenProgress({ step: `参考資料と同じ言い回しを言い換え中…（ショート ${k}/${n}）`, done: 1, total: 1 }));
-      p = { ...p, longScenes: L.scenes, shortScenes: S.scenes };
+      // ラベル（kicker）は、選んだ長尺の長さから自動で入れる（例：5分で解説）。生成後も自由に書き換えられる
+      p = { ...p, longScenes: L.scenes, shortScenes: S.scenes, kicker: autoKickerFor(minutes) };
       setProject(p); setFormat("long"); setInputOpen(false); setSeekPos(0);
     } catch (e) { setGenError(errMsg(e)); }
     finally { setGenBusy(false); setGenProgress(null); abortRef.current = null; }
@@ -635,11 +639,16 @@ export default function ExplainerStudio() {
     const y = project.youtube;
     const thumb = safeFileName(y.thumbnailText || project.videoTitle);
     const isShort = format === "short";
+    // ファイル名・動画名称は「ラベル＋タイトル」（ラベルを先に、【】で囲んで表示）。
+    // 例：【3分で解説】米国の中間選挙ってなに？…　／　ショートはラベルの概念が無いので付けない。
+    const rawTitle = isShort ? (y.shortTitle || y.title) : y.title;
+    const kicker = (project.kicker || "").trim();
+    const title = !isShort && kicker ? `【${kicker}】${rawTitle}` : rawTitle;
     return {
       folder: isShort ? `${thumb}_ショート` : thumb,
-      video: safeFileName(isShort ? (y.shortTitle || y.title) : y.title, thumb),
+      video: safeFileName(title, thumb),
       thumb: isShort ? `${thumb}_ショート` : thumb,
-      title: isShort ? (y.shortTitle || y.title) : y.title,
+      title,
     };
   };
   // サムネは「タイトル画面が描き終わったところ」（タイトルの場面の終わり0.5秒前）を撮る
@@ -758,48 +767,58 @@ export default function ExplainerStudio() {
   const patchYoutube = (patch) => setProject((p) => ({ ...p, youtube: { ...p.youtube, ...patch } }));
 
   // ---------------- 長さと声の速さのガイド ----------------
+  // 「超過」または「20秒以上不足」を赤字アラートの条件にする（例：目標3分なら2分40秒〜3分の間に収める）
+  const SHORT_WINDOW_SEC = 20;
   const targetSec = format === "long" ? (project?.targetMinutes || 5) * 60 : 60;
   const predicted = useMemo(() => (totalSec > 0 ? totalSec : predictTotalSec(scenes, rate, narrMeasure)), [totalSec, scenes, rate, narrMeasure]);
-  const needRate = useMemo(() => suggestRate(scenes, targetSec * 0.98, narrMeasure), [scenes, targetSec, narrMeasure]);
-  // 目標まで余裕があるときに、ゆっくり読める速さ（目標の90%まで使う・聞き取りやすい範囲の下限まで）
-  const relaxRate = useMemo(() => { const r = suggestRate(scenes, targetSec * 0.9, narrMeasure); return r == null ? null : Math.max(COMFORT_RATE.min, r); }, [scenes, targetSec, narrMeasure]);
+  // 目標の窓（targetSec-SHORT_WINDOW_SEC 〜 targetSec）の中央あたりを狙う速さ。
+  // suggestRateは「predicted <= 指定秒数を満たす最もゆっくりな速さ」を返すため、超過（速める）・不足（ゆっくりにする）
+  // どちらの場合もこの1つの計算で正しい向きの提案になる。
+  const fitRate = useMemo(() => suggestRate(scenes, targetSec - SHORT_WINDOW_SEC / 2, narrMeasure), [scenes, targetSec, narrMeasure]);
+  const fitPredicted = useMemo(() => (fitRate != null ? predictTotalSec(scenes, fitRate, narrMeasure) : null), [fitRate, scenes, narrMeasure]);
   const applyRate = (r) => { const v = Math.round(r * 100) / 100; setRate(v); updateLocked("rate", v); setActivePresetId(null); };
   const measureNow = async () => { if (isPlayingRef.current) handlePause(); setMeasuring(true); try { await prepareAudio(); } finally { setMeasuring(false); } };
+  // 「長尺の長さ」を変えたら、ラベルが自動入力のパターン（{n}分で解説）のままなら新しい長さに合わせて更新する
+  // （手で書き換え済みのラベルは上書きしない）
+  const handleTargetMinutesChange = (minutes) => {
+    setProject((p) => {
+      const nextKicker = KICKER_AUTO_RE.test((p.kicker || "").trim()) ? autoKickerFor(minutes) : p.kicker;
+      return { ...p, targetMinutes: minutes, kicker: nextKicker };
+    });
+  };
   const SpeedGuide = () => {
     if (!project || !scenes.length) return null;
     const over = predicted > targetSec;
-    const roomy = !over && predicted < targetSec * 0.8 && relaxRate != null && relaxRate < rate - 0.04;
-    const tone = over ? C.rust : roomy ? C.amber : C.teal;
+    const short = !over && predicted < targetSec - SHORT_WINDOW_SEC;
+    const bad = over || short;
+    const tone = bad ? C.rust : C.teal;
+    const fitWorks = fitPredicted != null && fitPredicted <= targetSec && fitPredicted >= targetSec - SHORT_WINDOW_SEC;
     return (
       <div className="rounded p-2 text-[11px] flex flex-col gap-1.5" style={{ background: `${tone}12`, border: `1px solid ${tone}55`, color: C.textMuted }}>
         <div className="flex items-center gap-2 flex-wrap">
-          <span style={{ color: tone, fontWeight: 700 }}>{over ? "目標を超えています" : roomy ? "目標まで余裕があります" : "目標の長さに収まっています"}</span>
+          <span style={{ color: tone, fontWeight: 700 }}>{over ? "目標を超えています" : short ? `目標より${SHORT_WINDOW_SEC}秒以上短くなっています` : "目標の長さに収まっています"}</span>
           <span>見込み {fmtTime(predicted)}（速さ {rate.toFixed(2)}x）／目標</span>
           {format === "long" ? (
-            <select value={project.targetMinutes} onChange={(e) => setProject((p) => ({ ...p, targetMinutes: Number(e.target.value) }))} className="px-1 py-0.5 rounded text-[11px]" style={inputStyle}>
+            <select value={project.targetMinutes} onChange={(e) => handleTargetMinutesChange(Number(e.target.value))} className="px-1 py-0.5 rounded text-[11px]" style={inputStyle}>
               {LENGTH_OPTIONS.map((m) => <option key={m} value={m}>{m}:00以内</option>)}
             </select>
           ) : <span>1:00以内（ショート）</span>}
           <span style={{ color: C.textDim }}>{totalSec ? "※実測" : narrMeasure ? "※実測から計算" : "※文字数から推計"}</span>
         </div>
-        {over && needRate != null && (
+        {bad && fitRate != null && fitWorks && (
           <div className="flex items-center gap-2 flex-wrap">
-            <span>声の速さを <b style={{ color: C.text }}>{needRate.toFixed(2)}x</b> にすると、約{fmtTime(predictTotalSec(scenes, needRate, narrMeasure))}で収まります。</span>
-            <button onClick={() => applyRate(needRate)} className="text-[10px] px-2 py-0.5 rounded" style={btn("primary")}>この速さにする</button>
-            {needRate > COMFORT_RATE.max && <span style={{ color: C.rust }}>（{COMFORT_RATE.max}xを超えると聞き取りにくくなります。場面を減らすか、目標を延ばすのがおすすめです）</span>}
+            <span>声の速さを <b style={{ color: C.text }}>{fitRate.toFixed(2)}x</b> にすると、約{fmtTime(fitPredicted)}で、目標（{fmtTime(targetSec - SHORT_WINDOW_SEC)}〜{fmtTime(targetSec)}）に収まります。</span>
+            <button onClick={() => applyRate(fitRate)} className="text-[10px] px-2 py-0.5 rounded" style={btn("primary")}>この速さにする</button>
+            {fitRate > COMFORT_RATE.max && <span style={{ color: C.rust }}>（{COMFORT_RATE.max}xを超えると聞き取りにくくなります。場面を減らすか、目標を延ばすのがおすすめです）</span>}
+            {fitRate < COMFORT_RATE.min && <span style={{ color: C.rust }}>（{COMFORT_RATE.min}x未満では聞き取りにくくなります。場面を増やすか、目標を短くするのがおすすめです）</span>}
           </div>
         )}
-        {over && needRate == null && <div style={{ color: C.rust }}>速さを上げても収まりません。場面を減らすか、目標の長さを延ばしてください。</div>}
-        {over && format === "long" && (needRate == null || needRate > COMFORT_RATE.max) && (
+        {over && !fitWorks && <div style={{ color: C.rust }}>速さを上げても収まりません。場面を減らすか、目標の長さを延ばしてください。</div>}
+        {short && !fitWorks && <div style={{ color: C.rust }}>速さを下げても目標に届きません。場面を増やすか、目標の長さを短くしてください。</div>}
+        {over && format === "long" && !fitWorks && (
           <div className="flex items-center gap-2 flex-wrap">
             <button onClick={() => handleGenerate(project.targetMinutes)} disabled={genBusy} className="text-[11px] px-2.5 py-1 rounded flex items-center gap-1" style={{ ...btn("primary"), opacity: genBusy ? 0.5 : 1 }}><RefreshCw size={11} /> {genBusy ? (genProgress?.step || "作り直し中…") : `${project.targetMinutes}分以内に収まるよう台本を作り直す`}</button>
             <span style={{ color: C.textDim }}>いまの声の速さ（{rate.toFixed(2)}x）で長さを見積もって作ります。テーマ・参考情報はそのまま使います。</span>
-          </div>
-        )}
-        {roomy && (
-          <div className="flex items-center gap-2 flex-wrap">
-            <span>速さを <b style={{ color: C.text }}>{relaxRate.toFixed(2)}x</b> に下げると、約{fmtTime(predictTotalSec(scenes, relaxRate, narrMeasure))}で、ゆったり聞きやすくなります。</span>
-            <button onClick={() => applyRate(relaxRate)} className="text-[10px] px-2 py-0.5 rounded" style={btn()}>この速さにする</button>
           </div>
         )}
         <div className="flex items-center gap-2 flex-wrap" style={{ color: C.textDim }}>
@@ -1242,8 +1261,10 @@ export default function ExplainerStudio() {
                   <div className="flex flex-col gap-1.5">
                     <div className="flex items-center gap-1">
                       <input value={format === "long" ? project.youtube.title : project.youtube.shortTitle} onChange={(e) => patchYoutube(format === "long" ? { title: e.target.value } : { shortTitle: e.target.value })} className="flex-1 px-1.5 py-1 rounded text-[11px]" style={inputStyle} />
-                      <button onClick={() => copyText(format === "long" ? project.youtube.title : project.youtube.shortTitle)} title="タイトルをコピー" style={{ color: C.teal, background: "none", border: "none", cursor: "pointer" }}><Copy size={12} /></button>
+                      {/* 長尺はコピー時に「【ラベル】タイトル」の形にする（ファイル名・概要欄の【タイトル】と同じ形。入力欄自体はラベル無しのまま編集できる） */}
+                      <button onClick={() => copyText(format === "long" ? exportNames().title : project.youtube.shortTitle)} title={format === "long" ? "動画名称（【ラベル】タイトル）をコピー" : "タイトルをコピー"} style={{ color: C.teal, background: "none", border: "none", cursor: "pointer" }}><Copy size={12} /></button>
                     </div>
+                    {format === "long" && project.kicker?.trim() && <div className="text-[10px]" style={{ color: C.textDim }}>動画名称：【{project.kicker.trim()}】{project.youtube.title}</div>}
                     {format === "long" && (
                       <div className="flex items-center gap-1 text-[11px]" style={{ color: C.textDim }}>サムネの文字
                         <input value={project.youtube.thumbnailText} onChange={(e) => patchYoutube({ thumbnailText: e.target.value })} className="flex-1 px-1.5 py-1 rounded text-[11px]" style={inputStyle} />
