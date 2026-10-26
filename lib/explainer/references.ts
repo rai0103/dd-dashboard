@@ -1,6 +1,6 @@
 // 参考情報（テキスト・URL・PDF）の取り込みと、AIに渡す形（Anthropic Messages APIのdocumentブロック）への変換。
-import { getTtsBaseUrl } from '../videoAudioMixer';
-import type { ReferenceItem } from './types';
+import { getTtsBaseUrl } from '../videoAudioMixer.ts';
+import type { ReferenceItem } from './types.ts';
 
 export const MAX_PDF_BYTES = 30 * 1024 * 1024;
 
@@ -51,6 +51,15 @@ export function refLabel(r: ReferenceItem): string {
 export function hostOf(url: string): string { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url; } }
 
 /**
+ * documentブロックのtitleは、Anthropic API側の上限が500文字。参考資料のページタイトルがまれに
+ * 非常に長い（サイト側のtitleタグの作りが特殊、取得時に本文の一部を拾ってしまった等）ことがあり、
+ * そのまま送るとAI呼び出し全体が失敗する（「台本を生成」が丸ごと止まる）。ここで必ず上限内に収める。
+ */
+export function capDocumentTitle(s: string, max = 500): string {
+  return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+}
+
+/**
  * AIへ渡すdocumentブロックの配列。最後のブロックにcache_controlを付け、目次・章ごとの複数回の呼び出しで
  * 参考資料の読み込みを使い回す（プロンプトキャッシュ）。
  */
@@ -59,12 +68,12 @@ export function referenceBlocks(refs: ReferenceItem[]): any[] {
   refs.forEach((r, i) => {
     const n = i + 1;
     if (r.kind === 'text' && r.text.trim()) {
-      blocks.push({ type: 'document', title: `参考${n}：${r.title || 'テキスト'}`, source: { type: 'text', media_type: 'text/plain', data: r.text.slice(0, 80000) } });
+      blocks.push({ type: 'document', title: capDocumentTitle(`参考${n}：${r.title || 'テキスト'}`), source: { type: 'text', media_type: 'text/plain', data: r.text.slice(0, 80000) } });
     } else if (r.kind === 'url' && r.status === 'ok') {
-      if (r.pdfBase64) blocks.push({ type: 'document', title: `参考${n}：${r.title}（${r.url}）`, source: { type: 'base64', media_type: 'application/pdf', data: r.pdfBase64 } });
-      else if (r.text) blocks.push({ type: 'document', title: `参考${n}：${r.title}（${r.url}）`, source: { type: 'text', media_type: 'text/plain', data: r.text.slice(0, 80000) } });
+      if (r.pdfBase64) blocks.push({ type: 'document', title: capDocumentTitle(`参考${n}：${r.title}（${r.url}）`), source: { type: 'base64', media_type: 'application/pdf', data: r.pdfBase64 } });
+      else if (r.text) blocks.push({ type: 'document', title: capDocumentTitle(`参考${n}：${r.title}（${r.url}）`), source: { type: 'text', media_type: 'text/plain', data: r.text.slice(0, 80000) } });
     } else if (r.kind === 'pdf') {
-      blocks.push({ type: 'document', title: `参考${n}：${r.title}`, source: { type: 'base64', media_type: 'application/pdf', data: r.base64 } });
+      blocks.push({ type: 'document', title: capDocumentTitle(`参考${n}：${r.title}`), source: { type: 'base64', media_type: 'application/pdf', data: r.base64 } });
     }
   });
   if (blocks.length) blocks[blocks.length - 1] = { ...blocks[blocks.length - 1], cache_control: { type: 'ephemeral' } };
