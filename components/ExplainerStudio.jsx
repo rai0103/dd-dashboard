@@ -812,7 +812,7 @@ export default function ExplainerStudio() {
       setExportProgress(100);
       setExportNote(where ? `保存しました：${where}（${files.map((f) => f.name).join("、")}）` : `ダウンロードフォルダに保存しました：${files.map((f) => f.name).join("、")}`);
       if (pr.failed) alert("一部のナレーションを動画に入れられませんでした。ローカルTTSサーバー（npm run dev:video）またはAivisSpeechが起動しているかご確認ください。");
-      if (handle.extension === "webm") alert("このブラウザはMP4で直接保存できないため、WebM形式で保存しました。YouTubeにはそのままアップロードできます。");
+      if (handle.extension === "webm") alert("WebM形式で保存しました（MP4はYouTube側の取り込み処理が時々失敗するため、より安定するWebMを使っています）。YouTubeにはそのままアップロードできます。");
     } catch (err) {
       alert(`書き出しエラー: ${err?.message ?? err}`);
       try { await handle?.stop(); } catch (e2) { /* ignore */ }
@@ -1035,7 +1035,7 @@ export default function ExplainerStudio() {
                   <button onClick={isPlaying ? handlePause : handlePlay} className="text-xs px-3 py-1.5 rounded flex items-center gap-1.5" style={btn("primary")}>{isPlaying ? <><Pause size={13} /> 一時停止</> : <><Play size={13} /> プレビュー再生</>}</button>
                   <button onClick={() => { handlePause(); handleSeek(0); }} className="text-xs px-3 py-1.5 rounded flex items-center gap-1.5" style={{ background: C.panel2, color: C.textMuted, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}><Square size={12} /> 先頭へ</button>
                   <button onClick={handleThumbnail} title={format === "long" ? "サムネ用の画像（大きな文字＋人物）をPNGで保存" : "いま表示中の1コマをPNGで保存"} className="text-xs px-3 py-1.5 rounded flex items-center gap-1.5" style={{ background: C.panel2, color: C.textMuted, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}><Camera size={12} /> サムネ保存</button>
-                  <button onClick={handleExport} disabled={isExporting} className="text-xs px-3 py-1.5 rounded flex items-center gap-1.5 ml-auto" style={{ ...btn("amber"), background: isExporting ? C.panel2 : C.amber, color: isExporting ? C.textMuted : C.bg }}><Download size={13} /> {isExporting ? `書き出し中… ${exportProgress}%` : "動画を書き出す（MP4）"}</button>
+                  <button onClick={handleExport} disabled={isExporting} className="text-xs px-3 py-1.5 rounded flex items-center gap-1.5 ml-auto" style={{ ...btn("amber"), background: isExporting ? C.panel2 : C.amber, color: isExporting ? C.textMuted : C.bg }}><Download size={13} /> {isExporting ? `書き出し中… ${exportProgress}%` : "動画を書き出す"}</button>
                 </div>
                 {format === "long" && <label className="flex items-center gap-1.5 text-[11px]" style={{ color: C.textDim }}><input type="checkbox" checked={sourcesInVideo} onChange={(e) => setSourcesInVideo(e.target.checked)} /> 動画に出典を表示（各スライドの「出典：…」と最後の「参考資料」の場面。オフでも概要欄には記載します）</label>}
                 <label className="flex items-center gap-1.5 text-[11px]" style={{ color: C.textDim }}><input type="checkbox" checked={showSubtitles} onChange={(e) => setShowSubtitles(e.target.checked)} /> 字幕（ナレーション）を表示（オフでテロップ）</label>

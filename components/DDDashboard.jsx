@@ -6778,7 +6778,7 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
       exporter.downloadVideo(blob, filename);
       setExportProgress(100);
       if (pr.failed) alert("ナレーションを動画に入れられませんでした（BGMのみ）。ローカルTTSサーバー（npm run dev:video）が起動しているか、Windowsに日本語音声が入っているかご確認ください。");
-      if (handle.extension === "webm") alert("このブラウザはMP4で直接保存できないため、WebM形式で保存しました。YouTubeにはそのままアップロードできます。");
+      if (handle.extension === "webm") alert("WebM形式で保存しました（MP4はYouTube側の取り込み処理が時々失敗するため、より安定するWebMを使っています）。YouTubeにはそのままアップロードできます。");
     } catch (err) {
       console.error("Export error:", err);
       alert(`書き出しエラー: ${err?.message ?? err}`);
@@ -6825,7 +6825,7 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
               <Camera size={12} /> サムネ保存
             </button>
             <button onClick={handleExport} disabled={isExporting} className="text-xs px-3 py-1.5 rounded flex items-center gap-1.5 ml-auto" style={{ background: isExporting ? C.panel2 : C.amber, color: isExporting ? C.textMuted : C.bg, fontWeight: 700, border: "none", cursor: isExporting ? "default" : "pointer" }}>
-              <Download size={13} /> {isExporting ? `書き出し中… ${exportProgress}%` : "動画を書き出す（MP4）"}
+              <Download size={13} /> {isExporting ? `書き出し中… ${exportProgress}%` : "動画を書き出す"}
             </button>
           </div>
           {ttsError && <div className="text-[11px]" style={{ color: C.rust }}>一部の場面でナレーション音声の生成に失敗しました（TTSサーバーをご確認ください）。</div>}

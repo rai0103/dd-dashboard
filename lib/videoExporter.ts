@@ -6,14 +6,20 @@ export interface RecordingHandle {
   stop: () => Promise<Blob>;
 }
 
-// 優先順：MP4（H.264/AAC）→ WebM。ブラウザが対応する最初の形式を使う
+// 優先順：WebM → MP4。ブラウザのMediaRecorderが生成するMP4は、録画しながら書き出す都合上、
+// 総再生時間を録画開始時点では確定できず、ファイル先頭のmoov（mvhd・tkhd・mdhd）のdurationが
+// 0のまま書き出される（fragmented MP4）既知の制約がある。多くのプレイヤーは末尾のフラグメントを
+// 読んで長さを推測できるが、YouTube側の取り込み処理がこれを嫌って「処理を中止しました」として
+// アップロードを失敗させることがある（毎回ではなく断続的）。WebMは同じ録画方式でもYouTubeへの
+// アップロードで安定して動作するため、対応していれば常にWebMを使う（FFmpeg等の外部ライブラリは
+// 使わず、録画形式の優先順位を変えるだけで回避する）。
 const MIME_CANDIDATES: { mime: string; ext: 'mp4' | 'webm' }[] = [
-  { mime: 'video/mp4;codecs=avc1.42E01E,mp4a.40.2', ext: 'mp4' },
-  { mime: 'video/mp4;codecs=avc1,mp4a.40.2', ext: 'mp4' },
-  { mime: 'video/mp4', ext: 'mp4' },
   { mime: 'video/webm;codecs=vp9,opus', ext: 'webm' },
   { mime: 'video/webm;codecs=vp8,opus', ext: 'webm' },
   { mime: 'video/webm', ext: 'webm' },
+  { mime: 'video/mp4;codecs=avc1.42E01E,mp4a.40.2', ext: 'mp4' },
+  { mime: 'video/mp4;codecs=avc1,mp4a.40.2', ext: 'mp4' },
+  { mime: 'video/mp4', ext: 'mp4' },
 ];
 
 export class VideoExporter {
