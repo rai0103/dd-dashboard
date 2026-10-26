@@ -6193,8 +6193,7 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
   // 書き込むため、「元に戻す」ボタンは変更不要でそのまま機能する。
   const rewriteSceneViaAi = async (i, sc) => {
     const k = sceneKey(i, sc.id);
-    const instruction = chatText.trim();
-    if (!instruction) return;
+    const instruction = chatText.trim() || "内容（事実・数値）は変えずに、今とは違う自然な言い回しに書き直してください。";
     setChatLoadingKey(k);
     setChatErrors((prev) => { const nx = { ...prev }; delete nx[k]; return nx; });
     try {
@@ -6490,16 +6489,12 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
   const sceneRefs = useRef([]);
   const narrListRef = useRef(null); // 「場面とナレーション」のスクロール領域本体（自動スクロールをこの中だけに閉じるため）
   useEffect(() => { setCurrentSceneIdx((i) => Math.min(i, Math.max(0, scenes.length - 1))); }, [scenes.length]);
-  // 対象のナレーションカードを、一覧（narrListRef）の中だけでできるだけ一番上に表示する。
-  // scrollIntoViewだと外側（モーダル全体）まで一緒にスクロールしてしまい構成パネルが見えなくなるため、
-  // narrListRefのscrollTopだけを直接操作する（コンテナの最大スクロール量を超える分は自動的にそこで止まる＝可能な範囲でOK）
+  // 対象のナレーションカードを、一覧（narrListRef）の中とモーダル本体の両方で、再生中は必ず画面に見えるようにする。
+  // block:"nearest"なので、既に両方の範囲内で見えているときは動かさない（構成パネルが毎回隠れることはない）
   useEffect(() => {
-    const container = narrListRef.current;
     const el = sceneRefs.current[currentSceneIdx];
-    if (!container || !el) return;
-    const delta = el.getBoundingClientRect().top - container.getBoundingClientRect().top;
-    const targetScrollTop = container.scrollTop + delta;
-    container.scrollTo({ top: Math.max(0, targetScrollTop), behavior: "smooth" });
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }, [currentSceneIdx]);
   // 今の場面の文章のどこまで読み上げ済みか（文字数。NarrMixedBoxのハイライトに渡す）。
   // ナレーション音声の長さは再生準備（prepareAudio）の結果でしか分からないため、再生のたびにnarrDursRefへ保存しておく
@@ -6980,6 +6975,13 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
                         })()}
                       </span>
                       <div className="flex items-center gap-2">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); if (isPlaying) handlePause(); }}
+                          disabled={!isPlaying}
+                          title="プレビューを一時停止"
+                          className="text-[10px] flex items-center gap-1"
+                          style={{ color: isPlaying ? C.teal : C.textDim, background: "none", border: "none", cursor: isPlaying ? "pointer" : "default", opacity: isPlaying ? 1 : 0.4 }}
+                        ><Pause size={10} /> 一時停止</button>
                         {edited && <button onClick={() => resetSceneText(i, sc)} className="text-[10px]" style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer" }}>元に戻す</button>}
                         <button onClick={() => previewScene(i)} className="text-[10px] flex items-center gap-1" style={{ color: C.teal, background: "none", border: "none", cursor: "pointer" }}><Play size={10} /> 試聴</button>
                         <button
@@ -7000,16 +7002,16 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
                             type="text"
                             value={chatText}
                             onChange={(e) => setChatText(e.target.value)}
-                            onKeyDown={(e) => { if (e.key === "Enter" && !chatLoadingKey) rewriteSceneViaAi(i, sc); }}
-                            placeholder="例：もう少し短く／もっとやさしい言葉で、など指示を入力"
+                            onKeyDown={(e) => { if (e.key === "Enter" && chatLoadingKey !== sceneKey(i, sc.id)) rewriteSceneViaAi(i, sc); }}
+                            placeholder="空欄のまま送信で、別の言い回しを1つ提案します（例：もう少し短く／もっとやさしい言葉で）"
                             className="flex-1 text-[11px] rounded px-2 py-1"
                             style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, color: C.text }}
                           />
                           <button
                             onClick={() => rewriteSceneViaAi(i, sc)}
-                            disabled={chatLoadingKey === sceneKey(i, sc.id) || !chatText.trim()}
+                            disabled={chatLoadingKey === sceneKey(i, sc.id)}
                             className="text-[10px] px-2 py-1 rounded"
-                            style={{ background: C.teal, color: "#04201a", border: "none", cursor: chatLoadingKey ? "default" : "pointer", opacity: chatLoadingKey === sceneKey(i, sc.id) || !chatText.trim() ? 0.5 : 1 }}
+                            style={{ background: C.teal, color: "#04201a", border: "none", cursor: chatLoadingKey ? "default" : "pointer", opacity: chatLoadingKey === sceneKey(i, sc.id) ? 0.5 : 1 }}
                           >{chatLoadingKey === sceneKey(i, sc.id) ? "生成中…" : "送信"}</button>
                         </div>
                         {chatErrors[sceneKey(i, sc.id)] && (

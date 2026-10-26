@@ -4,7 +4,7 @@
 import { callTool } from './aiClient';
 import { ICON_NAMES, VISUAL_KINDS } from './types';
 import type { ChapterPlan, ExplainerProject, ExplainerScene, SourceNote, YoutubeMeta } from './types';
-import { assembleLong, normalizeScene } from './scriptModel';
+import { assembleLong, normalizeScene, sanitizeReading } from './scriptModel';
 
 export interface GenerateInput {
   topic: string;
@@ -356,6 +356,47 @@ export async function rewriteScene(inp: GenerateInput, videoTitle: string, instr
   if (!raw) throw new Error('AIから場面が返りませんでした。');
   const sc = normalizeScene(raw, current?.chapter ?? 0);
   return current ? { ...sc, id: current.id, chapter: current.chapter, imageId: current.imageId ?? null } : sc;
+}
+
+const NARRATION_SCHEMA = {
+  type: 'object',
+  properties: {
+    narration: { type: 'string', description: 'ナレーション（です・ます調、40〜95文字）' },
+    reading: { type: 'string', description: 'narrationをひらがなのみで書いた読み上げ文' },
+  },
+  required: ['narration', 'reading'],
+};
+
+/**
+ * スライド（図解・見出し・テロップ）は変えず、ナレーションだけを指示どおりに書き直す（スライドはしっくりくるが、
+ * ナレーションの言い回しだけ直したいときに使う）。現在の図解の内容を「変えない前提」としてAIに渡し、
+ * 図解と矛盾しない文だけを作らせる。instructionが空なら「別の言い回しを1つ提案する」既定の指示にする。
+ */
+export async function rewriteNarration(inp: GenerateInput, videoTitle: string, instruction: string, current: ExplainerScene, neighbors: string[], format: 'long' | 'short', signal?: AbortSignal): Promise<{ narration: string; reading: string }> {
+  const instr = instruction.trim() || '図解の内容・数値と矛盾しないまま、今とは違う自然な言い回しに書き直してください。';
+  const task = [
+    header(inp),
+    '',
+    `動画タイトル：${videoTitle}（${format === 'short' ? '縦型ショート' : '長尺16:9'}）`,
+    neighbors.length ? `【前後の場面のナレーション】\n${neighbors.map((n) => `・${n}`).join('\n')}` : '',
+    `【この場面の図解（変更しない。ナレーションはこの内容と矛盾しないこと）】${JSON.stringify({ title: current.title, caption: current.caption, visual: current.visual })}`,
+    `【現在のナレーション】${current.narration}`,
+    `【指示】${instr}`,
+    'スライド（図解・見出し・テロップ）は変えず、ナレーションと読み上げ文（reading）だけを書き直してください。',
+  ].filter(Boolean).join('\n');
+  const r = await callTool<any>({
+    system: system(),
+    content: [...inp.refBlocks, { type: 'text', text: task }],
+    toolName: 'rewrite_narration',
+    toolDescription: 'スライドは変えずに、解説動画の1場面のナレーションだけを指示どおりに書き直す。',
+    inputSchema: NARRATION_SCHEMA,
+    maxTokens: 1200,
+    signal,
+  });
+  const narration = typeof r?.narration === 'string' ? r.narration.trim() : '';
+  if (!narration) throw new Error('AIから空の応答が返りました。');
+  const rd = sanitizeReading(typeof r?.reading === 'string' ? r.reading : '', narration);
+  return { narration, reading: rd.reading };
 }
 
 export interface GenerateProgress { step: string; done: number; total: number }

@@ -18,7 +18,7 @@ import { listBackgrounds, saveBackground, deleteBackground } from "@/lib/videoBa
 import { listAvatars, saveAvatar, deleteAvatar, newAvatar, MAX_CLIPS } from "@/lib/videoAvatarLibrary";
 import { VideoAvatar } from "@/lib/videoAvatarRender";
 import { ExplainerRenderer, RENDER_SIZE } from "@/lib/explainer/renderer";
-import { generateProject, generateShort, rewriteScene, CHARS_PER_MIN } from "@/lib/explainer/aiScript";
+import { generateProject, generateShort, rewriteScene, rewriteNarration, CHARS_PER_MIN } from "@/lib/explainer/aiScript";
 import { AiClientError } from "@/lib/explainer/aiClient";
 import { referenceBlocks, referenceTexts, fetchUrlReference, fileToBase64, newRefId, refLabel, MAX_PDF_BYTES } from "@/lib/explainer/references";
 import { lintScenes, buildDescription, sourcesScene, findVerbatimOverlaps, predictTotalSec, suggestRate, COMFORT_RATE, normalizeVisual, minSecFor, sanitizeReading, isKanaReading } from "@/lib/explainer/scriptModel";
@@ -281,6 +281,25 @@ export default function ExplainerStudio() {
     } catch (e) { setAiError(errMsg(e)); }
     finally { setAiBusy(false); }
   };
+  // 場面ごとの「ナレーション変更」：スライド（図解）は変えず、ナレーションだけをAIで変える
+  const [narrAiOpenId, setNarrAiOpenId] = useState(null);
+  const [narrAiText, setNarrAiText] = useState("");
+  const [narrAiBusy, setNarrAiBusy] = useState(false);
+  const [narrAiError, setNarrAiError] = useState("");
+  const runNarrationAi = async (sceneId) => {
+    if (!project) return;
+    setNarrAiBusy(true); setNarrAiError("");
+    try {
+      const idx = scenes.findIndex((s) => s.id === sceneId);
+      const cur = scenes[idx];
+      if (!cur) throw new Error("場面が見つかりません。");
+      const neighbors = [scenes[idx - 1], scenes[idx + 1]].filter(Boolean).map((s) => s.narration);
+      const { narration, reading } = await rewriteNarration(genInput(), project.videoTitle, narrAiText.trim(), cur, neighbors, format);
+      patchScene(sceneId, { narration, reading, readingStale: false });
+      setNarrAiOpenId(null); setNarrAiText("");
+    } catch (e) { setNarrAiError(errMsg(e)); }
+    finally { setNarrAiBusy(false); }
+  };
   const [editVisualId, setEditVisualId] = useState(null);
   const [readingOpenId, setReadingOpenId] = useState(null);
 
@@ -529,9 +548,11 @@ export default function ExplainerStudio() {
   // 速さを変えたら、実測した全体の長さは使えないので見込みに戻す（ナレーションの実測値は残して比で計算する）
   useEffect(() => { setTotalSec(0); setSceneDurs([]); }, [rate]);
   useEffect(() => {
-    const box = listRef.current, el = sceneRefs.current[currentSceneIdx];
-    if (!box || !el) return;
-    box.scrollTo({ top: Math.max(0, box.scrollTop + el.getBoundingClientRect().top - box.getBoundingClientRect().top), behavior: "smooth" });
+    const el = sceneRefs.current[currentSceneIdx];
+    if (!el) return;
+    // 場面一覧（listRef）だけでなく、ページ全体のスクロールも必要な分だけ連動させ、
+    // 再生中は常にこのカードが画面に見えるようにする（block:"nearest"なので、既に見えているときは動かさない）
+    el.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }, [currentSceneIdx]);
   // 読み上げ中の場面の、どの文字まで読み終えたか（ナレーション枠のハイライト用）。音声の長さは prepareAudio で確定する
   const narrDursRef = useRef([]);
@@ -1034,7 +1055,9 @@ export default function ExplainerStudio() {
                               {[...VISUAL_KINDS, "chapter", "sources"].map((k) => <option key={k} value={k}>{KIND_LABEL[k]}</option>)}
                             </select>
                             <button onClick={() => speak(ttsText(sc))} className="text-[10px] flex items-center gap-0.5" style={{ color: C.teal, background: "none", border: "none", cursor: "pointer" }}><Play size={10} />試聴</button>
-                            <button onClick={() => { setAiOpenId((v) => (v === sc.id ? null : sc.id)); setAiText(""); setAiError(""); }} className="text-[10px] flex items-center gap-0.5" style={{ color: aiOpenId === sc.id ? C.teal : C.textDim, background: "none", border: "none", cursor: "pointer" }} title="AIに作り直しを指示"><MessageSquare size={10} />AI</button>
+                            <button onClick={() => { if (isPlaying) handlePause(); }} disabled={!isPlaying} title="プレビューを一時停止" className="text-[10px] flex items-center gap-0.5" style={{ color: isPlaying ? C.teal : C.textDim, background: "none", border: "none", cursor: isPlaying ? "pointer" : "default", opacity: isPlaying ? 1 : 0.4 }}><Pause size={10} />一時停止</button>
+                            <button onClick={() => { setNarrAiOpenId((v) => (v === sc.id ? null : sc.id)); setNarrAiText(""); setNarrAiError(""); }} className="text-[10px] flex items-center gap-0.5" style={{ color: narrAiOpenId === sc.id ? C.teal : C.textDim, background: "none", border: "none", cursor: "pointer" }} title="スライドはそのまま、ナレーションだけをAIで変える"><RefreshCw size={10} />ナレーション変更</button>
+                            <button onClick={() => { setAiOpenId((v) => (v === sc.id ? null : sc.id)); setAiText(""); setAiError(""); }} className="text-[10px] flex items-center gap-0.5" style={{ color: aiOpenId === sc.id ? C.teal : C.textDim, background: "none", border: "none", cursor: "pointer" }} title="AIに作り直しを指示（スライドごと作り直します）"><MessageSquare size={10} />AI</button>
                             <button onClick={() => removeScene(sc.id)} title="この場面を削除" style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer" }}><X size={12} /></button>
                           </div>
                           <div className="rounded" style={{ background: C.panel }}>
@@ -1100,6 +1123,16 @@ export default function ExplainerStudio() {
                             <div className="mt-1.5 pt-1.5 flex items-center gap-1.5" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
                               <input autoFocus value={aiText} onChange={(e) => setAiText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !aiBusy) runSceneAi(sc.id); }} placeholder="例：もっとやさしく／流れ図にして／数字を入れて短く" className="flex-1 text-[11px] rounded px-2 py-1" style={{ ...inputStyle, background: C.panel }} />
                               <button onClick={() => runSceneAi(sc.id)} disabled={aiBusy || !aiText.trim()} className="text-[10px] px-2 py-1 rounded" style={{ ...btn("primary"), opacity: aiBusy || !aiText.trim() ? 0.5 : 1 }}>{aiBusy ? "生成中…" : "送信"}</button>
+                            </div>
+                          )}
+                          {narrAiOpenId === sc.id && (
+                            <div className="mt-1.5 pt-1.5 flex flex-col gap-1" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+                              <div className="flex items-center gap-1.5">
+                                <input autoFocus value={narrAiText} onChange={(e) => setNarrAiText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !narrAiBusy) runNarrationAi(sc.id); }} placeholder="空欄のまま送信で、別の言い回しを1つ提案します（例：もっと短く／やさしい言葉で）" className="flex-1 text-[11px] rounded px-2 py-1" style={{ ...inputStyle, background: C.panel }} />
+                                <button onClick={() => runNarrationAi(sc.id)} disabled={narrAiBusy} className="text-[10px] px-2 py-1 rounded" style={{ ...btn("primary"), opacity: narrAiBusy ? 0.5 : 1 }}>{narrAiBusy ? "生成中…" : "送信"}</button>
+                              </div>
+                              <div className="text-[10px]" style={{ color: C.textDim }}>図解（スライド）は変えず、ナレーションだけを書き直します。</div>
+                              {narrAiError && <div className="text-[10px]" style={{ color: "#ff6b6b" }}>{narrAiError}</div>}
                             </div>
                           )}
                           {iss.length > 0 && <div className="mt-1 flex flex-col">{iss.map((x, k) => (
