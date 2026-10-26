@@ -230,6 +230,50 @@ export default function ExplainerStudio() {
     finally { setParaAllBusy(""); }
   };
 
+  // 全場面への一括AI修正指示（例：すべてのスライドのドル表記の後に円換算を加える、など）。
+  // paraphraseScenesと違い対象を絞り込まず、全場面を1つずつ順番にrewriteScene()へ同じ指示で投げ、
+  // スライド（図解・テロップ）とナレーションの両方を書き直す。当てはまらない場面はAI自身に元のまま
+  // 返させる（指示文の末尾に注記を添える）。1場面ずつ順番に呼ぶため時間がかかるが、途中でキャンセルでき、
+  // それまでに完了した場面はキャンセル後も反映される。
+  const [bulkAiOpen, setBulkAiOpen] = useState(false);
+  const [bulkAiText, setBulkAiText] = useState("");
+  const [bulkAiBusy, setBulkAiBusy] = useState(""); // ""＝停止中、それ以外は進捗文言
+  const [bulkAiError, setBulkAiError] = useState("");
+  const bulkAiAbortRef = useRef(null);
+  const bulkRewriteAllScenes = async (list, inp, title, fmt, instruction, signal, onStep) => {
+    const out = list.slice();
+    let failCount = 0;
+    let cancelled = false;
+    for (let i = 0; i < out.length; i++) {
+      if (signal?.aborted) { cancelled = true; break; }
+      onStep?.(i + 1, out.length);
+      try {
+        const neighbors = [out[i - 1], out[i + 1]].filter(Boolean).map((x) => x.narration);
+        const instr = `${instruction}\n（この指示は動画内の全場面に同じ基準で一括適用しています。当てはまらない場面はそのままで構いません。）`;
+        out[i] = await rewriteScene(inp, title, instr, out[i], neighbors, fmt, signal);
+      } catch (e) {
+        if (e?.code === "ABORTED") { cancelled = true; break; }
+        failCount += 1; // 1場面失敗しても続ける
+      }
+    }
+    return { scenes: out, failCount, cancelled };
+  };
+  const runBulkAi = async () => {
+    const instr = bulkAiText.trim();
+    if (!instr || !project) return;
+    const ac = new AbortController(); bulkAiAbortRef.current = ac;
+    setBulkAiBusy("準備中…"); setBulkAiError("");
+    try {
+      const { scenes: out, failCount, cancelled } = await bulkRewriteAllScenes(scenes, genInput(), project.videoTitle, format, instr, ac.signal, (k, n) => setBulkAiBusy(`修正中…（${k}/${n}）`));
+      setScenes(out);
+      setBulkAiOpen(false); setBulkAiText("");
+      if (cancelled) setBulkAiError("キャンセルしました（それまでの場面は反映済みです）。");
+      else if (failCount > 0) setBulkAiError(`${failCount}件の場面で修正に失敗しました（他の場面は適用済みです）。`);
+    } catch (e) { setBulkAiError(errMsg(e)); }
+    finally { setBulkAiBusy(""); bulkAiAbortRef.current = null; }
+  };
+  const cancelBulkAi = () => bulkAiAbortRef.current?.abort();
+
   const handleRegenerateShort = async () => {
     if (!project) return;
     setGenBusy(true); setGenError(""); setGenProgress({ step: "宣伝用ショートを作り直し中…", done: 0, total: 1 });
@@ -1025,8 +1069,29 @@ export default function ExplainerStudio() {
 
                 {/* 場面とナレーション */}
                 <Section title={`場面とナレーション（${scenes.length}場面・ドラッグで並べ替え）`} right={
-                  <button onClick={() => { setAiOpenId((v) => (v === "__new" ? null : "__new")); setAiText(""); setAiError(""); }} className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-1" style={btn()}><Plus size={10} /> 場面をAIで追加</button>
+                  <div className="flex items-center gap-1.5">
+                    <button onClick={() => { setBulkAiOpen((v) => !v); setBulkAiError(""); }} className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-1" style={btn(bulkAiOpen ? "primary" : undefined)}><RefreshCw size={10} /> 全体をAIで一括修正</button>
+                    <button onClick={() => { setAiOpenId((v) => (v === "__new" ? null : "__new")); setAiText(""); setAiError(""); }} className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-1" style={btn()}><Plus size={10} /> 場面をAIで追加</button>
+                  </div>
                 }>
+                  {bulkAiOpen && (
+                    <div className="mb-1.5 p-2 rounded flex flex-col gap-1.5" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
+                      <div className="flex items-center gap-1.5">
+                        <input autoFocus value={bulkAiText} onChange={(e) => setBulkAiText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !bulkAiBusy) runBulkAi(); }} disabled={!!bulkAiBusy}
+                          placeholder="例：すべてのスライドのドル表記の後に（）で円換算を表記して、ナレーションでも円換算を加えてください"
+                          className="flex-1 text-[11px] rounded px-2 py-1" style={{ ...inputStyle, background: C.panel }} />
+                        {bulkAiBusy ? (
+                          <button onClick={cancelBulkAi} className="text-[10px] px-2 py-1 rounded" style={btn()}>キャンセル</button>
+                        ) : (
+                          <button onClick={runBulkAi} disabled={!bulkAiText.trim()} className="text-[10px] px-2 py-1 rounded" style={{ ...btn("primary"), opacity: bulkAiText.trim() ? 1 : 0.5 }}>全{scenes.length}場面に適用</button>
+                        )}
+                      </div>
+                      <div className="text-[10px]" style={{ color: C.textDim }}>
+                        {bulkAiBusy || `全${scenes.length}場面それぞれに、この指示でスライド（図解・テロップ）とナレーションの書き直しを依頼します。1場面ずつ順番に処理するため時間がかかります（途中でキャンセルできます。キャンセルまでに完了した場面は反映されます）。`}
+                      </div>
+                      {bulkAiError && <div className="text-[10px]" style={{ color: "#ff6b6b" }}>{bulkAiError}</div>}
+                    </div>
+                  )}
                   {aiOpenId === "__new" && (
                     <div className="mb-1.5 p-2 rounded flex items-center gap-1.5" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
                       <input autoFocus value={aiText} onChange={(e) => setAiText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !aiBusy) runSceneAi("__new"); }} placeholder={`場面${currentSceneIdx + 1}の後ろに追加。例：住宅ローンの返済額の変化を棒グラフで`} className="flex-1 text-[11px] rounded px-2 py-1" style={{ ...inputStyle, background: C.panel }} />

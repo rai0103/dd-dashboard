@@ -6156,6 +6156,68 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
     return true;
   };
   const forgetNarrTemplate = (sceneId) => { const nx = { ...narrTemplates }; delete nx[sceneId]; saveNarrTemplates(nx); };
+  // 全場面のナレーションへの一括AI修正指示（例：すべての場面でドル表記の後に円換算を加える、など）。
+  // 既存の場面ごとのAIチャット（rewriteSceneViaAi）と同じ仕組みを、全場面に対して1件ずつ順番に呼ぶ。
+  // 画面表示・図解はDD Dashboardではデータから自動描画されるため対象外（ナレーション文のみ）。
+  // 当てはまらない場面はAI自身に元の文のまま返させる。途中でキャンセルでき、それまでに完了した場面は反映される。
+  const [bulkChatOpen, setBulkChatOpen] = useState(false);
+  const [bulkChatText, setBulkChatText] = useState("");
+  const [bulkChatBusy, setBulkChatBusy] = useState(""); // ""＝停止中、それ以外は進捗文言
+  const [bulkChatError, setBulkChatError] = useState("");
+  const bulkCancelRef = useRef(false);
+  const cancelBulkNarrAi = () => { bulkCancelRef.current = true; };
+  const runBulkNarrAi = async () => {
+    const instruction = bulkChatText.trim();
+    if (!instruction || scenes.length === 0) return;
+    bulkCancelRef.current = false;
+    setBulkChatBusy("準備中…"); setBulkChatError("");
+    let failCount = 0;
+    let cancelled = false;
+    for (let i = 0; i < scenes.length; i++) {
+      if (bulkCancelRef.current) { cancelled = true; break; }
+      const sc = scenes[i];
+      const k = sceneKey(i, sc.id);
+      setBulkChatBusy(`修正中…（${i + 1}/${scenes.length}）`);
+      try {
+        const currentReading = readings[i];
+        const examples = scenes.map((_, j) => readings[j]).filter((t, j) => j !== i && t).slice(0, 3);
+        const system = [
+          "あなたは投資データ解説動画のナレーション編集者です。",
+          "出力は必ずひらがなのみで書いてください（漢字・カタカナ・英数字は使わない）。句読点は「、」「。」のみ使えます。",
+          "他の場面のナレーション文体の実例：",
+          ...examples.map((e, idx) => `例${idx + 1}：${e}`),
+        ].join("\n");
+        const prompt = `現在の場面（${sc.caption || ""}）のナレーションは次の通りです：\n『${currentReading}』\n\n次の指示は、動画内のすべての場面に同じ基準で一括適用しています。この場面に当てはまる内容があれば反映し、当てはまらなければ元の文のまま返してください：\n『${instruction}』`;
+        const result = await callAiTool({
+          system, prompt,
+          toolName: "rewrite_narration",
+          toolDescription: "指示に従って、投資データ解説動画の1場面のナレーション文（ひらがなのみ）を書き直す（当てはまらなければ元のまま）。",
+          inputSchema: {
+            type: "object",
+            properties: { reading: { type: "string", description: "ひらがなのみの書き直し後の読み上げ文（当てはまらない場合は元の文のまま）" } },
+            required: ["reading"],
+          },
+        });
+        const newReading = typeof result?.reading === "string" ? result.reading.trim() : "";
+        if (!newReading) throw new Error("空の応答");
+        if (newReading !== currentReading) {
+          const base = effectiveReadings[i];
+          const shown = displayOf(segmentReading(newReading, extraVocab, learned));
+          setSceneEdits((prev) => ({ ...prev, [k]: { base, shown, text: newReading } }));
+          learnNarrTemplate(sc.id, base, newReading);
+        }
+      } catch (e) {
+        failCount += 1; // 1場面失敗しても続ける
+      }
+    }
+    setBulkChatBusy("");
+    if (cancelled) setBulkChatError("キャンセルしました（それまでの場面は反映済みです）。");
+    else {
+      setBulkChatOpen(false); setBulkChatText("");
+      if (failCount > 0) setBulkChatError(`${failCount}件の場面で修正に失敗しました（他の場面は適用済みです）。`);
+      else setNarrNote("すべての場面に一括修正を適用しました。");
+    }
+  };
   const segsList = useMemo(() => effectiveReadings.map((r) => segmentReading(r, extraVocab, learned)), [effectiveReadings, extraVocab, learned]);
   const baseShown = useMemo(() => effectiveReadings.map((r) => displayOf(segmentReading(r, extraVocab, {}))), [effectiveReadings, extraVocab]);
   const readings = useMemo(() => scenes.map((sc, i) => { const e = sceneEdits[sceneKey(i, sc.id)]; return e && e.base === effectiveReadings[i] ? e.text : readingOf(segsList[i]); }), [scenes, sceneEdits, segsList, effectiveReadings]);
@@ -6918,10 +6980,40 @@ function VideoCreateModalContent({ d, crashFrequency, bottom, instrumentLabel = 
           <div>
             <div className="flex items-center justify-between mb-1.5">
               <div className="text-[11px] font-semibold" style={{ color: C.textMuted }}>場面とナレーション（{scenes.length}場面）</div>
-              <button onClick={() => setNarrHelpOpen((v) => !v)} className="text-[10px] flex items-center gap-0.5" style={{ color: C.textDim, background: "transparent", border: "none", cursor: "pointer" }}>
-                使い方<ChevronRight size={11} style={{ transform: narrHelpOpen ? "rotate(90deg)" : "none", transition: "transform 0.15s" }} />
-              </button>
+              <div className="flex items-center gap-2">
+                <button onClick={() => { setBulkChatOpen((v) => !v); setBulkChatError(""); }} className="text-[10px] flex items-center gap-0.5" style={{ color: bulkChatOpen ? C.teal : C.textDim, background: "transparent", border: "none", cursor: "pointer" }}>
+                  <RefreshCw size={10} />全体を一括修正
+                </button>
+                <button onClick={() => setNarrHelpOpen((v) => !v)} className="text-[10px] flex items-center gap-0.5" style={{ color: C.textDim, background: "transparent", border: "none", cursor: "pointer" }}>
+                  使い方<ChevronRight size={11} style={{ transform: narrHelpOpen ? "rotate(90deg)" : "none", transition: "transform 0.15s" }} />
+                </button>
+              </div>
             </div>
+            {bulkChatOpen && (
+              <div className="mb-1.5 p-2 rounded flex flex-col gap-1.5" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    autoFocus
+                    value={bulkChatText}
+                    onChange={(e) => setBulkChatText(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter" && !bulkChatBusy) runBulkNarrAi(); }}
+                    disabled={!!bulkChatBusy}
+                    placeholder="例：すべての場面で、ドル表記の後に（）で円換算も加えてください"
+                    className="flex-1 text-[11px] rounded px-2 py-1"
+                    style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, color: C.text }}
+                  />
+                  {bulkChatBusy ? (
+                    <button onClick={cancelBulkNarrAi} className="text-[10px] px-2 py-1 rounded" style={{ border: `1px solid ${C.borderSoft}`, color: C.textMuted, background: "none", cursor: "pointer" }}>キャンセル</button>
+                  ) : (
+                    <button onClick={runBulkNarrAi} disabled={!bulkChatText.trim()} className="text-[10px] px-2 py-1 rounded" style={{ background: C.teal, color: "#04201a", border: "none", cursor: bulkChatText.trim() ? "pointer" : "default", opacity: bulkChatText.trim() ? 1 : 0.5 }}>全{scenes.length}場面に適用</button>
+                  )}
+                </div>
+                <div className="text-[10px]" style={{ color: C.textDim }}>
+                  {bulkChatBusy || `全${scenes.length}場面のナレーションに、この指示を1件ずつ順番に適用します（画面表示・図解は変わりません。当てはまらない場面は元のままになります。途中でキャンセルできます）。`}
+                </div>
+                {bulkChatError && <div className="text-[10px]" style={{ color: "#ff6b6b" }}>{bulkChatError}</div>}
+              </div>
+            )}
             {narrHelpOpen && (
               <>
                 <div className="text-[10px] mb-1.5" style={{ color: C.textDim }}>通常の文章で表示します。「試聴」で音声を確かめ、読み方が違う箇所だけを<b>ひらがな</b>に直して枠の外をクリックすると、直した箇所が<span style={{ color: "#2ee6b8", fontWeight: 600 }}>緑</span>になり、読み上げだけが変わります（動画の表示は変わりません）。S&P500 などの用語は学習して、次回以降も同じ読みになります。</div>
