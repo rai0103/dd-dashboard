@@ -1147,6 +1147,30 @@ export default function ExplainerStudio() {
                   </div>
                 </Section>
 
+                {/* 章タイトル（ヘッダー右側に表示。長尺のみ） */}
+                {format === "long" && project.chapters?.length > 0 && (
+                  <Section title="章タイトル（ヘッダー右側に表示）">
+                    <div className="text-[10px] mb-1.5" style={{ color: C.textDim }}>画面右上に出る見出しです。今プレビュー中の場面の章に応じて切り替わります。</div>
+                    <div className="flex flex-col gap-1">
+                      {project.chapters.map((ch, i) => {
+                        const example = scenes.find((s) => s.chapter === i && s.visual.kind !== "chapter")?.caption || "";
+                        return (
+                          <div key={i} className="flex items-center gap-1.5">
+                            <span className="text-[10px] shrink-0" style={{ color: C.textDim, width: 44 }}>第{i + 1}章</span>
+                            <input
+                              value={ch.title}
+                              onChange={(e) => { const v = e.target.value; setProject((p) => ({ ...p, chapters: p.chapters.map((c, idx) => (idx === i ? { ...c, title: v } : c)) })); }}
+                              className="flex-1 min-w-0 text-[11px] px-1.5 py-0.5 rounded"
+                              style={inputStyle}
+                            />
+                            {example && <span className="text-[10px] shrink-0 truncate" style={{ color: C.textDim, maxWidth: 110 }} title={example}>{example}</span>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </Section>
+                )}
+
                 {/* アバター */}
                 <Section title={`アバター（長尺動画作成と共通・1人につき最大${MAX_CLIPS}本）`} right={<button onClick={addAvatar} className="text-[11px] px-2 py-1 rounded" style={btn()}>＋ アバターを追加</button>}>
                   {avatars.length === 0 && <p className="text-[10px] mb-1.5" style={{ color: C.textDim }}>未登録のあいだは人物は表示されません。</p>}
