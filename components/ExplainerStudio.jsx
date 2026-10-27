@@ -23,6 +23,7 @@ import { AiClientError } from "@/lib/explainer/aiClient";
 import { referenceBlocks, referenceTexts, fetchUrlReference, fileToBase64, newRefId, refLabel, MAX_PDF_BYTES } from "@/lib/explainer/references";
 import { lintScenes, buildDescription, sourcesScene, findVerbatimOverlaps, predictTotalSec, suggestRate, COMFORT_RATE, normalizeVisual, minSecFor, sanitizeReading, isKanaReading } from "@/lib/explainer/scriptModel";
 import { saveImage, listImages, deleteImage } from "@/lib/explainer/imageStore";
+import { generateImage } from "@/lib/explainer/imageClient";
 import { safeFileName, canPickFolder, getSavedFolder, pickFolder, ensureWritable, saveBundle, descriptionText } from "@/lib/explainer/exportBundle";
 import { VISUAL_KINDS, ICON_NAMES } from "@/lib/explainer/types";
 
@@ -103,6 +104,15 @@ export default function ExplainerStudio() {
   const [refTextBody, setRefTextBody] = useState("");
   const [urlInput, setUrlInput] = useState("");
   const [inputOpen, setInputOpen] = useState(true);
+  // AI画像の自動生成（Google Gemini / Imagen。費用が発生するため既定はオフ）
+  const [imageGenEnabled, setImageGenEnabled] = useState(false);
+  const [imageGenCount, setImageGenCount] = useState(3);
+  // 画風・表現の自由記述リクエスト（例：「写真のようなリアルな画像で」）。場面ごとのimagePromptに追記して使う
+  const [imageStyleHint, setImageStyleHint] = useState("");
+  const withStyleHint = (prompt, hint) => {
+    const h = (hint || "").trim();
+    return h ? `${prompt}\n追加の指示（画風・表現について。ユーザー自身の希望）: ${h}` : prompt;
+  };
 
   const addTextRef = () => {
     if (!refTextBody.trim()) return;
@@ -164,8 +174,31 @@ export default function ExplainerStudio() {
   const [genProgress, setGenProgress] = useState(null);
   const [genError, setGenError] = useState("");
   const abortRef = useRef(null);
-  const genInput = (minutes = targetMinutes) => ({ topic: topic.trim(), mode, audience, targetMinutes: minutes, extraInstruction, refBlocks: referenceBlocks(refs), today: todayStr(), speechRate: rate });
+  const genInput = (minutes = targetMinutes) => ({ topic: topic.trim(), mode, audience, targetMinutes: minutes, extraInstruction, refBlocks: referenceBlocks(refs), today: todayStr(), speechRate: rate, imageTarget: imageGenEnabled ? imageGenCount : 0 });
   const errMsg = (e) => (e instanceof AiClientError ? e.message : e?.message || String(e));
+  // visual.kind=image の場面（AIがimagePromptを用意している場面）のうち、先頭から指定枚数だけAIで画像を生成して
+  // 自動で割り当てる。GEMINI_API_KEY未設定・生成失敗は場面単位でスキップし、台本自体は壊さない（呼び出し側でまとめて案内する）。
+  const genImagesForScenes = async (list, count, signal, onStep, styleHint = "") => {
+    const targets = list.map((s, i) => ({ i, s })).filter((x) => x.s.visual.kind === "image" && x.s.visual.imagePrompt).slice(0, Math.max(0, count));
+    if (!targets.length) return { scenes: list, failed: 0, noKey: false };
+    const out = list.slice();
+    let failed = 0, noKey = false;
+    for (let k = 0; k < targets.length; k++) {
+      const { i, s } = targets[k];
+      onStep?.(k + 1, targets.length);
+      try {
+        const blob = await generateImage(withStyleHint(s.visual.imagePrompt, styleHint), "16:9", signal);
+        const file = new File([blob], `ai-${s.id}.png`, { type: blob.type || "image/png" });
+        const im = await saveImage(file);
+        out[i] = { ...out[i], imageId: im.id };
+      } catch (e) {
+        if (e?.code === "ABORTED") throw e;
+        if (e?.code === "NO_API_KEY") noKey = true;
+        failed += 1;
+      }
+    }
+    return { scenes: out, failed, noKey };
+  };
   const handleGenerate = async (minutesOverride) => {
     const minutes = typeof minutesOverride === "number" ? minutesOverride : targetMinutes;
     if (!topic.trim()) { setGenError("テーマ（ニュースやキーワード）を入力してください。"); return; }
@@ -180,9 +213,18 @@ export default function ExplainerStudio() {
       // 参考資料の文章とほぼ同じ箇所は、自動で言い換える（長尺・ショート）
       const L = await paraphraseScenes(p.longScenes, inp, p.videoTitle, "long", ac.signal, (k, n) => setGenProgress({ step: `参考資料と同じ言い回しを言い換え中…（長尺 ${k}/${n}）`, done: 1, total: 1 }));
       const S = await paraphraseScenes(p.shortScenes, inp, p.videoTitle, "short", ac.signal, (k, n) => setGenProgress({ step: `参考資料と同じ言い回しを言い換え中…（ショート ${k}/${n}）`, done: 1, total: 1 }));
+      let longScenes = L.scenes;
+      let imgFailed = 0, imgNoKey = false;
+      if (imageGenEnabled && imageGenCount > 0) {
+        const r = await genImagesForScenes(longScenes, imageGenCount, ac.signal, (k, n) => setGenProgress({ step: `AIで画像を生成中…（${k}/${n}）`, done: 1, total: 1 }), imageStyleHint);
+        longScenes = r.scenes; imgFailed = r.failed; imgNoKey = r.noKey;
+        await refreshImages(); // 保存した画像をプレビュー/書き出し側の一覧に反映する（手動の「画像を追加」と同じ扱いにする）
+      }
       // ラベル（kicker）は、選んだ長尺の長さから自動で入れる（例：5分で解説）。生成後も自由に書き換えられる
-      p = { ...p, longScenes: L.scenes, shortScenes: S.scenes, kicker: autoKickerFor(minutes) };
+      p = { ...p, longScenes, shortScenes: S.scenes, kicker: autoKickerFor(minutes) };
       setProject(p); setFormat("long"); setInputOpen(false); setSeekPos(0);
+      if (imgNoKey) alert("画像の自動生成に失敗しました：tts-server/.env に GEMINI_API_KEY が設定されていません（tts-server/.env.example を参考に設定してください）。台本自体は生成できています。あとから各場面の「画像を追加」→「AIで生成」からやり直せます。");
+      else if (imgFailed > 0) alert(`${imgFailed}件の場面で画像の自動生成に失敗しました（台本は生成できています）。あとから各場面の「画像を追加」→「AIで生成」からやり直せます。`);
     } catch (e) { setGenError(errMsg(e)); }
     finally { setGenBusy(false); setGenProgress(null); abortRef.current = null; }
   };
@@ -376,6 +418,19 @@ export default function ExplainerStudio() {
     patchScene(sc.id, { imageId: null });
     const usedElsewhere = project && [...project.longScenes, ...project.shortScenes].some((s) => s.imageId === id && s.id !== sc.id);
     if (id && !usedElsewhere) { await deleteImage(id).catch(() => {}); refreshImages(); }
+  };
+  // 場面ごとに「AIで生成」：既存のimagePrompt（台本生成時にAIが用意した英語のプロンプト案）で1枚生成し、そのまま添付する
+  const [imgGenBusyId, setImgGenBusyId] = useState(null);
+  const [imgGenError, setImgGenError] = useState("");
+  const genSceneImage = async (sc) => {
+    if (!sc.visual.imagePrompt) return;
+    setImgGenBusyId(sc.id); setImgGenError("");
+    try {
+      const blob = await generateImage(withStyleHint(sc.visual.imagePrompt, imageStyleHint), format === "short" ? "9:16" : "16:9");
+      const file = new File([blob], `ai-${sc.id}-${Date.now()}.png`, { type: blob.type || "image/png" });
+      await attachImage(sc.id, file);
+    } catch (e) { setImgGenError(errMsg(e)); }
+    finally { setImgGenBusyId(null); }
   };
 
   // ---------------- アバター（長尺動画作成と共通の保存データ） ----------------
@@ -975,6 +1030,29 @@ export default function ExplainerStudio() {
                 )}
               </div>
 
+              <div className="flex flex-wrap gap-3 items-center p-2 rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
+                <label className="flex items-center gap-1.5 text-[11px]" style={{ color: C.textMuted }}>
+                  <input type="checkbox" checked={imageGenEnabled} onChange={(e) => setImageGenEnabled(e.target.checked)} />
+                  AIで画像を自動生成してスライドに挿入する
+                </label>
+                {imageGenEnabled && (
+                  <label className="flex items-center gap-1.5 text-[11px]" style={{ color: C.textMuted }}>枚数
+                    <select value={imageGenCount} onChange={(e) => setImageGenCount(Number(e.target.value))} className="px-1.5 py-1 rounded text-[11px]" style={inputStyle}>
+                      {[1, 2, 3, 4, 5, 6, 8, 10].map((n) => <option key={n} value={n}>{n}枚</option>)}
+                    </select>
+                  </label>
+                )}
+                {imageGenEnabled && (
+                  <label className="flex items-center gap-1.5 text-[11px] flex-1 min-w-[220px]" style={{ color: C.textMuted }}>画風の指定（任意）
+                    <input value={imageStyleHint} onChange={(e) => setImageStyleHint(e.target.value)} placeholder="例：写真のようなリアルな画像で表現してください" className="flex-1 px-2 py-1 rounded text-[11px]" style={inputStyle} />
+                  </label>
+                )}
+                <span className="text-[10px]" style={{ color: C.textDim }}>
+                  {imageGenEnabled
+                    ? "内容に合う場面を選び、画像1枚ごとに課金されるGoogle Gemini（Imagen）で生成します（tts-server/.envにGEMINI_API_KEYの設定が必要）。実在の人物・ロゴ・既存作品を描かないよう指示しています。生成後も場面ごとに作り直せます。"
+                    : "オフの場合、図解はこれまで通りすべて自作の図形・アイコンで描きます（あとから場面ごとに「画像を追加」→「AIで生成」で追加することもできます）。"}
+                </span>
+              </div>
               <div className="flex items-center gap-2 flex-wrap">
                 <button onClick={() => handleGenerate()} disabled={genBusy} className="text-xs px-3 py-1.5 rounded flex items-center gap-1.5" style={{ ...btn("primary"), opacity: genBusy ? 0.6 : 1 }}><Sparkles size={13} /> {project ? "台本を作り直す" : "台本を生成（長尺＋ショート）"}</button>
                 {genBusy && <button onClick={() => abortRef.current?.abort()} className="text-[11px] px-2 py-1 rounded" style={{ ...btn(), color: C.rust, borderColor: C.rust + "88" }}>中止</button>}
@@ -1142,7 +1220,7 @@ export default function ExplainerStudio() {
                             {sc.imageId ? (
                               <span className="text-[10px] inline-flex items-center gap-1" style={{ color: C.teal }}><ImageIcon size={10} /> 画像あり<button onClick={() => detachImage(sc)} style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer" }}><X size={10} /></button></span>
                             ) : (
-                              <button onClick={() => setRightsPendingId((v) => (v === sc.id ? null : sc.id))} className="text-[10px] flex items-center gap-0.5" style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer", padding: 0 }}><ImageIcon size={10} /> 画像を追加</button>
+                              <button onClick={() => { setRightsPendingId((v) => (v === sc.id ? null : sc.id)); setImgGenError(""); }} className="text-[10px] flex items-center gap-0.5" style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer", padding: 0 }}><ImageIcon size={10} /> 画像を追加</button>
                             )}
                             <span className="text-[10px] ml-auto" style={{ color: C.textDim }}>テロップ</span>
                             <input value={sc.caption} onChange={(e) => patchScene(sc.id, { caption: e.target.value })} className="text-[10px] px-1 py-0.5 rounded w-40" style={inputStyle} />
@@ -1179,9 +1257,15 @@ export default function ExplainerStudio() {
                             <div className="mt-1 p-1.5 rounded text-[10px] flex flex-col gap-1" style={{ background: `${C.amber}12`, border: `1px solid ${C.amber}55`, color: C.textMuted }}>
                               <div>使えるのは、自分で撮影・作成した画像、利用条件を確認したフリー素材、画像生成AIで自作したもの（実在の人物・ロゴ・既存作品を含まない）です。ニュースサイトの写真や人物写真をそのまま使うのは避けてください。</div>
                               {sc.visual.imagePrompt && <div className="flex items-center gap-1">プロンプト案をコピー<button onClick={() => copyText(sc.visual.imagePrompt)} style={{ color: C.teal, background: "none", border: "none", cursor: "pointer" }}><Copy size={10} /></button></div>}
-                              <label className="self-start px-2 py-0.5 rounded cursor-pointer" style={btn()}>権利を確認した画像を選ぶ
-                                <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) attachImage(sc.id, f); }} />
-                              </label>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <label className="px-2 py-0.5 rounded cursor-pointer" style={btn()}>権利を確認した画像を選ぶ
+                                  <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) attachImage(sc.id, f); }} />
+                                </label>
+                                {sc.visual.imagePrompt && (
+                                  <button onClick={() => genSceneImage(sc)} disabled={imgGenBusyId === sc.id} className="px-2 py-0.5 rounded" style={{ ...btn("primary"), opacity: imgGenBusyId === sc.id ? 0.5 : 1 }}>{imgGenBusyId === sc.id ? "生成中…" : "AIで生成"}</button>
+                                )}
+                              </div>
+                              {imgGenError && <div style={{ color: "#ff6b6b" }}>{imgGenError}</div>}
                             </div>
                           )}
                           {aiOpenId === sc.id && (

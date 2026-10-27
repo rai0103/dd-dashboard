@@ -17,6 +17,8 @@ export interface GenerateInput {
   today: string;
   /** 読み上げの速さ（声の「速さ」。長さの見積もりに使う。既定1.0） */
   speechRate?: number;
+  /** AIで画像を自動生成して挿入する場合の目安枚数（長尺動画全体で、visual.kind=imageにする場面のおおよその数）。0/未指定なら従来通りAIの判断に任せる */
+  imageTarget?: number;
 }
 
 /** 日本語ナレーションの1分あたりの文字数の目安（話速1.0） */
@@ -243,6 +245,20 @@ function outlineText(o: Outline): string {
 /** 1回の呼び出しで作る場面の上限（日本語のナレーション＋ひらがなの読み上げ文は長くなりやすいため、少しずつ作る） */
 export const SCENES_PER_CALL = 4;
 
+/**
+ * AIで画像を自動生成する場合（inp.imageTarget>0）、動画全体の目安枚数を各章の場面数に応じて按分し、
+ * 「この章ではvisual.kind=imageをおおよそN個使う」という指示文を作る（内容に合わない場面まで無理に
+ * imageにしないよう、あくまで目安として伝える）。imageTargetが0/未指定なら何も付け足さない（従来通り）。
+ */
+function imageQuotaNote(inp: GenerateInput, o: Outline, ch: ChapterPlan): string {
+  const target = Math.max(0, Math.round(inp.imageTarget || 0));
+  if (!target) return '';
+  const totalScenes = o.chapters.reduce((a, c) => a + c.sceneCount, 0) || 1;
+  const quota = Math.round(target * (ch.sceneCount / totalScenes));
+  if (!quota) return '';
+  return `- この章では、visual.kind=image の場面をおよそ${quota}個使う（画像生成AIで自動的に画像を作って挿入するため）。内容的に画像が合う場面だけに使い、無理に増やさない。`;
+}
+
 async function generateChapterPart(inp: GenerateInput, o: Outline, idx: number, count: number, partNo: number, partTotal: number, prev: ExplainerScene[], signal?: AbortSignal): Promise<ExplainerScene[]> {
   const ch = o.chapters[idx];
   const first = prev.length === 0;
@@ -264,6 +280,7 @@ async function generateChapterPart(inp: GenerateInput, o: Outline, idx: number, 
     `- 章で伝えること：${ch.goal}`,
     `- 扱う要点：${ch.keyPoints}（他の章の要点は扱わない）`,
     roleNote,
+    imageQuotaNote(inp, o, ch),
     prev.length ? `【この章ですでに作った場面（続きから書き、内容を繰り返さない）】\n${prev.map((s) => `・[${s.visual.kind}] ${s.narration}`).join('\n')}` : '',
     partTotal > 1 && partNo < partTotal ? '- 章の途中なので、締めの言葉は入れない。' : '',
     '- 図解の種類を毎場面変え、数値の図解・流れ図・比較・イメージ図などをバランスよく使う。',

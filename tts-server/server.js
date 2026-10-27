@@ -186,6 +186,49 @@ async function handlePostChat(req, res) {
   }
 }
 
+// AI画像生成プロキシ（Gemini API の Imagen 経由。/api/chat と同じ理由でNext.js Route Handlerの外に実装する）。
+// リクエストをそのままGemini APIへ中継するだけで、APIキーはユーザー自身のtts-server/.env
+// （gitignore対象）のGEMINI_API_KEYから読む（Claudeが入力・保持することはない）。
+async function handlePostImage(req, res) {
+  const body = await readJsonBody(req);
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({
+      error: 'NO_API_KEY',
+      message: 'tts-server/.env に GEMINI_API_KEY が設定されていません（tts-server/.env.example を参考に設定してください）。',
+    }));
+    return;
+  }
+  const prompt = body && typeof body.prompt === 'string' ? body.prompt.trim() : '';
+  if (!prompt) {
+    res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ error: 'BAD_REQUEST', message: 'prompt が空です。' }));
+    return;
+  }
+  const aspectRatio = body && (body.aspectRatio === '9:16' || body.aspectRatio === '16:9') ? body.aspectRatio : '16:9';
+  // 2026年8月にImagen 4系（predictエンドポイント）が廃止されたため、Gemini画像生成（generateContent、
+  // responseModalities: ['TEXT','IMAGE']）に切り替え。既定モデルはGoogle公式ドキュメントの現行例に合わせる。
+  const model = (process.env.GEMINI_IMAGE_MODEL || 'gemini-nano-banana-2.1');
+  const payload = {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: { responseModalities: ['TEXT', 'IMAGE'], imageConfig: { aspectRatio } },
+  };
+  try {
+    const upstream = await fetch(`https://generativelanguage.googleapis.com/v1/models/${model}:generateContent`, {
+      method: 'POST',
+      headers: { 'x-goog-api-key': apiKey, 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const text = await upstream.text();
+    res.writeHead(upstream.status, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(text);
+  } catch (e) {
+    res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ error: 'UPSTREAM_FAILED', message: String(e && e.message ? e.message : e) }));
+  }
+}
+
 // ニュース・キーワード解説動画（/explainer）用：参考URLの本文を取得する。
 // ブラウザからは他サイトを直接読めない（CORS）ため、このローカルサーバーが代わりに取得し、
 // HTMLは本文らしき部分だけをテキストにして返す。PDFならbase64のまま返す（AIにPDFとして渡す）。
@@ -398,6 +441,7 @@ const server = http.createServer((req, res) => {
   if (pathname === '/api/tts' && req.method === 'GET') { handleGetVoices(req, res); return; }
   if (pathname === '/api/tts' && req.method === 'POST') { handlePostSpeak(req, res); return; }
   if (pathname === '/api/chat' && req.method === 'POST') { handlePostChat(req, res); return; }
+  if (pathname === '/api/image' && req.method === 'POST') { handlePostImage(req, res); return; }
   if (pathname === '/api/fetch-url' && req.method === 'GET') { handleFetchUrl(req, res); return; }
   if (pathname === '/' || pathname === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
