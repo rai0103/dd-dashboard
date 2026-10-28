@@ -417,6 +417,81 @@ const drawLine: Draw = (c, sc, e) => {
   sourceNote(c, e, v.source);
 };
 
+// [Stage E-9] yearCompare：複数の系列（線）を1つの横軸（例：年初からの経過日数）に重ねて描く。
+// v.itemsは「系列ごとにグループ化したVisualItemの寄せ集め」（item.seriesKey/x/seriesEmphasisを使う。
+// lib/explainer/stockCatalog.tsのresolveYearCompareItemsが組み立てる）。強調系列（seriesEmphasis）は
+// アクセントカラーで太く、それ以外は白の細線・低めの不透明度で背景として重ねる（ダッシュボード本体の
+// 「年比較」チャートと同じ考え方：今年や注目の系列だけを目立たせ、他は参考として薄く見せる）。
+const drawOverlay: Draw = (c, sc, e) => {
+  const v = sc.visual;
+  const top = heading(c, e, v.heading, v.subheading, e.accent) + 6;
+  const groups = new Map<string, { label: string; emphasis: boolean; pts: { x: number; n: number }[] }>();
+  v.items.forEach((it, idx) => {
+    const n = parseValue(it.value);
+    if (n === null) return;
+    const key = it.seriesKey || it.seriesLabel || it.label || `s${idx}`;
+    const g = groups.get(key) ?? { label: it.seriesLabel || it.label || key, emphasis: !!it.seriesEmphasis, pts: [] };
+    const x = Number.isFinite(it.x) ? (it.x as number) : g.pts.length;
+    g.pts.push({ x, n });
+    groups.set(key, g);
+  });
+  const series = [...groups.values()].map((g) => ({ ...g, pts: [...g.pts].sort((a, b) => a.x - b.x) })).filter((g) => g.pts.length >= 2);
+  if (!series.length) { sourceNote(c, e, v.source); return; }
+  const allX = series.flatMap((g) => g.pts.map((p) => p.x));
+  const allN = series.flatMap((g) => g.pts.map((p) => p.n));
+  const xLo = Math.min(...allX), xHi = Math.max(...allX) || 1;
+  const lo0 = Math.min(...allN), hi0 = Math.max(...allN);
+  const pad = (hi0 - lo0) * 0.12 || Math.abs(hi0) * 0.1 || 1;
+  const lo = lo0 - pad, hi = hi0 + pad;
+  const legendRows = Math.max(1, Math.ceil(series.length / (e.portrait ? 2 : 3)));
+  const legendH = legendRows * 17 + 6;
+  const x0 = 54, x1 = e.W - 20, y0 = top + 6, y1 = e.H - 36 - legendH;
+  const X = (x: number) => x0 + ((x1 - x0) * (x - xLo)) / Math.max(1, xHi - xLo);
+  const Y = (n: number) => y1 - ((n - lo) / Math.max(1e-6, hi - lo)) * (y1 - y0);
+  c.save();
+  for (let g = 0; g <= 4; g++) {
+    const gv = lo + ((hi - lo) * g) / 4, gy = Y(gv);
+    c.fillStyle = 'rgba(255,255,255,0.08)'; c.fillRect(x0, gy, x1 - x0, 1);
+    text(c, fmtNum(gv), x0 - 8, gy + 4, 11, WHITE, { align: 'right', alpha: 0.5 });
+  }
+  const k = ease(sub(e.p, 0.08, 0.8));
+  const drawSeries = (g: { pts: { x: number; n: number }[] }, rgb: string, alpha: number, lw: number, glow: boolean) => {
+    const n = g.pts.length;
+    const upto = k * (n - 1);
+    const fi = Math.floor(upto), fr = upto - fi;
+    c.beginPath();
+    c.moveTo(X(g.pts[0].x), Y(g.pts[0].n));
+    for (let i = 1; i <= fi; i++) c.lineTo(X(g.pts[i].x), Y(g.pts[i].n));
+    if (fi < n - 1) {
+      const hx = g.pts[fi].x + (g.pts[fi + 1].x - g.pts[fi].x) * fr;
+      const hn = g.pts[fi].n + (g.pts[fi + 1].n - g.pts[fi].n) * fr;
+      c.lineTo(X(hx), Y(hn));
+    }
+    c.strokeStyle = `rgba(${rgb},${alpha})`; c.lineWidth = lw; c.lineJoin = 'round';
+    if (glow) { c.shadowColor = `rgba(${rgb},0.7)`; c.shadowBlur = 10; }
+    c.stroke();
+    c.shadowBlur = 0;
+  };
+  series.filter((g) => !g.emphasis).forEach((g) => drawSeries(g, WHITE, 0.26, 2, false));
+  series.filter((g) => g.emphasis).forEach((g) => drawSeries(g, e.accent, 0.95, 4, true));
+  text(c, fmtNum(xLo), x0, y1 + 20, 11, WHITE, { alpha: 0.5 });
+  text(c, fmtNum(xHi), x1, y1 + 20, 11, WHITE, { align: 'right', alpha: 0.5 });
+  if (v.unit) text(c, v.unit, x1, y0 - 10, 11, WHITE, { align: 'right', alpha: 0.45 });
+  let lx = x0, ly = y1 + 36;
+  series.forEach((g) => {
+    const rgb = g.emphasis ? e.accent : WHITE;
+    const alpha = g.emphasis ? 1 : 0.7;
+    c.beginPath(); c.moveTo(lx, ly - 4); c.lineTo(lx + 14, ly - 4);
+    c.strokeStyle = `rgba(${rgb},${alpha})`; c.lineWidth = g.emphasis ? 4 : 2; c.stroke();
+    font(c, 11); const w = c.measureText(g.label).width;
+    text(c, g.label, lx + 18, ly, 11, rgb, { alpha: g.emphasis ? 1 : 0.8 });
+    lx += 18 + w + 16;
+    if (lx > e.W - 70) { lx = x0; ly += 17; }
+  });
+  c.restore();
+  sourceNote(c, e, v.source);
+};
+
 const drawDonut: Draw = (c, sc, e) => {
   const v = sc.visual;
   const top = heading(c, e, v.heading, v.subheading, e.accent);
@@ -767,6 +842,7 @@ const DRAWERS: Record<string, Draw> = {
   bar: drawBar, line: drawLine, donut: drawDonut, timeline: drawTimeline, flow: drawFlow, compare: drawCompare,
   cycle: drawCycle, illustration: drawIllustration, image: drawImage, point: drawPoint, qa: drawQa,
   summary: drawSummary, cta: drawCta, sources: drawSources,
+  yearCompare: drawOverlay, // [Stage E-9]
 };
 
 /** 場面の図解を、仮想サイズ（e.W×e.H）の座標で描く */

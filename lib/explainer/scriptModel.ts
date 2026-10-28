@@ -4,7 +4,7 @@ import type { ChapterPlan, ExplainerProject, ExplainerScene, IconName, SourceNot
 
 const ICON_SET = new Set<string>(ICON_NAMES);
 const KIND_SET = new Set<string>([...VISUAL_KINDS, 'chapter', 'sources']);
-export const DATA_KINDS = new Set<VisualKind>(['number', 'bar', 'line', 'donut']);
+export const DATA_KINDS = new Set<VisualKind>(['number', 'bar', 'line', 'donut', 'yearCompare']);
 
 export const newSceneId = () => `sc-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e8).toString(36)}`;
 
@@ -25,12 +25,20 @@ const str = (x: unknown, max = 400) => (typeof x === 'string' ? x : x == null ? 
 
 export function normalizeItem(raw: any): VisualItem {
   const icon = ICON_SET.has(raw?.icon) ? (raw.icon as IconName) : 'bulb';
-  return { label: str(raw?.label, 60), value: str(raw?.value, 30), text: str(raw?.text, 200), icon };
+  const item: VisualItem = { label: str(raw?.label, 60), value: str(raw?.value, 30), text: str(raw?.text, 200), icon };
+  // [Stage E-9] yearCompare専用の追加フィールド。他の図解では未指定（undefinedのまま）。
+  if (Number.isFinite(raw?.x)) item.x = Number(raw.x);
+  if (typeof raw?.seriesKey === 'string' && raw.seriesKey) item.seriesKey = str(raw.seriesKey, 80);
+  if (typeof raw?.seriesLabel === 'string' && raw.seriesLabel) item.seriesLabel = str(raw.seriesLabel, 60);
+  if (typeof raw?.seriesEmphasis === 'boolean') item.seriesEmphasis = raw.seriesEmphasis;
+  return item;
 }
 
 const ITEM_LIMIT: Partial<Record<VisualKind, [number, number]>> = {
   points: [1, 4], number: [1, 1], bar: [1, 8], line: [2, 16], donut: [2, 6], timeline: [2, 7], flow: [2, 5],
   compare: [2, 2], cycle: [3, 6], illustration: [1, 5], image: [0, 5], summary: [1, 5], title: [0, 3], keyword: [0, 3], cta: [0, 3], point: [0, 1], qa: [0, 1],
+  // [Stage E-9] yearCompare：1系列（線）あたり最大15点×最大8系列を想定
+  yearCompare: [6, 120],
 };
 
 export function normalizeVisual(raw: any): VisualSpec {
@@ -52,6 +60,24 @@ export function normalizeVisual(raw: any): VisualSpec {
       v.items = v.items.slice(0, 4).map((it) => ({ ...it, text: it.text || it.value }));
     } else {
       v.items = numeric;
+    }
+  }
+  // [Stage E-9] yearCompare：系列（seriesKey）ごとに3点以上そろった系列が2つ以上無ければ、数値をでっち上げず要点カードに落とす
+  if (kind === 'yearCompare') {
+    const bySeries = new Map<string, VisualItem[]>();
+    for (const it of v.items) {
+      if (parseValue(it.value) === null || !it.seriesKey) continue;
+      const arr = bySeries.get(it.seriesKey) ?? [];
+      arr.push(it);
+      bySeries.set(it.seriesKey, arr);
+    }
+    const validGroups = [...bySeries.values()].filter((arr) => arr.length >= 3);
+    if (validGroups.length < 2) {
+      const labels = [...new Set(v.items.map((it) => it.seriesLabel).filter((s): s is string => !!s))];
+      v.kind = 'points';
+      v.items = labels.slice(0, 4).map((label) => ({ label, value: '', text: '', icon: 'chartUp' as IconName }));
+    } else {
+      v.items = validGroups.flat();
     }
   }
   if (kind === 'compare' && v.items.length < 2) v.kind = v.items.length ? 'points' : 'point';

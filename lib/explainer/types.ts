@@ -25,6 +25,9 @@ export const VISUAL_KINDS = [
   'qa',           // よくある疑問（問い→答え）
   'summary',      // まとめ（チェックリスト）
   'cta',          // 締め（チャンネル登録・本編への誘導）
+  // [Stage E-9] 株式情報モードのみ使う。ダッシュボードの「年比較」グラフ（複数年の値動きを同じ年内日数で重ねる）を
+  // そのまま動画内に再現する。実データはStockCatalog.yearCompareから解決する（lib/explainer/stockCatalog.tsのresolveYearCompareItems）。
+  'yearCompare',  // 年比較グラフ（複数年の推移を重ねて比較）
 ] as const;
 export type VisualKind = typeof VISUAL_KINDS[number] | 'chapter' | 'sources';
 
@@ -46,6 +49,16 @@ export interface VisualItem {
   /** 補足の文（要点・年表の出来事・比較の箇条書き（改行区切り）など） */
   text: string;
   icon: IconName;
+  // [Stage E-9] yearCompareのみ使う：複数の系列（線）を1つのitems配列にまとめて持たせるための追加情報。
+  // 同じseriesKeyの点を発生順につないで1本の線にする。xは系列間で揃えた横軸の実数位置（年比較＝年初からの経過日数）。
+  /** 横軸の実数位置（系列間で共通の軸に揃える。例：年初からの経過日数） */
+  x?: number;
+  /** この点が属する系列のキー（例：yearCompareのカタログキー） */
+  seriesKey?: string;
+  /** この点が属する系列の表示名（凡例用） */
+  seriesLabel?: string;
+  /** 強調する系列（例：今年）かどうか */
+  seriesEmphasis?: boolean;
 }
 
 export interface VisualSpec {
@@ -108,7 +121,7 @@ export interface ExplainerProject {
   version: 1;
   topic: string;
   mode: 'news' | 'stock' | 'keyword';
-  audience: 'beginner' | 'general' | 'advanced';
+  audience: 'beginner' | 'general' | 'advanced' | 'expert';
   targetMinutes: number;
   videoTitle: string;
   kicker: string;
@@ -143,6 +156,14 @@ export interface StockCatalog {
   asOf: string;
   scalars: Record<string, { label: string; value: number }>;
   series: Record<string, { label: string; points: { label: string; value: number }[] }>;
+  // [Stage E-9] 「年比較グラフ」専用のカタログ。seriesは個別の年・平均などの系列（lib/videoCustomScene.tsの
+  // buildSeriesCatalogと同じ材料だが、こちらはダウンサンプルせず年内の実際の日数(x)をそのまま持つ＝
+  // 長さの異なる系列同士を正しい横軸位置で重ねて描けるようにするため）。
+  yearCompare?: {
+    xLabel: string;
+    unit: string;
+    series: Record<string, { label: string; emphasis: boolean; points: { x: number; value: number }[] }>;
+  };
 }
 
 export const emptyVisual = (kind: VisualKind = 'point'): VisualSpec => ({

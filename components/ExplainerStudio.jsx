@@ -30,7 +30,7 @@ import { VISUAL_KINDS, ICON_NAMES } from "@/lib/explainer/types";
 import { storage } from "@/lib/storage";
 import { easternStamp } from "@/lib/marketClock";
 import { parseStooqCSV } from "@/lib/csvPrice";
-import { buildStockCatalogFromSnapshot, buildStockCatalogFromCsv, mergeStockCatalogs } from "@/lib/explainer/stockCatalog";
+import { buildStockCatalogFromSnapshot, buildStockCatalogFromCsv, mergeStockCatalogs, resolveYearCompareItems } from "@/lib/explainer/stockCatalog";
 
 const C = {
   bg: "#0A0F1C", panel: "#111A2C", panel2: "#0D1424",
@@ -42,6 +42,7 @@ const KIND_LABEL = {
   title: "タイトル", keyword: "用語カード", points: "要点カード", number: "大きな数字", bar: "棒グラフ", line: "折れ線グラフ", donut: "円グラフ",
   timeline: "年表", flow: "流れ図", compare: "比較", cycle: "循環図", illustration: "イメージ図", image: "画像", point: "ポイント", qa: "Q&A",
   summary: "まとめ", cta: "締め", chapter: "章の扉", sources: "参考資料",
+  yearCompare: "年比較グラフ", // [Stage E-9] 株式情報モードのみ使う
 };
 // 取り込み元のページのConsoleで実行する1行：localStorageの中から「登録した声」の形の配列を探してクリップボードにコピーする
 const PRESET_EXPORT_SNIPPET = `copy(JSON.stringify(Object.keys(localStorage).flatMap(k=>{try{const v=JSON.parse(localStorage.getItem(k));return Array.isArray(v)&&v.length&&v.every(p=>p&&typeof p.name==='string'&&typeof p.voice==='string')?v:[]}catch(e){return[]}})))`;
@@ -267,17 +268,21 @@ export default function ExplainerStudio() {
   // ダッシュボードのS&P500・SOXL（背景で読み込み済み）と、参考情報に追加したCSV各社分をすべて統合し、
   // シナリオに応じてAIが必要な銘柄のキーだけを選べるようにする（データソースを選ばせる操作は廃止）。
   // これにより台本生成側（lib/explainer/aiScript.ts）がdataKey/seriesKeyで実数を解決できる（AIの創作値を禁止する仕組み）。
+  // [Stage E-9] 図解の内容パネルの年比較グラフ（yearCompare）用の系列選択UIからも同じ統合カタログを参照したいので、
+  // genInput()内だけのローカル変数ではなくuseMemoに切り出す（AI生成・手動選択で同じデータソースを共用する）。
+  const stockOverlayCatalog = useMemo(() => {
+    const catalogs = [stockSnapshots.SP500 && buildStockCatalogFromSnapshot(stockSnapshots.SP500), stockSnapshots.SOXL && buildStockCatalogFromSnapshot(stockSnapshots.SOXL)];
+    for (const r of refs) {
+      if (r.kind !== "csv") continue;
+      const rows = parseStooqCSV(r.text);
+      if (rows.length) catalogs.push(buildStockCatalogFromCsv(r.title, rows));
+    }
+    return mergeStockCatalogs(catalogs);
+  }, [stockSnapshots, refs]);
   const genInput = (minutes = targetMinutes) => {
     let stockCatalog;
-    if (mode === "stock") {
-      const catalogs = [stockSnapshots.SP500 && buildStockCatalogFromSnapshot(stockSnapshots.SP500), stockSnapshots.SOXL && buildStockCatalogFromSnapshot(stockSnapshots.SOXL)];
-      for (const r of refs) {
-        if (r.kind !== "csv") continue;
-        const rows = parseStooqCSV(r.text);
-        if (rows.length) catalogs.push(buildStockCatalogFromCsv(r.title, rows));
-      }
-      const merged = mergeStockCatalogs(catalogs);
-      if (Object.keys(merged.scalars).length || Object.keys(merged.series).length) stockCatalog = merged;
+    if (mode === "stock" && (Object.keys(stockOverlayCatalog.scalars).length || Object.keys(stockOverlayCatalog.series).length)) {
+      stockCatalog = stockOverlayCatalog;
     }
     return { topic: topic.trim(), mode, audience, targetMinutes: minutes, extraInstruction, refBlocks: referenceBlocks(refs), today: todayStr(), speechRate: rate, imageTarget: imageGenEnabled ? imageGenCount : 0, stockCatalog, requiredRefNotes: requiredRefNotes(refs) };
   };
@@ -871,6 +876,18 @@ export default function ExplainerStudio() {
     const target = Math.min(1, (before + Math.max(0, d - Math.min(2, d * 0.15))) / total);
     setSeekPos(target); r.draw(target); updateSceneProgress(target);
   };
+  // [Stage E-10] 場面カードの「再生」：その場面の最初から、最後の場面まで通しで再生する
+  // （previewSceneAtは場面の終盤に静止した状態で止める用途のため、別関数として用意する）。
+  const playFromScene = async (idx) => {
+    const r = rendererRef.current; if (!r || idx < 0) return;
+    if (isPlayingRef.current) handlePause();
+    const durs = sceneDurs.length === scenes.length ? sceneDurs : estDurs;
+    const total = durs.reduce((a, b) => a + b, 0) || 1;
+    const before = durs.slice(0, idx).reduce((a, b) => a + b, 0);
+    const target = Math.min(1, before / total);
+    seekPosRef.current = target; setSeekPos(target); r.draw(target); updateSceneProgress(target);
+    await handlePlay();
+  };
   const download = (blob, name) => { const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 10000); };
   const stamp = () => new Date().toISOString().slice(0, 10).replace(/-/g, "");
   // ---- 書き出しの名前 ----
@@ -1105,7 +1122,7 @@ export default function ExplainerStudio() {
               <div className="flex flex-wrap gap-3 items-center" style={{ color: C.textMuted }}>
                 <label className="flex items-center gap-1.5">視聴者
                   <select value={audience} onChange={(e) => setAudience(e.target.value)} className="px-1.5 py-1 rounded text-[11px]" style={inputStyle}>
-                    <option value="beginner">初心者向け</option><option value="general">一般向け</option><option value="advanced">詳しめ</option>
+                    <option value="beginner">初心者向け</option><option value="general">一般向け</option><option value="advanced">詳しめ</option><option value="expert">専門的</option>
                   </select>
                 </label>
                 <label className="flex items-center gap-1.5">長尺の長さ
@@ -1357,6 +1374,7 @@ export default function ExplainerStudio() {
                               {[...VISUAL_KINDS, "chapter", "sources"].map((k) => <option key={k} value={k}>{KIND_LABEL[k]}</option>)}
                             </select>
                             <button onClick={() => speak(ttsText(sc))} className="text-[10px] flex items-center gap-0.5" style={{ color: C.teal, background: "none", border: "none", cursor: "pointer" }}><Play size={10} />試聴</button>
+                            <button onClick={() => playFromScene(i)} title="この場面の最初から、最後の場面まで通しで再生" className="text-[10px] flex items-center gap-0.5" style={{ color: C.teal, background: "none", border: "none", cursor: "pointer" }}><Play size={10} />再生</button>
                             <button onClick={() => { if (isPlaying) handlePause(); }} disabled={!isPlaying} title="プレビューを一時停止" className="text-[10px] flex items-center gap-0.5" style={{ color: isPlaying ? C.teal : C.textDim, background: "none", border: "none", cursor: isPlaying ? "pointer" : "default", opacity: isPlaying ? 1 : 0.4 }}><Pause size={10} />一時停止</button>
                             <button onClick={() => { setNarrAiOpenId((v) => (v === sc.id ? null : sc.id)); setNarrAiText(""); setNarrAiError(""); }} className="text-[10px] flex items-center gap-0.5" style={{ color: narrAiOpenId === sc.id ? C.teal : C.textDim, background: "none", border: "none", cursor: "pointer" }} title="スライドはそのまま、ナレーションだけをAIで変える"><RefreshCw size={10} />ナレーション変更</button>
                             <button onClick={() => { setAiOpenId((v) => (v === sc.id ? null : sc.id)); setAiText(""); setAiError(""); }} className="text-[10px] flex items-center gap-0.5" style={{ color: aiOpenId === sc.id ? C.teal : C.textDim, background: "none", border: "none", cursor: "pointer" }} title="AIに作り直しを指示（スライドごと作り直します）"><MessageSquare size={10} />AI</button>
@@ -1364,7 +1382,7 @@ export default function ExplainerStudio() {
                           </div>
                           <div className="rounded" style={{ background: C.panel }}>
                             <NarrMixedBox value={sc.narration} base={sc.narration}
-                              onChange={(t) => patchScene(sc.id, { narration: t, readingStale: true })}
+                              onChange={(t) => { if (isPlayingRef.current) handlePause(); patchScene(sc.id, { narration: t, readingStale: true }); }}
                               onBlur={() => {}}
                               colors={{ text: C.text, border: C.borderSoft }}
                               readUpTo={cur && (isPlaying || isExporting) ? readCharIdx : null} />
@@ -1386,7 +1404,7 @@ export default function ExplainerStudio() {
                           </div>
                           {readingOpenId === sc.id && (
                             <div className="mt-1">
-                              <textarea value={sc.reading} rows={2} onChange={(e) => patchScene(sc.id, { reading: e.target.value.replace(/\n/g, ""), readingStale: false })} className="w-full rounded px-1.5 py-1 text-[11px]" style={{ ...inputStyle, background: C.panel, resize: "vertical" }} />
+                              <textarea value={sc.reading} rows={2} onChange={(e) => { if (isPlayingRef.current) handlePause(); patchScene(sc.id, { reading: e.target.value.replace(/\n/g, ""), readingStale: false }); }} className="w-full rounded px-1.5 py-1 text-[11px]" style={{ ...inputStyle, background: C.panel, resize: "vertical" }} />
                               <div className="text-[10px] flex items-center gap-2" style={{ color: C.textDim }}>
                                 音声はこの文（ひらがな）で読み上げます。ナレーションを直したら、ここも合わせて直すか「AI」で「読み上げ文を今のナレーションに合わせて」と指示してください。
                                 <button onClick={() => patchScene(sc.id, { reading: sanitizeReading(sc.reading, sc.narration).reading })} className="shrink-0" style={{ color: C.teal, background: "none", border: "none", cursor: "pointer" }}>整える</button>
@@ -1401,8 +1419,39 @@ export default function ExplainerStudio() {
                               </div>
                               <input value={sc.visual.subheading} onChange={(e) => patchVisual(sc.id, { subheading: e.target.value })} placeholder="副題・補足" className="text-[10px] px-1 py-0.5 rounded" style={inputStyle} />
                               <input value={sc.visual.emphasis} onChange={(e) => patchVisual(sc.id, { emphasis: e.target.value })} placeholder="強調のひとこと" className="text-[10px] px-1 py-0.5 rounded" style={inputStyle} />
-                              <textarea defaultValue={itemsToText(sc.visual.items)} key={sc.id + JSON.stringify(sc.visual.items)} onBlur={(e) => patchScene(sc.id, { visual: normalizeVisual({ ...sc.visual, items: textToItems(e.target.value) }) })} rows={Math.max(2, sc.visual.items.length)} className="text-[10px] px-1 py-0.5 rounded mono" style={{ ...inputStyle, resize: "vertical" }} />
-                              <div className="text-[10px]" style={{ color: C.textDim }}>1行1項目：見出し｜数値｜説明｜アイコン（枠の外をクリックで反映）。アイコン：{ICON_NAMES.join(", ")}</div>
+                              {sc.visual.kind === "yearCompare" ? (
+                                // [Stage E-9] 年比較グラフ：itemsは系列ごとの実データ点列（seriesKey付き）なので、
+                                // 他の図解と同じ「見出し｜数値｜説明｜アイコン」のテキスト編集には適さない
+                                // （編集すると系列情報が失われる）。代わりに系列をチェックボックスで選ぶ専用UIにする。
+                                <div className="p-1.5 rounded flex flex-col gap-1" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
+                                  <div className="text-[10px]" style={{ color: C.textDim }}>重ねて表示する系列を選択（2〜8個。今年などの強調系列も含めると見やすくなります）</div>
+                                  {stockOverlayCatalog.yearCompare ? (
+                                    <div className="flex flex-wrap gap-2">
+                                      {Object.entries(stockOverlayCatalog.yearCompare.series).map(([key, s]) => {
+                                        const selectedKeys = [...new Set(sc.visual.items.map((it) => it.seriesKey).filter(Boolean))];
+                                        const checked = selectedKeys.includes(key);
+                                        return (
+                                          <label key={key} className="text-[10px] flex items-center gap-1" style={{ color: checked ? C.teal : C.textMuted, cursor: "pointer" }}>
+                                            <input type="checkbox" checked={checked} onChange={(e) => {
+                                              const next = e.target.checked ? [...selectedKeys, key] : selectedKeys.filter((k) => k !== key);
+                                              const items = resolveYearCompareItems(next, stockOverlayCatalog.yearCompare);
+                                              patchScene(sc.id, { visual: normalizeVisual({ ...sc.visual, items }) });
+                                            }} />
+                                            {s.label}
+                                          </label>
+                                        );
+                                      })}
+                                    </div>
+                                  ) : (
+                                    <div className="text-[10px]" style={{ color: C.textDim }}>年比較データがまだ読み込まれていません。ダッシュボードを一度開いてから、しばらくしてお試しください。</div>
+                                  )}
+                                </div>
+                              ) : (
+                                <>
+                                  <textarea defaultValue={itemsToText(sc.visual.items)} key={sc.id + JSON.stringify(sc.visual.items)} onBlur={(e) => patchScene(sc.id, { visual: normalizeVisual({ ...sc.visual, items: textToItems(e.target.value) }) })} rows={Math.max(2, sc.visual.items.length)} className="text-[10px] px-1 py-0.5 rounded mono" style={{ ...inputStyle, resize: "vertical" }} />
+                                  <div className="text-[10px]" style={{ color: C.textDim }}>1行1項目：見出し｜数値｜説明｜アイコン（枠の外をクリックで反映）。アイコン：{ICON_NAMES.join(", ")}</div>
+                                </>
+                              )}
                               <input value={sc.visual.source} onChange={(e) => patchVisual(sc.id, { source: e.target.value })} placeholder="出典（数値を使う場合は必須）" className="text-[10px] px-1 py-0.5 rounded" style={inputStyle} />
                               {sc.visual.imagePrompt && (
                                 <div className="text-[10px] flex items-start gap-1" style={{ color: C.textDim }}>

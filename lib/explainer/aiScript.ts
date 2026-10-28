@@ -5,11 +5,12 @@ import { callTool } from './aiClient';
 import { ICON_NAMES, VISUAL_KINDS } from './types';
 import type { ChapterPlan, ExplainerProject, ExplainerScene, SourceNote, StockCatalog, YoutubeMeta } from './types';
 import { assembleLong, normalizeScene, sanitizeReading } from './scriptModel';
+import { resolveYearCompareItems } from './stockCatalog';
 
 export interface GenerateInput {
   topic: string;
   mode: 'news' | 'stock' | 'keyword';
-  audience: 'beginner' | 'general' | 'advanced';
+  audience: 'beginner' | 'general' | 'advanced' | 'expert';
   targetMinutes: number;
   extraInstruction: string;
   /** referenceBlocks() の結果 */
@@ -63,6 +64,9 @@ const AUDIENCE: Record<GenerateInput['audience'], string> = {
   beginner: '予備知識のない初心者（中学生にもわかる言葉。専門用語は必ず言い換えてから使う）',
   general: '一般の社会人（ニュースは見るが専門家ではない）',
   advanced: 'ある程度詳しい視聴者（基本用語の説明は短く、背景・影響の分析を厚めに）',
+  // [Stage E-10] 視聴者種別の中で最も専門的なレベル。基本用語の説明は省き、専門用語・数値をそのまま使い、
+  // 前提条件・根拠・限界（データの出典や解釈の分かれ目）まで踏み込んだ分析を主軸にする
+  expert: '実務家・専門家レベルの視聴者（基本用語の説明は省略し、専門用語や数値をそのまま使う。前提条件・根拠・解釈の分かれ目まで踏み込んで分析する）',
 };
 
 // systemは全呼び出しで同一にする（キャッシュが効くように、呼び出しごとの違いはuser本文に書く）
@@ -107,6 +111,7 @@ const SYSTEM_RULES = [
   '- cycle：items 3〜5個（label、icon）。ぐるぐる回る関係',
   '- illustration：items 2〜5個（label=短い名前、icon）。1個目が中心。emphasis=情景を表す一言。抽象的なイメージ図',
   '- image：illustration と同じ指定に加え、imagePrompt を必ず書く（ユーザーが権利のある画像を追加する場面）',
+  '- yearCompare：株式情報モードのみ使える。複数の年・期間の値動きを同じ年内日数で重ねて比較するグラフ。itemsは空のままで良く、代わりにvisualのseriesKeysに下記yearCompare.*のキーを2〜6個指定してください（例：今年と直近の数年、または今年と平均系列）',
   '- point：emphasis=強調したい一文25字以内、subheading=補足、items=アイコン0〜1個',
   '- qa：heading=視聴者が抱きそうな疑問、emphasis=答えの要点（短く）、subheading=補足',
   '- summary：items 3〜5個（label=まとめの一文）',
@@ -121,6 +126,8 @@ function stockCatalogKeyList(cat: StockCatalog): string {
   const lines: string[] = [];
   for (const [key, v] of Object.entries(cat.scalars)) lines.push(`scalars.${key}：${v.label}`);
   for (const [key, v] of Object.entries(cat.series)) lines.push(`series.${key}：${v.label}（月ごとの値の推移）`);
+  // [Stage E-9] yearCompare.* はseriesKeys（複数指定可）専用のキー一覧。series.* のseriesKey（1個のみ）とは別物
+  if (cat.yearCompare) for (const [key, v] of Object.entries(cat.yearCompare.series)) lines.push(`yearCompare.${key}：${v.label}`);
   return lines.join('\n');
 }
 
@@ -134,7 +141,8 @@ function system(inp?: GenerateInput) {
         `【株価データ】これは${cat.instrumentLabel}（${cat.asOf || '直近'}時点）の実際のデータです。`,
         '- bar・donut・numberの図解で数値を使う場合は、各itemのdataKeyに下記のscalars.*のキーを1つ指定してください（value・labelは仮の内容で構いません。実際の値・ラベルはdataKeyから自動的に差し替わります）。',
         '- line（折れ線）で実データの推移を見せる場合は、visualのseriesKeyに下記series.*のキーを1つ指定してください（itemsはダミーで構いません。実際の点はseriesKeyから自動的に生成されます）。',
-        '- 下記のキーに無い数値を、数値の図解（bar・line・donut・number）で新たに作成することは禁止です（points・timeline等、数値を使わない図解であれば自由な内容にできます）。',
+        '- yearCompare（年比較グラフ）で複数年・複数期間の値動きを重ねて見せる場合は、visualのseriesKeysに下記yearCompare.*のキーを2〜6個指定してください（itemsはダミーで構いません。1個目を強調表示したい場合はcurYearを含めてください）。',
+        '- 下記のキーに無い数値を、数値の図解（bar・line・donut・number・yearCompare）で新たに作成することは禁止です（points・timeline等、数値を使わない図解であれば自由な内容にできます）。',
         '【使えるキー一覧】',
         stockCatalogKeyList(cat),
       ].join('\n'),
@@ -174,6 +182,14 @@ export function applyStockDataKeysToScene(raw: any, catalog: StockCatalog | unde
     });
     return { ...raw, visual: { ...v, items } };
   }
+  // [Stage E-9] yearCompare：visual.seriesKeysに挙げられたyearCompare.*のキー（2〜8個）を実データの
+  // 複数系列（items、系列ごとにseriesKeyでグループ化）に差し替える。正規化側（normalizeVisual）の
+  // グループ化チェックで、有効な系列が2つ未満ならpointsへ降格する（でっち上げ防止の最終防衛線）
+  if (v.kind === 'yearCompare') {
+    const keys = Array.isArray(v.seriesKeys) ? v.seriesKeys.map((k: any) => String(k).replace(/^yearCompare\./, '')) : [];
+    const items = resolveYearCompareItems(keys, catalog.yearCompare);
+    return { ...raw, visual: { ...v, items } };
+  }
   return raw;
 }
 
@@ -196,6 +212,8 @@ const VISUAL_SCHEMA = {
     unit: { type: 'string' }, source: { type: 'string' }, emphasis: { type: 'string' }, imagePrompt: { type: 'string' },
     // [Stage E-4] 株式情報モードのline（折れ線）のみ使う。'series.xxx' の形で1つ指定すると、itemsが実データの点列に差し替わる
     seriesKey: { type: 'string' },
+    // [Stage E-9] 株式情報モードのyearCompareのみ使う。'yearCompare.xxx' の形で2〜6個指定すると、itemsが実データの複数系列に差し替わる
+    seriesKeys: { type: 'array', items: { type: 'string' } },
   },
   required: ['kind', 'heading', 'subheading', 'items', 'unit', 'source', 'emphasis', 'imagePrompt'],
 };

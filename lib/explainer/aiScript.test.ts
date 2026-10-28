@@ -122,6 +122,67 @@ const baseHeaderInput: GenerateInput = {
   today: "2026-10-28",
 };
 
+// [Stage E-9] 年比較グラフ（yearCompare）：visual.seriesKeysで指定したyearCompare.*のキーが
+// 実データの複数系列（items、seriesKeyでグループ化）に差し替わることの確認
+const catalogWithYearCompare: StockCatalog = {
+  ...catalog,
+  yearCompare: {
+    xLabel: "年初からの経過日数",
+    unit: "（指数・年初=100）",
+    series: {
+      curYear: { label: "今年", emphasis: true, points: [{ x: 0, value: 100 }, { x: 100, value: 103 }, { x: 200, value: 106 }] },
+      allYears: { label: "全期間平均", emphasis: false, points: [{ x: 0, value: 100 }, { x: 100, value: 101.5 }, { x: 200, value: 103 }] },
+      y2018: { label: "2018年", emphasis: false, points: [{ x: 0, value: 100 }, { x: 100, value: 95 }] },
+    },
+  },
+};
+
+test("yearCompare：seriesKeysで指定した系列が実データの複数系列（items）に差し替わる", () => {
+  const raw = {
+    title: "年比較", caption: "", narration: "", reading: "",
+    visual: { kind: "yearCompare", heading: "", subheading: "", items: [], unit: "", source: "", emphasis: "", imagePrompt: "", seriesKeys: ["yearCompare.curYear", "yearCompare.allYears"] },
+  };
+  const out = applyStockDataKeysToScene(raw, catalogWithYearCompare);
+  assert.equal(out.visual.items.length, 6);
+  const curYearItems = out.visual.items.filter((it: any) => it.seriesKey === "curYear");
+  assert.equal(curYearItems.length, 3);
+  assert.equal(curYearItems[0].seriesLabel, "今年");
+  assert.equal(curYearItems[0].seriesEmphasis, true);
+  assert.equal(curYearItems[1].x, 100);
+  assert.equal(curYearItems[1].value, "103");
+  const allYearsItems = out.visual.items.filter((it: any) => it.seriesKey === "allYears");
+  assert.equal(allYearsItems.length, 3);
+  assert.equal(allYearsItems[0].seriesEmphasis, false);
+});
+
+test("yearCompare：存在しないキーは無視され、3点未満の系列（y2018の2点）は8個上限内なら含まれる", () => {
+  const raw = {
+    title: "年比較", caption: "", narration: "", reading: "",
+    visual: { kind: "yearCompare", heading: "", subheading: "", items: [], unit: "", source: "", emphasis: "", imagePrompt: "", seriesKeys: ["yearCompare.curYear", "yearCompare.notExist", "yearCompare.y2018"] },
+  };
+  const out = applyStockDataKeysToScene(raw, catalogWithYearCompare);
+  const keys = new Set(out.visual.items.map((it: any) => it.seriesKey));
+  assert.equal(keys.has("notExist"), false);
+  assert.equal(keys.has("curYear"), true);
+  assert.equal(keys.has("y2018"), true);
+});
+
+test("yearCompare：catalog.yearCompareが無い場合はitemsが空になる（normalizeVisualのpoints降格に委ねる）", () => {
+  const raw = {
+    title: "年比較", caption: "", narration: "", reading: "",
+    visual: { kind: "yearCompare", heading: "", subheading: "", items: [], unit: "", source: "", emphasis: "", imagePrompt: "", seriesKeys: ["yearCompare.curYear"] },
+  };
+  const out = applyStockDataKeysToScene(raw, catalog); // yearCompareフィールドを持たない通常のcatalog
+  assert.deepEqual(out.visual.items, []);
+});
+
+// [Stage E-10] 視聴者種別に「専門的」（expert）を追加：基本用語の説明を省き、専門用語・根拠まで踏み込む想定視聴者がheader()に反映される
+test("header：audience='expert'のときは専門家向けの想定視聴者文が出力される", () => {
+  const out = header({ ...baseHeaderInput, audience: "expert" });
+  assert.ok(out.includes("【想定視聴者】"));
+  assert.ok(out.includes("実務家・専門家レベル"));
+});
+
 test("header：requiredRefNotesが無ければ「必ず扱う参考情報」ブロックは出力されない", () => {
   const out = header(baseHeaderInput);
   assert.equal(out.includes("必ず扱う参考情報"), false);

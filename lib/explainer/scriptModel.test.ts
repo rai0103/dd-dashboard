@@ -25,6 +25,49 @@ test("不明な種類・不足した比較は安全な種類に寄せる", () =>
   assert.equal(normalizeVisual({ kind: "cycle", items: [{ label: "A" }, { label: "B" }] }).kind, "flow");
 });
 
+// [Stage E-9] yearCompare：系列（seriesKey）ごとに3点以上そろった系列が2つ以上なければpointsに降格する
+test("yearCompare：3点以上の系列が2つ以上あれば、系列ごとにまとめたitemsのままyearCompareを維持する", () => {
+  const raw = {
+    kind: "yearCompare",
+    items: [
+      { label: "0日", value: "100", seriesKey: "curYear", seriesLabel: "今年", seriesEmphasis: true, x: 0 },
+      { label: "100日", value: "103", seriesKey: "curYear", seriesLabel: "今年", seriesEmphasis: true, x: 100 },
+      { label: "200日", value: "106", seriesKey: "curYear", seriesLabel: "今年", seriesEmphasis: true, x: 200 },
+      { label: "0日", value: "100", seriesKey: "allYears", seriesLabel: "全期間平均", seriesEmphasis: false, x: 0 },
+      { label: "100日", value: "101.5", seriesKey: "allYears", seriesLabel: "全期間平均", seriesEmphasis: false, x: 100 },
+      { label: "200日", value: "103", seriesKey: "allYears", seriesLabel: "全期間平均", seriesEmphasis: false, x: 200 },
+    ],
+  };
+  const v = normalizeVisual(raw);
+  assert.equal(v.kind, "yearCompare");
+  assert.equal(v.items.length, 6);
+  assert.equal(v.items.filter((it) => it.seriesKey === "curYear").length, 3);
+});
+
+test("yearCompare：有効な系列（3点以上）が1つしかない場合は要点カードに降格する（数値をでっち上げない）", () => {
+  const raw = {
+    kind: "yearCompare",
+    items: [
+      { label: "0日", value: "100", seriesKey: "curYear", seriesLabel: "今年", x: 0 },
+      { label: "100日", value: "103", seriesKey: "curYear", seriesLabel: "今年", x: 100 },
+      { label: "200日", value: "106", seriesKey: "curYear", seriesLabel: "今年", x: 200 },
+      { label: "0日", value: "100", seriesKey: "y2018", seriesLabel: "2018年", x: 0 },
+      { label: "100日", value: "95", seriesKey: "y2018", seriesLabel: "2018年", x: 100 },
+    ],
+  };
+  const v = normalizeVisual(raw);
+  assert.equal(v.kind, "points");
+  const labels = v.items.map((it) => it.label);
+  assert.ok(labels.includes("今年"));
+  assert.ok(labels.includes("2018年"));
+});
+
+test("yearCompare：itemsが空・seriesKey未指定のみの場合も要点カードに降格する", () => {
+  const v = normalizeVisual({ kind: "yearCompare", items: [] });
+  assert.equal(v.kind, "points");
+  assert.deepEqual(v.items, []);
+});
+
 test("読み上げ文の補正", () => {
   assert.equal(katakanaToHiragana("インフレ"), "いんふれ");
   assert.deepEqual(sanitizeReading("ニチギンが、「きんり」を、あげました！", "日銀が金利を上げました"), { reading: "にちぎんが、きんりを、あげました。", ok: true });
