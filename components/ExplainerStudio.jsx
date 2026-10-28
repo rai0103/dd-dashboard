@@ -1099,7 +1099,7 @@ export default function ExplainerStudio() {
     <div className="min-h-screen" style={{ background: C.bg, color: C.text, fontFamily: "'Zen Kaku Gothic New',sans-serif" }}>
       <div className="max-w-[1240px] mx-auto px-4 py-4 flex flex-col gap-4">
         <header className="flex items-center gap-3 flex-wrap">
-          <a href={`${process.env.NEXT_PUBLIC_BASE_PATH || ""}/`} className="text-[11px] flex items-center gap-1" style={{ color: C.textMuted }}><ArrowLeft size={12} /> ダッシュボード</a>
+          <a href={`${process.env.NEXT_PUBLIC_BASE_PATH || ""}/`} target="_blank" rel="noopener noreferrer" title="別タブで開きます" className="text-[11px] flex items-center gap-1" style={{ color: C.textMuted }}><ArrowLeft size={12} /> ダッシュボード</a>
           <h1 className="text-base font-bold">ニュース・キーワード解説動画</h1>
           <span className="text-[11px]" style={{ color: C.textDim }}>長尺（16:9）＋宣伝用ショート（9:16）</span>
           <div className="ml-auto flex items-center gap-2">
