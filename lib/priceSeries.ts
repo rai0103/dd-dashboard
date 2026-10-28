@@ -6,7 +6,7 @@
 //     （当日の値は取引中に変わるため、API登録分は後のAPI取得で更新してよい。ユーザー登録値は上書きしない）
 // このファイルは外部importを持たないため、`node --test` から直接実行できる。
 
-export type PriceRecord = { date: Date; voo?: number; qqq?: number; gold?: number; goldSrc?: "api"; soxl?: number };
+export type PriceRecord = { date: Date; voo?: number; qqq?: number; gold?: number; goldSrc?: "api"; soxl?: number; soxlSrc?: "api" };
 export type PriceRow = { date: Date; price: number };
 export type PriceField = "voo" | "qqq" | "gold" | "soxl";
 
@@ -15,13 +15,14 @@ const byDate = (series: PriceRecord[]) => new Map(series.map((p) => [dayKey(p.da
 const sorted = (map: Map<string, PriceRecord>) => Array.from(map.values()).sort((a, b) => a.date.getTime() - b.date.getTime());
 
 // CSV一括取り込み・直接入力：同じ日付の既存レコードには該当フィールドのみ上書きで合成する。
-// goldの場合はユーザー登録値になるためgoldSrc（API由来の印）を消す。
+// gold・soxlの場合はユーザー登録値になるためgoldSrc・soxlSrc（API由来の印）を消す。
 export function importUserPrices(series: PriceRecord[], kind: PriceField, rows: PriceRow[]): PriceRecord[] {
   const map = byDate(series);
   for (const row of rows) {
     const key = dayKey(row.date);
     const next: PriceRecord = { ...(map.get(key) ?? { date: row.date }), [kind]: row.price };
     if (kind === "gold") delete next.goldSrc;
+    if (kind === "soxl") delete next.soxlSrc;
     map.set(key, next);
   }
   return sorted(map);
@@ -43,10 +44,27 @@ export function applyApiGold(series: PriceRecord[], rows: PriceRow[]): { series:
   return { series: changed ? sorted(map) : series, changed };
 }
 
-// kindのデータのみ削除する。goldの場合はAPI由来の印も消す。全フィールドが消えた日付のレコードは除去する。
+// API自動取得のSOXL終値を反映する。ユーザー登録値（soxlがありsoxlSrcが無い日＝CSV取り込み・直接入力）は上書きしない。
+// applyApiGoldと全く同じ優先順位ルール（CSV/直接入力 ＞ API自動取得）をsoxl/soxlSrcに適用したもの。
+// changed：1件でも書き込んだか（保存・同期の要否の判定用）
+export function applyApiSoxl(series: PriceRecord[], rows: PriceRow[]): { series: PriceRecord[]; changed: boolean } {
+  const map = byDate(series);
+  let changed = false;
+  for (const row of rows) {
+    const key = dayKey(row.date);
+    const existing = map.get(key);
+    if (existing?.soxl != null && existing.soxlSrc !== "api") continue; // CSV/直接入力の値を優先
+    if (existing?.soxl === row.price && existing.soxlSrc === "api") continue;
+    map.set(key, { ...(existing ?? { date: row.date }), soxl: row.price, soxlSrc: "api" });
+    changed = true;
+  }
+  return { series: changed ? sorted(map) : series, changed };
+}
+
+// kindのデータのみ削除する。gold・soxlの場合はAPI由来の印も消す。全フィールドが消えた日付のレコードは除去する。
 export function resetPriceField(series: PriceRecord[], kind: PriceField): PriceRecord[] {
   return series
-    .map((p) => { const c = { ...p }; delete c[kind]; if (kind === "gold") delete c.goldSrc; return c; })
+    .map((p) => { const c = { ...p }; delete c[kind]; if (kind === "gold") delete c.goldSrc; if (kind === "soxl") delete c.soxlSrc; return c; })
     .filter((p) => p.voo != null || p.qqq != null || p.gold != null || p.soxl != null);
 }
 

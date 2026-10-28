@@ -1,7 +1,7 @@
 // 実行: npm test
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { importUserPrices, applyApiGold, resetPriceField, goldHistoryFetchStart, type PriceRecord } from "./priceSeries.ts";
+import { importUserPrices, applyApiGold, applyApiSoxl, resetPriceField, goldHistoryFetchStart, type PriceRecord } from "./priceSeries.ts";
 
 const d = (s: string) => new Date(`${s}T00:00:00Z`);
 const goldOf = (series: PriceRecord[], s: string) => series.find((p) => p.date.toISOString().slice(0, 10) === s);
@@ -67,6 +67,40 @@ test("SOXLもVOO/QQQ/GOLDと同じ経路で取り込み・初期化できる", (
   assert.deepEqual(reset, [{ date: d("2026-10-02"), voo: 707.5 }]);
   const soxlOnly: PriceRecord[] = [{ date: d("2026-10-03"), soxl: 85 }];
   assert.deepEqual(resetPriceField(soxlOnly, "voo"), soxlOnly); // soxlのみのレコードは他フィールドの初期化で消えない
+});
+
+test("SOXL：API取得値はCSV取り込み済みの日を上書きしない（applyApiGoldと同じ優先順位）", () => {
+  const csv = importUserPrices([], "soxl", [{ date: d("2026-10-01"), price: 82.1 }, { date: d("2026-10-02"), price: 83.56 }]);
+  const { series, changed } = applyApiSoxl(csv, [{ date: d("2026-10-02"), price: 999 }]);
+  assert.equal(changed, false);
+  assert.deepEqual(series.find((p) => p.date.toISOString().slice(0, 10) === "2026-10-02"), { date: d("2026-10-02"), soxl: 83.56 });
+});
+
+test("SOXL：API取得値は未登録の日を埋め、同じ日のVOO/QQQは残す", () => {
+  const base: PriceRecord[] = [{ date: d("2026-10-02"), voo: 707.5, qqq: 749.6 }];
+  const { series, changed } = applyApiSoxl(base, [{ date: d("2026-10-02"), price: 83.56 }]);
+  assert.equal(changed, true);
+  assert.deepEqual(series.find((p) => p.date.toISOString().slice(0, 10) === "2026-10-02"), { date: d("2026-10-02"), voo: 707.5, qqq: 749.6, soxl: 83.56, soxlSrc: "api" });
+});
+
+test("SOXL：前回APIで登録した日は、後のAPI取得（取引中の値の更新）で上書きしてよい", () => {
+  const first = applyApiSoxl([], [{ date: d("2026-10-05"), price: 83 }]).series;
+  const { series, changed } = applyApiSoxl(first, [{ date: d("2026-10-05"), price: 84.2 }]);
+  assert.equal(changed, true);
+  assert.equal(series.find((p) => p.date.toISOString().slice(0, 10) === "2026-10-05")?.soxl, 84.2);
+});
+
+test("SOXL：API登録済みの日にCSVを取り込むとCSVの値になり、以後のAPI取得では上書きされない", () => {
+  const api = applyApiSoxl([], [{ date: d("2026-10-02"), price: 83.56 }]).series;
+  const csv = importUserPrices(api, "soxl", [{ date: d("2026-10-02"), price: 83.0 }]);
+  assert.deepEqual(csv.find((p) => p.date.toISOString().slice(0, 10) === "2026-10-02"), { date: d("2026-10-02"), soxl: 83.0 });
+  const after = applyApiSoxl(csv, [{ date: d("2026-10-02"), price: 83.56 }]).series;
+  assert.equal(after.find((p) => p.date.toISOString().slice(0, 10) === "2026-10-02")?.soxl, 83.0);
+});
+
+test("SOXLの初期化はAPI由来の印も消し、空になった日は除去する", () => {
+  const series: PriceRecord[] = [{ date: d("2026-10-01"), soxl: 83, soxlSrc: "api" }, { date: d("2026-10-02"), voo: 707.5, soxl: 84 }];
+  assert.deepEqual(resetPriceField(series, "soxl"), [{ date: d("2026-10-02"), voo: 707.5 }]);
 });
 
 test("履歴の再取得：未登録なら全期間、3日超空いたら最終日以降、週末をまたぐだけなら不要", () => {
