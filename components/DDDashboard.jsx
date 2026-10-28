@@ -26,6 +26,7 @@ import { buildStatsTable, computeMddHoldProbability, depthBucketIndex, DEPTH_BUC
 import { computeYearForecast, yearForecastTrajectory, yearEndProjectionPath, computeNextYearForecast, computeQqqSpxCorrelation, buildAnnualReturns, presidentialCycleAverage, seasonalMonthlyAverages } from "@/lib/yearForecast";
 import { buildQqqEquivalentSeries, parseNdxPreQqqCsv } from "@/lib/qqqSynthetic";
 import { buildSoxlEquivalentSeries, parseSoxlPreListingCsv } from "@/lib/soxlSynthetic";
+import { parseCSVLine, findCol, parseDateOnly, parseStooqCSV, BOM_RE } from "@/lib/csvPrice";
 import { buildVideoLongform, SP500_KANA, tickerKana } from "@/lib/videoDataAdapter";
 import { classifyDdCategory } from "@/lib/ddCategory";
 import { DEFAULT_CONTENT_SECTIONS, CONTENT_SECTION_LABELS, availableContentSections } from "@/lib/videoLongMd";
@@ -104,59 +105,12 @@ const NDX_PRE_QQQ_SERIES = parseNdxPreQqqCsv();
 const SOXL_PRE_LISTING_SERIES = parseSoxlPreListingCsv();
 
 /* ---------------- CSV parsing (Stooq: Date,Open,High,Low,Close,Volume) ---------------- */
-const BOM_RE = new RegExp("^" + String.fromCharCode(0xfeff)); // Excel等で保存されたUTF-8 CSV先頭のBOMを除去するため（コードポイント指定で明示、ソース上に不可視文字を埋め込まない）
-function findCol(header, candidates) { for (const c of candidates) { const idx = header.indexOf(c); if (idx !== -1) return idx; } return -1; }
-// 引用符で囲まれたフィールド内のカンマ（例: "5,480.22" のような桁区切り）を誤って列区切りとして分割しないCSV行パーサー。
-// 単純な line.split(",") だと桁区切りカンマ入りの値で列がずれ、Close列に別の値が混入する不具合があったため導入。
-function parseCSVLine(line) {
-  const out = [];
-  let cur = "";
-  let inQuotes = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (inQuotes) {
-      if (ch === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else inQuotes = false; }
-      else cur += ch;
-    } else if (ch === '"') inQuotes = true;
-    else if (ch === ",") { out.push(cur); cur = ""; }
-    else cur += ch;
-  }
-  out.push(cur);
-  return out;
-}
-// 日付のみの文字列（"YYYY-MM-DD" or "YYYY/MM/DD" 等）を、実行環境のタイムゾーンに関わらずUTC 0時のDateとして厳密にパースする。
-// new Date(string) はECMAScript仕様上「-」区切りのISO日付のみUTCとして解釈され、「/」区切りなど非ISO形式は実装依存でローカル時刻として
-// 解釈されるため、UTCより進んだタイムゾーン（JST等）の環境では日付が1日前にズレる不具合の原因になっていた（例：CSVの日付欄が"/"区切りの場合）。
-// この関数は区切り文字によらず年月日を直接抽出してUTC基準のDateを作るため、実行環境に関わらず常に同じ日付になる。
-function parseDateOnly(str) {
-  const m = String(str).trim().match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
-  if (!m) return new Date(NaN);
-  return new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
-}
+// parseCSVLine・findCol・parseDateOnly・BOM_RE・parseStooqCSV は lib/csvPrice.ts に切り出し済み（Stage E-1。挙動は変更していない）。
 // <input type="date">のデフォルト値用：ブラウザのローカルタイムゾーンの「今日」を"YYYY-MM-DD"で返す。
 // new Date().toISOString()はUTC基準のため、UTCより進んだタイムゾーン（JST等）ではローカルの日付が変わった直後から
 // 最大9時間、UTC側はまだ前日のままで「今日」の初期値が実際の前日になってしまう（気づかず入力すると前日付で記録される）不具合があった。
 function localYMD(date = new Date()) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-}
-function parseStooqCSV(text) {
-  const normalized = text.replace(BOM_RE, "").trim(); // 先頭BOM・前後の空白を除去
-  const lines = normalized.split(/\r?\n/).filter((l) => l.trim() !== ""); // \r\n(Windows)・\n(Unix)いずれも対応し、空行は除外
-  if (!lines.length) return [];
-  const header = parseCSVLine(lines[0]).map((h) => h.trim().toLowerCase());
-  const dateIdx = findCol(header, ["date", "日付"]);
-  const closeIdx = findCol(header, ["close", "終値"]);
-  if (dateIdx === -1 || closeIdx === -1) return [];
-  const rows = [];
-  for (let i = 1; i < lines.length; i++) {
-    const cols = parseCSVLine(lines[i]);
-    if (cols.length <= Math.max(dateIdx, closeIdx)) continue;
-    const d = parseDateOnly(cols[dateIdx]);
-    const c = parseFloat(String(cols[closeIdx]).replace(/,/g, "").trim());
-    if (!isNaN(d.getTime()) && !isNaN(c)) rows.push({ date: d, price: c });
-  }
-  rows.sort((a, b) => a.date - b.date);
-  return rows;
 }
 // 本アプリの「データ出力」が生成する統合形式（見出し Date,SP500,VOO,QQQ,GOLD。GOLD列の無い旧形式も可）を検出してパースする。
 // 日付は"-"/"/"区切り・ゼロ埋めなし（例:2026/9/3）どちらも parseDateOnly が吸収し、昇順・降順どちらの並びでも読めるよう都度ソートし直す。
@@ -7350,7 +7304,6 @@ function TickerVideoModalContent({ trackRecord }) {
   const [newSymbol, setNewSymbol] = useState("");
   const [selected, setSelected] = useState("");
   const [fileMsg, setFileMsg] = useState("");
-  const [tickerTab, setTickerTab] = useState("data"); // "data"（データ出力）| "video"（動画作成）
 
   useEffect(() => {
     (async () => {
@@ -7447,15 +7400,7 @@ function TickerVideoModalContent({ trackRecord }) {
         <div className="text-xs" style={{ color: C.amber }}>データが{series.length}件のみです（最低{VIDEO_TICKER_MIN_POINTS}件程度必要）。CSVを取り込んでください。</div>
       )}
       {selected && tickerD && tickerBottom && (
-        <>
-          <div className="flex gap-0.5 mb-3">
-            {[{ k: "data", l: "データ出力（MD/JSON）" }, { k: "video", l: "動画作成" }].map((t) => (
-              <button key={t.k} onClick={() => setTickerTab(t.k)} className="text-[11px] px-2 py-1 rounded" style={{ color: tickerTab === t.k ? C.bg : C.textMuted, background: tickerTab === t.k ? C.teal : "transparent", fontWeight: tickerTab === t.k ? 700 : 400, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>{t.l}</button>
-            ))}
-          </div>
-          {tickerTab === "data" && <LongformAnalysisModalContent d={tickerD} crashFrequency={tickerBottom.stats.crashFrequency} bottom={tickerBottom} instrumentLabel={selected} />}
-          {tickerTab === "video" && <VideoCreateModalContent d={tickerD} crashFrequency={tickerBottom.stats.crashFrequency} bottom={tickerBottom} instrumentLabel={selected} />}
-        </>
+        <LongformAnalysisModalContent d={tickerD} crashFrequency={tickerBottom.stats.crashFrequency} bottom={tickerBottom} instrumentLabel={selected} />
       )}
     </div>
   );
@@ -10357,8 +10302,6 @@ export default function DDDashboard() {
       {modal?.type === "realHoldingsRanking" && <FullScreenModal title="実質保有銘柄ランキング" onClose={() => setModal(null)}><RealHoldingsRankingContent holdings={combinedHoldings} /></FullScreenModal>}
       {modal?.type === "summary" && <FullScreenModal title="詳細サマリー出力（AI相談用）" onClose={() => setModal(null)}><SummaryModalContent d={d} dVoo={dVoo} dQqq={dQqq} holdings={holdings} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} blocks={blocks} rankLabels={rankLabels} lifecycle={lifecycle} onLifecycleChange={handleLifecycleChange} fixedPositions={fixedPositions} onFixedPositionChange={handleFixedPositionChange} checkpoints={checkpoints} prevSnapshot={prevSnapshot} onSaveSnapshot={handleSaveSnapshot} crashFrequency={bottom.stats.crashFrequency} /></FullScreenModal>}
       {modal?.type === "longform" && <FullScreenModal title="長尺用S&P500分析データ出力" onClose={() => setModal(null)}><LongformAnalysisModalContent d={d} crashFrequency={bottom.stats.crashFrequency} bottom={bottom} /></FullScreenModal>}
-      {modal?.type === "videoCreate" && <FullScreenModal title="長尺動画作成" onClose={() => setModal(null)}><VideoCreateTabsModalContent d={d} bottom={bottom} dSoxl={dSoxl} bottomSoxl={bottomSoxl} /></FullScreenModal>}
-      {modal?.type === "videoTicker" && <FullScreenModal title="動画用ティッカー分析" onClose={() => setModal(null)}><TickerVideoModalContent trackRecord={d.trackRecord} /></FullScreenModal>}
       {modal?.type === "mobileChartZoom" && <MobileChartZoomModal onClose={() => setModal(null)} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} sourceViews={sourceViews} chartSources={chartSources} onToggleChartSource={toggleChartSource} yearCompare={yearCompare} setYearCompare={setYearCompare} initialTab={chartTab} isRealDevice={isMobileAuto} />}
 
       {isMobile ? (
@@ -10375,12 +10318,6 @@ export default function DDDashboard() {
             </button>
             <button onClick={() => setModal({ type: "longform" })} title="長尺用S&P500分析データを出力" className="flex items-center justify-center w-[30px] h-[30px] max-[374px]:w-7 max-[374px]:h-7 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
               <Film size={16} />
-            </button>
-            <button onClick={() => setModal({ type: "videoCreate" })} title="長尺動画作成（S&P500／SOXL）" className="flex items-center justify-center w-[30px] h-[30px] max-[374px]:w-7 max-[374px]:h-7 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
-              <Clapperboard size={16} />
-            </button>
-            <button onClick={() => setModal({ type: "videoTicker" })} title="動画用ティッカー分析（SP500以外の銘柄）" className="flex items-center justify-center w-[30px] h-[30px] max-[374px]:w-7 max-[374px]:h-7 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
-              <Layers size={16} />
             </button>
             <button onClick={() => setModal({ type: "dataInput" })} title="データ入力・出力" className="flex items-center justify-center w-[30px] h-[30px] max-[374px]:w-7 max-[374px]:h-7 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
               <Database size={16} />
@@ -10407,15 +10344,9 @@ export default function DDDashboard() {
           <button onClick={() => setModal({ type: "longform" })} title="長尺用S&P500分析データを出力" className="shrink-0 flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
             <Film size={12} /> 長尺用データ出力
           </button>
-          <button onClick={() => setModal({ type: "videoCreate" })} title="長尺動画作成（S&P500／SOXL）" className="shrink-0 flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
-            <Clapperboard size={12} /> 長尺動画作成
-          </button>
           <a href={`${process.env.NEXT_PUBLIC_BASE_PATH || ""}/explainer/`} title="ニュース・キーワード解説動画（長尺＋ショート）" className="shrink-0 flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer", textDecoration: "none" }}>
             <Clapperboard size={12} /> 解説動画作成
           </a>
-          <button onClick={() => setModal({ type: "videoTicker" })} title="動画用ティッカー分析（SP500以外の銘柄）" className="shrink-0 flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
-            <Layers size={12} /> 動画用ティッカー
-          </button>
           <button onClick={() => setModal({ type: "dataInput" })} title="データ入力・出力" className="shrink-0 flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
             <Database size={12} /> データ入力・出力
           </button>
