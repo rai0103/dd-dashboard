@@ -30,7 +30,7 @@ import { parseCSVLine, findCol, parseDateOnly, parseStooqCSV, BOM_RE } from "@/l
 // [Stage E-5] 長尺動画作成UI（VideoCreateModalContent等）の廃止に伴い、そこでのみ使っていたimportを削除。
 // buildVideoLongform・SP500_KANA・DEFAULT_CONTENT_SECTIONSは引き続きStage E-2のstorageキャッシュ書き込みで使用。
 // 動画生成そのもの（音声合成・BGM・アバター・AIチャット等のライブラリ）はExplainerStudio.jsx側に一本化された。
-import { buildVideoLongform, SP500_KANA } from "@/lib/videoDataAdapter";
+import { buildVideoLongform, SP500_KANA, dailyPointsFromFull } from "@/lib/videoDataAdapter";
 import { classifyDdCategory } from "@/lib/ddCategory";
 import { DEFAULT_CONTENT_SECTIONS } from "@/lib/videoLongMd";
 
@@ -8628,6 +8628,32 @@ export default function DDDashboard() {
       storage.set("stock-catalog:SOXL", JSON.stringify({ asOf, instrumentLabel: "SOXL", catalog: video.catalog, scalarCatalog: video.scalarCatalog })).catch(() => { /* storage unavailable */ });
     } catch (e) { /* 失敗してもダッシュボード本体の動作には影響させない */ }
   }, [dSoxl, bottomSoxl]);
+  // [グラフ作成ページ] /chart-studio/ 用：VOO・QQQ・SOXL・GOLDの生の日次終値（{date,close}[]）をそのまま
+  // 共有storageへ書き出す。stock-catalog:*（長尺動画用に年単位へ加工済みのカタログ）とは別に、生データを渡す
+  // ことで、グラフ作成ページ側が任意の期間（1週間〜最長）・複数年セットを自由に組み立てられるようにする。
+  useEffect(() => {
+    try {
+      storage.set("price-series:VOO", JSON.stringify({ label: "S&P500(VOO)", points: dailyPointsFromFull(d.FULL) })).catch(() => { /* storage unavailable */ });
+    } catch (e) { /* 失敗してもダッシュボード本体の動作には影響させない */ }
+  }, [d.FULL]);
+  useEffect(() => {
+    if (!dQqq) return;
+    try {
+      storage.set("price-series:QQQ", JSON.stringify({ label: "NQ100(QQQ)", points: dailyPointsFromFull(dQqq.FULL) })).catch(() => { /* storage unavailable */ });
+    } catch (e) { /* 失敗してもダッシュボード本体の動作には影響させない */ }
+  }, [dQqq]);
+  useEffect(() => {
+    if (!dSoxl) return;
+    try {
+      storage.set("price-series:SOXL", JSON.stringify({ label: "SOXL", points: dailyPointsFromFull(dSoxl.FULL) })).catch(() => { /* storage unavailable */ });
+    } catch (e) { /* 失敗してもダッシュボード本体の動作には影響させない */ }
+  }, [dSoxl]);
+  useEffect(() => {
+    if (!goldSeries.length) return;
+    try {
+      storage.set("price-series:GOLD", JSON.stringify({ label: "GOLD", points: dailyPointsFromFull(goldSeries) })).catch(() => { /* storage unavailable */ });
+    } catch (e) { /* 失敗してもダッシュボード本体の動作には影響させない */ }
+  }, [goldSeries]);
   // VOO底値判定パネル・モーダルで実際に表示する側（QQQ未取込時はVOOに自動フォールバック）。
   const activeBottomInstrument = bottomScoreInstrument === "qqq" && bottomQqq ? "qqq" : "voo";
   const activeBottom = activeBottomInstrument === "qqq" ? bottomQqq : bottom;
