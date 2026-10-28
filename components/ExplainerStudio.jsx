@@ -550,6 +550,15 @@ export default function ExplainerStudio() {
     const idx = scenes.findIndex((s) => s.id === sc.id);
     if (idx >= 0) previewSceneAt(idx);
   };
+  // [ライブラリから選ぶ] 既に画像ライブラリ（listImages）にある画像を、新規アップロードせずそのまま場面へ添付する。
+  // グラフ作成ページ（/chart-studio/）のスクリーンショットや、他の場面で使った画像・以前の手動アップロード／AI生成画像を
+  // 選べるようにするためのもの（attachImageと違い、saveImageは呼ばない＝ライブラリには何も追加しない）。
+  const attachExistingImage = (sceneId, imageId) => {
+    setScenes((list) => list.map((s) => (s.id === sceneId ? { ...s, imageId, visual: { ...s.visual, kind: "image" } } : s)));
+    setRightsPendingId(null);
+    const idx = scenes.findIndex((s) => s.id === sceneId);
+    if (idx >= 0) previewSceneAt(idx);
+  };
   // 場面ごとに「AIで生成」：既存のimagePrompt（台本生成時にAIが用意した英語のプロンプト案）で1枚生成し、そのまま添付する
   const [imgGenBusyId, setImgGenBusyId] = useState(null);
   const [imgGenError, setImgGenError] = useState("");
@@ -1472,6 +1481,18 @@ export default function ExplainerStudio() {
                             <div className="mt-1 p-1.5 rounded text-[10px] flex flex-col gap-1" style={{ background: `${C.amber}12`, border: `1px solid ${C.amber}55`, color: C.textMuted }}>
                               <div>使えるのは、自分で撮影・作成した画像、利用条件を確認したフリー素材、画像生成AIで自作したもの（実在の人物・ロゴ・既存作品を含まない）です。ニュースサイトの写真や人物写真をそのまま使うのは避けてください。</div>
                               {sc.visual.imagePrompt && <div className="flex items-center gap-1">プロンプト案をコピー<button onClick={() => copyText(sc.visual.imagePrompt)} style={{ color: C.teal, background: "none", border: "none", cursor: "pointer" }}><Copy size={10} /></button></div>}
+                              {images.length > 0 && (
+                                <div className="flex flex-col gap-1">
+                                  <div style={{ color: C.textDim }}>ライブラリから選ぶ（グラフ作成ページのスクリーンショットもここに出ます）</div>
+                                  <div className="flex flex-wrap gap-1" style={{ maxHeight: 112, overflowY: "auto" }}>
+                                    {images.slice().reverse().map((im) => (
+                                      <button key={im.id} onClick={() => attachExistingImage(sc.id, im.id)} title={im.name} className="shrink-0 rounded overflow-hidden" style={{ width: 44, height: 44, padding: 0, border: `1px solid ${C.borderSoft}`, background: C.panel2, cursor: "pointer" }}>
+                                        {imageEls[im.id] && <img src={imageEls[im.id].src} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />}
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
                               <div className="flex items-center gap-1.5 flex-wrap">
                                 <label className="px-2 py-0.5 rounded cursor-pointer" style={btn()}>権利を確認した画像を選ぶ
                                   <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) attachImage(sc.id, f); }} />
