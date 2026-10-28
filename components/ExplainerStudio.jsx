@@ -111,6 +111,7 @@ export default function ExplainerStudio() {
   const [refTextBody, setRefTextBody] = useState("");
   const [urlInput, setUrlInput] = useState("");
   const [inputOpen, setInputOpen] = useState(true);
+  const [chaptersOpen, setChaptersOpen] = useState(false); // [Stage E-11] 章タイトルは既定で折りたたみ
   // [Stage E-6] 株式情報モード：データソースを選ぶ操作は廃止し、ダッシュボードが持つS&P500・SOXLのデータを
   // 常に背景で読み込んでおき（UIには出さない）、シナリオに応じてAIが必要な銘柄のキーだけを選んで使う
   // （lib/explainer/stockCatalog.tsのmergeStockCatalogsで1つに統合してgenInput()が渡す）。
@@ -537,12 +538,17 @@ export default function ExplainerStudio() {
     await refreshImages();
     setScenes((list) => list.map((s) => (s.id === sceneId ? { ...s, imageId: im.id, visual: { ...s.visual, kind: "image" } } : s)));
     setRightsPendingId(null);
+    // [Stage E-11] 画像を添付したら、まず変更後のスライドをプレビューに表示する
+    const idx = scenes.findIndex((s) => s.id === sceneId);
+    if (idx >= 0) previewSceneAt(idx);
   };
   const detachImage = async (sc) => {
     const id = sc.imageId;
     patchScene(sc.id, { imageId: null });
     const usedElsewhere = project && [...project.longScenes, ...project.shortScenes].some((s) => s.imageId === id && s.id !== sc.id);
     if (id && !usedElsewhere) { await deleteImage(id).catch(() => {}); refreshImages(); }
+    const idx = scenes.findIndex((s) => s.id === sc.id);
+    if (idx >= 0) previewSceneAt(idx);
   };
   // 場面ごとに「AIで生成」：既存のimagePrompt（台本生成時にAIが用意した英語のプロンプト案）で1枚生成し、そのまま添付する
   const [imgGenBusyId, setImgGenBusyId] = useState(null);
@@ -874,7 +880,7 @@ export default function ExplainerStudio() {
     const total = durs.reduce((a, b) => a + b, 0) || 1;
     const before = durs.slice(0, idx).reduce((a, b) => a + b, 0), d = durs[idx] || 1;
     const target = Math.min(1, (before + Math.max(0, d - Math.min(2, d * 0.15))) / total);
-    setSeekPos(target); r.draw(target); updateSceneProgress(target);
+    seekPosRef.current = target; setSeekPos(target); r.draw(target); updateSceneProgress(target);
   };
   // [Stage E-10] 場面カードの「再生」：その場面の最初から、最後の場面まで通しで再生する
   // （previewSceneAtは場面の終盤に静止した状態で止める用途のため、別関数として用意する）。
@@ -1303,8 +1309,8 @@ export default function ExplainerStudio() {
                 <div className="text-[10px] leading-relaxed" style={{ color: C.textDim }}>書き出しは実時間で録画します（{fmtTime(displayTotal)}かかります）。録画中はこのタブを前面に表示したままにしてください。</div>
               </div>
 
-              {/* ---------- 設定パネル ---------- */}
-              <div className="flex flex-col gap-4 text-xs flex-1 min-w-0">
+              {/* ---------- 設定パネル（常にプレビューの右横に枠として表示し、内側のスクロールバーで移動する） ---------- */}
+              <div className="flex flex-col gap-4 text-xs flex-1 min-w-0 rounded-lg p-3 overflow-y-auto" style={{ border: `1px solid ${C.border}`, background: C.panel, maxHeight: "min(85vh, 900px)" }}>
                 {/* 公開前チェック */}
                 <Section title={`公開前チェック（${issues.filter((x) => x.level === "warn").length}件の注意・${issues.filter((x) => x.level === "info").length}件の確認）`} right={issues.some((x) => x.message.startsWith("参考資料の文章")) ? <button onClick={paraphraseAll} disabled={!!paraAllBusy} className="text-[10px] px-1.5 py-0.5 rounded" style={{ ...btn("primary"), opacity: paraAllBusy ? 0.5 : 1 }}>{paraAllBusy || "参考資料と同じ言い回しをまとめて言い換える"}</button> : null}>
                   {issues.length === 0 ? (
@@ -1436,6 +1442,7 @@ export default function ExplainerStudio() {
                                               const next = e.target.checked ? [...selectedKeys, key] : selectedKeys.filter((k) => k !== key);
                                               const items = resolveYearCompareItems(next, stockOverlayCatalog.yearCompare);
                                               patchScene(sc.id, { visual: normalizeVisual({ ...sc.visual, items }) });
+                                              previewSceneAt(i); // [Stage E-11] 系列を変更したら、まず変更後のスライドを表示する
                                             }} />
                                             {s.label}
                                           </label>
@@ -1448,7 +1455,7 @@ export default function ExplainerStudio() {
                                 </div>
                               ) : (
                                 <>
-                                  <textarea defaultValue={itemsToText(sc.visual.items)} key={sc.id + JSON.stringify(sc.visual.items)} onBlur={(e) => patchScene(sc.id, { visual: normalizeVisual({ ...sc.visual, items: textToItems(e.target.value) }) })} rows={Math.max(2, sc.visual.items.length)} className="text-[10px] px-1 py-0.5 rounded mono" style={{ ...inputStyle, resize: "vertical" }} />
+                                  <textarea defaultValue={itemsToText(sc.visual.items)} key={sc.id + JSON.stringify(sc.visual.items)} onBlur={(e) => { patchScene(sc.id, { visual: normalizeVisual({ ...sc.visual, items: textToItems(e.target.value) }) }); previewSceneAt(i); }} rows={Math.max(2, sc.visual.items.length)} className="text-[10px] px-1 py-0.5 rounded mono" style={{ ...inputStyle, resize: "vertical" }} />
                                   <div className="text-[10px]" style={{ color: C.textDim }}>1行1項目：見出し｜数値｜説明｜アイコン（枠の外をクリックで反映）。アイコン：{ICON_NAMES.join(", ")}</div>
                                 </>
                               )}
@@ -1504,27 +1511,35 @@ export default function ExplainerStudio() {
                   </div>
                 </Section>
 
-                {/* 章タイトル（ヘッダー右側に表示。長尺のみ） */}
+                {/* 章タイトル（ヘッダー右側に表示。長尺のみ。既定では折りたたみ） */}
                 {format === "long" && project.chapters?.length > 0 && (
-                  <Section title="章タイトル（ヘッダー右側に表示）">
-                    <div className="text-[10px] mb-1.5" style={{ color: C.textDim }}>画面右上に出る見出しです。今プレビュー中の場面の章に応じて切り替わります。</div>
-                    <div className="flex flex-col gap-1">
-                      {project.chapters.map((ch, i) => {
-                        const example = scenes.find((s) => s.chapter === i && s.visual.kind !== "chapter")?.caption || "";
-                        return (
-                          <div key={i} className="flex items-center gap-1.5">
-                            <span className="text-[10px] shrink-0" style={{ color: C.textDim, width: 44 }}>第{i + 1}章</span>
-                            <input
-                              value={ch.title}
-                              onChange={(e) => { const v = e.target.value; setProject((p) => ({ ...p, chapters: p.chapters.map((c, idx) => (idx === i ? { ...c, title: v } : c)) })); }}
-                              className="flex-1 min-w-0 text-[11px] px-1.5 py-0.5 rounded"
-                              style={inputStyle}
-                            />
-                            {example && <span className="text-[10px] shrink-0 truncate" style={{ color: C.textDim, maxWidth: 110 }} title={example}>{example}</span>}
-                          </div>
-                        );
-                      })}
-                    </div>
+                  <Section title="章タイトル（ヘッダー右側に表示）" right={
+                    <button onClick={() => setChaptersOpen((v) => !v)} className="text-[10px] flex items-center gap-0.5" style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer", padding: 0 }}>
+                      {chaptersOpen ? "閉じる" : "開く"}<ChevronRight size={10} style={{ transform: chaptersOpen ? "rotate(90deg)" : "none" }} />
+                    </button>
+                  }>
+                    {chaptersOpen && (
+                      <>
+                        <div className="text-[10px] mb-1.5" style={{ color: C.textDim }}>画面右上に出る見出しです。今プレビュー中の場面の章に応じて切り替わります。</div>
+                        <div className="flex flex-col gap-1">
+                          {project.chapters.map((ch, i) => {
+                            const example = scenes.find((s) => s.chapter === i && s.visual.kind !== "chapter")?.caption || "";
+                            return (
+                              <div key={i} className="flex items-center gap-1.5">
+                                <span className="text-[10px] shrink-0" style={{ color: C.textDim, width: 44 }}>第{i + 1}章</span>
+                                <input
+                                  value={ch.title}
+                                  onChange={(e) => { const v = e.target.value; setProject((p) => ({ ...p, chapters: p.chapters.map((c, idx) => (idx === i ? { ...c, title: v } : c)) })); }}
+                                  className="flex-1 min-w-0 text-[11px] px-1.5 py-0.5 rounded"
+                                  style={inputStyle}
+                                />
+                                {example && <span className="text-[10px] shrink-0" style={{ color: C.textDim, maxWidth: 160, whiteSpace: "normal", wordBreak: "break-word" }} title={example}>{example}</span>}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </>
+                    )}
                   </Section>
                 )}
 
