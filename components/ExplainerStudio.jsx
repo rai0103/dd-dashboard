@@ -30,7 +30,7 @@ import { VISUAL_KINDS, ICON_NAMES } from "@/lib/explainer/types";
 import { storage } from "@/lib/storage";
 import { easternStamp } from "@/lib/marketClock";
 import { parseStooqCSV } from "@/lib/csvPrice";
-import { buildStockCatalogFromSnapshot, buildStockCatalogFromCsv } from "@/lib/explainer/stockCatalog";
+import { buildStockCatalogFromSnapshot, buildStockCatalogFromCsv, mergeStockCatalogs } from "@/lib/explainer/stockCatalog";
 
 const C = {
   bg: "#0A0F1C", panel: "#111A2C", panel2: "#0D1424",
@@ -110,32 +110,18 @@ export default function ExplainerStudio() {
   const [refTextBody, setRefTextBody] = useState("");
   const [urlInput, setUrlInput] = useState("");
   const [inputOpen, setInputOpen] = useState(true);
-  // [Stage E-3] 株式情報モード：データの出典（ダッシュボードのS&P500／SOXL、またはCSVアップロード）
-  const [stockSource, setStockSource] = useState("SP500"); // "SP500" | "SOXL" | "csv"
-  const [stockSnapshot, setStockSnapshot] = useState(null); // ダッシュボードが書き出したstock-catalog:*（lib/storage.ts経由）
-  const [stockSnapshotError, setStockSnapshotError] = useState("");
-  const [csvCompanyName, setCsvCompanyName] = useState("");
-  const [stockCsvSeries, setStockCsvSeries] = useState([]); // ダッシュボードが持たない企業のCSVを取り込んだ場合の{date,price}[]
-  const [stockCsvError, setStockCsvError] = useState("");
-  const loadStockSnapshot = async (source) => {
-    setStockSnapshot(null); setStockSnapshotError("");
-    try {
-      const res = await storage.get(`stock-catalog:${source}`);
-      if (!res || !res.value) { setStockSnapshotError("データが見つかりません。ダッシュボードを一度開いてください。"); return; }
-      const parsed = JSON.parse(res.value);
-      setStockSnapshot(parsed);
-      const asOfDate = parsed.asOf ? new Date(`${parsed.asOf}T00:00:00Z`) : null;
-      if (asOfDate && Date.now() - asOfDate.getTime() > 3 * 24 * 60 * 60 * 1000) {
-        setStockSnapshotError(`${parsed.asOf}時点のデータです（3日以上前）。ダッシュボードを開いて最新化することをおすすめします（このまま生成も可能です）。`);
-      }
-    } catch (e) {
-      setStockSnapshotError("データの読み込みに失敗しました。");
-    }
-  };
+  // [Stage E-6] 株式情報モード：データソースを選ぶ操作は廃止し、ダッシュボードが持つS&P500・SOXLのデータを
+  // 常に背景で読み込んでおき（UIには出さない）、シナリオに応じてAIが必要な銘柄のキーだけを選んで使う
+  // （lib/explainer/stockCatalog.tsのmergeStockCatalogsで1つに統合してgenInput()が渡す）。
+  const [stockSnapshots, setStockSnapshots] = useState({ SP500: null, SOXL: null });
   useEffect(() => {
-    if (mode === "stock" && (stockSource === "SP500" || stockSource === "SOXL")) loadStockSnapshot(stockSource);
-    /* eslint-disable-next-line react-hooks/exhaustive-deps */
-  }, [mode, stockSource]);
+    if (mode !== "stock") return;
+    ["SP500", "SOXL"].forEach((src) => {
+      storage.get(`stock-catalog:${src}`).then((res) => {
+        if (res?.value) { try { setStockSnapshots((p) => ({ ...p, [src]: JSON.parse(res.value) })); } catch (e) { /* 読めなければそのまま無視（キーが使えないだけ） */ } }
+      }).catch(() => {});
+    });
+  }, [mode]);
   // 「株式情報」ボタンを押した瞬間、テーマ欄が空ならその場で米国東部時間の「今日」を入れる（消去・書き換えは自由）
   const handleModeClick = (k) => {
     setMode(k);
@@ -187,20 +173,22 @@ export default function ExplainerStudio() {
       setRefs((p) => [...p, { id: newRefId(), kind: "pdf", title: f.name.replace(/\.pdf$/i, ""), base64, sizeBytes: f.size }]);
     }
   };
-  // [Stage E-3] 株式情報モード：ダッシュボードが持たない企業のCSV（Date/Close列、lib/csvPrice.tsと同じ形式）を取り込む。
-  // 1本の動画につき1社分なので、以前取り込んだCSV参照があれば置き換える。
-  const addStockCsv = (file) => {
-    setStockCsvError("");
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      const text = String(ev.target.result);
-      const rows = parseStooqCSV(text);
-      if (!rows.length) { setStockCsvError("Date/Close列が見つかりませんでした。CSVの形式を確認してください。"); return; }
-      setStockCsvSeries(rows);
-      setRefs((p) => [...p.filter((r) => r.kind !== "csv"), { id: newRefId(), kind: "csv", title: csvCompanyName.trim() || file.name.replace(/\.csv$/i, ""), text, sizeBytes: file.size }]);
-    };
-    reader.onerror = () => setStockCsvError("CSVを読み込めませんでした。");
-    reader.readAsText(file);
+  // [Stage E-6] 株式情報モード：ダッシュボードが持たない企業のCSV（Date/Close列、lib/csvPrice.tsと同じ形式）を
+  // 参考情報として追加する（URL・PDF・スクショと同じ「追加」操作。複数社分を追加でき、置き換えない）。
+  // 企業名はファイル名から取る（必要なら別のファイル名で読み込み直せば変更できる）。
+  const addStockCsv = (files) => {
+    for (const f of Array.from(files || [])) {
+      if (!(/\.csv$/i.test(f.name) || f.type === "text/csv")) { alert(`CSVファイルではありません：${f.name}`); continue; }
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const text = String(ev.target.result);
+        const rows = parseStooqCSV(text);
+        if (!rows.length) { alert(`Date/Close列が見つかりませんでした：${f.name}`); return; }
+        setRefs((p) => [...p, { id: newRefId(), kind: "csv", title: f.name.replace(/\.csv$/i, ""), text, sizeBytes: f.size }]);
+      };
+      reader.onerror = () => alert(`CSVを読み込めませんでした：${f.name}`);
+      reader.readAsText(f);
+    }
   };
   const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
   // [Stage E-3] ニュース・株式情報どちらのモードでも使えるスクリーンショット参照の追加
@@ -271,14 +259,24 @@ export default function ExplainerStudio() {
   const [genProgress, setGenProgress] = useState(null);
   const [genError, setGenError] = useState("");
   const abortRef = useRef(null);
-  // [Stage E-4] 「株式情報」モードのときだけ、実データのカタログ（StockCatalog）を生成入力に含める。
+  // [Stage E-6] 「株式情報」モードのときだけ、実データのカタログ（StockCatalog）を生成入力に含める。
+  // ダッシュボードのS&P500・SOXL（背景で読み込み済み）と、参考情報に追加したCSV各社分をすべて統合し、
+  // シナリオに応じてAIが必要な銘柄のキーだけを選べるようにする（データソースを選ばせる操作は廃止）。
   // これにより台本生成側（lib/explainer/aiScript.ts）がdataKey/seriesKeyで実数を解決できる（AIの創作値を禁止する仕組み）。
-  const genInput = (minutes = targetMinutes) => ({
-    topic: topic.trim(), mode, audience, targetMinutes: minutes, extraInstruction, refBlocks: referenceBlocks(refs), today: todayStr(), speechRate: rate, imageTarget: imageGenEnabled ? imageGenCount : 0,
-    stockCatalog: mode === "stock"
-      ? (stockSource === "csv" ? buildStockCatalogFromCsv(csvCompanyName, stockCsvSeries) : (stockSnapshot ? buildStockCatalogFromSnapshot(stockSnapshot) : undefined))
-      : undefined,
-  });
+  const genInput = (minutes = targetMinutes) => {
+    let stockCatalog;
+    if (mode === "stock") {
+      const catalogs = [stockSnapshots.SP500 && buildStockCatalogFromSnapshot(stockSnapshots.SP500), stockSnapshots.SOXL && buildStockCatalogFromSnapshot(stockSnapshots.SOXL)];
+      for (const r of refs) {
+        if (r.kind !== "csv") continue;
+        const rows = parseStooqCSV(r.text);
+        if (rows.length) catalogs.push(buildStockCatalogFromCsv(r.title, rows));
+      }
+      const merged = mergeStockCatalogs(catalogs);
+      if (Object.keys(merged.scalars).length || Object.keys(merged.series).length) stockCatalog = merged;
+    }
+    return { topic: topic.trim(), mode, audience, targetMinutes: minutes, extraInstruction, refBlocks: referenceBlocks(refs), today: todayStr(), speechRate: rate, imageTarget: imageGenEnabled ? imageGenCount : 0, stockCatalog };
+  };
   const errMsg = (e) => (e instanceof AiClientError ? e.message : e?.message || String(e));
   // visual.kind=image の場面（AIがimagePromptを用意している場面）のうち、先頭から指定枚数だけAIで画像を生成して
   // 自動で割り当てる。GEMINI_API_KEY未設定・生成失敗は場面単位でスキップし、台本自体は壊さない（呼び出し側でまとめて案内する）。
@@ -1100,31 +1098,6 @@ export default function ExplainerStudio() {
                 ))}
                 <input value={topic} onChange={(e) => setTopic(e.target.value)} placeholder={mode === "news" ? "例：日銀が政策金利を0.75%に引き上げ" : mode === "stock" ? "例：2026年10月28日（消去・書き換え可）" : "例：インフレ／NISA／半導体の微細化"} className="flex-1 min-w-[220px] px-2 py-1.5 rounded text-sm" style={inputStyle} />
               </div>
-              {mode === "stock" && (
-                <div className="flex flex-wrap gap-2 items-center" style={{ color: C.textMuted }}>
-                  <span className="text-[11px]">株価データの出典：</span>
-                  {[["SP500", "S&P500"], ["SOXL", "SOXL"], ["csv", "CSVをアップロード"]].map(([k, l]) => (
-                    <button key={k} onClick={() => setStockSource(k)} className="text-[11px] px-2.5 py-1 rounded" style={{ color: stockSource === k ? C.bg : C.textMuted, background: stockSource === k ? C.teal : "transparent", border: `1px solid ${C.borderSoft}`, cursor: "pointer", fontWeight: stockSource === k ? 700 : 400 }}>{l}</button>
-                  ))}
-                  {stockSource !== "csv" && (
-                    stockSnapshotError
-                      ? <span className="text-[10px]" style={{ color: C.amber }}>{stockSnapshotError}</span>
-                      : stockSnapshot
-                        ? <span className="text-[10px]" style={{ color: C.textDim }}>{stockSnapshot.asOf}時点のダッシュボードのデータを使用します</span>
-                        : <span className="text-[10px]" style={{ color: C.textDim }}>読み込み中…</span>
-                  )}
-                  {stockSource === "csv" && (
-                    <>
-                      <input value={csvCompanyName} onChange={(e) => setCsvCompanyName(e.target.value)} placeholder="企業名・銘柄名（例：任天堂）" className="px-2 py-1 rounded text-[11px]" style={inputStyle} />
-                      <label className="text-[11px] px-2 py-1 rounded flex items-center gap-1" style={btn()}><Upload size={11} /> CSVを選択
-                        <input type="file" accept=".csv,text/csv" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) addStockCsv(f); }} />
-                      </label>
-                      {stockCsvError && <span className="text-[10px]" style={{ color: C.rust }}>{stockCsvError}</span>}
-                      {stockCsvSeries.length > 0 && !stockCsvError && <span className="text-[10px]" style={{ color: C.teal }}>{stockCsvSeries.length.toLocaleString()}件取り込みました</span>}
-                    </>
-                  )}
-                </div>
-              )}
               <div className="flex flex-wrap gap-3 items-center" style={{ color: C.textMuted }}>
                 <label className="flex items-center gap-1.5">視聴者
                   <select value={audience} onChange={(e) => setAudience(e.target.value)} className="px-1.5 py-1 rounded text-[11px]" style={inputStyle}>
@@ -1173,6 +1146,11 @@ export default function ExplainerStudio() {
                   <label className="text-[11px] px-2 py-1 rounded flex items-center gap-1" style={btn()}><FileText size={11} /> PDFを追加
                     <input type="file" accept="application/pdf,.pdf" multiple style={{ display: "none" }} onChange={(e) => { const fs = e.target.files; addPdfs(fs); e.target.value = ""; }} />
                   </label>
+                  {mode === "stock" && (
+                    <label className="text-[11px] px-2 py-1 rounded flex items-center gap-1" style={btn()}><FileText size={11} /> CSVを追加（株価データ）
+                      <input type="file" accept=".csv,text/csv" multiple style={{ display: "none" }} onChange={(e) => { const fs = e.target.files; addStockCsv(fs); e.target.value = ""; }} />
+                    </label>
+                  )}
                   <label className="text-[11px] px-2 py-1 rounded flex items-center gap-1" style={btn()}><Camera size={11} /> スクショを追加
                     <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) addScreenshot(f); }} />
                   </label>

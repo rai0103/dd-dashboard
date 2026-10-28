@@ -60,3 +60,25 @@ export function buildStockCatalogFromCsv(companyName: string, rows: { date: Date
   });
   return { instrumentLabel: name, asOf: fmtMD(last.date), scalars, series: { priceTrend: { label: `${name}の株価推移`, points } } };
 }
+
+// [Stage E-6] 複数の銘柄（S&P500・SOXL・CSVでアップロードした各社）のStockCatalogを、キーの衝突を避けて
+// 1つに統合する。「データソースを選ぶ」操作を廃止し、ダッシュボードが持つデータ（S&P500・SOXL）を常に
+// 下敷きにしつつ、シナリオに応じてAIが必要な銘柄のキーだけを選んで使う方式に変える（Stage E-4のdataKey/
+// seriesKey方式と組み合わせる）。各キーには元のinstrumentLabelを接頭辞として付け、ラベルにも銘柄名を
+// 含めることで、AIが「どの銘柄のどの値か」を取り違えないようにする。空・未読み込みのcatalogは無視する。
+export function mergeStockCatalogs(catalogs: (StockCatalog | undefined | null)[]): StockCatalog {
+  const scalars: StockCatalog['scalars'] = {};
+  const series: StockCatalog['series'] = {};
+  const labels: string[] = [];
+  let asOf = '';
+  for (const cat of catalogs) {
+    if (!cat) continue;
+    if (!Object.keys(cat.scalars).length && !Object.keys(cat.series).length) continue;
+    const label = cat.instrumentLabel || '銘柄';
+    labels.push(label);
+    if (cat.asOf && !asOf) asOf = cat.asOf;
+    for (const [k, v] of Object.entries(cat.scalars)) scalars[`${label}::${k}`] = { label: `${label}：${v.label}`, value: v.value };
+    for (const [k, v] of Object.entries(cat.series)) series[`${label}::${k}`] = { label: `${label}：${v.label}`, points: v.points };
+  }
+  return { instrumentLabel: labels.join('・'), asOf, scalars, series };
+}
