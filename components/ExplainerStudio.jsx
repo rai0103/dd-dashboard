@@ -519,6 +519,15 @@ export default function ExplainerStudio() {
   const [images, setImages] = useState([]);
   const refreshImages = () => listImages().then(setImages).catch(() => {});
   useEffect(() => { refreshImages(); }, []);
+  // グラフ作成ページ（/chart-studio/）など、別タブ・別ウィンドウで画像ライブラリに保存してからこのタブに
+  // 戻ってきたときに一覧が古いままにならないよう、このタブが前面に戻るたびに読み直す
+  // （IndexedDBへの書き込みは他タブに自動通知されないため、マウント時の1回読み込みだけでは追従しない）。
+  useEffect(() => {
+    const onVisible = () => { if (document.visibilityState === "visible") refreshImages(); };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => { document.removeEventListener("visibilitychange", onVisible); window.removeEventListener("focus", onVisible); };
+  }, []);
   const [imageEls, setImageEls] = useState({});
   useEffect(() => {
     const urls = [];
@@ -1412,7 +1421,7 @@ export default function ExplainerStudio() {
                             {sc.imageId ? (
                               <span className="text-[10px] inline-flex items-center gap-1" style={{ color: C.teal }}><ImageIcon size={10} /> 画像あり<button onClick={() => detachImage(sc)} style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer" }}><X size={10} /></button></span>
                             ) : (
-                              <button onClick={() => { setRightsPendingId((v) => (v === sc.id ? null : sc.id)); setImgGenError(""); }} className="text-[10px] flex items-center gap-0.5" style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer", padding: 0 }}><ImageIcon size={10} /> 画像を追加</button>
+                              <button onClick={() => { setRightsPendingId((v) => (v === sc.id ? null : sc.id)); setImgGenError(""); refreshImages(); }} className="text-[10px] flex items-center gap-0.5" style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer", padding: 0 }}><ImageIcon size={10} /> 画像を追加</button>
                             )}
                             <span className="text-[10px] ml-auto" style={{ color: C.textDim }}>テロップ</span>
                             <input value={sc.caption} onChange={(e) => patchScene(sc.id, { caption: e.target.value })} className="text-[10px] px-1 py-0.5 rounded w-40" style={inputStyle} />

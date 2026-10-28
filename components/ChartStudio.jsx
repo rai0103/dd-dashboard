@@ -64,19 +64,36 @@ export default function ChartStudio() {
   const [csvError, setCsvError] = useState("");
   const [csvNameDraft, setCsvNameDraft] = useState("");
   const csvFileRef = useRef(null);
-  const handleCsvFile = async (file) => {
+  // Stooqのファイル名（例："soxl_us_d.csv"・"nvda.us.txt"）は先頭が銘柄のティッカーなので、
+  // "."または"_"区切りの最初のトークンを取り出して大文字化する（名称入力を省略できるようにする）。
+  const tickerFromFileName = (fileName) => {
+    const base = String(fileName).replace(/\.[^.]+$/, "");
+    const first = base.split(/[._]/)[0];
+    return first ? first.toUpperCase() : "";
+  };
+  // 複数ファイルを一度に選択できる。手入力の銘柄名は「1ファイルだけ選んだ場合」のみ優先し、
+  // 複数選択時や未入力時はファイル名から自動で銘柄名を付ける。
+  const handleCsvFiles = async (fileList) => {
     setCsvError("");
-    const name = csvNameDraft.trim();
-    if (!name) { setCsvError("先に銘柄名・企業名を入力してください。"); return; }
-    try {
-      const text = await file.text();
-      const rows = parseStooqCSV(text);
-      if (!rows.length) { setCsvError("Date/Close列が見つかりませんでした（Stooq形式のCSVをお使いください）。"); return; }
-      const points = csvRowsToStockDataPoints(rows);
-      setCsvTickers((list) => [...list, { id: uid(), name, points }]);
-      setCsvNameDraft("");
-      if (csvFileRef.current) csvFileRef.current.value = "";
-    } catch (e) { setCsvError("CSVの読み込みに失敗しました。"); }
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+    const manualName = csvNameDraft.trim();
+    const added = [];
+    const errors = [];
+    for (const file of files) {
+      try {
+        const text = await file.text();
+        const rows = parseStooqCSV(text);
+        if (!rows.length) { errors.push(`${file.name}：Date/Close列が見つかりませんでした`); continue; }
+        const points = csvRowsToStockDataPoints(rows);
+        const name = (files.length === 1 && manualName) ? manualName : (tickerFromFileName(file.name) || file.name);
+        added.push({ id: uid(), name, points });
+      } catch (e) { errors.push(`${file.name}：読み込みに失敗しました`); }
+    }
+    if (added.length) setCsvTickers((list) => [...list, ...added]);
+    setCsvError(errors.join(" / "));
+    setCsvNameDraft("");
+    if (csvFileRef.current) csvFileRef.current.value = "";
   };
   const removeCsvTicker = (id) => {
     setCsvTickers((list) => list.filter((c) => c.id !== id));
@@ -238,13 +255,14 @@ export default function ChartStudio() {
               <div className="my-2" style={{ borderTop: `1px solid ${C.borderSoft}` }} />
               <div className="font-bold mb-1">CSVアップロード（その他の銘柄）</div>
               <input
-                value={csvNameDraft} onChange={(e) => setCsvNameDraft(e.target.value)} placeholder="銘柄名・企業名（例：NVDA）"
+                value={csvNameDraft} onChange={(e) => setCsvNameDraft(e.target.value)} placeholder="銘柄名（任意・1件選択時のみ有効。複数選択時やファイル名を使う場合は空欄でOK）"
                 className="w-full text-xs rounded px-2 py-1 mb-1" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }}
               />
               <label className="text-[11px] px-2 py-1 rounded flex items-center gap-1 w-fit cursor-pointer" style={btn(false)}>
-                <Upload size={11} /> Stooq形式CSVを選ぶ
-                <input ref={csvFileRef} type="file" accept=".csv,text/csv" className="hidden" onChange={(e) => e.target.files?.[0] && handleCsvFile(e.target.files[0])} />
+                <Upload size={11} /> Stooq形式CSVを選ぶ（複数選択可）
+                <input ref={csvFileRef} type="file" accept=".csv,text/csv" multiple className="hidden" onChange={(e) => e.target.files?.length && handleCsvFiles(e.target.files)} />
               </label>
+              <div className="text-[10px] mt-0.5" style={{ color: C.textDim }}>銘柄名は、Stooqのファイル名（例：soxl_us_d.csv → SOXL）から自動で付けます。</div>
               {csvError && <div className="text-[11px] mt-1" style={{ color: C.rust }}>{csvError}</div>}
               {csvTickers.map((c) => (
                 <div key={c.id} className="flex items-center justify-between mt-1">
