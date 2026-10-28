@@ -21,6 +21,8 @@ export interface GenerateInput {
   imageTarget?: number;
   /** [Stage E-4] mode==='stock' のときの実データカタログ。bar/line/donut/numberの数値はこの中のキーのみ使わせ、AIの創作値を禁止する */
   stockCatalog?: StockCatalog;
+  /** [Stage E-5] 今回の生成で使う「切り口」（マンネリ防止）。未指定ならheader()は何も加えない。generateProject/generateShortが内部で自動選択する */
+  sceneAngle?: string;
 }
 
 /** 日本語ナレーションの1分あたりの文字数の目安（話速1.0） */
@@ -207,6 +209,39 @@ const SCENE_SCHEMA = {
 };
 const SCENES_SCHEMA = { type: 'object', properties: { scenes: { type: 'array', items: SCENE_SCHEMA } }, required: ['scenes'] };
 
+// [Stage E-5] マンネリ防止：モードごとに毎回ランダムで選ぶ「切り口」候補。同じテーマ・同じ日付でも、
+// 生成するたびに違う構成になることを狙う（完全な一致防止ではなく、構成作家への「お題」を変える軽量な対策）。
+const SCENE_ANGLES: Record<GenerateInput['mode'], string[]> = {
+  news: [
+    '背景にある歴史や経緯を丁寧にたどる構成',
+    '複数の立場・意見の対立を軸にした構成',
+    '専門用語を一つずつ丁寧に解きほぐす構成',
+    '今後の影響・将来の展開を中心にした構成',
+    '具体的な数字・統計を軸に説得力を持たせる構成',
+    '似たような過去の出来事との比較を交えた構成',
+  ],
+  stock: [
+    '直近の値動きの大きさに注目する構成',
+    '年初来のトレンドを中心にした構成',
+    '他の指数・銘柄との比較を交えた構成',
+    '過去の似た局面との比較を軸にした構成',
+    '長期的な資産形成の観点を中心にした構成',
+    'リスク（下落シナリオ）に焦点を当てた構成',
+  ],
+  keyword: [
+    '身近な具体例から入る構成',
+    '歴史的な由来・語源から掘り下げる構成',
+    '似た用語との違いを比較する構成',
+    'よくある誤解を正すことを軸にした構成',
+    '実務での使われ方・具体的な活用例を中心にした構成',
+    '初心者が最初に疑問に思う点から始める構成',
+  ],
+};
+function pickAngle(mode: GenerateInput['mode']): string {
+  const list = SCENE_ANGLES[mode] ?? SCENE_ANGLES.news;
+  return list[Math.floor(Math.random() * list.length)];
+}
+
 function header(inp: GenerateInput): string {
   const kind = inp.mode === 'news' ? 'ニュース' : inp.mode === 'stock' ? '株式情報' : 'キーワード（用語）';
   return [
@@ -215,6 +250,8 @@ function header(inp: GenerateInput): string {
     `【制作日】${inp.today}`,
     inp.refBlocks.length ? '【参考資料】このメッセージ冒頭のドキュメントを参照してください。' : '【参考資料】なし（一般に確立した知識の範囲で解説し、最新の数値・出来事には触れない）',
     inp.extraInstruction.trim() ? `【制作者からの追加の指示】${inp.extraInstruction.trim()}` : '',
+    // [Stage E-5] マンネリ防止：今回選ばれた切り口を主軸にするよう明示する
+    inp.sceneAngle ? `【今回の切り口】${inp.sceneAngle}（毎回変えています。前回と似た構成にならないよう、この切り口を主軸に章立てを考えてください）` : '',
   ].filter(Boolean).join('\n');
 }
 
@@ -388,6 +425,9 @@ export async function generateChapter(inp: GenerateInput, o: Outline, idx: numbe
 
 /** 長尺の内容をもとに、本編へ誘導する宣伝用ショート（縦型・35〜55秒）を作る */
 export async function generateShort(inp: GenerateInput, o: Outline, longScenes: ExplainerScene[], signal?: AbortSignal): Promise<ExplainerScene[]> {
+  // [Stage E-5] generateProjectから渡された場合はそのsceneAngleをそのまま使う。「ショートだけ作り直す」単独呼び出しの場合は
+  // ここで新たに選び直す（本編と違う切り口になっても問題ない＝宣伝用の短い動画なので、作り直すたびに違う見せ方になる方が望ましい）。
+  inp = { ...inp, sceneAngle: inp.sceneAngle ?? pickAngle(inp.mode) };
   const digest = longScenes.filter((s) => s.visual.kind !== 'chapter' && s.visual.kind !== 'sources').map((s) => `・${s.narration}`).join('\n').slice(0, 6000);
   const task = [
     header(inp),
@@ -485,6 +525,9 @@ export interface GenerateProgress { step: string; done: number; total: number }
 
 /** 目次→章ごと（最初の1章のあとは3並列）→ショート の順に生成し、プロジェクト一式を返す */
 export async function generateProject(inp: GenerateInput, onProgress: (p: GenerateProgress) => void, signal?: AbortSignal, withShort = true, withSourcesScene = false): Promise<ExplainerProject> {
+  // [Stage E-5] マンネリ防止：切り口は動画1本につき1回だけ選び、目次・各章・ショートの全呼び出しで同じものを使う
+  // （章ごとに別の切り口になると構成が散らかるため、ここで固定したinpを以降すべてに渡す）。
+  inp = { ...inp, sceneAngle: inp.sceneAngle ?? pickAngle(inp.mode) };
   onProgress({ step: '目次を作成中…', done: 0, total: 1 });
   const step = async <T,>(label: string, fn: () => Promise<T>): Promise<T> => {
     try { return await fn(); } catch (e: any) { if (e && typeof e.message === 'string' && e.code !== 'ABORTED') e.message = `【${label}】${e.message}`; throw e; }
