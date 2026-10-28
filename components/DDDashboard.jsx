@@ -5,7 +5,7 @@ import {
   ComposedChart, LineChart, Area, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ReferenceLine, ReferenceDot, ResponsiveContainer, PieChart, Pie, Cell, Brush, Customized,
 } from "recharts";
-import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Download, RefreshCw, Database, Trash2, Zap, Copy, FileText, Activity, Layers, ListChecks, Smartphone, Monitor, Wallet, Gauge, Film, Clapperboard, Play, Pause, Square, GripVertical, Camera, MessageSquare, Lock, Unlock, Pencil } from "lucide-react";
+import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Download, RefreshCw, Database, Trash2, Zap, Copy, FileText, Activity, Layers, ListChecks, Smartphone, Monitor, Wallet, Gauge, Clapperboard, Play, Pause, Square, GripVertical, Camera, MessageSquare, Lock, Unlock, Pencil } from "lucide-react";
 import { storage } from "@/lib/storage";
 import { pullSyncAndApply, pushSyncNow, scheduleSyncPush, getLastSyncedAt, onSyncMergedFromRemote } from "@/lib/sync";
 import { parseInvestmentExcel, computeOwnAssetDrawdown, computeBenchmarkCAGR, latestUsdJpyRates, fxImpact, simulateDcaBenchmark, simulateMonthlyRebasedBenchmark, accountChanges, resolveBeginnerTrial, trialAxis } from "@/lib/investmentPerformance";
@@ -8845,7 +8845,6 @@ export default function DDDashboard() {
       {modal?.type === "yearForecast" && <FullScreenModal title={`${forecastYear}年 年騰落率予測${yearForecast?.blendedForecastPct != null ? `（総合：${yearForecast.blendedForecastPct > 0 ? "+" : ""}${yearForecast.blendedForecastPct.toFixed(1)}%）` : ""}`} onClose={() => setModal(null)}><YearForecastModalContent forecast={yearForecast} trajectory={yearForecastTrajectoryData} yearPoints={forecastYearPoints} forecastYear={forecastYear} forwardPath={yearForecastTrajectoryForwardPath} nextYearForecast={nextYearForecast} thisYearStartPrice={thisYearStartPrice} thisYearEndApproxPrice={thisYearEndApproxPrice} history={yearForecastHistory} forecastPath={yearForecastChartPath} qqqCorrelation={qqqSpxCorrelation} crashFrequency={bottom.stats.crashFrequency} /></FullScreenModal>}
       {modal?.type === "realHoldingsRanking" && <FullScreenModal title="実質保有銘柄ランキング" onClose={() => setModal(null)}><RealHoldingsRankingContent holdings={combinedHoldings} /></FullScreenModal>}
       {modal?.type === "summary" && <FullScreenModal title="詳細サマリー出力（AI相談用）" onClose={() => setModal(null)}><SummaryModalContent d={d} dVoo={dVoo} dQqq={dQqq} holdings={holdings} currentHoldingPct={currentHoldingPct} effectiveModelRow={effectiveModelRow} blocks={blocks} rankLabels={rankLabels} lifecycle={lifecycle} onLifecycleChange={handleLifecycleChange} fixedPositions={fixedPositions} onFixedPositionChange={handleFixedPositionChange} checkpoints={checkpoints} prevSnapshot={prevSnapshot} onSaveSnapshot={handleSaveSnapshot} crashFrequency={bottom.stats.crashFrequency} /></FullScreenModal>}
-      {modal?.type === "longform" && <FullScreenModal title="長尺用S&P500分析データ出力" onClose={() => setModal(null)}><LongformAnalysisModalContent d={d} crashFrequency={bottom.stats.crashFrequency} bottom={bottom} /></FullScreenModal>}
       {modal?.type === "mobileChartZoom" && <MobileChartZoomModal onClose={() => setModal(null)} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} sourceViews={sourceViews} chartSources={chartSources} onToggleChartSource={toggleChartSource} yearCompare={yearCompare} setYearCompare={setYearCompare} initialTab={chartTab} isRealDevice={isMobileAuto} />}
 
       {isMobile ? (
@@ -8859,9 +8858,6 @@ export default function DDDashboard() {
             </button>
             <button onClick={() => setModal({ type: "summary" })} title="詳細サマリー" className="flex items-center justify-center w-[30px] h-[30px] max-[374px]:w-7 max-[374px]:h-7 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
               <FileText size={16} />
-            </button>
-            <button onClick={() => setModal({ type: "longform" })} title="長尺用S&P500分析データを出力" className="flex items-center justify-center w-[30px] h-[30px] max-[374px]:w-7 max-[374px]:h-7 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
-              <Film size={16} />
             </button>
             <button onClick={() => setModal({ type: "dataInput" })} title="データ入力・出力" className="flex items-center justify-center w-[30px] h-[30px] max-[374px]:w-7 max-[374px]:h-7 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
               <Database size={16} />
@@ -8884,9 +8880,6 @@ export default function DDDashboard() {
           </button>
           <button onClick={() => setModal({ type: "summary" })} title="詳細サマリー" className="shrink-0 flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
             <FileText size={12} /> 詳細サマリー
-          </button>
-          <button onClick={() => setModal({ type: "longform" })} title="長尺用S&P500分析データを出力" className="shrink-0 flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}>
-            <Film size={12} /> 長尺用データ出力
           </button>
           <a href={`${process.env.NEXT_PUBLIC_BASE_PATH || ""}/explainer/`} target="_blank" rel="noopener noreferrer" title="ニュース・キーワード解説動画（長尺＋ショート）・別タブで開きます" className="shrink-0 flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full" style={{ color: C.textMuted, background: C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer", textDecoration: "none" }}>
             <Clapperboard size={12} /> 解説動画作成
