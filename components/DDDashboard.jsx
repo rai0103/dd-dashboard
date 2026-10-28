@@ -10084,6 +10084,27 @@ export default function DDDashboard() {
     const stats = buildStatsTable(prices, dates);
     return { stats, hold: computeMddHoldProbability(prices, stats) };
   }, [dSoxl]);
+  // [Stage E-2] 解説動画作成（ExplainerStudio）の「株式情報」モードが使う、S&P500・SOXLのデータカタログを
+  // storage（共有IndexedDB、lib/storage.ts）へ書き出す。長尺動画作成のUIは廃止したが、データの土台
+  // （computeLongformAnalysisJSON・buildVideoLongformが作るcatalog/scalarCatalog）はそのまま再利用し、
+  // モーダルを開かなくても、データ更新のたびに自動的に最新化する（ExplainerStudio側は読み取るだけ）。
+  useEffect(() => {
+    try {
+      const jsonOutput = computeLongformAnalysisJSON({ d, crashFrequency: bottom.stats.crashFrequency, generatedAt: new Date(), bottom, instrumentLabel: "SP500" });
+      const video = buildVideoLongform(jsonOutput, d, SP500_KANA, DEFAULT_CONTENT_SECTIONS, [], "S&P500");
+      const asOf = d.FULL.length ? d.FULL[d.FULL.length - 1].date.toISOString().slice(0, 10) : null;
+      storage.set("stock-catalog:SP500", JSON.stringify({ asOf, instrumentLabel: "S&P500", catalog: video.catalog, scalarCatalog: video.scalarCatalog })).catch(() => { /* storage unavailable */ });
+    } catch (e) { /* 失敗してもダッシュボード本体の動作には影響させない */ }
+  }, [d, bottom]);
+  useEffect(() => {
+    if (!dSoxl || !bottomSoxl) return;
+    try {
+      const jsonOutput = computeLongformAnalysisJSON({ d: dSoxl, crashFrequency: bottomSoxl.stats.crashFrequency, generatedAt: new Date(), bottom: bottomSoxl, instrumentLabel: "SOXL" });
+      const video = buildVideoLongform(jsonOutput, dSoxl, "えすおーえっくすえる", DEFAULT_CONTENT_SECTIONS, [], "SOXL");
+      const asOf = dSoxl.FULL.length ? dSoxl.FULL[dSoxl.FULL.length - 1].date.toISOString().slice(0, 10) : null;
+      storage.set("stock-catalog:SOXL", JSON.stringify({ asOf, instrumentLabel: "SOXL", catalog: video.catalog, scalarCatalog: video.scalarCatalog })).catch(() => { /* storage unavailable */ });
+    } catch (e) { /* 失敗してもダッシュボード本体の動作には影響させない */ }
+  }, [dSoxl, bottomSoxl]);
   // VOO底値判定パネル・モーダルで実際に表示する側（QQQ未取込時はVOOに自動フォールバック）。
   const activeBottomInstrument = bottomScoreInstrument === "qqq" && bottomQqq ? "qqq" : "voo";
   const activeBottom = activeBottomInstrument === "qqq" ? bottomQqq : bottom;
