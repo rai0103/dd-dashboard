@@ -725,11 +725,31 @@ const drawImage: Draw = (c, sc, e) => {
   const k = ease(sub(e.p, 0, 0.15));
   c.save(); c.globalAlpha *= k;
   rr(c, 0, 0, e.W, e.H, 16); c.clip();
-  // ゆっくり寄りながら少し動く（Ken Burns）
-  const z = 1.06 + 0.08 * e.p, sc0 = Math.max(e.W / img.naturalWidth, e.H / img.naturalHeight) * z;
-  const dw = img.naturalWidth * sc0, dh = img.naturalHeight * sc0;
-  const dir = (sc.id.charCodeAt(sc.id.length - 1) % 2) ? 1 : -1;
-  c.drawImage(img, (e.W - dw) / 2 + dir * (e.p - 0.5) * 30, (e.H - dh) / 2 - (e.p - 0.5) * 16, dw, dh);
+  // [Stage E-12] ダッシュボードのスクショ等、枠（16:10相当）と縦横比が大きく異なる画像をcoverで
+  // 敷き詰めると、端（グラフの凡例・軸ラベル・最新の日付など）が大きく切れてしまう
+  // （ユーザー報告：「まだ見切れていますね」）。coverに必要なクロップ量が大きい場合だけ、
+  // 画像全体が収まるcontain表示に切り替える（背景はぼかし拡大したcoverコピーで余白を埋める）。
+  const coverScale = Math.max(e.W / img.naturalWidth, e.H / img.naturalHeight);
+  const containScale = Math.min(e.W / img.naturalWidth, e.H / img.naturalHeight);
+  const needsContain = coverScale > containScale * 1.3;
+  if (needsContain) {
+    c.save();
+    // @ts-ignore: CanvasRenderingContext2D.filterはTS libには含まれるが、念のため存在確認してから使う
+    if ('filter' in c) (c as any).filter = 'blur(18px) brightness(0.5)';
+    const bw = img.naturalWidth * coverScale * 1.08, bh = img.naturalHeight * coverScale * 1.08;
+    c.drawImage(img, (e.W - bw) / 2, (e.H - bh) / 2, bw, bh);
+    // @ts-ignore
+    if ('filter' in c) (c as any).filter = 'none';
+    c.restore();
+    const dw = img.naturalWidth * containScale, dh = img.naturalHeight * containScale;
+    c.drawImage(img, (e.W - dw) / 2, (e.H - dh) / 2, dw, dh);
+  } else {
+    // ゆっくり寄りながら少し動く（Ken Burns）
+    const z = 1.06 + 0.08 * e.p, sc0 = coverScale * z;
+    const dw = img.naturalWidth * sc0, dh = img.naturalHeight * sc0;
+    const dir = (sc.id.charCodeAt(sc.id.length - 1) % 2) ? 1 : -1;
+    c.drawImage(img, (e.W - dw) / 2 + dir * (e.p - 0.5) * 30, (e.H - dh) / 2 - (e.p - 0.5) * 16, dw, dh);
+  }
   const g = c.createLinearGradient(0, e.H * 0.45, 0, e.H);
   g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,0.75)');
   c.fillStyle = g; c.fillRect(0, 0, e.W, e.H);
