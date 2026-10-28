@@ -5,7 +5,7 @@ import { callTool } from './aiClient';
 import { ICON_NAMES, VISUAL_KINDS } from './types';
 import type { ChapterPlan, ExplainerProject, ExplainerScene, SourceNote, StockCatalog, YoutubeMeta } from './types';
 import { assembleLong, normalizeScene, sanitizeReading } from './scriptModel';
-import { resolveYearCompareItems } from './stockCatalog';
+import { resolveYearCompareItems, resolveCatalogKey } from './stockCatalog';
 
 export interface GenerateInput {
   topic: string;
@@ -141,7 +141,8 @@ function system(inp?: GenerateInput) {
         `【株価データ】これは${cat.instrumentLabel}（${cat.asOf || '直近'}時点）の実際のデータです。`,
         '- bar・donut・numberの図解で数値を使う場合は、各itemのdataKeyに下記のscalars.*のキーを1つ指定してください（value・labelは仮の内容で構いません。実際の値・ラベルはdataKeyから自動的に差し替わります）。',
         '- line（折れ線）で実データの推移を見せる場合は、visualのseriesKeyに下記series.*のキーを1つ指定してください（itemsはダミーで構いません。実際の点はseriesKeyから自動的に生成されます）。',
-        '- yearCompare（年比較グラフ）で複数年・複数期間の値動きを重ねて見せる場合は、visualのseriesKeysに下記yearCompare.*のキーを2〜6個指定してください（itemsはダミーで構いません。1個目を強調表示したい場合はcurYearを含めてください）。',
+        '- yearCompare（年比較グラフ）で複数年・複数期間の値動きを重ねて見せる場合は、visualのseriesKeysに下記yearCompare.*のキーを2〜6個指定してください（itemsはダミーで構いません。「今年」を強調表示したい場合はcurYearで終わるキーを含めてください）。',
+        '- dataKey・seriesKey・seriesKeysに指定するキーは、下記【使えるキー一覧】に書かれた文字列（scalars./series./yearCompare.の接頭辞を除いた部分）を一字一句そのまま使ってください。銘柄名::が付いたキー（例：S&P500::curYear）は、銘柄名::の部分を省略せずそのまま含めてください（省略すると解決できず図解が表示されません）。',
         '- 下記のキーに無い数値を、数値の図解（bar・line・donut・number・yearCompare）で新たに作成することは禁止です（points・timeline等、数値を使わない図解であれば自由な内容にできます）。',
         '【使えるキー一覧】',
         stockCatalogKeyList(cat),
@@ -165,7 +166,10 @@ export function applyStockDataKeysToScene(raw: any, catalog: StockCatalog | unde
   const v = raw.visual;
   if (v.kind === 'line') {
     const key = typeof v.seriesKey === 'string' ? v.seriesKey.replace(/^series\./, '') : '';
-    const entry = key ? catalog.series[key] : undefined;
+    // [Stage E-10] resolveCatalogKeyで「銘柄名::」接頭辞の省略も救済する（複数銘柄統合時にAIが接頭辞を
+    // 落として指定しても、候補が一意なら解決できるようにする。曖昧な場合は解決せず安全側に倒す）
+    const resolvedKey = key ? resolveCatalogKey(key, catalog.series) : undefined;
+    const entry = resolvedKey ? catalog.series[resolvedKey] : undefined;
     if (entry && entry.points.length >= 3) {
       const icon = Array.isArray(v.items) && v.items[0]?.icon ? v.items[0].icon : 'chart';
       const items = entry.points.map((p) => ({ label: p.label, value: String(Math.round(p.value * 10) / 10), text: '', icon }));
@@ -177,7 +181,8 @@ export function applyStockDataKeysToScene(raw: any, catalog: StockCatalog | unde
     if (!Array.isArray(v.items)) return raw;
     const items = v.items.map((it: any) => {
       const dk = typeof it?.dataKey === 'string' ? it.dataKey.replace(/^scalars\./, '') : '';
-      const e = dk ? catalog.scalars[dk] : undefined;
+      const resolvedKey = dk ? resolveCatalogKey(dk, catalog.scalars) : undefined;
+      const e = resolvedKey ? catalog.scalars[resolvedKey] : undefined;
       return e ? { ...it, label: e.label, value: String(Math.round(e.value * 10) / 10) } : { ...it, value: '' };
     });
     return { ...raw, visual: { ...v, items } };

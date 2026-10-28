@@ -49,16 +49,49 @@ export function buildStockCatalogFromSnapshot(snapshot: any): StockCatalog {
   return { instrumentLabel: String(snapshot?.instrumentLabel ?? ''), asOf: String(snapshot?.asOf ?? ''), scalars, series, yearCompare };
 }
 
+// [Stage E-10] AIがdataKey/seriesKey/seriesKeysに、mergeStockCatalogsが付けた「銘柄名::」の接頭辞を
+// 省略して指定してしまうケースの救済（実際に観測：yearCompareのseriesKeysで2系列のうち1系列だけ接頭辞を
+// 落として指定し、片方しか解決できず年比較が有効系列2未満で要点カードに落ちてしまった）。完全一致を優先し、
+// 無ければ「::key」で終わる候補を探す。候補が複数ある（複数銘柄で同じキー名が存在する）場合は、どの銘柄の
+// データか確定できないため解決しない＝誤った銘柄の数値を使わせない安全側の挙動を維持する。
+export function resolveCatalogKey<T>(key: string, record: Record<string, T> | undefined): string | undefined {
+  if (!record) return undefined;
+  if (Object.prototype.hasOwnProperty.call(record, key)) return key;
+  const suffix = `::${key}`;
+  const matches = Object.keys(record).filter((k) => k.endsWith(suffix));
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+// [Stage E-10] 1系列あたりの点数の上限。yearCompareの系列は（buildStockCatalogFromSnapshotで）ダウンサンプル
+// せず年内の実日数のまま持っているため、1年分で200点を超えることがある。これを間引かずに複数系列（最大8個）
+// 渡すと、scriptModel.tsのnormalizeVisualが行う「items全体を120個までに切り詰める」処理で、先頭の1系列
+// だけで上限に達し、後続の系列が丸ごと消えてしまう不具合が実際に発生した（例：curYear 206点＋cyclePos2 201点
+// →207点目以降のcyclePos2が全滅し、有効系列が1つしか残らず要点カードに降格していた）。ここで系列ごとに
+// 均等間引きしてから渡すことで、複数系列を渡しても後続が消えないようにする。
+const MAX_POINTS_PER_SERIES = 60;
+function downsamplePoints<T>(points: T[], n: number): T[] {
+  if (points.length <= n) return points;
+  if (n <= 1) return points.slice(0, 1);
+  const out: T[] = [];
+  for (let i = 0; i < n; i++) out.push(points[Math.round(((points.length - 1) * i) / (n - 1))]);
+  return out;
+}
+
 // [Stage E-9] 選ばれたyearCompareのキー（2〜8個）を、Canvas描画用のVisualItem配列に解決する。
 // 1キー＝1系列（線）。同じseriesKeyの点を発生順につないで1本の線として描く（lib/explainer/visuals.tsのdrawOverlay）。
 // 存在しないキーは無視する（AI生成・手動選択どちらからも呼ばれる共通ロジック）。
+// [Stage E-10] resolveCatalogKeyで「銘柄名::」接頭辞の省略も救済する。各系列はMAX_POINTS_PER_SERIESまで間引く。
 export function resolveYearCompareItems(seriesKeys: string[], catalog: StockCatalog['yearCompare'] | undefined): VisualItem[] {
   if (!catalog) return [];
-  const keys = [...new Set((seriesKeys ?? []).filter((k) => typeof k === 'string' && catalog.series[k]))].slice(0, 8);
+  const resolved = (seriesKeys ?? [])
+    .filter((k): k is string => typeof k === 'string')
+    .map((k) => resolveCatalogKey(k, catalog.series))
+    .filter((k): k is string => !!k);
+  const keys = [...new Set(resolved)].slice(0, 8);
   const items: VisualItem[] = [];
   for (const key of keys) {
     const s = catalog.series[key];
-    for (const p of s.points) {
+    for (const p of downsamplePoints(s.points, MAX_POINTS_PER_SERIES)) {
       items.push({ label: `${p.x}日`, value: String(p.value), text: '', icon: 'chartUp', x: p.x, seriesKey: key, seriesLabel: s.label, seriesEmphasis: s.emphasis });
     }
   }

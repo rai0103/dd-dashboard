@@ -26,6 +26,22 @@ test("不明な種類・不足した比較は安全な種類に寄せる", () =>
 });
 
 // [Stage E-9] yearCompare：系列（seriesKey）ごとに3点以上そろった系列が2つ以上なければpointsに降格する
+// [Stage E-10] 実際にExplainerStudioで観測した不具合の再現：items全体を120個に切り詰める処理が、
+// 複数系列のうち先頭の1系列だけで上限に達してしまい、2系列目以降が丸ごと消えて要点カードに降格していた
+// （AIはseriesKeysを正しく2つ指定していたにもかかわらず）。ITEM_LIMITからyearCompareを除外したことで、
+// 200点規模の系列が2つあってもどちらも残り、yearCompareのまま維持されることを確認する。
+test("yearCompare：1系列が120点を超える規模でも、後続の系列が切り詰めで消えずyearCompareのまま維持される（実際に起きた不具合の再現）", () => {
+  const mk = (seriesKey: string, label: string, n: number) =>
+    Array.from({ length: n }, (_, i) => ({ label: `${i}日`, value: String(100 + i * 0.1), seriesKey, seriesLabel: label, x: i }));
+  const raw = { kind: "yearCompare", items: [...mk("curYear", "今年", 206), ...mk("cyclePos2", "中間選挙年の平均", 201)] };
+  const v = normalizeVisual(raw);
+  assert.equal(v.kind, "yearCompare");
+  const curYearCount = v.items.filter((it) => it.seriesKey === "curYear").length;
+  const cyclePos2Count = v.items.filter((it) => it.seriesKey === "cyclePos2").length;
+  assert.ok(curYearCount >= 3, `今年の系列が残っていること（実際:${curYearCount}）`);
+  assert.ok(cyclePos2Count >= 3, `中間選挙年の系列が残っていること（実際:${cyclePos2Count}）`);
+});
+
 test("yearCompare：3点以上の系列が2つ以上あれば、系列ごとにまとめたitemsのままyearCompareを維持する", () => {
   const raw = {
     kind: "yearCompare",

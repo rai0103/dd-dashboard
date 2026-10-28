@@ -137,6 +137,35 @@ const catalogWithYearCompare: StockCatalog = {
   },
 };
 
+// [Stage E-10] 実際にExplainerStudioで観測した不具合：複数銘柄統合（mergeStockCatalogs）で
+// 「銘柄名::」接頭辞が付いたキーを、AIが接頭辞を省略して指定しても（候補が一意なら）解決できることの確認
+const prefixedCatalog: StockCatalog = {
+  instrumentLabel: "S&P500",
+  asOf: "2026-10-27",
+  scalars: { "S&P500::dayChange": { label: "S&P500：前日比", value: 1.23 } },
+  series: { "S&P500::recent30d": { label: "S&P500：直近30日", points: [{ label: "10/1", value: 100 }, { label: "10/8", value: 102.5 }, { label: "10/15", value: 98.1 }] } },
+};
+
+test("number：dataKeyの「銘柄名::」接頭辞を省略しても、候補が一意なら実データに解決される", () => {
+  const raw = {
+    title: "前日比", caption: "", narration: "", reading: "",
+    visual: { kind: "number", heading: "", subheading: "", items: [{ label: "", value: "0", text: "", icon: "chart", dataKey: "dayChange" }], unit: "", source: "", emphasis: "", imagePrompt: "" },
+  };
+  const out = applyStockDataKeysToScene(raw, prefixedCatalog);
+  assert.equal(out.visual.items[0].value, "1.2");
+  assert.equal(out.visual.items[0].label, "S&P500：前日比");
+});
+
+test("line：seriesKeyの「銘柄名::」接頭辞を省略しても、候補が一意なら実データの点列に解決される", () => {
+  const raw = {
+    title: "直近30日", caption: "", narration: "", reading: "",
+    visual: { kind: "line", heading: "", subheading: "", items: [], unit: "", source: "", emphasis: "", imagePrompt: "", seriesKey: "recent30d" },
+  };
+  const out = applyStockDataKeysToScene(raw, prefixedCatalog);
+  assert.equal(out.visual.items.length, 3);
+  assert.equal(out.visual.heading, "S&P500：直近30日");
+});
+
 test("yearCompare：seriesKeysで指定した系列が実データの複数系列（items）に差し替わる", () => {
   const raw = {
     title: "年比較", caption: "", narration: "", reading: "",

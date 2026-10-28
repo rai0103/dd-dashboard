@@ -37,8 +37,10 @@ export function normalizeItem(raw: any): VisualItem {
 const ITEM_LIMIT: Partial<Record<VisualKind, [number, number]>> = {
   points: [1, 4], number: [1, 1], bar: [1, 8], line: [2, 16], donut: [2, 6], timeline: [2, 7], flow: [2, 5],
   compare: [2, 2], cycle: [3, 6], illustration: [1, 5], image: [0, 5], summary: [1, 5], title: [0, 3], keyword: [0, 3], cta: [0, 3], point: [0, 1], qa: [0, 1],
-  // [Stage E-9] yearCompare：1系列（線）あたり最大15点×最大8系列を想定
-  yearCompare: [6, 120],
+  // [Stage E-10] yearCompareはITEM_LIMITに含めない：下のitems全体を均一に切り詰める処理（v.items.slice(0,lim[1])）を
+  // yearCompareに適用すると、先頭の1系列だけで上限に達し、後続の系列が丸ごと消える不具合が実際に発生した
+  // （lib/explainer/stockCatalog.tsのresolveYearCompareItems参照）。系列ごとの点数上限は解決側（resolveYearCompareItemsの
+  // MAX_POINTS_PER_SERIES）と系列数上限（最大8系列）ですでに抑えているため、ここでの一律な切り詰めは不要かつ有害。
 };
 
 export function normalizeVisual(raw: any): VisualSpec {
