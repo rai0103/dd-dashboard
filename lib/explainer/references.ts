@@ -50,6 +50,16 @@ export function refLabel(r: ReferenceItem): string {
 
 export function hostOf(url: string): string { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url; } }
 
+// [Stage E-7] 参考情報ごとの「必ず動画に含める」トグル（ReferenceItem.required）がオンのものだけを、
+// AIへの指示文で名指しできる短い説明文の配列にする（種別ラベル付き）。URLは本文を取得できていない
+// （status !== 'ok'）場合、AIに渡す中身が無く「必ず触れろ」と言っても扱いようがないため除外する。
+const REF_KIND_LABEL: Record<ReferenceItem['kind'], string> = { text: 'テキスト', url: 'URL記事', pdf: 'PDF', csv: 'CSV（株価データ）', image: '画像（スクリーンショット）' };
+export function requiredRefNotes(refs: ReferenceItem[]): string[] {
+  return refs
+    .filter((r) => r.required && (r.kind !== 'url' || r.status === 'ok'))
+    .map((r) => `${refLabel(r)}（${REF_KIND_LABEL[r.kind]}）`);
+}
+
 /**
  * documentブロックのtitleは、Anthropic API側の上限が500文字。参考資料のページタイトルがまれに
  * 非常に長い（サイト側のtitleタグの作りが特殊、取得時に本文の一部を拾ってしまった等）ことがあり、

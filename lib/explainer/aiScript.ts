@@ -23,6 +23,9 @@ export interface GenerateInput {
   stockCatalog?: StockCatalog;
   /** [Stage E-5] 今回の生成で使う「切り口」（マンネリ防止）。未指定ならheader()は何も加えない。generateProject/generateShortが内部で自動選択する */
   sceneAngle?: string;
+  /** [Stage E-7] 「必ず動画に含める」とマークした参考情報の説明（lib/explainer/references.tsのrequiredRefNotes）。
+   *  指定があればheader()で名指しし、AIがその内容を省略しないよう強制する */
+  requiredRefNotes?: string[];
 }
 
 /** 日本語ナレーションの1分あたりの文字数の目安（話速1.0） */
@@ -242,7 +245,7 @@ function pickAngle(mode: GenerateInput['mode']): string {
   return list[Math.floor(Math.random() * list.length)];
 }
 
-function header(inp: GenerateInput): string {
+export function header(inp: GenerateInput): string {
   const kind = inp.mode === 'news' ? 'ニュース' : inp.mode === 'stock' ? '株式情報' : 'キーワード（用語）';
   return [
     `【テーマ（${kind}）】${inp.topic}`,
@@ -252,6 +255,10 @@ function header(inp: GenerateInput): string {
     inp.extraInstruction.trim() ? `【制作者からの追加の指示】${inp.extraInstruction.trim()}` : '',
     // [Stage E-5] マンネリ防止：今回選ばれた切り口を主軸にするよう明示する
     inp.sceneAngle ? `【今回の切り口】${inp.sceneAngle}（毎回変えています。前回と似た構成にならないよう、この切り口を主軸に章立てを考えてください）` : '',
+    // [Stage E-7] 「必ず動画に含める」とマークされた参考情報を名指しし、省略を禁止する
+    inp.requiredRefNotes && inp.requiredRefNotes.length
+      ? `【必ず扱う参考情報】次の資料は、動画の中で必ず具体的に触れてください（存在を無視したり省略したりせず、該当する数値・固有名詞・出来事を実際に使うこと）：\n${inp.requiredRefNotes.map((s) => `・${s}`).join('\n')}`
+      : '',
   ].filter(Boolean).join('\n');
 }
 

@@ -7,7 +7,7 @@
 // 違い：台本は「テーマ＋参考情報（テキスト・URL・PDF）」からAIが作る。図解はすべて自作の図形・アイコンで描く（著作権・肖像権への配慮）。
 import { useEffect, useMemo, useRef, useState } from "react";
 import NarrMixedBox from "@/components/NarrMixedBox";
-import { Play, Pause, Square, Camera, Download, Upload, X, GripVertical, MessageSquare, ChevronRight, Lock, Unlock, Link2, FileText, Type, Sparkles, Copy, AlertTriangle, Check, Image as ImageIcon, RefreshCw, Plus, ArrowLeft, Search, ExternalLink, Eye, EyeOff } from "lucide-react";
+import { Play, Pause, Square, Camera, Download, Upload, X, GripVertical, MessageSquare, ChevronRight, Lock, Unlock, Link2, FileText, Type, Sparkles, Copy, AlertTriangle, Check, Image as ImageIcon, RefreshCw, Plus, ArrowLeft, Search, ExternalLink, Eye, EyeOff, Pin, PinOff } from "lucide-react";
 import { voiceGender } from "@/lib/videoAnalysts";
 import { AudioMixer, getTtsBaseUrl } from "@/lib/videoAudioMixer";
 import { listAivisVoices, isAivisVoice, getAivisUrl } from "@/lib/videoAivisClient";
@@ -20,7 +20,7 @@ import { VideoAvatar } from "@/lib/videoAvatarRender";
 import { ExplainerRenderer, RENDER_SIZE } from "@/lib/explainer/renderer";
 import { generateProject, generateShort, rewriteScene, rewriteNarration, CHARS_PER_MIN } from "@/lib/explainer/aiScript";
 import { AiClientError } from "@/lib/explainer/aiClient";
-import { referenceBlocks, referenceTexts, fetchUrlReference, fileToBase64, newRefId, refLabel, MAX_PDF_BYTES } from "@/lib/explainer/references";
+import { referenceBlocks, referenceTexts, fetchUrlReference, fileToBase64, newRefId, refLabel, requiredRefNotes, MAX_PDF_BYTES } from "@/lib/explainer/references";
 import { lintScenes, buildDescription, sourcesScene, findVerbatimOverlaps, predictTotalSec, suggestRate, COMFORT_RATE, normalizeVisual, minSecFor, sanitizeReading, isKanaReading } from "@/lib/explainer/scriptModel";
 import { saveImage, listImages, deleteImage } from "@/lib/explainer/imageStore";
 import { generateImage } from "@/lib/explainer/imageClient";
@@ -202,13 +202,17 @@ export default function ExplainerStudio() {
   // 何度でも押せる（見つかったURLの中身が合わなければ削除して、もう一度押せば別の候補に入れ替わる）。
   const [researchBusy, setResearchBusy] = useState(false);
   const [researchError, setResearchError] = useState("");
+  // [Stage E-8] 検索内容をテーマ本文と分けて指定したい場合の、AI検索専用プロンプト（任意）。
+  // 空欄ならテーマをそのまま検索クエリとして使う（従来通りの挙動）。
+  const [researchPrompt, setResearchPrompt] = useState("");
   const researchAbortRef = useRef(null);
   const runResearch = async () => {
-    if (!topic.trim()) { setResearchError("先にテーマ（ニュースやキーワード）を入力してください。"); return; }
+    const query = researchPrompt.trim() || topic.trim();
+    if (!query) { setResearchError("先にテーマ（ニュースやキーワード）、または検索プロンプトを入力してください。"); return; }
     setResearchBusy(true); setResearchError("");
     const ac = new AbortController(); researchAbortRef.current = ac;
     try {
-      const r = await researchTopic(topic.trim(), ac.signal);
+      const r = await researchTopic(query, ac.signal);
       const existingUrls = new Set(refs.filter((x) => x.kind === "url").map((x) => x.url));
       const combined = [];
       [...r.claude.urls, ...r.gemini.urls].forEach((u) => {
@@ -275,7 +279,7 @@ export default function ExplainerStudio() {
       const merged = mergeStockCatalogs(catalogs);
       if (Object.keys(merged.scalars).length || Object.keys(merged.series).length) stockCatalog = merged;
     }
-    return { topic: topic.trim(), mode, audience, targetMinutes: minutes, extraInstruction, refBlocks: referenceBlocks(refs), today: todayStr(), speechRate: rate, imageTarget: imageGenEnabled ? imageGenCount : 0, stockCatalog };
+    return { topic: topic.trim(), mode, audience, targetMinutes: minutes, extraInstruction, refBlocks: referenceBlocks(refs), today: todayStr(), speechRate: rate, imageTarget: imageGenEnabled ? imageGenCount : 0, stockCatalog, requiredRefNotes: requiredRefNotes(refs) };
   };
   const errMsg = (e) => (e instanceof AiClientError ? e.message : e?.message || String(e));
   // visual.kind=image の場面（AIがimagePromptを用意している場面）のうち、先頭から指定枚数だけAIで画像を生成して
@@ -1114,24 +1118,30 @@ export default function ExplainerStudio() {
 
               <div>
                 <div className="text-[11px] font-semibold mb-1.5" style={{ color: C.textMuted }}>参考情報（AIはこれを最優先に解説します。文章は丸写しせず言い換えます）</div>
+                <div className="text-[10px] mb-1.5" style={{ color: C.textDim }}>各資料の<Pin size={10} style={{ display: "inline", verticalAlign: "-1px", color: C.teal }} />ボタンを押すと「必ず動画に含める」情報として固定できます（押していない資料は、AIが内容を見て取捨選択します）。</div>
+                <div className="flex items-center gap-2 mb-1 flex-wrap">
+                  <input value={researchPrompt} onChange={(e) => setResearchPrompt(e.target.value)} placeholder="検索プロンプト（任意）：空欄ならテーマをそのまま検索します。例）2026年10月の決算の反応に絞って" className="flex-1 min-w-[260px] px-2 py-1 rounded text-[11px]" style={inputStyle} />
+                </div>
                 <div className="flex items-center gap-2 mb-2 flex-wrap">
                   <button onClick={runResearch} disabled={researchBusy} className="text-[11px] px-2 py-1 rounded flex items-center gap-1" style={{ ...btn("primary"), opacity: researchBusy ? 0.6 : 1 }}><Search size={11} /> {researchBusy ? "検索中…" : "AIで検索して参考情報を追加"}</button>
-                  <span className="text-[10px]" style={{ color: C.textDim }}>テーマについて、Claudeの検索とGeminiの検索でURL最大5件・要約テキスト2件（Gemini・Claude）を自動で追加します（何度でも押せます。不要な結果は個別に削除できます）。</span>
+                  <span className="text-[10px]" style={{ color: C.textDim }}>{researchPrompt.trim() ? "上の検索プロンプトの内容で" : "テーマについて"}、Claudeの検索とGeminiの検索でURL最大5件・要約テキスト2件（Gemini・Claude）を自動で追加します（何度でも押せます。不要な結果は個別に削除できます）。</span>
                   {researchError && <div className="text-[10px] w-full" style={{ color: C.rust }}>{researchError}</div>}
                 </div>
                 <div className="flex flex-col gap-1 mb-2">
                   {refs.length === 0 && <div className="text-[10px]" style={{ color: C.textDim }}>未追加です。ニュースは元記事や公式発表を追加すると正確になります（参考情報なしの場合は、一般に確立した知識の範囲で解説します）。</div>}
                   {refs.map((r) => (
                     <div key={r.id}>
-                      <div className="flex items-center gap-2 px-2 py-1 rounded" style={{ background: C.panel2, border: `1px solid ${r.kind === "url" && r.status === "error" ? C.rust + "88" : C.borderSoft}` }}>
+                      <div className="flex items-center gap-2 px-2 py-1 rounded" style={{ background: C.panel2, border: `1px solid ${r.kind === "url" && r.status === "error" ? C.rust + "88" : r.required ? C.teal + "99" : C.borderSoft}` }}>
                         {r.kind === "url" ? <Link2 size={12} style={{ color: C.blue, flexShrink: 0 }} /> : r.kind === "pdf" ? <FileText size={12} style={{ color: C.rust, flexShrink: 0 }} /> : r.kind === "csv" ? <FileText size={12} style={{ color: C.blue, flexShrink: 0 }} /> : r.kind === "image" ? <ImageIcon size={12} style={{ color: C.teal, flexShrink: 0 }} /> : <Type size={12} style={{ color: C.amber, flexShrink: 0 }} />}
                         <span className="truncate flex-1 text-[11px]" title={r.kind === "url" ? r.url : r.title}>{refLabel(r)}</span>
+                        {r.required && <span className="text-[9px] px-1 rounded shrink-0" style={{ color: C.bg, background: C.teal, fontWeight: 700 }}>必須</span>}
                         <span className="text-[10px] shrink-0" style={{ color: r.kind === "url" && r.status === "error" ? C.rust : C.textDim }}>
                           {r.kind === "url" ? (r.status === "pending" ? "読み込み中…" : r.status === "error" ? r.error : r.pdfBase64 ? "PDF" : `${r.note ? `${r.note}・` : ""}${r.text.length.toLocaleString()}字`) : r.kind === "pdf" ? sizeKb(r.sizeBytes) : r.kind === "csv" ? `CSV・${sizeKb(r.sizeBytes)}` : r.kind === "image" ? `画像・${sizeKb(r.sizeBytes)}` : `${r.text.length.toLocaleString()}字`}
                         </span>
                         {r.kind === "url" && <a href={r.url} target="_blank" rel="noopener noreferrer" title="サイトを新しいタブで開く（採用するか確認）" style={{ color: C.textMuted, flexShrink: 0, display: "flex" }}><ExternalLink size={11} /></a>}
                         {r.kind === "text" && <button onClick={() => setExpandedRefId((id) => (id === r.id ? null : r.id))} title="本文を確認" style={{ color: C.textMuted, background: "none", border: "none", cursor: "pointer" }}>{expandedRefId === r.id ? <EyeOff size={12} /> : <Eye size={12} />}</button>}
                         {r.kind === "url" && r.status === "error" && <button onClick={() => loadUrl(r.id, r.url)} title="もう一度読み込む" style={{ color: C.textMuted, background: "none", border: "none", cursor: "pointer" }}><RefreshCw size={11} /></button>}
+                        <button onClick={() => setRefs((p) => p.map((x) => (x.id === r.id ? { ...x, required: !x.required } : x)))} title={r.required ? "「必ず動画に含める」を解除" : "必ず動画に含める（AIに省略させない）"} style={{ color: r.required ? C.teal : C.textDim, background: "none", border: "none", cursor: "pointer" }}>{r.required ? <Pin size={12} /> : <PinOff size={12} />}</button>
                         <button onClick={() => setRefs((p) => p.filter((x) => x.id !== r.id))} title="削除" style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer" }}><X size={12} /></button>
                       </div>
                       {r.kind === "text" && expandedRefId === r.id && (

@@ -8,17 +8,22 @@ export const STORE_BACKGROUNDS_LONG = 'backgrounds-long';
 export const STORE_BGMS_LONG = 'bgms-long';
 export const STORE_ANALYSTS = 'analysts'; // 長尺のアナリスト画像
 export const STORE_AVATARS = 'avatars'; // 長尺のアバター（人物の動画）
-export const STORE_CUSTOM_PROMPTS = 'custom-scene-prompts'; // Stage D-4：カスタム場面の指示文（記憶する機能）
-
+// STORE_CUSTOM_PROMPTS（'custom-scene-prompts'）は、Stage D-4のカスタム場面チャット機能で使っていたストア。
+// Stage E-5でlib/videoCustomScenePrompts.tsごと削除し、もう使っていない（既存ブラウザに残っていても害はないため、
+// ストア自体の削除は行わない。新規作成もしない）。
+// [Stage E-6の不具合修正] バージョン番号を6のまま据え置くと、過去の開発中（Stage D-8相当の試作、news-imagesストア追加）
+// に一度バージョン7までブラウザ側のIndexedDBが進んでしまったユーザー環境で、indexedDB.openが
+// 「requested version (6) is less than the existing version (7)」というVersionErrorで失敗し、アバター・背景・BGMが
+// 一切読み込めなくなる不具合があった（IndexedDBはバージョンを下げて開けない仕様のため）。7に上げて解消する。
 export function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     if (typeof indexedDB === 'undefined') {
       reject(new Error('IndexedDB unavailable'));
       return;
     }
-    const req = indexedDB.open(DB_NAME, 6);
+    const req = indexedDB.open(DB_NAME, 7);
     req.onupgradeneeded = () => {
-      for (const name of [STORE_BACKGROUNDS, STORE_BGMS, STORE_BACKGROUNDS_LONG, STORE_BGMS_LONG, STORE_ANALYSTS, STORE_AVATARS, STORE_CUSTOM_PROMPTS]) {
+      for (const name of [STORE_BACKGROUNDS, STORE_BGMS, STORE_BACKGROUNDS_LONG, STORE_BGMS_LONG, STORE_ANALYSTS, STORE_AVATARS]) {
         if (!req.result.objectStoreNames.contains(name)) {
           req.result.createObjectStore(name, { keyPath: 'id' });
         }

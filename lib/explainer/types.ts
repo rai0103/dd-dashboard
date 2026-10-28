@@ -121,14 +121,17 @@ export interface ExplainerProject {
 }
 
 // ---- 参考情報 ----
+// [Stage E-7] どの参考情報にも共通で持たせる「必ず動画に含める」フラグ。trueのものは、AIへの指示
+// （lib/explainer/aiScript.tsのheader()）で名指しして、省略せず実際に扱うよう強制する。
+interface ReferenceItemBase { id: string; required?: boolean }
 export type ReferenceItem =
-  | { id: string; kind: 'text'; title: string; text: string }
-  | { id: string; kind: 'url'; url: string; title: string; text: string; status: 'pending' | 'ok' | 'error'; error?: string; pdfBase64?: string; note?: string }
-  | { id: string; kind: 'pdf'; title: string; base64: string; sizeBytes: number }
+  | (ReferenceItemBase & { kind: 'text'; title: string; text: string })
+  | (ReferenceItemBase & { kind: 'url'; url: string; title: string; text: string; status: 'pending' | 'ok' | 'error'; error?: string; pdfBase64?: string; note?: string })
+  | (ReferenceItemBase & { kind: 'pdf'; title: string; base64: string; sizeBytes: number })
   // [Stage E-3] 株式情報モード：株価CSV（Date/Close列。lib/csvPrice.tsのparseStooqCSVと同じ形式）をそのまま原文で保持する
-  | { id: string; kind: 'csv'; title: string; text: string; sizeBytes: number }
+  | (ReferenceItemBase & { kind: 'csv'; title: string; text: string; sizeBytes: number })
   // [Stage E-3] ニュース・株式情報どちらのモードでも使えるスクリーンショット参照（画像としてAIに渡す）
-  | { id: string; kind: 'image'; title: string; base64: string; mediaType: string; sizeBytes: number };
+  | (ReferenceItemBase & { kind: 'image'; title: string; base64: string; mediaType: string; sizeBytes: number });
 
 export interface ImageAsset { id: string; name: string; blob: Blob; rightsConfirmed: boolean; createdAt: number }
 

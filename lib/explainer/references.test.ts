@@ -2,7 +2,7 @@
 // 超えないことを確認する（参考情報のページタイトルが極端に長い場合に「台本を生成」全体が失敗する不具合の回帰テスト）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { referenceBlocks, capDocumentTitle } from './references.ts';
+import { referenceBlocks, capDocumentTitle, requiredRefNotes } from './references.ts';
 
 test('capDocumentTitle：500文字以内ならそのまま、超えていれば499文字+…に切り詰める', () => {
   const short = '短いタイトル';
@@ -36,4 +36,23 @@ test('referenceBlocks：通常の短いタイトルは、参考番号とURLを�
   ];
   const blocks = referenceBlocks(refs);
   assert.equal(blocks[0].title, '参考1：普通の記事タイトル（https://example.com/a）');
+});
+
+test('requiredRefNotes：requiredがtrueの資料だけを種別ラベル付きで列挙する', () => {
+  const refs = [
+    { id: 'r1', kind: 'text' as const, title: 'メモ', text: '本文', required: true },
+    { id: 'r2', kind: 'text' as const, title: '任意のメモ', text: '本文2' },
+    { id: 'r3', kind: 'csv' as const, title: '任天堂', text: 'Date,Close\n2026-01-01,100', sizeBytes: 10, required: true },
+  ];
+  const notes = requiredRefNotes(refs);
+  assert.deepEqual(notes, ['メモ（テキスト）', '任天堂（CSV（株価データ））']);
+});
+
+test('requiredRefNotes：requiredなURLでも本文未取得（status!==\'ok\'）なら除外する', () => {
+  const refs = [
+    { id: 'r1', kind: 'url' as const, url: 'https://example.com/a', title: '記事', text: '', status: 'pending' as const, required: true },
+    { id: 'r2', kind: 'url' as const, url: 'https://example.com/b', title: '記事2', text: '本文', status: 'ok' as const, required: true },
+  ];
+  const notes = requiredRefNotes(refs);
+  assert.deepEqual(notes, ['記事2（example.com）（URL記事）']);
 });

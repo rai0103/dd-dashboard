@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { applyStockDataKeysToScene } from "./aiScript.ts";
+import { applyStockDataKeysToScene, header } from "./aiScript.ts";
+import type { GenerateInput } from "./aiScript.ts";
 import type { StockCatalog } from "./types.ts";
 
 const catalog: StockCatalog = {
@@ -108,4 +109,27 @@ test("donutの一部itemだけdataKey不一致でも、一致したitemだけが
   const out = applyStockDataKeysToScene(raw, catalog);
   assert.equal(out.visual.items[0].value, "1.2");
   assert.equal(out.visual.items[1].value, "");
+});
+
+// [Stage E-7] header()のテスト用の最小GenerateInput
+const baseHeaderInput: GenerateInput = {
+  topic: "テスト用テーマ",
+  mode: "news",
+  audience: "general",
+  targetMinutes: 5,
+  extraInstruction: "",
+  refBlocks: [],
+  today: "2026-10-28",
+};
+
+test("header：requiredRefNotesが無ければ「必ず扱う参考情報」ブロックは出力されない", () => {
+  const out = header(baseHeaderInput);
+  assert.equal(out.includes("必ず扱う参考情報"), false);
+});
+
+test("header：requiredRefNotesがあれば、各項目を列挙した「必ず扱う参考情報」ブロックが追加される", () => {
+  const out = header({ ...baseHeaderInput, requiredRefNotes: ["メモ（テキスト）", "任天堂（CSV（株価データ）)"] });
+  assert.ok(out.includes("【必ず扱う参考情報】"));
+  assert.ok(out.includes("・メモ（テキスト）"));
+  assert.ok(out.includes("・任天堂（CSV（株価データ）)"));
 });
