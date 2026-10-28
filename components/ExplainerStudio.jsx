@@ -27,6 +27,9 @@ import { generateImage } from "@/lib/explainer/imageClient";
 import { researchTopic } from "@/lib/explainer/researchClient";
 import { safeFileName, canPickFolder, getSavedFolder, pickFolder, ensureWritable, saveBundle, descriptionText } from "@/lib/explainer/exportBundle";
 import { VISUAL_KINDS, ICON_NAMES } from "@/lib/explainer/types";
+import { storage } from "@/lib/storage";
+import { easternStamp } from "@/lib/marketClock";
+import { parseStooqCSV } from "@/lib/csvPrice";
 
 const C = {
   bg: "#0A0F1C", panel: "#111A2C", panel2: "#0D1424",
@@ -94,10 +97,10 @@ export default function ExplainerStudio() {
   const [audience, setAudience] = useState(saved0?.audience ?? "beginner");
   const [targetMinutes, setTargetMinutes] = useState(Math.min(8, Math.max(3, saved0?.targetMinutes ?? 5)));
   const [extraInstruction, setExtraInstruction] = useState(saved0?.extraInstruction ?? "");
-  const [refs, setRefs] = useState(() => (saved0?.refs ?? []).filter((r) => r.kind !== "pdf"));
+  const [refs, setRefs] = useState(() => (saved0?.refs ?? []).filter((r) => r.kind !== "pdf" && r.kind !== "csv" && r.kind !== "image"));
   useEffect(() => {
-    // PDFは容量が大きいため保存しない（テキストとURLの本文は保存して次回も使える）
-    const keep = refs.filter((r) => r.kind !== "pdf").map((r) => (r.kind === "url" ? { ...r, pdfBase64: undefined, status: r.pdfBase64 ? "pending" : r.status } : r));
+    // PDF・CSV・スクショは容量が大きいため保存しない（テキストとURLの本文は保存して次回も使える）
+    const keep = refs.filter((r) => r.kind !== "pdf" && r.kind !== "csv" && r.kind !== "image").map((r) => (r.kind === "url" ? { ...r, pdfBase64: undefined, status: r.pdfBase64 ? "pending" : r.status } : r));
     try { localStorage.setItem(INPUT_KEY, JSON.stringify({ topic, mode, audience, targetMinutes, extraInstruction, refs: keep })); } catch (e) { /* 容量超過などは無視 */ }
   }, [topic, mode, audience, targetMinutes, extraInstruction, refs]);
   const [refTextOpen, setRefTextOpen] = useState(false);
@@ -106,6 +109,40 @@ export default function ExplainerStudio() {
   const [refTextBody, setRefTextBody] = useState("");
   const [urlInput, setUrlInput] = useState("");
   const [inputOpen, setInputOpen] = useState(true);
+  // [Stage E-3] 株式情報モード：データの出典（ダッシュボードのS&P500／SOXL、またはCSVアップロード）
+  const [stockSource, setStockSource] = useState("SP500"); // "SP500" | "SOXL" | "csv"
+  const [stockSnapshot, setStockSnapshot] = useState(null); // ダッシュボードが書き出したstock-catalog:*（lib/storage.ts経由）
+  const [stockSnapshotError, setStockSnapshotError] = useState("");
+  const [csvCompanyName, setCsvCompanyName] = useState("");
+  const [stockCsvSeries, setStockCsvSeries] = useState([]); // ダッシュボードが持たない企業のCSVを取り込んだ場合の{date,price}[]
+  const [stockCsvError, setStockCsvError] = useState("");
+  const loadStockSnapshot = async (source) => {
+    setStockSnapshot(null); setStockSnapshotError("");
+    try {
+      const res = await storage.get(`stock-catalog:${source}`);
+      if (!res || !res.value) { setStockSnapshotError("データが見つかりません。ダッシュボードを一度開いてください。"); return; }
+      const parsed = JSON.parse(res.value);
+      setStockSnapshot(parsed);
+      const asOfDate = parsed.asOf ? new Date(`${parsed.asOf}T00:00:00Z`) : null;
+      if (asOfDate && Date.now() - asOfDate.getTime() > 3 * 24 * 60 * 60 * 1000) {
+        setStockSnapshotError(`${parsed.asOf}時点のデータです（3日以上前）。ダッシュボードを開いて最新化することをおすすめします（このまま生成も可能です）。`);
+      }
+    } catch (e) {
+      setStockSnapshotError("データの読み込みに失敗しました。");
+    }
+  };
+  useEffect(() => {
+    if (mode === "stock" && (stockSource === "SP500" || stockSource === "SOXL")) loadStockSnapshot(stockSource);
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [mode, stockSource]);
+  // 「株式情報」ボタンを押した瞬間、テーマ欄が空ならその場で米国東部時間の「今日」を入れる（消去・書き換えは自由）
+  const handleModeClick = (k) => {
+    setMode(k);
+    if (k === "stock" && !topic.trim()) {
+      const [y, m, dd] = easternStamp(new Date()).slice(0, 10).split("-");
+      setTopic(`${y}年${Number(m)}月${Number(dd)}日`);
+    }
+  };
   // AI画像の自動生成（Google Gemini / Imagen。費用が発生するため既定はオフ）
   const [imageGenEnabled, setImageGenEnabled] = useState(false);
   const [imageGenCount, setImageGenCount] = useState(3);
@@ -148,6 +185,29 @@ export default function ExplainerStudio() {
       const base64 = await fileToBase64(f);
       setRefs((p) => [...p, { id: newRefId(), kind: "pdf", title: f.name.replace(/\.pdf$/i, ""), base64, sizeBytes: f.size }]);
     }
+  };
+  // [Stage E-3] 株式情報モード：ダッシュボードが持たない企業のCSV（Date/Close列、lib/csvPrice.tsと同じ形式）を取り込む。
+  // 1本の動画につき1社分なので、以前取り込んだCSV参照があれば置き換える。
+  const addStockCsv = (file) => {
+    setStockCsvError("");
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const text = String(ev.target.result);
+      const rows = parseStooqCSV(text);
+      if (!rows.length) { setStockCsvError("Date/Close列が見つかりませんでした。CSVの形式を確認してください。"); return; }
+      setStockCsvSeries(rows);
+      setRefs((p) => [...p.filter((r) => r.kind !== "csv"), { id: newRefId(), kind: "csv", title: csvCompanyName.trim() || file.name.replace(/\.csv$/i, ""), text, sizeBytes: file.size }]);
+    };
+    reader.onerror = () => setStockCsvError("CSVを読み込めませんでした。");
+    reader.readAsText(file);
+  };
+  const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+  // [Stage E-3] ニュース・株式情報どちらのモードでも使えるスクリーンショット参照の追加
+  const addScreenshot = async (file) => {
+    if (!/^image\//.test(file.type)) { alert(`画像ファイルではありません：${file.name}`); return; }
+    if (file.size > MAX_IMAGE_BYTES) { alert(`画像が大きすぎます（8MBまで）：${file.name}`); return; }
+    const base64 = await fileToBase64(file);
+    setRefs((p) => [...p, { id: newRefId(), kind: "image", title: file.name, base64, mediaType: file.type, sizeBytes: file.size }]);
   };
   // テーマから、Claude（Web検索）とGemini（Google検索）にまとめて参考情報を探させる。
   // 何度でも押せる（見つかったURLの中身が合わなければ削除して、もう一度押せば別の候補に入れ替わる）。
@@ -1027,11 +1087,36 @@ export default function ExplainerStudio() {
           {inputOpen && (
             <div className="flex flex-col gap-3 mt-3 text-xs">
               <div className="flex flex-wrap gap-2 items-center">
-                {[["news", "ニュース"], ["keyword", "キーワード（用語）"]].map(([k, l]) => (
-                  <button key={k} onClick={() => setMode(k)} className="text-[11px] px-2.5 py-1 rounded" style={{ color: mode === k ? C.bg : C.textMuted, background: mode === k ? C.teal : "transparent", border: `1px solid ${C.borderSoft}`, cursor: "pointer", fontWeight: mode === k ? 700 : 400 }}>{l}</button>
+                {[["news", "ニュース"], ["stock", "株式情報"], ["keyword", "キーワード（用語）"]].map(([k, l]) => (
+                  <button key={k} onClick={() => handleModeClick(k)} className="text-[11px] px-2.5 py-1 rounded" style={{ color: mode === k ? C.bg : C.textMuted, background: mode === k ? C.teal : "transparent", border: `1px solid ${C.borderSoft}`, cursor: "pointer", fontWeight: mode === k ? 700 : 400 }}>{l}</button>
                 ))}
-                <input value={topic} onChange={(e) => setTopic(e.target.value)} placeholder={mode === "news" ? "例：日銀が政策金利を0.75%に引き上げ" : "例：インフレ／NISA／半導体の微細化"} className="flex-1 min-w-[220px] px-2 py-1.5 rounded text-sm" style={inputStyle} />
+                <input value={topic} onChange={(e) => setTopic(e.target.value)} placeholder={mode === "news" ? "例：日銀が政策金利を0.75%に引き上げ" : mode === "stock" ? "例：2026年10月28日（消去・書き換え可）" : "例：インフレ／NISA／半導体の微細化"} className="flex-1 min-w-[220px] px-2 py-1.5 rounded text-sm" style={inputStyle} />
               </div>
+              {mode === "stock" && (
+                <div className="flex flex-wrap gap-2 items-center" style={{ color: C.textMuted }}>
+                  <span className="text-[11px]">株価データの出典：</span>
+                  {[["SP500", "S&P500"], ["SOXL", "SOXL"], ["csv", "CSVをアップロード"]].map(([k, l]) => (
+                    <button key={k} onClick={() => setStockSource(k)} className="text-[11px] px-2.5 py-1 rounded" style={{ color: stockSource === k ? C.bg : C.textMuted, background: stockSource === k ? C.teal : "transparent", border: `1px solid ${C.borderSoft}`, cursor: "pointer", fontWeight: stockSource === k ? 700 : 400 }}>{l}</button>
+                  ))}
+                  {stockSource !== "csv" && (
+                    stockSnapshotError
+                      ? <span className="text-[10px]" style={{ color: C.amber }}>{stockSnapshotError}</span>
+                      : stockSnapshot
+                        ? <span className="text-[10px]" style={{ color: C.textDim }}>{stockSnapshot.asOf}時点のダッシュボードのデータを使用します</span>
+                        : <span className="text-[10px]" style={{ color: C.textDim }}>読み込み中…</span>
+                  )}
+                  {stockSource === "csv" && (
+                    <>
+                      <input value={csvCompanyName} onChange={(e) => setCsvCompanyName(e.target.value)} placeholder="企業名・銘柄名（例：任天堂）" className="px-2 py-1 rounded text-[11px]" style={inputStyle} />
+                      <label className="text-[11px] px-2 py-1 rounded flex items-center gap-1" style={btn()}><Upload size={11} /> CSVを選択
+                        <input type="file" accept=".csv,text/csv" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) addStockCsv(f); }} />
+                      </label>
+                      {stockCsvError && <span className="text-[10px]" style={{ color: C.rust }}>{stockCsvError}</span>}
+                      {stockCsvSeries.length > 0 && !stockCsvError && <span className="text-[10px]" style={{ color: C.teal }}>{stockCsvSeries.length.toLocaleString()}件取り込みました</span>}
+                    </>
+                  )}
+                </div>
+              )}
               <div className="flex flex-wrap gap-3 items-center" style={{ color: C.textMuted }}>
                 <label className="flex items-center gap-1.5">視聴者
                   <select value={audience} onChange={(e) => setAudience(e.target.value)} className="px-1.5 py-1 rounded text-[11px]" style={inputStyle}>
@@ -1058,10 +1143,10 @@ export default function ExplainerStudio() {
                   {refs.map((r) => (
                     <div key={r.id}>
                       <div className="flex items-center gap-2 px-2 py-1 rounded" style={{ background: C.panel2, border: `1px solid ${r.kind === "url" && r.status === "error" ? C.rust + "88" : C.borderSoft}` }}>
-                        {r.kind === "url" ? <Link2 size={12} style={{ color: C.blue, flexShrink: 0 }} /> : r.kind === "pdf" ? <FileText size={12} style={{ color: C.rust, flexShrink: 0 }} /> : <Type size={12} style={{ color: C.amber, flexShrink: 0 }} />}
+                        {r.kind === "url" ? <Link2 size={12} style={{ color: C.blue, flexShrink: 0 }} /> : r.kind === "pdf" ? <FileText size={12} style={{ color: C.rust, flexShrink: 0 }} /> : r.kind === "csv" ? <FileText size={12} style={{ color: C.blue, flexShrink: 0 }} /> : r.kind === "image" ? <ImageIcon size={12} style={{ color: C.teal, flexShrink: 0 }} /> : <Type size={12} style={{ color: C.amber, flexShrink: 0 }} />}
                         <span className="truncate flex-1 text-[11px]" title={r.kind === "url" ? r.url : r.title}>{refLabel(r)}</span>
                         <span className="text-[10px] shrink-0" style={{ color: r.kind === "url" && r.status === "error" ? C.rust : C.textDim }}>
-                          {r.kind === "url" ? (r.status === "pending" ? "読み込み中…" : r.status === "error" ? r.error : r.pdfBase64 ? "PDF" : `${r.note ? `${r.note}・` : ""}${r.text.length.toLocaleString()}字`) : r.kind === "pdf" ? sizeKb(r.sizeBytes) : `${r.text.length.toLocaleString()}字`}
+                          {r.kind === "url" ? (r.status === "pending" ? "読み込み中…" : r.status === "error" ? r.error : r.pdfBase64 ? "PDF" : `${r.note ? `${r.note}・` : ""}${r.text.length.toLocaleString()}字`) : r.kind === "pdf" ? sizeKb(r.sizeBytes) : r.kind === "csv" ? `CSV・${sizeKb(r.sizeBytes)}` : r.kind === "image" ? `画像・${sizeKb(r.sizeBytes)}` : `${r.text.length.toLocaleString()}字`}
                         </span>
                         {r.kind === "url" && <a href={r.url} target="_blank" rel="noopener noreferrer" title="サイトを新しいタブで開く（採用するか確認）" style={{ color: C.textMuted, flexShrink: 0, display: "flex" }}><ExternalLink size={11} /></a>}
                         {r.kind === "text" && <button onClick={() => setExpandedRefId((id) => (id === r.id ? null : r.id))} title="本文を確認" style={{ color: C.textMuted, background: "none", border: "none", cursor: "pointer" }}>{expandedRefId === r.id ? <EyeOff size={12} /> : <Eye size={12} />}</button>}
@@ -1079,6 +1164,9 @@ export default function ExplainerStudio() {
                   <button onClick={addUrls} className="text-[11px] px-2 py-1 rounded flex items-center gap-1" style={btn()}><Link2 size={11} /> URLを追加</button>
                   <label className="text-[11px] px-2 py-1 rounded flex items-center gap-1" style={btn()}><FileText size={11} /> PDFを追加
                     <input type="file" accept="application/pdf,.pdf" multiple style={{ display: "none" }} onChange={(e) => { const fs = e.target.files; addPdfs(fs); e.target.value = ""; }} />
+                  </label>
+                  <label className="text-[11px] px-2 py-1 rounded flex items-center gap-1" style={btn()}><Camera size={11} /> スクショを追加
+                    <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) addScreenshot(f); }} />
                   </label>
                   <button onClick={() => setRefTextOpen((v) => !v)} className="text-[11px] px-2 py-1 rounded flex items-center gap-1" style={btn()}><Type size={11} /> テキストを追加</button>
                 </div>

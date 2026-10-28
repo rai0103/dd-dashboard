@@ -74,6 +74,13 @@ export function referenceBlocks(refs: ReferenceItem[]): any[] {
       else if (r.text) blocks.push({ type: 'document', title: capDocumentTitle(`参考${n}：${r.title}（${r.url}）`), source: { type: 'text', media_type: 'text/plain', data: r.text.slice(0, 80000) } });
     } else if (r.kind === 'pdf') {
       blocks.push({ type: 'document', title: capDocumentTitle(`参考${n}：${r.title}`), source: { type: 'base64', media_type: 'application/pdf', data: r.base64 } });
+    } else if (r.kind === 'csv') {
+      // [Stage E-3] 株価CSVは原文のままdocumentブロックとして渡す（AIが数値の裏付けとして参照できるようにする。
+      // 丸写しチェック（referenceTexts）の対象には含めない＝pdfと同じ扱い）
+      blocks.push({ type: 'document', title: capDocumentTitle(`参考${n}：${r.title}（CSV）`), source: { type: 'text', media_type: 'text/plain', data: r.text.slice(0, 80000) } });
+    } else if (r.kind === 'image') {
+      // [Stage E-3] スクリーンショット参照（ニュース・株式情報どちらでも使える）。documentではなくimageブロック
+      blocks.push({ type: 'image', source: { type: 'base64', media_type: r.mediaType, data: r.base64 } });
     }
   });
   if (blocks.length) blocks[blocks.length - 1] = { ...blocks[blocks.length - 1], cache_control: { type: 'ephemeral' } };

@@ -124,7 +124,11 @@ export interface ExplainerProject {
 export type ReferenceItem =
   | { id: string; kind: 'text'; title: string; text: string }
   | { id: string; kind: 'url'; url: string; title: string; text: string; status: 'pending' | 'ok' | 'error'; error?: string; pdfBase64?: string; note?: string }
-  | { id: string; kind: 'pdf'; title: string; base64: string; sizeBytes: number };
+  | { id: string; kind: 'pdf'; title: string; base64: string; sizeBytes: number }
+  // [Stage E-3] 株式情報モード：株価CSV（Date/Close列。lib/csvPrice.tsのparseStooqCSVと同じ形式）をそのまま原文で保持する
+  | { id: string; kind: 'csv'; title: string; text: string; sizeBytes: number }
+  // [Stage E-3] ニュース・株式情報どちらのモードでも使えるスクリーンショット参照（画像としてAIに渡す）
+  | { id: string; kind: 'image'; title: string; base64: string; mediaType: string; sizeBytes: number };
 
 export interface ImageAsset { id: string; name: string; blob: Blob; rightsConfirmed: boolean; createdAt: number }
 
