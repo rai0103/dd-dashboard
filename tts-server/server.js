@@ -186,6 +186,103 @@ async function handlePostChat(req, res) {
   }
 }
 
+// AIによる参考情報の自動検索（Claude のWeb検索ツール + Gemini のGoogle検索グラウンディング）。
+// 「テーマと参考情報」画面で、テーマから関連URL・要約テキストをまとめて取得するために使う。
+// 2つを並行して呼び、片方が失敗してももう片方の結果はそのまま返す（それぞれのerrorで個別に分かる）。
+async function researchWithClaude(prompt) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return { text: '', urls: [], error: 'tts-server/.env に ANTHROPIC_API_KEY が設定されていません。' };
+  const model = (process.env.ANTHROPIC_MODEL || 'claude-sonnet-5-5');
+  const payload = {
+    model,
+    max_tokens: 1536,
+    messages: [{ role: 'user', content: prompt }],
+    tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 5 }],
+  };
+  let data;
+  try {
+    const upstream = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    data = await upstream.json();
+    if (!upstream.ok) {
+      const m = (data && data.error && data.error.message) || `HTTP ${upstream.status}`;
+      return { text: '', urls: [], error: `Claudeの検索に失敗しました: ${m}` };
+    }
+  } catch (e) {
+    return { text: '', urls: [], error: `Claudeの検索に失敗しました: ${String(e && e.message ? e.message : e)}` };
+  }
+  const blocks = Array.isArray(data.content) ? data.content : [];
+  let lastResultIdx = -1;
+  blocks.forEach((b, i) => { if (b && b.type === 'web_search_tool_result') lastResultIdx = i; });
+  const text = blocks.slice(lastResultIdx + 1).filter((b) => b && b.type === 'text' && typeof b.text === 'string').map((b) => b.text).join('');
+  const urls = [];
+  const seen = new Set();
+  blocks.forEach((b) => {
+    if (b && b.type === 'web_search_tool_result' && Array.isArray(b.content)) {
+      b.content.forEach((item) => {
+        if (item && item.type === 'web_search_result' && item.url && !seen.has(item.url)) {
+          seen.add(item.url);
+          urls.push({ url: item.url, title: item.title || item.url });
+        }
+      });
+    }
+  });
+  return { text, urls };
+}
+
+async function researchWithGemini(prompt) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return { text: '', urls: [], error: 'tts-server/.env に GEMINI_API_KEY が設定されていません。' };
+  const model = (process.env.GEMINI_SEARCH_MODEL || 'gemini-3.8-flash');
+  const payload = { contents: [{ parts: [{ text: prompt }] }], tools: [{ google_search: {} }] };
+  let data;
+  try {
+    const upstream = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+      method: 'POST',
+      headers: { 'x-goog-api-key': apiKey, 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    data = await upstream.json();
+    if (!upstream.ok) {
+      const m = (data && data.error && data.error.message) || `HTTP ${upstream.status}`;
+      return { text: '', urls: [], error: `Geminiの検索に失敗しました: ${m}` };
+    }
+  } catch (e) {
+    return { text: '', urls: [], error: `Geminiの検索に失敗しました: ${String(e && e.message ? e.message : e)}` };
+  }
+  const cand = data && Array.isArray(data.candidates) ? data.candidates[0] : null;
+  const parts = cand && cand.content && Array.isArray(cand.content.parts) ? cand.content.parts : [];
+  const text = parts.filter((p) => typeof p.text === 'string').map((p) => p.text).join('');
+  const chunks = cand && cand.groundingMetadata && Array.isArray(cand.groundingMetadata.groundingChunks) ? cand.groundingMetadata.groundingChunks : [];
+  const urls = [];
+  const seen = new Set();
+  chunks.forEach((c) => {
+    const uri = c && c.web && c.web.uri;
+    if (uri && !seen.has(uri)) { seen.add(uri); urls.push({ url: uri, title: (c.web && c.web.title) || uri }); }
+  });
+  return { text, urls };
+}
+
+async function handlePostResearch(req, res) {
+  const body = await readJsonBody(req);
+  const topic = body && typeof body.topic === 'string' ? body.topic.trim() : '';
+  if (!topic) {
+    res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ error: 'BAD_REQUEST', message: 'topic が空です。' }));
+    return;
+  }
+  const prompt = `次のニュース・キーワードについて、動画解説の参考資料として使える内容を、最新のWeb情報に基づいて日本語で詳しく要約してください（400〜600字程度）。数値・日付・固有名詞はできるだけ正確に、出典ごとに書き分けず一つの文章としてまとめてください。\n\nテーマ: ${topic}`;
+  const [claude, gemini] = await Promise.all([
+    researchWithClaude(prompt).catch((e) => ({ text: '', urls: [], error: String(e && e.message ? e.message : e) })),
+    researchWithGemini(prompt).catch((e) => ({ text: '', urls: [], error: String(e && e.message ? e.message : e) })),
+  ]);
+  res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+  res.end(JSON.stringify({ claude, gemini }));
+}
+
 // AI画像生成プロキシ（Gemini API の Imagen 経由。/api/chat と同じ理由でNext.js Route Handlerの外に実装する）。
 // リクエストをそのままGemini APIへ中継するだけで、APIキーはユーザー自身のtts-server/.env
 // （gitignore対象）のGEMINI_API_KEYから読む（Claudeが入力・保持することはない）。
@@ -442,6 +539,7 @@ const server = http.createServer((req, res) => {
   if (pathname === '/api/tts' && req.method === 'POST') { handlePostSpeak(req, res); return; }
   if (pathname === '/api/chat' && req.method === 'POST') { handlePostChat(req, res); return; }
   if (pathname === '/api/image' && req.method === 'POST') { handlePostImage(req, res); return; }
+  if (pathname === '/api/research' && req.method === 'POST') { handlePostResearch(req, res); return; }
   if (pathname === '/api/fetch-url' && req.method === 'GET') { handleFetchUrl(req, res); return; }
   if (pathname === '/' || pathname === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });

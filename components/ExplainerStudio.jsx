@@ -7,7 +7,7 @@
 // 違い：台本は「テーマ＋参考情報（テキスト・URL・PDF）」からAIが作る。図解はすべて自作の図形・アイコンで描く（著作権・肖像権への配慮）。
 import { useEffect, useMemo, useRef, useState } from "react";
 import NarrMixedBox from "@/components/NarrMixedBox";
-import { Play, Pause, Square, Camera, Download, Upload, X, GripVertical, MessageSquare, ChevronRight, Lock, Unlock, Link2, FileText, Type, Sparkles, Copy, AlertTriangle, Check, Image as ImageIcon, RefreshCw, Plus, ArrowLeft } from "lucide-react";
+import { Play, Pause, Square, Camera, Download, Upload, X, GripVertical, MessageSquare, ChevronRight, Lock, Unlock, Link2, FileText, Type, Sparkles, Copy, AlertTriangle, Check, Image as ImageIcon, RefreshCw, Plus, ArrowLeft, Search, ExternalLink, Eye, EyeOff } from "lucide-react";
 import { voiceGender } from "@/lib/videoAnalysts";
 import { AudioMixer, getTtsBaseUrl } from "@/lib/videoAudioMixer";
 import { listAivisVoices, isAivisVoice, getAivisUrl } from "@/lib/videoAivisClient";
@@ -24,6 +24,7 @@ import { referenceBlocks, referenceTexts, fetchUrlReference, fileToBase64, newRe
 import { lintScenes, buildDescription, sourcesScene, findVerbatimOverlaps, predictTotalSec, suggestRate, COMFORT_RATE, normalizeVisual, minSecFor, sanitizeReading, isKanaReading } from "@/lib/explainer/scriptModel";
 import { saveImage, listImages, deleteImage } from "@/lib/explainer/imageStore";
 import { generateImage } from "@/lib/explainer/imageClient";
+import { researchTopic } from "@/lib/explainer/researchClient";
 import { safeFileName, canPickFolder, getSavedFolder, pickFolder, ensureWritable, saveBundle, descriptionText } from "@/lib/explainer/exportBundle";
 import { VISUAL_KINDS, ICON_NAMES } from "@/lib/explainer/types";
 
@@ -100,6 +101,7 @@ export default function ExplainerStudio() {
     try { localStorage.setItem(INPUT_KEY, JSON.stringify({ topic, mode, audience, targetMinutes, extraInstruction, refs: keep })); } catch (e) { /* 容量超過などは無視 */ }
   }, [topic, mode, audience, targetMinutes, extraInstruction, refs]);
   const [refTextOpen, setRefTextOpen] = useState(false);
+  const [expandedRefId, setExpandedRefId] = useState(null); // 参考情報（テキスト）の本文をその場で確認する
   const [refTextTitle, setRefTextTitle] = useState("");
   const [refTextBody, setRefTextBody] = useState("");
   const [urlInput, setUrlInput] = useState("");
@@ -108,7 +110,8 @@ export default function ExplainerStudio() {
   const [imageGenEnabled, setImageGenEnabled] = useState(false);
   const [imageGenCount, setImageGenCount] = useState(3);
   // 画風・表現の自由記述リクエスト（例：「写真のようなリアルな画像で」）。場面ごとのimagePromptに追記して使う
-  const [imageStyleHint, setImageStyleHint] = useState("");
+  const [imageStyleHint, setImageStyleHint] = useState("写真のようなリアルな画像でニュースの途中の映像の画角にしてください。");
+  const [reuseImagesEnabled, setReuseImagesEnabled] = useState(true); // 前回の台本で場面に付いていた画像を、作り直し時に再利用する（画像生成の課金を抑える）
   const withStyleHint = (prompt, hint) => {
     const h = (hint || "").trim();
     return h ? `${prompt}\n追加の指示（画風・表現について。ユーザー自身の希望）: ${h}` : prompt;
@@ -146,6 +149,39 @@ export default function ExplainerStudio() {
       setRefs((p) => [...p, { id: newRefId(), kind: "pdf", title: f.name.replace(/\.pdf$/i, ""), base64, sizeBytes: f.size }]);
     }
   };
+  // テーマから、Claude（Web検索）とGemini（Google検索）にまとめて参考情報を探させる。
+  // 何度でも押せる（見つかったURLの中身が合わなければ削除して、もう一度押せば別の候補に入れ替わる）。
+  const [researchBusy, setResearchBusy] = useState(false);
+  const [researchError, setResearchError] = useState("");
+  const researchAbortRef = useRef(null);
+  const runResearch = async () => {
+    if (!topic.trim()) { setResearchError("先にテーマ（ニュースやキーワード）を入力してください。"); return; }
+    setResearchBusy(true); setResearchError("");
+    const ac = new AbortController(); researchAbortRef.current = ac;
+    try {
+      const r = await researchTopic(topic.trim(), ac.signal);
+      const existingUrls = new Set(refs.filter((x) => x.kind === "url").map((x) => x.url));
+      const combined = [];
+      [...r.claude.urls, ...r.gemini.urls].forEach((u) => {
+        if (combined.length >= 5) return;
+        if (existingUrls.has(u.url) || combined.some((x) => x.url === u.url)) return;
+        combined.push(u);
+      });
+      const newUrlRefs = combined.map((u) => ({ id: newRefId(), kind: "url", url: u.url, title: u.title || u.url, text: "", status: "pending" }));
+      const newTextRefs = [];
+      if (r.gemini.text.trim()) newTextRefs.push({ id: newRefId(), kind: "text", title: "Gemini", text: r.gemini.text.trim() });
+      if (r.claude.text.trim()) newTextRefs.push({ id: newRefId(), kind: "text", title: "Claude", text: r.claude.text.trim() });
+      if (newUrlRefs.length || newTextRefs.length) setRefs((p) => [...p, ...newUrlRefs, ...newTextRefs]);
+      newUrlRefs.forEach((it) => loadUrl(it.id, it.url));
+      const errs = [r.claude.error, r.gemini.error].filter(Boolean);
+      if (errs.length) setResearchError(errs.join(" / "));
+      else if (!newUrlRefs.length && !newTextRefs.length) setResearchError("新しい参考情報が見つかりませんでした（すでに追加済みかもしれません）。もう一度お試しください。");
+    } catch (e) {
+      setResearchError(e instanceof AiClientError ? e.message : e?.message || String(e));
+    } finally {
+      setResearchBusy(false); researchAbortRef.current = null;
+    }
+  };
 
   // ---------------- プロジェクト（台本） ----------------
   const [project, setProject] = useState(() => {
@@ -179,7 +215,7 @@ export default function ExplainerStudio() {
   // visual.kind=image の場面（AIがimagePromptを用意している場面）のうち、先頭から指定枚数だけAIで画像を生成して
   // 自動で割り当てる。GEMINI_API_KEY未設定・生成失敗は場面単位でスキップし、台本自体は壊さない（呼び出し側でまとめて案内する）。
   const genImagesForScenes = async (list, count, signal, onStep, styleHint = "") => {
-    const targets = list.map((s, i) => ({ i, s })).filter((x) => x.s.visual.kind === "image" && x.s.visual.imagePrompt).slice(0, Math.max(0, count));
+    const targets = list.map((s, i) => ({ i, s })).filter((x) => x.s.visual.kind === "image" && x.s.visual.imagePrompt && !x.s.imageId).slice(0, Math.max(0, count));
     if (!targets.length) return { scenes: list, failed: 0, noKey: false };
     const out = list.slice();
     let failed = 0, noKey = false;
@@ -207,6 +243,8 @@ export default function ExplainerStudio() {
     if (minutes !== targetMinutes) setTargetMinutes(minutes);
     setGenBusy(true); setGenError("");
     const ac = new AbortController(); abortRef.current = ac;
+    // 作り直し前の台本に付いていた画像を、場面の順番で引き継ぐための候補（課金を避けるため）
+    const prevImagePool = reuseImagesEnabled ? (project?.longScenes || []).filter((s) => s.imageId).map((s) => s.imageId) : [];
     try {
       const inp = genInput(minutes);
       let p = await generateProject(inp, setGenProgress, ac.signal, true, sourcesInVideo);
@@ -214,11 +252,23 @@ export default function ExplainerStudio() {
       const L = await paraphraseScenes(p.longScenes, inp, p.videoTitle, "long", ac.signal, (k, n) => setGenProgress({ step: `参考資料と同じ言い回しを言い換え中…（長尺 ${k}/${n}）`, done: 1, total: 1 }));
       const S = await paraphraseScenes(p.shortScenes, inp, p.videoTitle, "short", ac.signal, (k, n) => setGenProgress({ step: `参考資料と同じ言い回しを言い換え中…（ショート ${k}/${n}）`, done: 1, total: 1 }));
       let longScenes = L.scenes;
-      let imgFailed = 0, imgNoKey = false;
+      let imgFailed = 0, imgNoKey = false, reusedCount = 0;
+      if (prevImagePool.length) {
+        let poolIdx = 0;
+        longScenes = longScenes.map((s) => {
+          if (s.visual.kind === "image" && s.visual.imagePrompt && poolIdx < prevImagePool.length) {
+            return { ...s, imageId: prevImagePool[poolIdx++] };
+          }
+          return s;
+        });
+        reusedCount = poolIdx;
+      }
       if (imageGenEnabled && imageGenCount > 0) {
         const r = await genImagesForScenes(longScenes, imageGenCount, ac.signal, (k, n) => setGenProgress({ step: `AIで画像を生成中…（${k}/${n}）`, done: 1, total: 1 }), imageStyleHint);
         longScenes = r.scenes; imgFailed = r.failed; imgNoKey = r.noKey;
         await refreshImages(); // 保存した画像をプレビュー/書き出し側の一覧に反映する（手動の「画像を追加」と同じ扱いにする）
+      } else if (reusedCount > 0) {
+        await refreshImages(); // 新規生成が無くても、再利用した画像をプレビュー側の一覧に反映する
       }
       // ラベル（kicker）は、選んだ長尺の長さから自動で入れる（例：5分で解説）。生成後も自由に書き換えられる
       p = { ...p, longScenes, shortScenes: S.scenes, kicker: autoKickerFor(minutes) };
@@ -998,17 +1048,29 @@ export default function ExplainerStudio() {
 
               <div>
                 <div className="text-[11px] font-semibold mb-1.5" style={{ color: C.textMuted }}>参考情報（AIはこれを最優先に解説します。文章は丸写しせず言い換えます）</div>
+                <div className="flex items-center gap-2 mb-2 flex-wrap">
+                  <button onClick={runResearch} disabled={researchBusy} className="text-[11px] px-2 py-1 rounded flex items-center gap-1" style={{ ...btn("primary"), opacity: researchBusy ? 0.6 : 1 }}><Search size={11} /> {researchBusy ? "検索中…" : "AIで検索して参考情報を追加"}</button>
+                  <span className="text-[10px]" style={{ color: C.textDim }}>テーマについて、Claudeの検索とGeminiの検索でURL最大5件・要約テキスト2件（Gemini・Claude）を自動で追加します（何度でも押せます。不要な結果は個別に削除できます）。</span>
+                  {researchError && <div className="text-[10px] w-full" style={{ color: C.rust }}>{researchError}</div>}
+                </div>
                 <div className="flex flex-col gap-1 mb-2">
                   {refs.length === 0 && <div className="text-[10px]" style={{ color: C.textDim }}>未追加です。ニュースは元記事や公式発表を追加すると正確になります（参考情報なしの場合は、一般に確立した知識の範囲で解説します）。</div>}
                   {refs.map((r) => (
-                    <div key={r.id} className="flex items-center gap-2 px-2 py-1 rounded" style={{ background: C.panel2, border: `1px solid ${r.kind === "url" && r.status === "error" ? C.rust + "88" : C.borderSoft}` }}>
-                      {r.kind === "url" ? <Link2 size={12} style={{ color: C.blue, flexShrink: 0 }} /> : r.kind === "pdf" ? <FileText size={12} style={{ color: C.rust, flexShrink: 0 }} /> : <Type size={12} style={{ color: C.amber, flexShrink: 0 }} />}
-                      <span className="truncate flex-1 text-[11px]" title={r.kind === "url" ? r.url : r.title}>{refLabel(r)}</span>
-                      <span className="text-[10px] shrink-0" style={{ color: r.kind === "url" && r.status === "error" ? C.rust : C.textDim }}>
-                        {r.kind === "url" ? (r.status === "pending" ? "読み込み中…" : r.status === "error" ? r.error : r.pdfBase64 ? "PDF" : `${r.note ? `${r.note}・` : ""}${r.text.length.toLocaleString()}字`) : r.kind === "pdf" ? sizeKb(r.sizeBytes) : `${r.text.length.toLocaleString()}字`}
-                      </span>
-                      {r.kind === "url" && r.status === "error" && <button onClick={() => loadUrl(r.id, r.url)} title="もう一度読み込む" style={{ color: C.textMuted, background: "none", border: "none", cursor: "pointer" }}><RefreshCw size={11} /></button>}
-                      <button onClick={() => setRefs((p) => p.filter((x) => x.id !== r.id))} title="削除" style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer" }}><X size={12} /></button>
+                    <div key={r.id}>
+                      <div className="flex items-center gap-2 px-2 py-1 rounded" style={{ background: C.panel2, border: `1px solid ${r.kind === "url" && r.status === "error" ? C.rust + "88" : C.borderSoft}` }}>
+                        {r.kind === "url" ? <Link2 size={12} style={{ color: C.blue, flexShrink: 0 }} /> : r.kind === "pdf" ? <FileText size={12} style={{ color: C.rust, flexShrink: 0 }} /> : <Type size={12} style={{ color: C.amber, flexShrink: 0 }} />}
+                        <span className="truncate flex-1 text-[11px]" title={r.kind === "url" ? r.url : r.title}>{refLabel(r)}</span>
+                        <span className="text-[10px] shrink-0" style={{ color: r.kind === "url" && r.status === "error" ? C.rust : C.textDim }}>
+                          {r.kind === "url" ? (r.status === "pending" ? "読み込み中…" : r.status === "error" ? r.error : r.pdfBase64 ? "PDF" : `${r.note ? `${r.note}・` : ""}${r.text.length.toLocaleString()}字`) : r.kind === "pdf" ? sizeKb(r.sizeBytes) : `${r.text.length.toLocaleString()}字`}
+                        </span>
+                        {r.kind === "url" && <a href={r.url} target="_blank" rel="noopener noreferrer" title="サイトを新しいタブで開く（採用するか確認）" style={{ color: C.textMuted, flexShrink: 0, display: "flex" }}><ExternalLink size={11} /></a>}
+                        {r.kind === "text" && <button onClick={() => setExpandedRefId((id) => (id === r.id ? null : r.id))} title="本文を確認" style={{ color: C.textMuted, background: "none", border: "none", cursor: "pointer" }}>{expandedRefId === r.id ? <EyeOff size={12} /> : <Eye size={12} />}</button>}
+                        {r.kind === "url" && r.status === "error" && <button onClick={() => loadUrl(r.id, r.url)} title="もう一度読み込む" style={{ color: C.textMuted, background: "none", border: "none", cursor: "pointer" }}><RefreshCw size={11} /></button>}
+                        <button onClick={() => setRefs((p) => p.filter((x) => x.id !== r.id))} title="削除" style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer" }}><X size={12} /></button>
+                      </div>
+                      {r.kind === "text" && expandedRefId === r.id && (
+                        <textarea readOnly value={r.text} rows={6} className="w-full mt-1 px-2 py-1 rounded text-[11px]" style={{ ...inputStyle, background: C.panel, resize: "vertical" }} />
+                      )}
                     </div>
                   ))}
                 </div>
@@ -1030,6 +1092,19 @@ export default function ExplainerStudio() {
                 )}
               </div>
 
+              {project?.longScenes?.some((s) => s.imageId) && (
+                <div className="flex flex-wrap gap-3 items-center p-2 rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
+                  <label className="flex items-center gap-1.5 text-[11px]" style={{ color: C.textMuted }}>
+                    <input type="checkbox" checked={reuseImagesEnabled} onChange={(e) => setReuseImagesEnabled(e.target.checked)} />
+                    台本を作り直す時、前回の画像を再利用する（場面の順番で引き継ぎ、課金なし）
+                  </label>
+                  <span className="text-[10px]" style={{ color: C.textDim }}>
+                    {reuseImagesEnabled
+                      ? "前回付いていた画像を先に引き継ぎ、それで埋まらない場面だけ下の設定に応じて新しく生成します。"
+                      : "オフの場合、画像が付いていた場面もすべて新しく生成し直します（その分課金されます）。"}
+                  </span>
+                </div>
+              )}
               <div className="flex flex-wrap gap-3 items-center p-2 rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
                 <label className="flex items-center gap-1.5 text-[11px]" style={{ color: C.textMuted }}>
                   <input type="checkbox" checked={imageGenEnabled} onChange={(e) => setImageGenEnabled(e.target.checked)} />
