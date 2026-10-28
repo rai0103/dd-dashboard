@@ -30,6 +30,7 @@ import { VISUAL_KINDS, ICON_NAMES } from "@/lib/explainer/types";
 import { storage } from "@/lib/storage";
 import { easternStamp } from "@/lib/marketClock";
 import { parseStooqCSV } from "@/lib/csvPrice";
+import { buildStockCatalogFromSnapshot, buildStockCatalogFromCsv } from "@/lib/explainer/stockCatalog";
 
 const C = {
   bg: "#0A0F1C", panel: "#111A2C", panel2: "#0D1424",
@@ -270,7 +271,14 @@ export default function ExplainerStudio() {
   const [genProgress, setGenProgress] = useState(null);
   const [genError, setGenError] = useState("");
   const abortRef = useRef(null);
-  const genInput = (minutes = targetMinutes) => ({ topic: topic.trim(), mode, audience, targetMinutes: minutes, extraInstruction, refBlocks: referenceBlocks(refs), today: todayStr(), speechRate: rate, imageTarget: imageGenEnabled ? imageGenCount : 0 });
+  // [Stage E-4] 「株式情報」モードのときだけ、実データのカタログ（StockCatalog）を生成入力に含める。
+  // これにより台本生成側（lib/explainer/aiScript.ts）がdataKey/seriesKeyで実数を解決できる（AIの創作値を禁止する仕組み）。
+  const genInput = (minutes = targetMinutes) => ({
+    topic: topic.trim(), mode, audience, targetMinutes: minutes, extraInstruction, refBlocks: referenceBlocks(refs), today: todayStr(), speechRate: rate, imageTarget: imageGenEnabled ? imageGenCount : 0,
+    stockCatalog: mode === "stock"
+      ? (stockSource === "csv" ? buildStockCatalogFromCsv(csvCompanyName, stockCsvSeries) : (stockSnapshot ? buildStockCatalogFromSnapshot(stockSnapshot) : undefined))
+      : undefined,
+  });
   const errMsg = (e) => (e instanceof AiClientError ? e.message : e?.message || String(e));
   // visual.kind=image の場面（AIがimagePromptを用意している場面）のうち、先頭から指定枚数だけAIで画像を生成して
   // 自動で割り当てる。GEMINI_API_KEY未設定・生成失敗は場面単位でスキップし、台本自体は壊さない（呼び出し側でまとめて案内する）。

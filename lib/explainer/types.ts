@@ -107,7 +107,7 @@ export interface SourceNote { title: string; detail: string }
 export interface ExplainerProject {
   version: 1;
   topic: string;
-  mode: 'news' | 'keyword';
+  mode: 'news' | 'stock' | 'keyword';
   audience: 'beginner' | 'general' | 'advanced';
   targetMinutes: number;
   videoTitle: string;
@@ -131,6 +131,16 @@ export type ReferenceItem =
   | { id: string; kind: 'image'; title: string; base64: string; mediaType: string; sizeBytes: number };
 
 export interface ImageAsset { id: string; name: string; blob: Blob; rightsConfirmed: boolean; createdAt: number }
+
+// [Stage E-4] 株式情報モード：台本生成に実数を保証して渡すためのデータカタログ。
+// scalars＝1時点の数値（前日比・年初来騰落率など）、series＝複数時点の推移（折れ線用）。
+// value は常に数値のまま保持し、文字列化（単位付け）はaiScript.tsのapplyStockDataKeysが行う。
+export interface StockCatalog {
+  instrumentLabel: string;
+  asOf: string;
+  scalars: Record<string, { label: string; value: number }>;
+  series: Record<string, { label: string; points: { label: string; value: number }[] }>;
+}
 
 export const emptyVisual = (kind: VisualKind = 'point'): VisualSpec => ({
   kind, heading: '', subheading: '', items: [], unit: '', source: '', emphasis: '', imagePrompt: '',

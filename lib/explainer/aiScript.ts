@@ -3,12 +3,12 @@
 // 参考資料（PDF・URL本文・テキスト）は毎回同じ先頭部分として渡し、プロンプトキャッシュで再利用する。
 import { callTool } from './aiClient';
 import { ICON_NAMES, VISUAL_KINDS } from './types';
-import type { ChapterPlan, ExplainerProject, ExplainerScene, SourceNote, YoutubeMeta } from './types';
+import type { ChapterPlan, ExplainerProject, ExplainerScene, SourceNote, StockCatalog, YoutubeMeta } from './types';
 import { assembleLong, normalizeScene, sanitizeReading } from './scriptModel';
 
 export interface GenerateInput {
   topic: string;
-  mode: 'news' | 'keyword';
+  mode: 'news' | 'stock' | 'keyword';
   audience: 'beginner' | 'general' | 'advanced';
   targetMinutes: number;
   extraInstruction: string;
@@ -19,6 +19,8 @@ export interface GenerateInput {
   speechRate?: number;
   /** AIで画像を自動生成して挿入する場合の目安枚数（長尺動画全体で、visual.kind=imageにする場面のおおよその数）。0/未指定なら従来通りAIの判断に任せる */
   imageTarget?: number;
+  /** [Stage E-4] mode==='stock' のときの実データカタログ。bar/line/donut/numberの数値はこの中のキーのみ使わせ、AIの創作値を禁止する */
+  stockCatalog?: StockCatalog;
 }
 
 /** 日本語ナレーションの1分あたりの文字数の目安（話速1.0） */
@@ -109,13 +111,74 @@ const SYSTEM_RULES = [
   '【caption】画面下に出す短いテロップ（20字以内）。【title】構成リスト用の短い場面名（12字以内）。',
 ].join('\n');
 
-function system() { return [{ type: 'text' as const, text: SYSTEM_RULES, cache_control: { type: 'ephemeral' as const } }]; }
+/** [Stage E-4] StockCatalogのキー一覧を、AIに渡す「使えるdataKey」のテキストにする */
+function stockCatalogKeyList(cat: StockCatalog): string {
+  const lines: string[] = [];
+  for (const [key, v] of Object.entries(cat.scalars)) lines.push(`scalars.${key}：${v.label}`);
+  for (const [key, v] of Object.entries(cat.series)) lines.push(`series.${key}：${v.label}（月ごとの値の推移）`);
+  return lines.join('\n');
+}
+
+function system(inp?: GenerateInput) {
+  const blocks: { type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }[] = [{ type: 'text', text: SYSTEM_RULES }];
+  if (inp?.mode === 'stock' && inp.stockCatalog && (Object.keys(inp.stockCatalog.scalars).length || Object.keys(inp.stockCatalog.series).length)) {
+    const cat = inp.stockCatalog;
+    blocks.push({
+      type: 'text',
+      text: [
+        `【株価データ】これは${cat.instrumentLabel}（${cat.asOf || '直近'}時点）の実際のデータです。`,
+        '- bar・donut・numberの図解で数値を使う場合は、各itemのdataKeyに下記のscalars.*のキーを1つ指定してください（value・labelは仮の内容で構いません。実際の値・ラベルはdataKeyから自動的に差し替わります）。',
+        '- line（折れ線）で実データの推移を見せる場合は、visualのseriesKeyに下記series.*のキーを1つ指定してください（itemsはダミーで構いません。実際の点はseriesKeyから自動的に生成されます）。',
+        '- 下記のキーに無い数値を、数値の図解（bar・line・donut・number）で新たに作成することは禁止です（points・timeline等、数値を使わない図解であれば自由な内容にできます）。',
+        '【使えるキー一覧】',
+        stockCatalogKeyList(cat),
+      ].join('\n'),
+      cache_control: { type: 'ephemeral' },
+    });
+  } else {
+    blocks[0].cache_control = { type: 'ephemeral' };
+  }
+  return blocks;
+}
+
+/**
+ * [Stage E-4] 株式情報モード：AIの生データ（normalizeScene前）のうち、line.seriesKey／bar・donut・numberの
+ * items[].dataKey を実データで解決する。解決できなければ値を空文字にするだけで、以降の処理
+ * （normalizeVisual→既存の「数値が足りなければpointsへ自動降格」フォールバック、lib/explainer/scriptModel.ts）
+ * に委ねる＝レンダラー側・既存の降格ロジックは一切変更しない。
+ */
+export function applyStockDataKeysToScene(raw: any, catalog: StockCatalog | undefined): any {
+  if (!catalog || !raw || typeof raw !== 'object' || !raw.visual) return raw;
+  const v = raw.visual;
+  if (v.kind === 'line') {
+    const key = typeof v.seriesKey === 'string' ? v.seriesKey.replace(/^series\./, '') : '';
+    const entry = key ? catalog.series[key] : undefined;
+    if (entry && entry.points.length >= 3) {
+      const icon = Array.isArray(v.items) && v.items[0]?.icon ? v.items[0].icon : 'chart';
+      const items = entry.points.map((p) => ({ label: p.label, value: String(Math.round(p.value * 10) / 10), text: '', icon }));
+      return { ...raw, visual: { ...v, items, heading: v.heading || entry.label } };
+    }
+    return { ...raw, visual: { ...v, items: Array.isArray(v.items) ? v.items.map((it: any) => ({ ...it, value: '' })) : [] } };
+  }
+  if (v.kind === 'bar' || v.kind === 'donut' || v.kind === 'number') {
+    if (!Array.isArray(v.items)) return raw;
+    const items = v.items.map((it: any) => {
+      const dk = typeof it?.dataKey === 'string' ? it.dataKey.replace(/^scalars\./, '') : '';
+      const e = dk ? catalog.scalars[dk] : undefined;
+      return e ? { ...it, label: e.label, value: String(Math.round(e.value * 10) / 10) } : { ...it, value: '' };
+    });
+    return { ...raw, visual: { ...v, items } };
+  }
+  return raw;
+}
 
 const ITEM_SCHEMA = {
   type: 'object',
   properties: {
     label: { type: 'string' }, value: { type: 'string' }, text: { type: 'string' },
     icon: { type: 'string', enum: [...ICON_NAMES] },
+    // [Stage E-4] 株式情報モードのみ使う。'scalars.xxx' か 'series.xxx' の形で指定すると、value/labelが実データに差し替わる
+    dataKey: { type: 'string' },
   },
   required: ['label', 'value', 'text', 'icon'],
 };
@@ -126,6 +189,8 @@ const VISUAL_SCHEMA = {
     heading: { type: 'string' }, subheading: { type: 'string' },
     items: { type: 'array', items: ITEM_SCHEMA },
     unit: { type: 'string' }, source: { type: 'string' }, emphasis: { type: 'string' }, imagePrompt: { type: 'string' },
+    // [Stage E-4] 株式情報モードのline（折れ線）のみ使う。'series.xxx' の形で1つ指定すると、itemsが実データの点列に差し替わる
+    seriesKey: { type: 'string' },
   },
   required: ['kind', 'heading', 'subheading', 'items', 'unit', 'source', 'emphasis', 'imagePrompt'],
 };
@@ -143,7 +208,7 @@ const SCENE_SCHEMA = {
 const SCENES_SCHEMA = { type: 'object', properties: { scenes: { type: 'array', items: SCENE_SCHEMA } }, required: ['scenes'] };
 
 function header(inp: GenerateInput): string {
-  const kind = inp.mode === 'news' ? 'ニュース' : 'キーワード（用語）';
+  const kind = inp.mode === 'news' ? 'ニュース' : inp.mode === 'stock' ? '株式情報' : 'キーワード（用語）';
   return [
     `【テーマ（${kind}）】${inp.topic}`,
     `【想定視聴者】${AUDIENCE[inp.audience]}`,
@@ -179,7 +244,7 @@ export async function generateOutline(inp: GenerateInput, signal?: AbortSignal):
     '- sources は実際に使う参考資料（資料名と、発行元・日付などの補足）。参考資料がなければ空配列。',
   ].join('\n');
   const r = await callTool<any>({
-    system: system(),
+    system: system(inp),
     content: [...inp.refBlocks, { type: 'text', text: task }],
     toolName: 'plan_explainer_video',
     toolDescription: '解説動画の目次（章立て）・YouTube用の情報・出典をまとめる。',
@@ -288,7 +353,7 @@ async function generateChapterPart(inp: GenerateInput, o: Outline, idx: number, 
   ].filter(Boolean).join('\n');
   try {
     const r = await callTool<any>({
-      system: system(),
+      system: system(inp),
       content: [...inp.refBlocks, { type: 'text', text: task }],
       toolName: 'write_chapter_scenes',
       toolDescription: '解説動画の1章分（またはその一部）の場面（ナレーション・読み上げ文・図解の指定）を作る。',
@@ -296,7 +361,7 @@ async function generateChapterPart(inp: GenerateInput, o: Outline, idx: number, 
       maxTokens: 12000,
       signal,
     });
-    return (Array.isArray(r?.scenes) ? r.scenes : []).slice(0, count + 1).map((s: any) => normalizeScene(s, idx)).filter((s: ExplainerScene) => s.narration);
+    return (Array.isArray(r?.scenes) ? r.scenes : []).slice(0, count + 1).map((s: any) => applyStockDataKeysToScene(s, inp.stockCatalog)).map((s: any) => normalizeScene(s, idx)).filter((s: ExplainerScene) => s.narration);
   } catch (e: any) {
     // 途中で切れたら、半分ずつに分けて作り直す
     if (e?.code === 'MAX_TOKENS' && count > 1) {
@@ -336,7 +401,7 @@ export async function generateShort(inp: GenerateInput, o: Outline, longScenes: 
     digest,
   ].join('\n');
   const r = await callTool<any>({
-    system: system(),
+    system: system(inp),
     content: [...inp.refBlocks, { type: 'text', text: task }],
     toolName: 'write_short_scenes',
     toolDescription: '本編へ誘導する縦型ショート動画の場面を作る。',
@@ -344,7 +409,7 @@ export async function generateShort(inp: GenerateInput, o: Outline, longScenes: 
     maxTokens: 12000,
     signal,
   });
-  const scenes = (Array.isArray(r?.scenes) ? r.scenes : []).map((s: any) => normalizeScene(s, 0)).filter((s: ExplainerScene) => s.narration);
+  const scenes = (Array.isArray(r?.scenes) ? r.scenes : []).map((s: any) => applyStockDataKeysToScene(s, inp.stockCatalog)).map((s: any) => normalizeScene(s, 0)).filter((s: ExplainerScene) => s.narration);
   if (!scenes.length) throw new Error('ショートの場面を作れませんでした。');
   return scenes.map((s) => ({ ...s, minSec: Math.min(s.minSec, 4.5) }));
 }
@@ -361,7 +426,7 @@ export async function rewriteScene(inp: GenerateInput, videoTitle: string, instr
     '場面を1つだけ返してください（scenes は1要素）。',
   ].filter(Boolean).join('\n');
   const r = await callTool<any>({
-    system: system(),
+    system: system(inp),
     content: [...inp.refBlocks, { type: 'text', text: task }],
     toolName: 'write_scene',
     toolDescription: '解説動画の場面を1つ作る（または指示どおりに作り直す）。',
@@ -371,7 +436,7 @@ export async function rewriteScene(inp: GenerateInput, videoTitle: string, instr
   });
   const raw = Array.isArray(r?.scenes) ? r.scenes[0] : null;
   if (!raw) throw new Error('AIから場面が返りませんでした。');
-  const sc = normalizeScene(raw, current?.chapter ?? 0);
+  const sc = normalizeScene(applyStockDataKeysToScene(raw, inp.stockCatalog), current?.chapter ?? 0);
   return current ? { ...sc, id: current.id, chapter: current.chapter, imageId: current.imageId ?? null } : sc;
 }
 
@@ -402,7 +467,7 @@ export async function rewriteNarration(inp: GenerateInput, videoTitle: string, i
     'スライド（図解・見出し・テロップ）は変えず、ナレーションと読み上げ文（reading）だけを書き直してください。',
   ].filter(Boolean).join('\n');
   const r = await callTool<any>({
-    system: system(),
+    system: system(inp),
     content: [...inp.refBlocks, { type: 'text', text: task }],
     toolName: 'rewrite_narration',
     toolDescription: 'スライドは変えずに、解説動画の1場面のナレーションだけを指示どおりに書き直す。',
