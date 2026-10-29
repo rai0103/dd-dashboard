@@ -1025,15 +1025,30 @@ export default function ExplainerStudio() {
       await new Promise((resolve) => {
         const t0 = performance.now();
         pr.bufs.forEach((b, i) => { if (b) mixer().playBufferAfter(b, pr.starts[i] + 0.3); });
-        let fading = false, lastUi = 0;
+        let fading = false, lastUi = 0, finished = false;
+        // タブを裏に回す・最小化するなどで非表示になると、requestAnimationFrameはブラウザ側で止まるか
+        // ごく低頻度になる（録画中であっても）。一方、canvas.captureStream()によるMediaRecorderの録画と
+        // BGMの再生（Web Audio）はタブの表示状態に関係なく進み続けるため、rAFのtick()だけで終了判定を
+        // していると、本編の時間（totalMs）を過ぎても録画が止まらず、ユーザーがタブに戻って来るまで
+        // BGMだけが流れる静止画面が録画され続けてしまう。setTimeoutはrAFほど厳しく止まらないため、
+        // 本来の終了予定時刻に確実に終了させる保険として使う（tick()が正常に動いていれば、通常は
+        // こちらより先にelがtotalMsへ達してresolveするので、この保険が働くのは裏に回っていた場合のみ）。
+        const finish = () => {
+          if (finished) return;
+          finished = true;
+          if (!fading) { fading = true; mixer().fadeBGM(0.2); }
+          resolve();
+        };
+        setTimeout(finish, totalMs + 200);
         const tick = () => {
+          if (finished) return;
           const now = performance.now(), el = now - t0, prog = Math.min(1, el / animMs);
           rendererRef.current?.draw(prog);
           if (!thumbPending && el >= thumbAtMs) thumbPending = canvasPng(canvas).then((b) => { thumbBlob = b; });
           // 画面の表示更新は1秒に4回まで（毎コマ更新すると画面全体の再描画で録画が引っかかり、人物が途切れる原因になる）
           if (now - lastUi > 200) { lastUi = now; setSeekPos(prog); updateSceneProgress(prog); setExportProgress(Math.round(Math.min(1, el / totalMs) * 95)); }
           if (!fading && el >= totalMs - 1400) { fading = true; mixer().fadeBGM(1.4); }
-          if (el < totalMs) requestAnimationFrame(tick); else resolve();
+          if (el < totalMs) requestAnimationFrame(tick); else finish();
         };
         requestAnimationFrame(tick);
       });
