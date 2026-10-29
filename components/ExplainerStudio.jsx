@@ -107,6 +107,8 @@ export default function ExplainerStudio() {
   }, [topic, mode, audience, targetMinutes, extraInstruction, refs]);
   const [refTextOpen, setRefTextOpen] = useState(false);
   const [expandedRefId, setExpandedRefId] = useState(null); // 参考情報（テキスト）の本文をその場で確認する
+  const [selectedRefIds, setSelectedRefIds] = useState(() => new Set()); // 参考情報のチェックボックス選択（まとめて削除・必須設定・サイトを開く用）
+  const toggleRefSelected = (id) => setSelectedRefIds((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   const [refTextTitle, setRefTextTitle] = useState("");
   const [refTextBody, setRefTextBody] = useState("");
   const [urlInput, setUrlInput] = useState("");
@@ -209,12 +211,17 @@ export default function ExplainerStudio() {
   const [researchPrompt, setResearchPrompt] = useState("");
   const researchAbortRef = useRef(null);
   const runResearch = async () => {
-    const query = researchPrompt.trim() || topic.trim();
-    if (!query) { setResearchError("先にテーマ（ニュースやキーワード）、または検索プロンプトを入力してください。"); return; }
+    const t = topic.trim(), fp = researchPrompt.trim();
+    // テーマが入力されていれば常に主軸とし、検索プロンプトは「テーマに加えてどこに注目するか」の
+    // 観点として別送りする（サーバー側でテーマと組み合わせて検索するよう明示的に指示する。
+    // クライアント側で1本の文字列に結合すると、検索プロンプトの語句だけが単独で検索され、
+    // テーマと無関係な結果が混ざることがあったため）。テーマが空なら検索プロンプトをテーマ扱いにする。
+    const reqTopic = t || fp, reqFocus = t ? fp : "";
+    if (!reqTopic) { setResearchError("先にテーマ（ニュースやキーワード）、または検索プロンプトを入力してください。"); return; }
     setResearchBusy(true); setResearchError("");
     const ac = new AbortController(); researchAbortRef.current = ac;
     try {
-      const r = await researchTopic(query, ac.signal);
+      const r = await researchTopic(reqTopic, reqFocus, ac.signal);
       const existingUrls = new Set(refs.filter((x) => x.kind === "url").map((x) => x.url));
       const combined = [];
       [...r.claude.urls, ...r.gemini.urls].forEach((u) => {
@@ -957,7 +964,7 @@ export default function ExplainerStudio() {
     refreshImages();
     setProject(null);
     try { localStorage.removeItem(PROJECT_KEY); } catch (e) { /* ignore */ }
-    setTopic(""); setExtraInstruction(""); setRefs([]);
+    setTopic(""); setExtraInstruction(""); setRefs([]); setSelectedRefIds(new Set());
     setUrlInput(""); setRefTextBody(""); setRefTextTitle(""); setRefTextOpen(false);
     setGenError(""); setAiError(""); setAiOpenId(null); setEditVisualId(null); setReadingOpenId(null); setRightsPendingId(null);
     setExportNote(""); setFormat("long"); setSeekPos(0); setCurrentSceneIdx(0); setTotalSec(0); setSceneDurs([]); setNarrMeasure(null);
@@ -1000,6 +1007,21 @@ export default function ExplainerStudio() {
       await r.prepare(0); // 人物の動画を先頭にそろえてから録画を始める（出だしで人物が消えないように）
       if (bgmUrl) await mixer().playBGM(bgmUrl, bgmVolume, true);
       handle = exporter.startRecording(canvas, audioStream, 30);
+      // MediaRecorder開始直後の数フレームはエンコーダーのパイプラインがまだ安定しておらず、書き出した
+      // ファイルの先頭が壊れる（YouTube側で「ファイルを読み取れません」となる）ことがごくまれにある。
+      // 特にショート（1分前後）はその不安定な区間が全体に占める割合が大きく、症状が出やすい
+      // （プレビュー再生を一度もせずに書き出すと起きやすい、という報告と一致する）。本編のタイマー
+      // （t0）を始める前に、実際の1コマ目を数フレーム分あらかじめ録画しておき、パイプラインを
+      // 安定させてから本編を始める（音声はまだ鳴らさないため、音ズレは発生しない）。
+      await new Promise((resolve) => {
+        let warmN = 0;
+        const warm = () => {
+          rendererRef.current?.draw(0);
+          warmN++;
+          if (warmN < 9) requestAnimationFrame(warm); else resolve();
+        };
+        requestAnimationFrame(warm);
+      });
       await new Promise((resolve) => {
         const t0 = performance.now();
         pr.bufs.forEach((b, i) => { if (b) mixer().playBufferAfter(b, pr.starts[i] + 0.3); });
@@ -1165,14 +1187,34 @@ export default function ExplainerStudio() {
                 </div>
                 <div className="flex items-center gap-2 mb-2 flex-wrap">
                   <button onClick={runResearch} disabled={researchBusy} className="text-[11px] px-2 py-1 rounded flex items-center gap-1" style={{ ...btn("primary"), opacity: researchBusy ? 0.6 : 1 }}><Search size={11} /> {researchBusy ? "検索中…" : "AIで検索して参考情報を追加"}</button>
-                  <span className="text-[10px]" style={{ color: C.textDim }}>{researchPrompt.trim() ? "上の検索プロンプトの内容で" : "テーマについて"}、Claudeの検索とGeminiの検索でURL最大5件・要約テキスト2件（Gemini・Claude）を自動で追加します（何度でも押せます。不要な結果は個別に削除できます）。</span>
+                  <span className="text-[10px]" style={{ color: C.textDim }}>{researchPrompt.trim() ? (topic.trim() ? "テーマ＋上の検索プロンプトの内容で" : "上の検索プロンプトの内容で") : "テーマについて"}、Claudeの検索とGeminiの検索でURL最大5件・要約テキスト2件（Gemini・Claude）を自動で追加します（何度でも押せます。不要な結果は個別に削除できます）。</span>
                   {researchError && <div className="text-[10px] w-full" style={{ color: C.rust }}>{researchError}</div>}
                 </div>
                 <div className="flex flex-col gap-1 mb-2">
                   {refs.length === 0 && <div className="text-[10px]" style={{ color: C.textDim }}>未追加です。ニュースは元記事や公式発表を追加すると正確になります（参考情報なしの場合は、一般に確立した知識の範囲で解説します）。</div>}
+                  {refs.length > 0 && (
+                    <div className="flex items-center gap-2 flex-wrap text-[10px] mb-0.5" style={{ color: C.textDim }}>
+                      <label className="flex items-center gap-1 cursor-pointer">
+                        <input type="checkbox" checked={refs.every((r) => selectedRefIds.has(r.id))} onChange={(e) => setSelectedRefIds(e.target.checked ? new Set(refs.map((r) => r.id)) : new Set())} />
+                        すべて選択
+                      </label>
+                      {selectedRefIds.size > 0 && (
+                        <>
+                          <span>{selectedRefIds.size}件選択中：</span>
+                          <button onClick={() => { setRefs((p) => p.filter((x) => !selectedRefIds.has(x.id))); setSelectedRefIds(new Set()); }} className="px-1.5 py-0.5 rounded flex items-center gap-1" style={btn()}><X size={10} /> まとめて削除</button>
+                          <button onClick={() => setRefs((p) => p.map((x) => (selectedRefIds.has(x.id) ? { ...x, required: true } : x)))} className="px-1.5 py-0.5 rounded flex items-center gap-1" style={btn()}><Pin size={10} /> まとめて必須に設定</button>
+                          <button onClick={() => setRefs((p) => p.map((x) => (selectedRefIds.has(x.id) ? { ...x, required: false } : x)))} className="px-1.5 py-0.5 rounded flex items-center gap-1" style={btn()}><PinOff size={10} /> 必須を解除</button>
+                          {refs.some((x) => selectedRefIds.has(x.id) && x.kind === "url") && (
+                            <button onClick={() => refs.filter((x) => selectedRefIds.has(x.id) && x.kind === "url").forEach((x) => window.open(x.url, "_blank", "noopener,noreferrer"))} className="px-1.5 py-0.5 rounded flex items-center gap-1" style={btn()}><ExternalLink size={10} /> 選択したURLを開く</button>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  )}
                   {refs.map((r) => (
                     <div key={r.id}>
                       <div className="flex items-center gap-2 px-2 py-1 rounded" style={{ background: C.panel2, border: `1px solid ${r.kind === "url" && r.status === "error" ? C.rust + "88" : r.required ? C.teal + "99" : C.borderSoft}` }}>
+                        <input type="checkbox" checked={selectedRefIds.has(r.id)} onChange={() => toggleRefSelected(r.id)} className="shrink-0" />
                         {r.kind === "url" ? <Link2 size={12} style={{ color: C.blue, flexShrink: 0 }} /> : r.kind === "pdf" ? <FileText size={12} style={{ color: C.rust, flexShrink: 0 }} /> : r.kind === "csv" ? <FileText size={12} style={{ color: C.blue, flexShrink: 0 }} /> : r.kind === "image" ? <ImageIcon size={12} style={{ color: C.teal, flexShrink: 0 }} /> : <Type size={12} style={{ color: C.amber, flexShrink: 0 }} />}
                         <span className="truncate flex-1 text-[11px]" title={r.kind === "url" ? r.url : r.title}>{refLabel(r)}</span>
                         {r.required && <span className="text-[9px] px-1 rounded shrink-0" style={{ color: C.bg, background: C.teal, fontWeight: 700 }}>必須</span>}
@@ -1183,7 +1225,7 @@ export default function ExplainerStudio() {
                         {r.kind === "text" && <button onClick={() => setExpandedRefId((id) => (id === r.id ? null : r.id))} title="本文を確認" style={{ color: C.textMuted, background: "none", border: "none", cursor: "pointer" }}>{expandedRefId === r.id ? <EyeOff size={12} /> : <Eye size={12} />}</button>}
                         {r.kind === "url" && r.status === "error" && <button onClick={() => loadUrl(r.id, r.url)} title="もう一度読み込む" style={{ color: C.textMuted, background: "none", border: "none", cursor: "pointer" }}><RefreshCw size={11} /></button>}
                         <button onClick={() => setRefs((p) => p.map((x) => (x.id === r.id ? { ...x, required: !x.required } : x)))} title={r.required ? "「必ず動画に含める」を解除" : "必ず動画に含める（AIに省略させない）"} style={{ color: r.required ? C.teal : C.textDim, background: "none", border: "none", cursor: "pointer" }}>{r.required ? <Pin size={12} /> : <PinOff size={12} />}</button>
-                        <button onClick={() => setRefs((p) => p.filter((x) => x.id !== r.id))} title="削除" style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer" }}><X size={12} /></button>
+                        <button onClick={() => { setRefs((p) => p.filter((x) => x.id !== r.id)); setSelectedRefIds((prev) => { if (!prev.has(r.id)) return prev; const next = new Set(prev); next.delete(r.id); return next; }); }} title="削除" style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer" }}><X size={12} /></button>
                       </div>
                       {r.kind === "text" && expandedRefId === r.id && (
                         <textarea readOnly value={r.text} rows={6} className="w-full mt-1 px-2 py-1 rounded text-[11px]" style={{ ...inputStyle, background: C.panel, resize: "vertical" }} />

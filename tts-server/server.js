@@ -269,12 +269,18 @@ async function researchWithGemini(prompt) {
 async function handlePostResearch(req, res) {
   const body = await readJsonBody(req);
   const topic = body && typeof body.topic === 'string' ? body.topic.trim() : '';
+  const focus = body && typeof body.focus === 'string' ? body.focus.trim() : '';
   if (!topic) {
     res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({ error: 'BAD_REQUEST', message: 'topic が空です。' }));
     return;
   }
-  const prompt = `次のニュース・キーワードについて、動画解説の参考資料として使える内容を、最新のWeb情報に基づいて日本語で詳しく要約してください（400〜600字程度）。数値・日付・固有名詞はできるだけ正確に、出典ごとに書き分けず一つの文章としてまとめてください。\n\nテーマ: ${topic}`;
+  // focus（検索プロンプト）がある場合、「focusの語句だけを単独で検索してテーマと無関係な結果が
+  // 混ざる」ことがあったため、Web検索のキーワードには必ずテーマの固有名詞を含め、focusは
+  // 「テーマに加えて特に注目する観点」として扱うよう明示的に指示する。
+  const prompt = focus
+    ? `次のニュース・キーワードについて、動画解説の参考資料として使える内容を、最新のWeb情報に基づいて日本語で詳しく要約してください（400〜600字程度）。数値・日付・固有名詞はできるだけ正確に、出典ごとに書き分けず一つの文章としてまとめてください。\n\nテーマ: ${topic}\n\n上記テーマに加えて、特に次の観点を中心に調べてください: ${focus}\n\n重要：Web検索のキーワードには、上記テーマの固有名詞（人名・組織名・地名・制度名など）を必ず含めてください。「${focus}」という語句だけを単独で検索しないでください（テーマと無関係な一般的な記事が混ざってしまいます）。検索は必ず「テーマ＋観点」の組み合わせで行ってください。`
+    : `次のニュース・キーワードについて、動画解説の参考資料として使える内容を、最新のWeb情報に基づいて日本語で詳しく要約してください（400〜600字程度）。数値・日付・固有名詞はできるだけ正確に、出典ごとに書き分けず一つの文章としてまとめてください。\n\nテーマ: ${topic}`;
   const [claude, gemini] = await Promise.all([
     researchWithClaude(prompt).catch((e) => ({ text: '', urls: [], error: String(e && e.message ? e.message : e) })),
     researchWithGemini(prompt).catch((e) => ({ text: '', urls: [], error: String(e && e.message ? e.message : e) })),

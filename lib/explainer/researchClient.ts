@@ -23,14 +23,18 @@ export interface ResearchResult {
  * 最新のWeb情報に基づく要約と出典URLを問い合わせる。どちらか一方が失敗しても、もう一方の結果は
  * そのまま返す（それぞれのerrorフィールドで個別に分かる。呼び出し側は両方のerrorが無い限りは
  * 部分的な結果として扱える）。
+ * focus（検索プロンプト）は、テーマとは別にサーバー側へ渡す。クライアント側で先に1本の文字列に
+ * 組み合わせてしまうと、検索語の選び方がAI任せになり、「focusの語句だけを単独で検索してテーマと
+ * 無関係な結果が混ざる」ことがあったため、サーバー側のプロンプトで明示的に「テーマと組み合わせて
+ * 検索すること」を指示する（tts-server/server.js の handlePostResearch 参照）。
  */
-export async function researchTopic(topic: string, signal?: AbortSignal): Promise<ResearchResult> {
+export async function researchTopic(topic: string, focus?: string, signal?: AbortSignal): Promise<ResearchResult> {
   let resp: Response;
   try {
     resp = await fetch(`${getTtsBaseUrl()}/api/research`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ topic }),
+      body: JSON.stringify({ topic, focus: focus || undefined }),
       signal,
     });
   } catch (e: any) {
