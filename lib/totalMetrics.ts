@@ -9,6 +9,14 @@
 // 見つからないラベルは握りつぶさず、どのラベルが無いかをerrorsで返す（アップロード画面にそのまま表示する）。
 // 値はExcelのキャッシュ値（再計算済みの数値）を読む。リターンは小数で保持する（0.2154＝21.54%）。
 // このファイルは外部importを持たないため、`node --test` から直接実行できる（シートは2次元配列で受け取る）。
+//
+// 設計上の注意（B・Cの値はA.時系列から導出する）：
+// A.時系列（1〜24行目）は、列が増えるたびに日付の検出ロジック自体が自動的に伸びるため、ユーザーが新しい月の
+// 列をシートに追加しさえすれば常に最新列を指す。一方、B.最新時点サマリー（26〜38行目）とC.暦年別リターンの
+// 「今年（YTD）」の行は、固定セル・固定行の値のため、新しい列を追加した際にコピーし忘れると前月の値のまま
+// 残ってしまう（実際にこの不具合が発生した）。そのためB・Cの値は、シートに書かれた値をそのまま信用せず、
+// 常にA.時系列の最新列から計算し直す。B.最新時点サマリーの「最新日」欄・C.の過去の確定年の行は、ユーザーの
+// 更新忘れを検知してお知らせするための突合せにのみ使う（表示される数値そのものには使わない）。
 
 export const TOTAL_METRICS_SHEET = "TOTAL指標";
 
@@ -33,6 +41,9 @@ export interface TotalMetricsPoint {
   annualTwr: number | null;
   annualXirr: number | null;
   totalPnl: number | null;
+  periodYears: number | null; // 経過年数（日数÷365.25）。summaryの運用期間はこの最新列の値を使う
+  annualModifiedDietz: number | null; // 年率リターン（修正ディーツ・参考）。古いシートには無い場合がありnull
+  simpleReturn: number | null; // （参考）単純損益率。古いシートには無い場合がありnull
 }
 export interface CalendarYearReturn {
   year: number;
@@ -76,6 +87,24 @@ export function toIsoDate(v: unknown): string | null {
   return y >= 1990 && y <= 2100 ? d.toISOString().slice(0, 10) : null;
 }
 
+// 暦年別リターンの「現在進行中の年（YTD）」の行を、シートの手打ちの値ではなくA.時系列の最新列から計算し直す。
+// 前年末時点（series内の、その年の1/1より前の最後の点。無ければ運用開始＝資産0・TWR指数1.0を基準とする）を
+// 起点に、年末資産・年間純入金・年間損益・年間TWR（TWR指数の比＝入出金の影響を受けない）を求める。
+// 過去の確定年の行は対象にしない（このシートの値をそのまま信頼する）。
+function recomputeYtdCalendarYearRow(series: TotalMetricsPoint[], existingNote: string | null): CalendarYearReturn | null {
+  const last = series[series.length - 1];
+  if (!last || last.totalAssets == null) return null;
+  const year = Number(last.date.slice(0, 4));
+  const prevYearEnd = [...series].reverse().find((p) => p.date <= `${year - 1}-12-31`) ?? null;
+  const baseAssets = prevYearEnd?.totalAssets ?? 0;
+  const basePrincipal = prevYearEnd?.principal ?? 0;
+  const baseTwrIndex = prevYearEnd?.twrIndex ?? 1; // 運用開始年はTWR指数の基準（開始=1.0）をそのまま使う
+  const netDeposit = last.principal != null ? last.principal - basePrincipal : null;
+  const pnl = netDeposit != null ? last.totalAssets - baseAssets - netDeposit : null;
+  const twr = last.twrIndex != null && baseTwrIndex ? last.twrIndex / baseTwrIndex - 1 : null;
+  return { year, yearEndAssets: last.totalAssets, netDeposit, pnl, twr, note: existingNote ?? `${year}年は最新日までのYTD` };
+}
+
 export function parseTotalMetricsSheet(rows: SheetRows): { metrics: TotalMetrics; errors: string[] } {
   const errors: string[] = [];
   const cell = (r: number, c: number): unknown => rows[r]?.[c] ?? null;
@@ -95,7 +124,7 @@ export function parseTotalMetricsSheet(rows: SheetRows): { metrics: TotalMetrics
   if (summaryHeader === null) errors.push(`${TOTAL_METRICS_SHEET}：見出し「【最新時点サマリー】」が見つかりません。`);
   if (yearHeader === null) errors.push(`${TOTAL_METRICS_SHEET}：暦年別リターンの見出し行（A列が「年」）が見つかりません。`);
 
-  // A. 時系列（日付行〜サマリー見出しの手前）。列は1行目の日付が空になる直前まで。
+  // A. 時系列（日付行〜サマリー見出しの手前）。列は1行目の日付が空になる直前まで（＝列が増えても自動的に追従する）。
   const series: TotalMetricsPoint[] = [];
   if (dateRow !== null) {
     const seriesEnd = summaryHeader ?? n;
@@ -106,9 +135,9 @@ export function parseTotalMetricsSheet(rows: SheetRows): { metrics: TotalMetrics
       cols.push({ c, date });
     }
     if (!cols.length) errors.push(`${TOTAL_METRICS_SHEET}：「日付」行に日付が見つかりません。`);
-    const seriesRow = (prefix: string): number | null => {
+    const seriesRow = (prefix: string, required = true): number | null => {
       const r = findRowFrom(prefix, dateRow + 1, seriesEnd);
-      if (r === null) errors.push(`${TOTAL_METRICS_SHEET}：時系列のラベル「${prefix}」が見つかりません。`);
+      if (r === null && required) errors.push(`${TOTAL_METRICS_SHEET}：時系列のラベル「${prefix}」が見つかりません。`);
       return r;
     };
     const rowOf = {
@@ -119,39 +148,49 @@ export function parseTotalMetricsSheet(rows: SheetRows): { metrics: TotalMetrics
       annualTwr: seriesRow("年率リターン（TWR"),
       annualXirr: seriesRow("年率リターン（XIRR"),
       totalPnl: seriesRow("累計損益"),
+      periodYears: seriesRow("経過年数"),
+      annualModifiedDietz: seriesRow("年率リターン（修正ディーツ", false),
+      simpleReturn: seriesRow("（参考）単純損益率", false),
     };
     const val = (r: number | null, c: number) => (r === null ? null : toNumber(cell(r, c)));
     for (const { c, date } of cols) {
       series.push({
         date, totalAssets: val(rowOf.totalAssets, c), principal: val(rowOf.principal, c), twrIndex: val(rowOf.twrIndex, c),
         cumulativeTwr: val(rowOf.cumulativeTwr, c), annualTwr: val(rowOf.annualTwr, c), annualXirr: val(rowOf.annualXirr, c), totalPnl: val(rowOf.totalPnl, c),
+        periodYears: val(rowOf.periodYears, c), annualModifiedDietz: val(rowOf.annualModifiedDietz, c), simpleReturn: val(rowOf.simpleReturn, c),
       });
     }
   }
 
-  // B. 最新時点サマリー（見出しの下〜暦年別の見出し or 次の【】見出しの手前）。値はB列。
+  // B. 最新時点サマリー：値はすべてA.時系列の最新列から取る（上の設計上の注意を参照）。
   const summary: TotalMetricsSummary = { latestDate: null, periodYears: null, totalAssets: null, principal: null, totalPnl: null, cumulativeTwr: null, annualTwr: null, annualXirr: null, annualModifiedDietz: null, simpleReturn: null };
+  const lastPoint = series.length ? series[series.length - 1] : null;
+  if (lastPoint) {
+    summary.latestDate = lastPoint.date;
+    summary.periodYears = lastPoint.periodYears;
+    summary.totalAssets = lastPoint.totalAssets;
+    summary.principal = lastPoint.principal;
+    summary.totalPnl = lastPoint.totalPnl;
+    summary.cumulativeTwr = lastPoint.cumulativeTwr;
+    summary.annualTwr = lastPoint.annualTwr;
+    summary.annualXirr = lastPoint.annualXirr;
+    summary.annualModifiedDietz = lastPoint.annualModifiedDietz;
+    summary.simpleReturn = lastPoint.simpleReturn;
+  }
   if (summaryHeader !== null) {
     let summaryEnd = n;
     for (let r = summaryHeader + 1; r < n; r++) if (labelAt(r).startsWith("【")) { summaryEnd = r; break; }
-    const summaryRow = (prefix: string, required = true): number | null => {
-      const r = findRowFrom(prefix, summaryHeader + 1, summaryEnd);
-      if (r === null && required) errors.push(`${TOTAL_METRICS_SHEET}：最新時点サマリーのラベル「${prefix}」が見つかりません。`);
-      return r;
-    };
-    const num = (prefix: string, required = true) => { const r = summaryRow(prefix, required); return r === null ? null : toNumber(cell(r, 1)); };
-    const latestRow = summaryRow("最新日");
-    summary.latestDate = latestRow === null ? null : toIsoDate(cell(latestRow, 1));
-    summary.periodYears = num("運用期間（年）");
-    summary.totalAssets = num("総資産");
-    summary.principal = num("累計純入金（元本）");
-    summary.totalPnl = num("累計損益（総資産−元本）");
-    summary.cumulativeTwr = num("累積リターン（TWR）");
-    summary.annualTwr = num("年率リターン（TWR");
-    summary.annualXirr = num("年率リターン（XIRR");
-    summary.annualModifiedDietz = num("年率リターン（修正ディーツ", false); // 参考（任意）
-    summary.simpleReturn = num("（参考）単純損益率", false); // 参考（任意・非推奨）
-    // 「（修正前の旧式…」の行は読み込まない（どの前方一致にも該当しない）
+    // 「最新日」欄は値としては使わないが、時系列の最新列と突合せて、シート側の更新忘れをお知らせする
+    // （26〜38行目は固定セルのため、列を追加した際にコピーし忘れると前月の値のまま残ってしまう）。
+    const latestRow = findRowFrom("最新日", summaryHeader + 1, summaryEnd);
+    if (latestRow === null) {
+      errors.push(`${TOTAL_METRICS_SHEET}：最新時点サマリーのラベル「最新日」が見つかりません。`);
+    } else {
+      const summaryLatestDate = toIsoDate(cell(latestRow, 1));
+      if (summaryLatestDate && lastPoint && summaryLatestDate !== lastPoint.date) {
+        errors.push(`${TOTAL_METRICS_SHEET}：【最新時点サマリー】欄の「最新日」（${summaryLatestDate}）が時系列の最新列（${lastPoint.date}）と異なります。表示の数値には時系列側の最新列の値を使用しているため、この欄（26〜38行目）の更新を忘れても問題ありません。`);
+      }
+    }
   }
 
   // C. 暦年別リターン（見出し「年」の直下から、A列が数値（年）の間）。G列以降（計算用）は無視。
@@ -164,6 +203,23 @@ export function parseTotalMetricsSheet(rows: SheetRows): { metrics: TotalMetrics
       calendarYears.push({ year, yearEndAssets: toNumber(cell(r, 1)), netDeposit: toNumber(cell(r, 2)), pnl: toNumber(cell(r, 3)), twr: toNumber(cell(r, 4)), note: note == null || note === "" ? null : String(note) });
     }
     if (!calendarYears.length) errors.push(`${TOTAL_METRICS_SHEET}：暦年別リターンのデータ行が見つかりません。`);
+  }
+  // 今年（進行中の年）の行は、シートの固定値ではなく時系列の最新列から計算し直す（上の設計上の注意を参照）。
+  // 既存の行が前月のまま残っている（＝最新列と総資産が一致しない）場合は上書きし、
+  // 年が変わったのに行自体が無い（年末更新時に追加し忘れた）場合は新しい行を追加する。
+  if (lastPoint && lastPoint.totalAssets != null) {
+    const latestYear = Number(lastPoint.date.slice(0, 4));
+    const lastRow = calendarYears.length ? calendarYears[calendarYears.length - 1] : null;
+    const stale = !!lastRow && lastRow.year === latestYear && lastRow.yearEndAssets !== lastPoint.totalAssets;
+    const missing = !lastRow || lastRow.year < latestYear;
+    if (stale || missing) {
+      const recomputed = recomputeYtdCalendarYearRow(series, stale ? lastRow!.note : null);
+      if (recomputed) {
+        errors.push(`${TOTAL_METRICS_SHEET}：【暦年別リターン】の${latestYear}年の行がシートに記載の値のまま更新されていなかったため、時系列の最新列（${lastPoint.date}）から計算し直した値を使用しています。列を追加した際にこの行の更新を忘れても、次回以降は自動的に補われます。`);
+        if (stale) calendarYears[calendarYears.length - 1] = recomputed;
+        else calendarYears.push(recomputed);
+      }
+    }
   }
 
   return { metrics: { summary, series, calendarYears }, errors };
