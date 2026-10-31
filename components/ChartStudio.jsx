@@ -11,7 +11,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Plus, X, Camera, Upload, RefreshCw, Check, AlertTriangle } from "lucide-react";
 import { storage } from "@/lib/storage";
 import { parseStooqCSV } from "@/lib/csvPrice";
-import { periodPath, PERIOD_OPTIONS, csvRowsToStockDataPoints, buildChartStudioCatalog } from "@/lib/chartSeries";
+import { periodPath, periodSpanDays, PERIOD_OPTIONS, csvRowsToStockDataPoints, buildChartStudioCatalog } from "@/lib/chartSeries";
 import { catalogKeyOptions } from "@/lib/videoCustomScene";
 import { saveImage } from "@/lib/explainer/imageStore";
 import { RENDER_SIZE } from "@/lib/explainer/renderer";
@@ -162,17 +162,32 @@ export default function ChartStudio() {
   const removeSeries = (id) => setAddedSeries((list) => list.filter((s) => s.id !== id));
   const updateSeriesLabel = (id, label) => setAddedSeries((list) => list.map((s) => (s.id === id ? { ...s, label } : s)));
 
-  // 追加済みの各系列を実際の{t,v}パスに解決する（データ更新・追加のたびに作り直す）
+  // 追加済みの各系列を実際の{t,v}パスに解決する（データ更新・追加のたびに作り直す）。
+  // xAxisKind：横軸ラベルの組み立て方を区別するための印。
+  // - "calendar"：複数年セット（年ごとの推移を1年のグリッドに正規化）＝tがそのまま年内の経過（1/1〜12/31）
+  // - "elapsed"：期間指定（1週間〜最長）＝spanDaysに実際の経過日数を添えて、日/週/ヶ月/年の単位で表示する
   const resolvedSeries = useMemo(() => addedSeries.map((s) => {
     const src = sourceByKey(s.sourceKey);
     if (!src || !src.points.length) return { ...s, pts: [] };
-    if (s.mode === "period") return { ...s, pts: periodPath(src.points, s.periodKey) };
+    if (s.mode === "period") {
+      return { ...s, pts: periodPath(src.points, s.periodKey), xAxisKind: "elapsed", spanDays: periodSpanDays(src.points, s.periodKey) };
+    }
     const asOfDate = src.points[src.points.length - 1].date;
     const curYear = parseInt(asOfDate.slice(0, 4), 10);
     const catalog = buildChartStudioCatalog(src.points, curYear, asOfDate);
     const entry = catalog[s.yearSetKey];
-    return { ...s, pts: entry?.pts ?? [], linePaths: entry?.linePaths };
+    return { ...s, pts: entry?.pts ?? [], linePaths: entry?.linePaths, xAxisKind: "calendar" };
   }), [addedSeries, allSources]);
+
+  // チャート全体の横軸の種類・基準期間：有効な系列のうち最初のもの（通常は同種の系列を重ねて使うため、
+  // これで事実上チャート全体の横軸を代表できる）から決める。系列が無ければ従来の0%〜100%表示にフォールバック。
+  const xAxisInfo = useMemo(() => {
+    const valid = resolvedSeries.find((s) => (s.pts && s.pts.length > 1) || (s.linePaths && s.linePaths.length));
+    if (!valid) return { kind: "percent" };
+    if (valid.xAxisKind === "calendar") return { kind: "calendar" };
+    if (valid.xAxisKind === "elapsed" && valid.spanDays) return { kind: "elapsed", spanDays: valid.spanDays };
+    return { kind: "percent" };
+  }, [resolvedSeries]);
 
   // ---------------- 出力サイズ・描画 ----------------
   const [format, setFormat] = useState("long"); // long=16:9（1920x1080）、short=9:16（1080x1920）
@@ -186,8 +201,8 @@ export default function ChartStudio() {
     if (!canvas) return;
     const { w: W, h: H } = RENDER_SIZE[format];
     canvas.width = W; canvas.height = H;
-    drawChart(canvas.getContext("2d"), W, H, resolvedSeries, chartTitle, format, yTickSize, xTickSize);
-  }, [resolvedSeries, format, chartTitle, yTickSize, xTickSize]);
+    drawChart(canvas.getContext("2d"), W, H, resolvedSeries, chartTitle, format, yTickSize, xTickSize, xAxisInfo);
+  }, [resolvedSeries, format, chartTitle, yTickSize, xTickSize, xAxisInfo]);
 
   // ---------------- スクリーンショット保存（解説動画作成と共通の画像ライブラリへ） ----------------
   const [shotBusy, setShotBusy] = useState(false);
@@ -344,12 +359,51 @@ export default function ChartStudio() {
   );
 }
 
+// 横軸の目盛り位置・ラベルを決める。xAxis.kind:
+// - "calendar"：複数年セット（年ごとの推移を1年グリッドに正規化）＝tがそのまま年内の経過（1/1〜12/31）なので、
+//   月名（1月・4月・7月・10月・12月）で表示する。
+// - "elapsed"：期間指定（1週間〜最長）＝xAxis.spanDaysの実経過日数を、規模に応じて日/週/ヶ月/年の「きりのいい」
+//   間隔を選んで「期間の経過」として表示する（目盛り位置自体も単位に揃える。0%〜100%の固定割合ではない）。
+// - それ以外（系列が無い等）：従来通り0%〜100%表示にフォールバックする。
+function buildXAxisTicks(xAxis) {
+  const percentFallback = () => [0, 0.25, 0.5, 0.75, 1].map((t) => ({ t, label: `${Math.round(t * 100)}%` }));
+  if (!xAxis) return percentFallback();
+  if (xAxis.kind === "calendar") {
+    // t=0が1/1、t=1が12/31相当（lib/videoLongBasis.tsのyearPathの正規化に合わせる）。
+    return [0, 0.25, 0.5, 0.75, 1].map((t) => ({ t, label: `${Math.min(11, Math.floor(t * 12)) + 1}月` }));
+  }
+  if (xAxis.kind === "elapsed" && xAxis.spanDays > 0) {
+    const spanDays = xAxis.spanDays;
+    let unitDays, unitLabel;
+    if (spanDays <= 10) { unitDays = 1; unitLabel = "日"; }
+    else if (spanDays <= 60) { unitDays = 7; unitLabel = "週"; }
+    else if (spanDays <= 450) { unitDays = 30.44; unitLabel = "ヶ月"; }
+    else { unitDays = 365.25; unitLabel = "年"; }
+    const totalUnits = spanDays / unitDays;
+    const roughStep = totalUnits / 5;
+    const pow = Math.pow(10, Math.floor(Math.log10(roughStep || 1)));
+    const frac = roughStep / pow;
+    const niceFrac = frac < 1.5 ? 1 : frac < 3 ? 2 : frac < 7 ? 5 : 10;
+    const step = Math.max(niceFrac * pow, unitLabel === "年" ? 0.5 : 1);
+    const decimals = unitLabel === "年" && step < 1 ? 1 : 0;
+    const ticks = [];
+    for (let u = 0; u <= totalUnits + 1e-6; u += step) {
+      ticks.push({ t: Math.min(1, u / totalUnits), label: `${u.toFixed(decimals)}${unitLabel}` });
+    }
+    if (!ticks.length || ticks[ticks.length - 1].t < 0.999) {
+      ticks.push({ t: 1, label: `${totalUnits.toFixed(decimals)}${unitLabel}` });
+    }
+    return ticks;
+  }
+  return percentFallback();
+}
+
 // チャート本体の描画（静止画・アニメーション無し＝スクリーンショット用）。
 // series は {label, color, pts:{t,v}[], linePaths?:{t,v}[][]}[]（pts・linePathsは addSeries 時点で既に解決済み）。
 // linePathsがある系列（「全○本」の複数年重ね描き）は、ptsは使わず個々の年の推移を薄い白線で全て描く。
 // yTickSize・xTickSizeは縦軸・横軸の目盛り値のフォントサイズ（px）。0を指定するとその軸の目盛り値を非表示にする
-// （グリッド線・刻みの位置自体は0でも変わらず、目盛りの文字だけを省く）。
-function drawChart(ctx, W, H, series, title, format, yTickSize = 22, xTickSize = 22) {
+// （グリッド線・刻みの位置自体は0でも変わらず、目盛りの文字だけを省く）。xAxisは横軸ラベルの種類（上記参照）。
+function drawChart(ctx, W, H, series, title, format, yTickSize = 22, xTickSize = 22, xAxis = null) {
   ctx.clearRect(0, 0, W, H);
   ctx.fillStyle = C.bg;
   ctx.fillRect(0, 0, W, H);
@@ -415,10 +469,10 @@ function drawChart(ctx, W, H, series, title, format, yTickSize = 22, xTickSize =
   if (xTickSize > 0) {
     ctx.strokeStyle = C.borderSoft; ctx.lineWidth = 1.5;
     ctx.fillStyle = C.textDim; ctx.font = `${xTickSize}px sans-serif`; ctx.textAlign = "center"; ctx.textBaseline = "top";
-    [0, 0.25, 0.5, 0.75, 1].forEach((t) => {
+    buildXAxisTicks(xAxis).forEach(({ t, label }) => {
       const x = xOf(t), tickY = plot.y + plot.h;
       ctx.beginPath(); ctx.moveTo(x, tickY); ctx.lineTo(x, tickY + 8); ctx.stroke();
-      ctx.fillText(`${Math.round(t * 100)}%`, x, tickY + 14);
+      ctx.fillText(label, x, tickY + 14);
     });
   }
 

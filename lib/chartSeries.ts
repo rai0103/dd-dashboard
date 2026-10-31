@@ -66,6 +66,28 @@ export function csvRowsToStockDataPoints(rows: { date: Date; price: number }[]):
   return rows.map((r) => ({ date: r.date.toISOString().slice(0, 10), close: r.price }));
 }
 
+/**
+ * periodPath()と全く同じ期間切り出し（カットオフ日・終端点の探し方）で、実際のカレンダー日数（開始点〜終端点）を
+ * 求める。グラフ作成ページの横軸ラベル（日数・週数・ヶ月数・年数での表示）はこの値をもとに組み立てる
+ * （periodPathのtはデータ点のインデックス基準の等間隔なので、実際の経過日数は別途ここで計算する）。
+ * 期間が上場前をカバーする等で開始点が見つからない場合はnullを返す。
+ */
+export function periodSpanDays(daily: StockDataPoint[], period: PeriodKey, asOfDate?: string): number | null {
+  if (!daily.length) return null;
+  let endIdx = daily.length - 1;
+  if (asOfDate) {
+    const idx = daily.findIndex((p) => p.date > asOfDate);
+    endIdx = idx === -1 ? daily.length - 1 : idx - 1;
+  }
+  if (endIdx < 0) return null;
+  const cutoff = cutoffDate(period, new Date(`${daily[endIdx].date}T00:00:00Z`));
+  const startIdx = cutoff ? daily.findIndex((p) => p.date >= cutoff.toISOString().slice(0, 10)) : 0;
+  if (startIdx === -1 || startIdx > endIdx) return null;
+  const startDate = new Date(`${daily[startIdx].date}T00:00:00Z`);
+  const endDate = new Date(`${daily[endIdx].date}T00:00:00Z`);
+  return Math.max(1, Math.round((endDate.getTime() - startDate.getTime()) / 86400000));
+}
+
 // ---- グラフ作成ページ専用：複数年セットの「全部重ね描き」選択肢 ----
 // lib/videoCustomScene.tsのbuildSeriesCatalog（長尺動画作成のAIカスタム場面機能と共用）自体は変更しない。
 // AIに渡す候補キー一覧に「線がptsではなくlinePathsにしかない」エントリが混ざると、AIがそれを選んだ場合に

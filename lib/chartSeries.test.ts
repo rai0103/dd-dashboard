@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { periodPath, csvRowsToStockDataPoints, PERIOD_OPTIONS } from './chartSeries';
+import { periodPath, periodSpanDays, csvRowsToStockDataPoints, PERIOD_OPTIONS } from './chartSeries';
 import { StockDataPoint } from './videoTypes';
 
 // 2020-01-01から2021-12-31までの営業日を模した合成系列（週末も含めた日次。periodPathは日付文字列の
@@ -70,4 +70,40 @@ test('csvRowsToStockDataPoints: date/priceをdate文字列/closeに変換する'
 test('PERIOD_OPTIONS: ユーザー指定の9区分が全て揃っている', () => {
   const keys = PERIOD_OPTIONS.map((o) => o.key).sort();
   assert.deepEqual(keys, ['1m', '1w', '1y', '3m', '3y', '5y', '6m', 'max', 'ytd'].sort());
+});
+
+test('periodSpanDays: maxは開始点〜終端点の実際の日数を返す（横軸ラベル用）', () => {
+  const daily = buildDaily('2020-01-01', 366, (i) => 100 + i); // 2020-01-01〜2020-12-31（うるう年、366日分）
+  assert.equal(periodSpanDays(daily, 'max'), 365);
+});
+
+test('periodSpanDays: 1yは実際には約365日だが、営業日の抜けがあっても暦日ベースで計算する', () => {
+  // 平日のみ（土日を除く）の合成系列：periodPathのtは点の個数基準の等間隔になるが、
+  // periodSpanDaysは実際のカレンダー日数（暦日）を返すので、点の個数には依存しない。
+  const daily: ReturnType<typeof buildDaily> = [];
+  const d = new Date('2019-01-01T00:00:00Z');
+  for (let i = 0; i < 800; i++) {
+    const day = d.getUTCDay();
+    if (day !== 0 && day !== 6) daily.push({ date: d.toISOString().slice(0, 10), close: 100 });
+    d.setUTCDate(d.getUTCDate() + 1);
+  }
+  const span = periodSpanDays(daily, '1y');
+  assert.ok(span !== null && span >= 360 && span <= 366, `expected ~365, got ${span}`);
+});
+
+test('periodSpanDays: asOfDateを指定すると、その日までの日数で計算する', () => {
+  const daily = buildDaily('2020-01-01', 30, (i) => 100 + i);
+  const span = periodSpanDays(daily, 'max', '2020-01-10');
+  assert.equal(span, 9); // 2020-01-01〜2020-01-10
+});
+
+test('periodSpanDays: 空配列、またはasOfDateが全データより前の場合はnullを返す', () => {
+  assert.equal(periodSpanDays([], 'max'), null);
+  const daily = buildDaily('2020-01-01', 30, (i) => 100 + i);
+  assert.equal(periodSpanDays(daily, 'max', '2019-01-01'), null); // asOfDateが全データより前＝終端点が無い
+});
+
+test('periodSpanDays: 期間が実際のデータより長い場合は、データ開始点からの実日数を返す（periodPathと同じ挙動）', () => {
+  const daily = buildDaily('2024-01-01', 5, (i) => 100 + i); // 直近5日分しかないのに5年を指定
+  assert.equal(periodSpanDays(daily, '5y', '2024-01-05'), 4); // periodPathと同様、使える範囲（4日分）で計算する
 });
