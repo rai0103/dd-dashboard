@@ -39,6 +39,7 @@
   "exclude": [
     "node_modules",
     "worker",
-    "**/*.test.ts"
+    "**/*.test.ts",
+    "_to_delete"
   ]
 }

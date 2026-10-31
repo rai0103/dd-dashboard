@@ -2,6 +2,8 @@
 // 複数年セット（中間選挙年の平均・直近10年平均等）は、長尺動画作成が使っていたlib/videoCustomScene.tsの
 // buildSeriesCatalog()をそのまま再利用する（ここでは再実装しない）。
 import { StockDataPoint } from './videoTypes';
+import { buildSeriesCatalog, SeriesCatalogEntry } from './videoCustomScene';
+import { presidentialTermYear } from './yearCompare';
 
 export type PeriodKey = '1w' | '1m' | '3m' | '6m' | 'ytd' | '1y' | '3y' | '5y' | 'max';
 
@@ -63,3 +65,57 @@ export function periodPath(daily: StockDataPoint[], period: PeriodKey, asOfDate?
 export function csvRowsToStockDataPoints(rows: { date: Date; price: number }[]): StockDataPoint[] {
   return rows.map((r) => ({ date: r.date.toISOString().slice(0, 10), close: r.price }));
 }
+
+// ---- グラフ作成ページ専用：複数年セットの「全部重ね描き」選択肢 ----
+// lib/videoCustomScene.tsのbuildSeriesCatalog（長尺動画作成のAIカスタム場面機能と共用）自体は変更しない。
+// AIに渡す候補キー一覧に「線がptsではなくlinePathsにしかない」エントリが混ざると、AIがそれを選んだ場合に
+// 折れ線（pts）が空の場面を生成してしまう恐れがあるため、この機能はグラフ作成ページ専用に別立てで追加する。
+
+export interface ChartStudioCatalogEntry extends SeriesCatalogEntry {
+  /** 複数年を白線で重ね描きする系列のみ：各年の個別の推移（{t,v}[]を年の数だけ）。通常の系列ではundefined。 */
+  linePaths?: { t: number; v: number }[][];
+}
+export type ChartStudioCatalog = Record<string, ChartStudioCatalogEntry>;
+
+/** 「○○の平均」「○○平均」のようなラベルから「平均」を取り除いた、重ね描き版の表示名を作る（例：「全期間（68年）平均」→「全期間（68年）」）。 */
+function stripAverageSuffix(label: string): string {
+  return label.replace(/の?平均$/, '');
+}
+
+/**
+ * buildSeriesCatalog()の複数年セット（cyclePos1〜4・recent5/10/15/20・allYears）それぞれについて、
+ * 同じ年群を1本1本そのまま重ね描きする「<キー>_all」エントリ（linePathsのみ・ptsは空）を追加したカタログを作る。
+ * 個々の年の推移はbuildSeriesCatalog()が既に計算済みのy{year}エントリをそのまま使い回す（二重計算しない）。
+ * ドロップダウンでの見え方：各「平均」の選択肢のすぐ後ろに、同じ年群の「重ね描き」の選択肢が並ぶ。
+ */
+export function buildChartStudioCatalog(daily: StockDataPoint[], curYear: number, asOfDate: string): ChartStudioCatalog {
+  const base = buildSeriesCatalog(daily, curYear, asOfDate);
+  const confirmedYears = Object.keys(base)
+    .map((k) => /^y(\d{4})$/.exec(k))
+    .filter((m): m is RegExpExecArray => !!m)
+    .map((m) => Number(m[1]))
+    .sort((a, b) => a - b);
+  const pathsOf = (years: number[]) => years.map((y) => base[`y${y}`].pts);
+  const groupYears: Record<string, number[]> = {
+    cyclePos1: confirmedYears.filter((y) => presidentialTermYear(y) === 1),
+    cyclePos2: confirmedYears.filter((y) => presidentialTermYear(y) === 2),
+    cyclePos3: confirmedYears.filter((y) => presidentialTermYear(y) === 3),
+    cyclePos4: confirmedYears.filter((y) => presidentialTermYear(y) === 4),
+    recent5: confirmedYears.slice(-5),
+    recent10: confirmedYears.slice(-10),
+    recent15: confirmedYears.slice(-15),
+    recent20: confirmedYears.slice(-20),
+    allYears: confirmedYears,
+  };
+
+  const catalog: ChartStudioCatalog = {};
+  for (const [key, entry] of Object.entries(base)) {
+    catalog[key] = entry;
+    const years = groupYears[key];
+    if (years && years.length) {
+      catalog[`${key}_all`] = { label: stripAverageSuffix(entry.label), pts: [], linePaths: pathsOf(years) };
+    }
+  }
+  return catalog;
+}
+

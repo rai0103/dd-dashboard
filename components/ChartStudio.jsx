@@ -11,8 +11,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Plus, X, Camera, Upload, RefreshCw, Check, AlertTriangle } from "lucide-react";
 import { storage } from "@/lib/storage";
 import { parseStooqCSV } from "@/lib/csvPrice";
-import { periodPath, PERIOD_OPTIONS, csvRowsToStockDataPoints } from "@/lib/chartSeries";
-import { buildSeriesCatalog, catalogKeyOptions } from "@/lib/videoCustomScene";
+import { periodPath, PERIOD_OPTIONS, csvRowsToStockDataPoints, buildChartStudioCatalog } from "@/lib/chartSeries";
+import { catalogKeyOptions } from "@/lib/videoCustomScene";
 import { saveImage } from "@/lib/explainer/imageStore";
 import { RENDER_SIZE } from "@/lib/explainer/renderer";
 
@@ -39,6 +39,22 @@ function btn(active) {
     background: active ? C.teal : C.panel,
     border: `1px solid ${active ? C.teal : C.borderSoft}`,
   };
+}
+// 縦軸・横軸の目盛り値のフォントサイズを上下ボタンで調整する（0＝非表示）。プレビュー（左のcanvas）は
+// useEffectの依存配列にyTickSize/xTickSizeが入っているため、ボタンを押すたびに即座に再描画される。
+const AXIS_TICK_MIN = 0, AXIS_TICK_MAX = 48, AXIS_TICK_STEP = 2;
+function AxisSizeStepper({ label, value, onChange }) {
+  const dec = () => onChange(Math.max(AXIS_TICK_MIN, value - AXIS_TICK_STEP));
+  const inc = () => onChange(Math.min(AXIS_TICK_MAX, value + AXIS_TICK_STEP));
+  const stepBtnStyle = (disabled) => ({ ...btn(false), width: 22, height: 22, opacity: disabled ? 0.35 : 1, cursor: disabled ? "default" : "pointer", fontWeight: 700, lineHeight: 1 });
+  return (
+    <div className="flex items-center gap-1.5 text-[11px]">
+      <span style={{ color: C.textMuted }}>{label}</span>
+      <button type="button" onClick={dec} disabled={value <= AXIS_TICK_MIN} className="rounded flex items-center justify-center" style={stepBtnStyle(value <= AXIS_TICK_MIN)}>−</button>
+      <span className="mono text-center" style={{ width: 46, color: C.text }}>{value <= AXIS_TICK_MIN ? "非表示" : `${value}px`}</span>
+      <button type="button" onClick={inc} disabled={value >= AXIS_TICK_MAX} className="rounded flex items-center justify-center" style={stepBtnStyle(value >= AXIS_TICK_MAX)}>＋</button>
+    </div>
+  );
 }
 
 export default function ChartStudio() {
@@ -117,7 +133,7 @@ export default function ChartStudio() {
     if (!src || !src.points.length) return {};
     const asOfDate = src.points[src.points.length - 1].date;
     const curYear = parseInt(asOfDate.slice(0, 4), 10);
-    return buildSeriesCatalog(src.points, curYear, asOfDate);
+    return buildChartStudioCatalog(src.points, curYear, asOfDate);
   }, [draft.sourceKey, allSources]);
   const draftCatalogOptions = useMemo(() => catalogKeyOptions(draftCatalog), [draftCatalog]);
 
@@ -132,10 +148,12 @@ export default function ChartStudio() {
     const src = sourceByKey(draft.sourceKey);
     if (!src || !src.points.length) return;
     if (draft.mode === "yearset" && !draft.yearSetKey) return;
-    const color = PALETTE[addedSeries.length % PALETTE.length];
+    const catalogEntry = draft.mode === "yearset" ? draftCatalog[draft.yearSetKey] : null;
+    const isMulti = !!catalogEntry?.linePaths?.length; // 複数年を薄い白線で重ね描きする系列（「全○本」の選択肢）
+    const color = isMulti ? "#FFFFFF" : PALETTE[addedSeries.length % PALETTE.length];
     const autoLabel = draft.mode === "period"
       ? `${src.label}（${PERIOD_OPTIONS.find((p) => p.key === draft.periodKey)?.label ?? draft.periodKey}）`
-      : `${src.label}（${draftCatalog[draft.yearSetKey]?.label ?? draft.yearSetKey}）`;
+      : `${src.label}（${catalogEntry?.label ?? draft.yearSetKey}）`;
     setAddedSeries((list) => [...list, {
       id: uid(), sourceKey: draft.sourceKey, mode: draft.mode,
       periodKey: draft.periodKey, yearSetKey: draft.yearSetKey, label: autoLabel, color,
@@ -151,13 +169,16 @@ export default function ChartStudio() {
     if (s.mode === "period") return { ...s, pts: periodPath(src.points, s.periodKey) };
     const asOfDate = src.points[src.points.length - 1].date;
     const curYear = parseInt(asOfDate.slice(0, 4), 10);
-    const catalog = buildSeriesCatalog(src.points, curYear, asOfDate);
-    return { ...s, pts: catalog[s.yearSetKey]?.pts ?? [] };
+    const catalog = buildChartStudioCatalog(src.points, curYear, asOfDate);
+    const entry = catalog[s.yearSetKey];
+    return { ...s, pts: entry?.pts ?? [], linePaths: entry?.linePaths };
   }), [addedSeries, allSources]);
 
   // ---------------- 出力サイズ・描画 ----------------
   const [format, setFormat] = useState("long"); // long=16:9（1920x1080）、short=9:16（1080x1920）
   const [chartTitle, setChartTitle] = useState("");
+  const [yTickSize, setYTickSize] = useState(22); // 縦軸の目盛り値のフォントサイズ（px）。0＝非表示
+  const [xTickSize, setXTickSize] = useState(22); // 横軸の目盛り値のフォントサイズ（px）。0＝非表示
   const canvasRef = useRef(null);
 
   useEffect(() => {
@@ -165,15 +186,15 @@ export default function ChartStudio() {
     if (!canvas) return;
     const { w: W, h: H } = RENDER_SIZE[format];
     canvas.width = W; canvas.height = H;
-    drawChart(canvas.getContext("2d"), W, H, resolvedSeries, chartTitle, format);
-  }, [resolvedSeries, format, chartTitle]);
+    drawChart(canvas.getContext("2d"), W, H, resolvedSeries, chartTitle, format, yTickSize, xTickSize);
+  }, [resolvedSeries, format, chartTitle, yTickSize, xTickSize]);
 
   // ---------------- スクリーンショット保存（解説動画作成と共通の画像ライブラリへ） ----------------
   const [shotBusy, setShotBusy] = useState(false);
   const [shotNote, setShotNote] = useState("");
   const takeScreenshot = async () => {
     const canvas = canvasRef.current;
-    if (!canvas || !resolvedSeries.some((s) => s.pts.length > 1)) { setShotNote("系列を1つ以上追加してください。"); return; }
+    if (!canvas || !resolvedSeries.some((s) => s.pts.length > 1 || (s.linePaths && s.linePaths.length))) { setShotNote("系列を1つ以上追加してください。"); return; }
     setShotBusy(true); setShotNote("");
     try {
       const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
@@ -221,6 +242,10 @@ export default function ChartStudio() {
               value={chartTitle} onChange={(e) => setChartTitle(e.target.value)} placeholder="チャートのタイトル（任意）"
               className="w-full text-xs rounded px-2 py-1.5 mb-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }}
             />
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mb-2">
+              <AxisSizeStepper label="縦軸の目盛り" value={yTickSize} onChange={setYTickSize} />
+              <AxisSizeStepper label="横軸の目盛り" value={xTickSize} onChange={setXTickSize} />
+            </div>
             <div className="mx-auto" style={{ aspectRatio: format === "long" ? "16/9" : "9/16", maxWidth: format === "long" ? 680 : 360 }}>
               <canvas ref={canvasRef} style={{ width: "100%", height: "100%", display: "block", borderRadius: 8, border: `1px solid ${C.border}` }} />
             </div>
@@ -320,27 +345,27 @@ export default function ChartStudio() {
 }
 
 // チャート本体の描画（静止画・アニメーション無し＝スクリーンショット用）。
-// series は {label, color, pts:{t,v}[]}[]（pts は addSeries 時点で既に解決済み）。
-function drawChart(ctx, W, H, series, title, format) {
+// series は {label, color, pts:{t,v}[], linePaths?:{t,v}[][]}[]（pts・linePathsは addSeries 時点で既に解決済み）。
+// linePathsがある系列（「全○本」の複数年重ね描き）は、ptsは使わず個々の年の推移を薄い白線で全て描く。
+// yTickSize・xTickSizeは縦軸・横軸の目盛り値のフォントサイズ（px）。0を指定するとその軸の目盛り値を非表示にする
+// （グリッド線・刻みの位置自体は0でも変わらず、目盛りの文字だけを省く）。
+function drawChart(ctx, W, H, series, title, format, yTickSize = 22, xTickSize = 22) {
   ctx.clearRect(0, 0, W, H);
   ctx.fillStyle = C.bg;
   ctx.fillRect(0, 0, W, H);
 
-  const valid = series.filter((s) => s.pts.length > 1);
+  const valid = series.filter((s) => (s.pts && s.pts.length > 1) || (s.linePaths && s.linePaths.length));
   const titleSize = format === "long" ? 44 : 50;
   const bodySize = format === "long" ? 24 : 28;
   const legendLineH = format === "long" ? 42 : 56;
   const legendTop = format === "long" ? 60 : 70;
-  const padTop = (title ? titleSize + 50 : 50) + 20;
-  const padBottom = legendTop + Math.max(1, valid.length) * legendLineH + 20;
-  const pad = { l: format === "long" ? 110 : 90, r: format === "long" ? 60 : 50, t: padTop, b: padBottom };
-  const plot = { x: pad.l, y: pad.t, w: W - pad.l - pad.r, h: Math.max(60, H - pad.t - pad.b) };
+  const titleX = format === "long" ? 110 : 90; // タイトルの左位置は固定（縦軸の余白は目盛りサイズで変わるため連動させない）
 
   if (title) {
     ctx.fillStyle = C.text;
     ctx.font = `bold ${titleSize}px sans-serif`;
     ctx.textAlign = "left"; ctx.textBaseline = "top";
-    ctx.fillText(title, pad.l, format === "long" ? 36 : 40);
+    ctx.fillText(title, titleX, format === "long" ? 36 : 40);
   }
 
   if (!valid.length) {
@@ -351,22 +376,50 @@ function drawChart(ctx, W, H, series, title, format) {
     return;
   }
 
+  // 値の範囲（y軸）：通常の系列はpts、複数年重ね描きの系列はlinePathsの全点から求める。
   let vMin = Infinity, vMax = -Infinity;
-  valid.forEach((s) => s.pts.forEach((p) => { if (p.v < vMin) vMin = p.v; if (p.v > vMax) vMax = p.v; }));
+  valid.forEach((s) => {
+    const pointsList = s.linePaths?.length ? s.linePaths : [s.pts];
+    pointsList.forEach((pts) => pts.forEach((p) => { if (p.v < vMin) vMin = p.v; if (p.v > vMax) vMax = p.v; }));
+  });
   if (!isFinite(vMin) || !isFinite(vMax) || vMin === vMax) { vMin = (vMin || 100) - 10; vMax = (vMax || 100) + 10; }
   const spread = vMax - vMin;
   vMin -= spread * 0.08; vMax += spread * 0.08;
+  const yTicks = [0, 1, 2, 3, 4].map((i) => vMin + ((vMax - vMin) * i) / 4);
+
+  // 左余白：縦軸の目盛りラベルの実際の幅から決める（非表示なら最小限の余白にする）。
+  let maxYLabelW = 0;
+  if (yTickSize > 0) {
+    ctx.font = `${yTickSize}px sans-serif`;
+    yTicks.forEach((v) => { maxYLabelW = Math.max(maxYLabelW, ctx.measureText(v.toFixed(0)).width); });
+  }
+  const xAxisH = xTickSize > 0 ? xTickSize + 20 : 0; // 横軸の目盛り行の高さ（非表示なら0＝その分プロット領域が広がる）
+  const padTop = (title ? titleSize + 50 : 50) + 20;
+  const padBottom = xAxisH + legendTop + Math.max(1, valid.length) * legendLineH + 20;
+  const pad = { l: yTickSize > 0 ? maxYLabelW + 30 : 20, r: format === "long" ? 60 : 50, t: padTop, b: padBottom };
+  const plot = { x: pad.l, y: pad.t, w: W - pad.l - pad.r, h: Math.max(60, H - pad.t - pad.b) };
   const yOf = (v) => plot.y + plot.h * (1 - (v - vMin) / (vMax - vMin));
   const xOf = (t) => plot.x + plot.w * t;
 
-  // グリッド＋y軸ラベル（5分割）
+  // グリッド＋縦軸の目盛り値（5分割）。グリッド線自体は目盛りサイズに関わらず常に描く。
   ctx.strokeStyle = C.borderSoft; ctx.lineWidth = 1.5;
-  ctx.fillStyle = C.textDim; ctx.font = `${bodySize - 2}px sans-serif`; ctx.textAlign = "right"; ctx.textBaseline = "middle";
-  for (let i = 0; i <= 4; i++) {
-    const v = vMin + ((vMax - vMin) * i) / 4;
+  if (yTickSize > 0) { ctx.fillStyle = C.textDim; ctx.font = `${yTickSize}px sans-serif`; ctx.textAlign = "right"; ctx.textBaseline = "middle"; }
+  yTicks.forEach((v) => {
     const y = yOf(v);
     ctx.beginPath(); ctx.moveTo(plot.x, y); ctx.lineTo(plot.x + plot.w, y); ctx.stroke();
-    ctx.fillText(v.toFixed(0), plot.x - 16, y);
+    if (yTickSize > 0) ctx.fillText(v.toFixed(0), plot.x - 16, y);
+  });
+
+  // 横軸の目盛り値（期間の進捗％、5分割の目印＋文字）。複数の期間・年セットを重ねられるツールのため、
+  // 実際の日付ではなく期間に対する進捗（0%〜100%）で統一して表示する。非表示（xTickSize=0）なら何も描かない。
+  if (xTickSize > 0) {
+    ctx.strokeStyle = C.borderSoft; ctx.lineWidth = 1.5;
+    ctx.fillStyle = C.textDim; ctx.font = `${xTickSize}px sans-serif`; ctx.textAlign = "center"; ctx.textBaseline = "top";
+    [0, 0.25, 0.5, 0.75, 1].forEach((t) => {
+      const x = xOf(t), tickY = plot.y + plot.h;
+      ctx.beginPath(); ctx.moveTo(x, tickY); ctx.lineTo(x, tickY + 8); ctx.stroke();
+      ctx.fillText(`${Math.round(t * 100)}%`, x, tickY + 14);
+    });
   }
 
   // 基準線（期間開始時点＝100）
@@ -377,8 +430,18 @@ function drawChart(ctx, W, H, series, title, format) {
     ctx.restore();
   }
 
-  // 各系列の折れ線＋終点ドット
+  // 各系列の折れ線。linePathsがある系列（複数年の重ね描き）は、個々の年の推移を薄い白線で全て描く
+  // （終点が年ごとにバラバラになるため、終点ドットは描かない）。
   valid.forEach((s) => {
+    if (s.linePaths?.length) {
+      ctx.strokeStyle = "rgba(255,255,255,0.3)"; ctx.lineWidth = format === "long" ? 1.5 : 2; ctx.lineJoin = "round"; ctx.lineCap = "round";
+      s.linePaths.forEach((pts) => {
+        ctx.beginPath();
+        pts.forEach((p, i) => { const x = xOf(p.t), y = yOf(p.v); if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); });
+        ctx.stroke();
+      });
+      return;
+    }
     ctx.strokeStyle = s.color; ctx.lineWidth = format === "long" ? 5 : 6; ctx.lineJoin = "round"; ctx.lineCap = "round";
     ctx.beginPath();
     s.pts.forEach((p, i) => { const x = xOf(p.t), y = yOf(p.v); if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); });
@@ -388,17 +451,21 @@ function drawChart(ctx, W, H, series, title, format) {
     ctx.beginPath(); ctx.arc(xOf(last.t), yOf(last.v), format === "long" ? 7 : 8, 0, Math.PI * 2); ctx.fill();
   });
 
-  // 凡例（系列名＋期間終端時点の騰落率）
-  const legendY0 = plot.y + plot.h + legendTop;
+  // 凡例（系列名＋期間終端時点の騰落率）。重ね描き系列は終点が複数あり％では語れないため、本数を添える。
+  const legendY0 = plot.y + plot.h + xAxisH + legendTop;
   ctx.font = `${bodySize}px sans-serif`; ctx.textAlign = "left"; ctx.textBaseline = "middle";
   valid.forEach((s, i) => {
     const y = legendY0 + i * legendLineH;
-    ctx.fillStyle = s.color;
+    ctx.fillStyle = s.linePaths?.length ? "rgba(255,255,255,0.65)" : s.color;
     ctx.fillRect(plot.x, y - bodySize * 0.35, bodySize * 0.9, bodySize * 0.7);
     ctx.fillStyle = C.text;
-    const last = s.pts[s.pts.length - 1];
-    const diff = last.v - 100;
-    const sign = diff >= 0 ? "+" : "";
-    ctx.fillText(`${s.label}（${sign}${diff.toFixed(1)}%）`, plot.x + bodySize * 1.3, y);
+    if (s.linePaths?.length) {
+      ctx.fillText(`${s.label}（${s.linePaths.length}本）`, plot.x + bodySize * 1.3, y);
+    } else {
+      const last = s.pts[s.pts.length - 1];
+      const diff = last.v - 100;
+      const sign = diff >= 0 ? "+" : "";
+      ctx.fillText(`${s.label}（${sign}${diff.toFixed(1)}%）`, plot.x + bodySize * 1.3, y);
+    }
   });
 }
