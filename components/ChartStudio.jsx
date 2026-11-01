@@ -8,7 +8,7 @@
 // 解説動画作成側の各場面「画像を追加」から選べるようになる（別途「ライブラリから選ぶ」ピッカーを追加予定）。
 // 通常のスクショ添付（解説動画作成の参考情報パネル「スクショを追加」）はこれとは別に、これまで通り利用できる。
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Plus, X, Camera, Upload, RefreshCw, Check, AlertTriangle } from "lucide-react";
+import { ArrowLeft, Plus, X, Camera, Upload, RefreshCw, Check, AlertTriangle, Lock, Unlock } from "lucide-react";
 import { storage } from "@/lib/storage";
 import { parseStooqCSV } from "@/lib/csvPrice";
 import { periodPath, periodSpanDays, PERIOD_OPTIONS, csvRowsToStockDataPoints, buildChartStudioCatalog } from "@/lib/chartSeries";
@@ -194,6 +194,9 @@ export default function ChartStudio() {
   const [chartTitle, setChartTitle] = useState("");
   const [yTickSize, setYTickSize] = useState(22); // 縦軸の目盛り値のフォントサイズ（px）。0＝非表示
   const [xTickSize, setXTickSize] = useState(22); // 横軸の目盛り値のフォントサイズ（px）。0＝非表示
+  const [axisSizeLocked, setAxisSizeLocked] = useState(false); // ロック中は縦横どちらかを変更すると、もう一方も同じ値に揃える
+  const handleYTickChange = (v) => { setYTickSize(v); if (axisSizeLocked) setXTickSize(v); };
+  const handleXTickChange = (v) => { setXTickSize(v); if (axisSizeLocked) setYTickSize(v); };
   const canvasRef = useRef(null);
 
   useEffect(() => {
@@ -257,9 +260,16 @@ export default function ChartStudio() {
               value={chartTitle} onChange={(e) => setChartTitle(e.target.value)} placeholder="チャートのタイトル（任意）"
               className="w-full text-xs rounded px-2 py-1.5 mb-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }}
             />
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mb-2">
-              <AxisSizeStepper label="縦軸の目盛り" value={yTickSize} onChange={setYTickSize} />
-              <AxisSizeStepper label="横軸の目盛り" value={xTickSize} onChange={setXTickSize} />
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mb-2">
+              <AxisSizeStepper label="縦軸の目盛り" value={yTickSize} onChange={handleYTickChange} />
+              <button
+                type="button" onClick={() => setAxisSizeLocked((v) => !v)}
+                title={axisSizeLocked ? "縦横の目盛りサイズが連動しています（クリックで解除）" : "縦横の目盛りサイズを連動させる"}
+                className="rounded flex items-center justify-center" style={{ ...btn(axisSizeLocked), width: 22, height: 22 }}
+              >
+                {axisSizeLocked ? <Lock size={12} /> : <Unlock size={12} />}
+              </button>
+              <AxisSizeStepper label="横軸の目盛り" value={xTickSize} onChange={handleXTickChange} />
             </div>
             <div className="mx-auto" style={{ aspectRatio: format === "long" ? "16/9" : "9/16", maxWidth: format === "long" ? 680 : 360 }}>
               <canvas ref={canvasRef} style={{ width: "100%", height: "100%", display: "block", borderRadius: 8, border: `1px solid ${C.border}` }} />
@@ -398,6 +408,24 @@ function buildXAxisTicks(xAxis) {
   return percentFallback();
 }
 
+// 縦軸の目盛り位置を決める。全ての系列は「開始時点=100」の指数で正規化されているため、100が必ず目盛りの
+// 1つに乗るよう、100を基準に「きりのいい」間隔（1/2/5/10刻み）でグリッドを作る（横軸と同じ考え方）。
+// 単純に表示範囲を5等分するだけだと、添付画像のように開始値100のすぐ側に「101」のような半端な目盛りが
+// 出てしまうため、これを避ける。
+function buildYAxisTicks(vMin, vMax) {
+  const rangeSpan = vMax - vMin;
+  const roughStep = rangeSpan / 4;
+  const pow = Math.pow(10, Math.floor(Math.log10(roughStep || 1)));
+  const frac = roughStep / pow;
+  const niceFrac = frac < 1.5 ? 1 : frac < 3 ? 2 : frac < 7 ? 5 : 10;
+  const step = niceFrac * pow || 1;
+  const first = 100 + Math.ceil((vMin - 100) / step) * step;
+  const ticks = [];
+  for (let v = first; v <= vMax + 1e-9; v += step) ticks.push(v);
+  if (!ticks.length) ticks.push(100);
+  return ticks;
+}
+
 // チャート本体の描画（静止画・アニメーション無し＝スクリーンショット用）。
 // series は {label, color, pts:{t,v}[], linePaths?:{t,v}[][]}[]（pts・linePathsは addSeries 時点で既に解決済み）。
 // linePathsがある系列（「全○本」の複数年重ね描き）は、ptsは使わず個々の年の推移を薄い白線で全て描く。
@@ -439,7 +467,7 @@ function drawChart(ctx, W, H, series, title, format, yTickSize = 22, xTickSize =
   if (!isFinite(vMin) || !isFinite(vMax) || vMin === vMax) { vMin = (vMin || 100) - 10; vMax = (vMax || 100) + 10; }
   const spread = vMax - vMin;
   vMin -= spread * 0.08; vMax += spread * 0.08;
-  const yTicks = [0, 1, 2, 3, 4].map((i) => vMin + ((vMax - vMin) * i) / 4);
+  const yTicks = buildYAxisTicks(vMin, vMax);
 
   // 左余白：縦軸の目盛りラベルの実際の幅から決める（非表示なら最小限の余白にする）。
   let maxYLabelW = 0;
@@ -455,7 +483,7 @@ function drawChart(ctx, W, H, series, title, format, yTickSize = 22, xTickSize =
   const yOf = (v) => plot.y + plot.h * (1 - (v - vMin) / (vMax - vMin));
   const xOf = (t) => plot.x + plot.w * t;
 
-  // グリッド＋縦軸の目盛り値（5分割）。グリッド線自体は目盛りサイズに関わらず常に描く。
+  // グリッド＋縦軸の目盛り値（100を基準にきりのいい間隔）。グリッド線自体は目盛りサイズに関わらず常に描く。
   ctx.strokeStyle = C.borderSoft; ctx.lineWidth = 1.5;
   if (yTickSize > 0) { ctx.fillStyle = C.textDim; ctx.font = `${yTickSize}px sans-serif`; ctx.textAlign = "right"; ctx.textBaseline = "middle"; }
   yTicks.forEach((v) => {
@@ -514,7 +542,7 @@ function drawChart(ctx, W, H, series, title, format, yTickSize = 22, xTickSize =
     ctx.fillRect(plot.x, y - bodySize * 0.35, bodySize * 0.9, bodySize * 0.7);
     ctx.fillStyle = C.text;
     if (s.linePaths?.length) {
-      ctx.fillText(`${s.label}（${s.linePaths.length}本）`, plot.x + bodySize * 1.3, y);
+      ctx.fillText(`${s.label}（${s.linePaths.length}年）`, plot.x + bodySize * 1.3, y);
     } else {
       const last = s.pts[s.pts.length - 1];
       const diff = last.v - 100;
