@@ -6623,11 +6623,39 @@ function RecoveryMatrixTable({ matrix }) {
       ))}</tbody></table></div>
   );
 }
+// 「採用条件に当てはまった過去事例」テーブルの列ごとの並べ替えキー（底値判定サンプル1件＝HoldSample）。
+// BottomScoreModalContentはVOO・QQQ両方で同じコンポーネントを使うため、ここに実装するだけで両方に反映される。
+const BOTTOM_CASE_SORT_COLS = {
+  preAth: { label: "直前ATH", get: (s) => s.pre_ath_idx },
+  troughDate: { label: "底値日", get: (s) => s.trough_idx },
+  mdd: { label: "その時点のMDD", get: (s) => s.mdd },
+  result: { label: "結果", get: (s) => (s.held ? 1 : 0) },
+  days: { label: "日数", get: (s) => (s.held ? s.days_to_ath : s.days_to_break) },
+  finalMdd: { label: "局面の最終MDD", get: (s) => s.final_mdd },
+};
 function BottomScoreModalContent({ bottom, FULL, instrumentLabel = "VOO", qqqGapStats = null, currentQqqDD = null }) {
   const { stats, hold: h } = bottom;
   const th = "text-left font-normal py-1 px-2", td = "py-1 px-2";
   const pctCell = (p) => (p === null ? "—" : `${p}%`);
   const sectionTitle = (t, sub) => (<div className="text-xs mb-2" style={{ color: C.textDim }}>{t}{sub && <span className="ml-1">{sub}</span>}</div>);
+  // 既定は底値日の新しい順（従来の [...samples].reverse() と同じ並び）。ヘッダークリックで列・昇降順を切り替える。
+  const [caseSort, setCaseSort] = useState({ key: "troughDate", dir: "desc" });
+  const toggleCaseSort = (key) => setCaseSort((prev) => (prev.key === key ? { key, dir: prev.dir === "desc" ? "asc" : "desc" } : { key, dir: "desc" }));
+  const sortedCases = useMemo(() => {
+    if (!h.applicable) return [];
+    const getter = BOTTOM_CASE_SORT_COLS[caseSort.key].get;
+    const sign = caseSort.dir === "asc" ? 1 : -1;
+    return [...h.tier.samples].sort((a, b) => sign * (getter(a) - getter(b)));
+  }, [h, caseSort]);
+  const caseSortTh = (key) => {
+    const col = BOTTOM_CASE_SORT_COLS[key];
+    const active = caseSort.key === key;
+    return (
+      <th key={key} className={`${th} cursor-pointer select-none`} onClick={() => toggleCaseSort(key)} title="クリックで並べ替え" style={{ color: active ? C.text : C.textDim }}>
+        {col.label}{active ? (caseSort.dir === "desc" ? " ▼" : " ▲") : ""}
+      </th>
+    );
+  };
   return (
     <div className="flex flex-col gap-7">
       {h.applicable ? (
@@ -6671,10 +6699,12 @@ function BottomScoreModalContent({ bottom, FULL, instrumentLabel = "VOO", qqqGap
           </div>
 
           <div>
-            {sectionTitle("採用条件に当てはまった過去事例", `（新しい順・${h.tier.n}件）`)}
-            <div className="overflow-auto" style={{ maxHeight: 280 }}><table className="w-full text-xs mono"><thead><tr style={{ color: C.textDim }}><th className={th}>直前ATH</th><th className={th}>底値日</th><th className={th}>その時点のMDD</th><th className={th}>結果</th><th className={th}>日数</th><th className={th}>局面の最終MDD</th></tr></thead>
-              <tbody>{[...h.tier.samples].reverse().map((s) => (
-                <tr key={s.trough_idx} style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+            {sectionTitle("採用条件に当てはまった過去事例", `（見出しクリックで並べ替え・${h.tier.n}件）`)}
+            <div className="overflow-auto" style={{ maxHeight: 280 }}><table className="w-full text-xs mono"><thead><tr style={{ color: C.textDim }}>
+              {caseSortTh("preAth")}{caseSortTh("troughDate")}{caseSortTh("mdd")}{caseSortTh("result")}{caseSortTh("days")}{caseSortTh("finalMdd")}
+            </tr></thead>
+              <tbody>{sortedCases.map((s) => (
+                <tr key={`${s.trough_idx}-${s.sample_idx}`} style={{ borderTop: `1px solid ${C.borderSoft}` }}>
                   <td className={td}>{fmtIdxDate(FULL, s.pre_ath_idx)}</td><td className={td}>{fmtIdxDate(FULL, s.trough_idx)}</td><td className={td}>{s.mdd.toFixed(2)}%</td>
                   <td className={td} style={{ color: s.held ? C.teal : C.rust }}>{s.held ? "底値確定→ATH更新" : "底割れ"}</td>
                   <td className={td}>{s.held ? `${s.days_to_ath}日でATH` : `${s.days_to_break}日で割れ`}</td>
