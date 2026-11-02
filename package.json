@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "dev:video": "node scripts/dev-video.js",
+    "launch": "node scripts/launch-and-open.js",
     "tts-server": "node tts-server/server.js",
     "build": "next build",
     "start": "next start",
