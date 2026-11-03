@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseValue, normalizeVisual, sanitizeReading, katakanaToHiragana, findVerbatimOverlaps, assembleLong, normalizeScene, lintScenes, buildDescription } from "./scriptModel.ts";
+import { parseValue, normalizeVisual, sanitizeReading, katakanaToHiragana, findVerbatimOverlaps, assembleLong, normalizeScene, lintScenes, buildDescription, fixBannedWording } from "./scriptModel.ts";
 
 test("数値の取り出し", () => {
   assert.equal(parseValue("1,234.5兆円"), 1234.5);
@@ -88,6 +88,16 @@ test("読み上げ文の補正", () => {
   assert.equal(katakanaToHiragana("インフレ"), "いんふれ");
   assert.deepEqual(sanitizeReading("ニチギンが、「きんり」を、あげました！", "日銀が金利を上げました"), { reading: "にちぎんが、きんりを、あげました。", ok: true });
   assert.deepEqual(sanitizeReading("日銀が、きんりを", "日銀が金利を上げました"), { reading: "日銀が金利を上げました", ok: false });
+});
+
+test("[Stage G-1追補] 「ダッシュボード」は一般に伝わりにくいため、生成後のテキストでも安全網として言い換える", () => {
+  assert.equal(fixBannedWording("ダッシュボードの過去データから点検します"), "過去の実績の過去データから点検します");
+  // normalizeSceneのtitle/narrationはstr()を通るため、AIが指示を無視しても自動的に言い換わる
+  const sc = normalizeScene({ title: "ダッシュボード解説", narration: "ダッシュボードの数値を見ます。", reading: "だっしゅぼーどの、すうちを、みます。", visual: { kind: "point" } }, 0);
+  assert.equal(sc.title, "過去の実績解説");
+  assert.equal(sc.narration, "過去の実績の数値を見ます。");
+  // 読み上げ文（ひらがな）側も、だっしゅぼーど→かこのじっせき に補正される
+  assert.equal(sc.reading, "かこのじっせきの、すうちを、みます。");
 });
 
 test("参考資料の丸写しを見つける", () => {

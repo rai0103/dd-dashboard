@@ -21,7 +21,16 @@ export function parseValue(v: string | number | null | undefined): number | null
   return Number.isFinite(n) ? n : null;
 }
 
-const str = (x: unknown, max = 400) => (typeof x === 'string' ? x : x == null ? '' : String(x)).trim().slice(0, max);
+// [Stage G-1] システムプロンプトで「使わない」よう指示している語でも、AIがまれに使ってしまうことがある
+// ため、生成後のテキストにも安全網として置換をかける（sanitizeReading()のさいこうね→さいたかね等と同じ考え方）。
+// str()を通るAI生成テキスト（タイトル・ナレーション・図解の見出し／項目など）全てに自動的に効く。
+const BANNED_WORDING: [RegExp, string][] = [[/ダッシュボード/g, '過去の実績']];
+export function fixBannedWording(s: string): string {
+  let r = s;
+  for (const [re, rep] of BANNED_WORDING) r = r.replace(re, rep);
+  return r;
+}
+const str = (x: unknown, max = 400) => fixBannedWording((typeof x === 'string' ? x : x == null ? '' : String(x)).trim()).slice(0, max);
 
 export function normalizeItem(raw: any): VisualItem {
   const icon = ICON_SET.has(raw?.icon) ? (raw.icon as IconName) : 'bulb';
@@ -107,7 +116,8 @@ export function sanitizeReading(reading: string, narration: string): { reading: 
   r = r.replace(/\s+/g, '').replace(/、{2,}/g, '、').replace(/。{2,}/g, '。');
   // [Stage G-1] AIが時々間違える読み方の安全網（システムプロンプトでも指示しているが、生成後にも補正する）。
   // 「からく」→「げらく」は「からくり」との混同を避けるため、直後が「り」でないときだけ置き換える。
-  r = r.replace(/さいこうね/g, 'さいたかね').replace(/からく(?!り)/g, 'げらく');
+  // 「だっしゅぼーど」は「ダッシュボード」の読みそのものなので、同じく「過去の実績」の読みに置き換える。
+  r = r.replace(/さいこうね/g, 'さいたかね').replace(/からく(?!り)/g, 'げらく').replace(/だっしゅぼーど/g, 'かこのじっせき');
   if (r && isKanaReading(r)) return { reading: r, ok: true };
   return { reading: narration, ok: false };
 }

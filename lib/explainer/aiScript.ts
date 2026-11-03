@@ -4,7 +4,7 @@
 import { callTool } from './aiClient';
 import { ICON_NAMES, VISUAL_KINDS } from './types';
 import type { ChapterPlan, ExplainerProject, ExplainerScene, SourceNote, StockCatalog, YoutubeMeta } from './types';
-import { assembleLong, normalizeScene, sanitizeReading } from './scriptModel';
+import { assembleLong, normalizeScene, sanitizeReading, fixBannedWording } from './scriptModel';
 import { resolveYearCompareItems, resolveCatalogKey } from './stockCatalog';
 
 export interface GenerateInput {
@@ -351,7 +351,7 @@ export async function generateOutline(inp: GenerateInput, signal?: AbortSignal):
     signal,
   });
   let chapters: ChapterPlan[] = (Array.isArray(r?.chapters) ? r.chapters : []).map((c: any) => ({
-    title: String(c?.title || '').slice(0, 40), reading: String(c?.reading || ''),
+    title: fixBannedWording(String(c?.title || '')).slice(0, 40), reading: fixBannedWording(String(c?.reading || '')),
     role: c?.role === 'intro' || c?.role === 'outro' ? c.role : 'body',
     goal: String(c?.goal || ''), keyPoints: String(c?.keyPoints || ''),
     sceneCount: Math.max(2, Math.min(10, Math.round(Number(c?.sceneCount) || 4))),
@@ -547,7 +547,7 @@ export async function rewriteNarration(inp: GenerateInput, videoTitle: string, i
     maxTokens: 1200,
     signal,
   });
-  const narration = typeof r?.narration === 'string' ? r.narration.trim() : '';
+  const narration = typeof r?.narration === 'string' ? fixBannedWording(r.narration.trim()) : '';
   if (!narration) throw new Error('AIから空の応答が返りました。');
   const rd = sanitizeReading(typeof r?.reading === 'string' ? r.reading : '', narration);
   return { narration, reading: rd.reading };
