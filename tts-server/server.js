@@ -115,6 +115,14 @@ function setCors(res) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 }
 
+// Stage F-1：自動実行（タスクスケジューラ登録・進捗・ファイル保存）関連エンドポイント専用のガード。
+// schtasksの実行やファイル書き込みを行うため、/api/chat等の既存エンドポイントより一段厳しく、
+// localhostからのアクセスのみを許可する（investment-shortsのisLocalと同じ考え方）。
+function isLocal(req) {
+  const host = (req.headers.host || '').toLowerCase();
+  return host.startsWith('localhost') || host.startsWith('127.0.0.1') || host.startsWith('[::1]');
+}
+
 async function handleGetVoices(req, res) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dd-video-tts-'));
   try {
@@ -536,6 +544,204 @@ async function handlePostSpeak(req, res) {
   }
 }
 
+
+// ==================== Stage F-1：平日朝の自動配信（タスクスケジューラ）用エンドポイント ====================
+// 設定・進捗・保存先はすべてこのPC上のファイルに置く（ホームディレクトリの .dd-dashboard フォルダ）。
+// investment-shortsの app/api/auto-schedule・app/api/save-output（同じ考え方のNext.js Route Handler）を
+// 参考に、dd-dashboardは静的エクスポートのためNext.js Route Handlerを持てない分、ここ（tts-server）に
+// 新規実装する（investment-shorts本体のコードは一切コピーしていない）。
+
+const AUTO_TASK_PREFIX = 'DdDashboardAuto_';
+const SCHTASK_DAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+
+function autoBaseDir() { return path.join(os.homedir(), '.dd-dashboard'); }
+function autoCfgFile() { return path.join(autoBaseDir(), 'auto.json'); }
+function autoRunsDir() { return path.join(autoBaseDir(), 'auto-runs'); }
+
+// schtasks（Windows標準のタスクスケジューラCLI）を呼ぶ。出力は日本語Windowsの既定コードページ（Shift-JIS）
+// で返ってくるため、investment-shortsのschtasks呼び出しと同じデコード方法を使う。
+function schtasksExec(args) {
+  return new Promise((resolve) => {
+    execFile('schtasks', args, { windowsHide: true, encoding: 'buffer', maxBuffer: 4 * 1024 * 1024 }, (e, so, se) => {
+      const buf = Buffer.concat([so || Buffer.alloc(0), se || Buffer.alloc(0)]);
+      let out;
+      try { out = new TextDecoder('shift_jis').decode(buf); } catch (e2) { out = buf.toString('utf8'); }
+      resolve({ code: e ? (e.code === 'ENOENT' ? -1 : 1) : 0, out: out.trim() });
+    });
+  });
+}
+
+// schtasks /FO CSV の出力（引用符内のカンマに対応した簡易パーサー）
+function parseCsvLine(l) {
+  const o = []; let cur = ''; let q = false;
+  for (const ch of l) {
+    if (ch === '"') q = !q;
+    else if (ch === ',' && !q) { o.push(cur); cur = ''; }
+    else cur += ch;
+  }
+  o.push(cur);
+  return o;
+}
+
+async function listAutoTasks() {
+  const r = await schtasksExec(['/Query', '/FO', 'CSV', '/V', '/NH']);
+  if (r.code === -1) return { error: 'schtasks が見つかりません（Windows専用の機能です）', tasks: [] };
+  const tasks = r.out.split(/\r?\n/).map(parseCsvLine)
+    .filter((c) => (c[1] || '').replace(/^\\/, '').startsWith(AUTO_TASK_PREFIX))
+    .map((c) => ({ name: c[1].replace(/^\\/, ''), next: c[2], status: c[3], last: c[5], result: c[6] }));
+  return { tasks };
+}
+
+function sendJson(res, status, obj) {
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+  res.end(JSON.stringify(obj));
+}
+
+// GET /api/auto-schedule            -> 保存済みの設定（auto.json）。無ければ null
+// GET /api/auto-schedule?tasks=1    -> Windowsに登録済みのタスク一覧
+async function handleGetAutoSchedule(req, res) {
+  if (!isLocal(req)) { sendJson(res, 403, { error: 'forbidden' }); return; }
+  const u = new URL(req.url, 'http://localhost');
+  if (u.searchParams.get('tasks')) { sendJson(res, 200, await listAutoTasks()); return; }
+  try {
+    const txt = await fs.readFile(autoCfgFile(), 'utf-8');
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(txt);
+  } catch (e) {
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end('null');
+  }
+}
+
+// POST /api/auto-schedule { config?, register?, unregister? }
+// config を渡すと auto.json に保存。register:true で既存の登録を消してから設定どおりに作り直す。
+// unregister:true で登録の解除のみ（設定は残す）。
+async function handlePostAutoSchedule(req, res) {
+  if (!isLocal(req)) { sendJson(res, 403, { error: 'forbidden' }); return; }
+  const body = await readJsonBody(req);
+  try {
+    if (body && body.config) {
+      await fs.mkdir(autoBaseDir(), { recursive: true });
+      await fs.writeFile(autoCfgFile(), JSON.stringify(body.config, null, 2));
+    }
+    if (!body || (!body.register && !body.unregister)) { sendJson(res, 200, { ok: true }); return; }
+    if (process.platform !== 'win32') { sendJson(res, 400, { ok: false, error: 'Windows専用の機能です' }); return; }
+
+    // 以前の登録を消してから、設定どおりに作り直す（investment-shortsの auto-schedule route と同じ手順）
+    const cur = await listAutoTasks();
+    for (const t of cur.tasks || []) await schtasksExec(['/Delete', '/F', '/TN', t.name]);
+    if (body.unregister) { sendJson(res, 200, { ok: true, created: 0 }); return; }
+
+    let cfg = body.config;
+    if (!cfg) { try { cfg = JSON.parse(await fs.readFile(autoCfgFile(), 'utf-8')); } catch (e) { cfg = null; } }
+    if (!cfg || !Array.isArray(cfg.jobs)) { sendJson(res, 400, { ok: false, error: '設定が見つかりません' }); return; }
+
+    const script = path.join(__dirname, '..', 'scripts', 'auto-run.mjs');
+    const errors = [];
+    let created = 0;
+    for (const j of cfg.jobs) {
+      if (!j.enabled || !Array.isArray(j.days) || j.days.length === 0) continue;
+      for (const t of (j.times || [])) {
+        if (!/^\d{1,2}:\d{2}$/.test(String(t.time))) { errors.push(`${j.name}：時刻「${t.time}」が正しくありません`); continue; }
+        const tr = `"${process.execPath}" "${script}" --job ${j.id} --time ${t.id}`;
+        const r = await schtasksExec(['/Create', '/F', '/TN', `${AUTO_TASK_PREFIX}${j.id}_${t.id}`, '/TR', tr, '/SC', 'WEEKLY', '/D', j.days.map((d) => SCHTASK_DAYS[d]).join(','), '/ST', String(t.time).padStart(5, '0')]);
+        if (r.code === 0) created++; else errors.push(`${j.name} ${t.time}：${r.out}`);
+      }
+    }
+    sendJson(res, 200, { ok: errors.length === 0, created, errors });
+  } catch (e) {
+    sendJson(res, 500, { ok: false, error: e && e.message ? e.message : String(e) });
+  }
+}
+
+// GET  /api/auto-status?run=<run|latest>  -> 実行状況のJSON（無ければ null）
+// POST /api/auto-status { run, state, message, steps, results, ... } -> 実行状況を保存
+async function handleGetAutoStatus(req, res) {
+  if (!isLocal(req)) { sendJson(res, 403, { error: 'forbidden' }); return; }
+  const u = new URL(req.url, 'http://localhost');
+  const run = u.searchParams.get('run') || 'latest';
+  if (!/^(latest|[A-Za-z0-9_-]+)$/.test(run)) { sendJson(res, 400, { error: 'bad run id' }); return; }
+  const file = path.join(autoRunsDir(), run === 'latest' ? 'latest.json' : `${run}.json`);
+  try {
+    const txt = await fs.readFile(file, 'utf-8');
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(txt);
+  } catch (e) {
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end('null');
+  }
+}
+
+async function handlePostAutoStatus(req, res) {
+  if (!isLocal(req)) { sendJson(res, 403, { error: 'forbidden' }); return; }
+  const body = await readJsonBody(req);
+  const run = body && body.run;
+  if (!run || !/^[A-Za-z0-9_-]+$/.test(String(run))) { sendJson(res, 400, { ok: false, error: 'bad run id' }); return; }
+  try {
+    await fs.mkdir(autoRunsDir(), { recursive: true });
+    const data = JSON.stringify({ ...body, updatedAt: Date.now() });
+    await fs.writeFile(path.join(autoRunsDir(), `${run}.json`), data);
+    await fs.writeFile(path.join(autoRunsDir(), 'latest.json'), data);
+    sendJson(res, 200, { ok: true });
+  } catch (e) {
+    sendJson(res, 500, { ok: false, error: e && e.message ? e.message : String(e) });
+  }
+}
+
+// フォルダ名・ファイル名として使えない文字を置き換える（パスの区切りや .. は使わせない）
+function safeSeg(s) {
+  const t = String(s == null ? '' : s).replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').replace(/\s+/g, ' ').trim().replace(/^\.+/, '').replace(/[. ]+$/, '');
+  return (t || '_').slice(0, 120);
+}
+function resolveBase(dir) {
+  const d = String(dir || '').trim();
+  if (!d || !path.isAbsolute(d)) return null;
+  return path.resolve(d);
+}
+
+// GET /api/save-output?dir=<保存先フォルダ> -> そのフォルダに書き込めるか確認（無ければ作る）
+async function handleGetSaveOutput(req, res) {
+  if (!isLocal(req)) { sendJson(res, 403, { error: 'forbidden' }); return; }
+  const u = new URL(req.url, 'http://localhost');
+  const base = resolveBase(u.searchParams.get('dir') || '');
+  if (!base) { sendJson(res, 400, { ok: false, error: 'フォルダは「C:\\Users\\…」のように、ドライブから始まる全体のパスで入力してください' }); return; }
+  try {
+    await fs.mkdir(base, { recursive: true });
+    const probe = path.join(base, `.write-test-${Date.now()}`);
+    await fs.writeFile(probe, 'ok');
+    await fs.unlink(probe);
+    sendJson(res, 200, { ok: true, dir: base });
+  } catch (e) {
+    sendJson(res, 400, { ok: false, error: `このフォルダには保存できません：${e && e.message ? e.message : e}` });
+  }
+}
+
+// POST /api/save-output：1ファイルを保存。ヘッダー x-dir（保存先）, x-sub（サブフォルダ、/区切り）,
+// x-name（ファイル名）はURLエンコード済み。本文がファイルの中身そのもの（バイト列）。
+// 自動実行（無人）のときのMP4・サムネ・概要欄テキストの保存先として使う（File System Access APIの
+// フォルダ選択ダイアログはユーザー操作が必須で無人実行では使えないため、サーバー側で直接書き込む）。
+async function handlePostSaveOutput(req, res) {
+  if (!isLocal(req)) { sendJson(res, 403, { error: 'forbidden' }); return; }
+  const dec = (k) => { try { return decodeURIComponent(req.headers[k] || ''); } catch (e) { return ''; } };
+  const base = resolveBase(dec('x-dir'));
+  const name = safeSeg(dec('x-name'));
+  if (!base || !dec('x-name')) { sendJson(res, 400, { ok: false, error: 'bad request' }); return; }
+  const subs = dec('x-sub').split('/').filter(Boolean).map(safeSeg);
+  const dir = path.join(base, ...subs);
+  if (!dir.startsWith(base)) { sendJson(res, 400, { ok: false, error: 'bad path' }); return; }
+  try {
+    await fs.mkdir(dir, { recursive: true });
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const buf = Buffer.concat(chunks);
+    const file = path.join(dir, name);
+    await fs.writeFile(file, buf);
+    sendJson(res, 200, { ok: true, file, bytes: buf.length });
+  } catch (e) {
+    sendJson(res, 500, { ok: false, error: e && e.message ? e.message : String(e) });
+  }
+}
+
 const server = http.createServer((req, res) => {
   setCors(res);
   const url = req.url || '';
@@ -547,6 +753,12 @@ const server = http.createServer((req, res) => {
   if (pathname === '/api/image' && req.method === 'POST') { handlePostImage(req, res); return; }
   if (pathname === '/api/research' && req.method === 'POST') { handlePostResearch(req, res); return; }
   if (pathname === '/api/fetch-url' && req.method === 'GET') { handleFetchUrl(req, res); return; }
+  if (pathname === '/api/auto-schedule' && req.method === 'GET') { handleGetAutoSchedule(req, res); return; }
+  if (pathname === '/api/auto-schedule' && req.method === 'POST') { handlePostAutoSchedule(req, res); return; }
+  if (pathname === '/api/auto-status' && req.method === 'GET') { handleGetAutoStatus(req, res); return; }
+  if (pathname === '/api/auto-status' && req.method === 'POST') { handlePostAutoStatus(req, res); return; }
+  if (pathname === '/api/save-output' && req.method === 'GET') { handleGetSaveOutput(req, res); return; }
+  if (pathname === '/api/save-output' && req.method === 'POST') { handlePostSaveOutput(req, res); return; }
   if (pathname === '/' || pathname === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({ ok: true, service: 'dd-dashboard tts-server', port: PORT }));
