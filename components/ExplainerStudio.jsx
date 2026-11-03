@@ -26,7 +26,7 @@ import { saveImage, listImages, deleteImage } from "@/lib/explainer/imageStore";
 import { generateImage } from "@/lib/explainer/imageClient";
 import { researchTopic } from "@/lib/explainer/researchClient";
 import { safeFileName, canPickFolder, getSavedFolder, pickFolder, ensureWritable, saveBundle, descriptionText } from "@/lib/explainer/exportBundle";
-import { exportVideoProfile } from "@/lib/videoProfileSnapshot";
+import { exportVideoProfile, importVideoProfile } from "@/lib/videoProfileSnapshot";
 import { VISUAL_KINDS, ICON_NAMES } from "@/lib/explainer/types";
 import { storage } from "@/lib/storage";
 import { easternStamp } from "@/lib/marketClock";
@@ -273,6 +273,14 @@ export default function ExplainerStudio() {
   const [genProgress, setGenProgress] = useState(null);
   const [genError, setGenError] = useState("");
   const abortRef = useRef(null);
+  // Stage F-4：平日朝の自動実行（scripts/auto-run.mjsが開く ?autorun=1&mode=preview|video&run=<id>）用。
+  // autorunRefが非nullの間だけ、handleExport()は保存先フォルダの選択ダイアログを使わずtts-server経由で
+  // サーバー側へ直接保存する。lastGenErrorRef／lastExportErrorRefは、handleGenerate／handleExportが
+  // 内部でcatchしてalertするだけ（例外を再throwしない）既存の作りのまま、自動実行側が成否を判定できるように
+  // 追加した「最後のエラー」の記録（手動操作時の挙動は変えない）。
+  const autorunRef = useRef(null);
+  const lastGenErrorRef = useRef(null);
+  const lastExportErrorRef = useRef(null);
   // [Stage E-6] 「株式情報」モードのときだけ、実データのカタログ（StockCatalog）を生成入力に含める。
   // ダッシュボードのS&P500・SOXL（背景で読み込み済み）と、参考情報に追加したCSV各社分をすべて統合し、
   // シナリオに応じてAIが必要な銘柄のキーだけを選べるようにする（データソースを選ばせる操作は廃止）。
@@ -321,11 +329,11 @@ export default function ExplainerStudio() {
   };
   const handleGenerate = async (minutesOverride) => {
     const minutes = typeof minutesOverride === "number" ? minutesOverride : targetMinutes;
-    if (!topic.trim()) { setGenError("テーマ（ニュースやキーワード）を入力してください。"); return; }
-    if (refs.some((r) => r.kind === "url" && r.status === "pending")) { setGenError("URLの読み込みが終わるまでお待ちください。"); return; }
+    if (!topic.trim()) { const m = "テーマ（ニュースやキーワード）を入力してください。"; setGenError(m); lastGenErrorRef.current = m; return; }
+    if (refs.some((r) => r.kind === "url" && r.status === "pending")) { const m = "URLの読み込みが終わるまでお待ちください。"; setGenError(m); lastGenErrorRef.current = m; return; }
     if (project && !confirm(`いまの台本を、${minutes}分以内・声の速さ${rate.toFixed(2)}xに合わせて新しく作り直します。よろしいですか？（現在の台本は「台本を保存」で残せます）`)) return;
     if (minutes !== targetMinutes) setTargetMinutes(minutes);
-    setGenBusy(true); setGenError("");
+    setGenBusy(true); setGenError(""); lastGenErrorRef.current = null;
     const ac = new AbortController(); abortRef.current = ac;
     // 作り直し前の台本に付いていた画像を、場面の順番で引き継ぐための候補（課金を避けるため）
     const prevImagePool = reuseImagesEnabled ? (project?.longScenes || []).filter((s) => s.imageId).map((s) => s.imageId) : [];
@@ -359,7 +367,7 @@ export default function ExplainerStudio() {
       setProject(p); setFormat("long"); setInputOpen(false); setSeekPos(0);
       if (imgNoKey) alert("画像の自動生成に失敗しました：tts-server/.env に GEMINI_API_KEY が設定されていません（tts-server/.env.example を参考に設定してください）。台本自体は生成できています。あとから各場面の「画像を追加」→「AIで生成」からやり直せます。");
       else if (imgFailed > 0) alert(`${imgFailed}件の場面で画像の自動生成に失敗しました（台本は生成できています）。あとから各場面の「画像を追加」→「AIで生成」からやり直せます。`);
-    } catch (e) { setGenError(errMsg(e)); }
+    } catch (e) { const msg = errMsg(e); setGenError(msg); lastGenErrorRef.current = msg; }
     finally { setGenBusy(false); setGenProgress(null); abortRef.current = null; }
   };
   // 参考資料の文章とほぼ同じ箇所があるナレーションを、AIに言い換えさせる（図解・場面の役割はそのまま）
@@ -1003,12 +1011,28 @@ export default function ExplainerStudio() {
     if (b) download(b, `${exportNames().thumb}.png`);
   };
 
+  // Stage F-4：自動実行中（autorunRef非null）は、ファイル保存をtts-server経由のサーバー側書き込みで行う
+  // （File System Access APIのフォルダ選択は無人実行では使えないため）。投資shortsのsaveFile()と同じ考え方。
+  const saveViaServer = async (blob, name, outDir, sub) => {
+    const buf = await blob.arrayBuffer();
+    const r = await fetch(`${getTtsBaseUrl()}/api/save-output`, {
+      method: "POST",
+      headers: { "x-dir": encodeURIComponent(outDir), "x-sub": encodeURIComponent(sub || ""), "x-name": encodeURIComponent(name) },
+      body: buf,
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) throw new Error(j.error || `保存に失敗しました（${name}）`);
+    return j.file;
+  };
   const handleExport = async () => {
     const r = rendererRef.current, canvas = canvasRef.current;
     if (!r || !canvas || !scenes.length || !project) return;
-    // 保存先フォルダ（ボタンを押した直後でないと選べない・許可を求められないため、録画の前に確認する）
+    const autorun = autorunRef.current;
+    lastExportErrorRef.current = null;
+    // 保存先フォルダ（ボタンを押した直後でないと選べない・許可を求められないため、録画の前に確認する）。
+    // 自動実行中はユーザー操作が無いためフォルダ選択ダイアログを呼ばず、保存は下のsaveViaServerに委ねる。
     let folder = exportFolder;
-    if (canPickFolder()) {
+    if (!autorun && canPickFolder()) {
       if (!folder) folder = await chooseExportFolder();
       if (folder && !(await ensureWritable(folder))) folder = await chooseExportFolder();
     }
@@ -1080,12 +1104,20 @@ export default function ExplainerStudio() {
       if (thumbBlob) files.push({ name: `${names.thumb}.png`, blob: thumbBlob });
       const tags = project.youtube.tags || [];
       files.push({ name: `${names.thumb}_概要欄.txt`, blob: new Blob(["\ufeff" + descriptionText(names.title, description, tags)], { type: "text/plain;charset=utf-8" }) });
-      const where = await saveBundle(folder && (await ensureWritable(folder)) ? folder : null, names.folder, files);
+      let where;
+      if (autorun) {
+        if (!autorun.outDir) throw new Error("保存先フォルダが設定されていません（配信設定でフォルダを指定してください）");
+        for (const f of files) await saveViaServer(f.blob, f.name, autorun.outDir, names.folder);
+        where = `${autorun.outDir}\\${names.folder}`;
+      } else {
+        where = await saveBundle(folder && (await ensureWritable(folder)) ? folder : null, names.folder, files);
+      }
       setExportProgress(100);
       setExportNote(where ? `保存しました：${where}（${files.map((f) => f.name).join("、")}）` : `ダウンロードフォルダに保存しました：${files.map((f) => f.name).join("、")}`);
       if (pr.failed) alert("一部のナレーションを動画に入れられませんでした。ローカルTTSサーバー（npm run dev:video）またはAivisSpeechが起動しているかご確認ください。");
       if (handle.extension === "webm") alert("WebM形式で保存しました（MP4はYouTube側の取り込み処理が時々失敗するため、より安定するWebMを使っています）。YouTubeにはそのままアップロードできます。");
     } catch (err) {
+      lastExportErrorRef.current = err;
       alert(`書き出しエラー: ${err?.message ?? err}`);
       try { await handle?.stop(); } catch (e2) { /* ignore */ }
       mixer().stopBGM(); mixer().stopRecordingTap();
@@ -1094,6 +1126,98 @@ export default function ExplainerStudio() {
       setTimeout(() => { setIsExporting(false); setExportProgress(0); }, 800);
     }
   };
+
+  // ---------------- Stage F-4：平日朝の自動実行オーケストレーション ----------------
+  // scripts/auto-run.mjsが開く ?autorun=1&mode=preview|video&run=<id> を検出し、「株式情報」モードで
+  // 台本生成（mode=previewはここまで）・動画生成（mode=videoはhandleExportまで）を無人で実行する。
+  // investment-shortsのBatchPanel.tsxと同じ「同じrunを二重実行しない」考え方（localStorageのautorun-last）を使う。
+  // alert()・confirm()はscripts/auto-run.mjs側のPlaywright dialogハンドラーが自動で閉じるため、
+  // ここでは画面側のalert呼び出し自体には手を入れない（window.alertの差し替えは行わない）。
+  useEffect(() => {
+    const qs = new URLSearchParams(window.location.search);
+    if (qs.get("autorun") !== "1") return;
+    const run = qs.get("run") || "";
+    const autoMode = qs.get("mode") === "video" ? "video" : "preview";
+    if (!run) return;
+    let lastRun = "";
+    try { lastRun = localStorage.getItem("autorun-last") || ""; } catch (e) { /* 無視 */ }
+    if (lastRun === run) return; // 同じrunを二重実行しない（useEffectの再発火・再読み込み対策）
+    try { localStorage.setItem("autorun-last", run); } catch (e) { /* 無視 */ }
+
+    const steps = [];
+    const addStep = (name, ok, note = "") => { steps.push({ name, ok, note }); return steps.slice(); };
+    const postStatus = (patch) => fetch(`${getTtsBaseUrl()}/api/auto-status`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ run, mode: autoMode, ...patch }),
+    }).catch(() => {});
+
+    (async () => {
+      try {
+        postStatus({ state: "running", message: "設定を読み込んでいます…", steps: addStep("開始", true) });
+
+        // ①保存先フォルダ（mode=videoのときのみ使う）を配信設定（/api/auto-schedule）から取得
+        let outDir = "";
+        try {
+          const cfgRes = await fetch(`${getTtsBaseUrl()}/api/auto-schedule`);
+          const cfg = await cfgRes.json().catch(() => null);
+          outDir = (cfg && cfg.outDir) || "";
+        } catch (e) { /* 空のままでも進める（video時のみ下でエラーにする） */ }
+
+        // ②声・アバター・BGM・背景などの設定を自動運転プロファイルへ反映する（Stage F-3）。
+        //   失敗しても続行する（未設定でも既定のアバター・声のまま生成できるため）。
+        try {
+          const r = await fetch(`${getTtsBaseUrl()}/api/profile-snapshot`);
+          const text = await r.text();
+          if (text && text !== "null") await importVideoProfile(text);
+          postStatus({ state: "running", message: "株式情報モードに切り替えています…", steps: addStep("設定の引き継み", true) });
+        } catch (e) {
+          postStatus({ state: "running", message: "株式情報モードに切り替えています…", steps: addStep("設定の引き継み", false, String(e?.message ?? e)) });
+        }
+
+        // ③「株式情報」モードへ切り替え、テーマ欄を今日の日付にする（前回の残り・引き継いだ設定の影響を受けないよう、
+        //   topic・参考情報・前回の台本は毎回明示的にリセットする＝「毎日同じ型」を保証する）
+        setMode("stock"); setRefs([]); setExtraInstruction(""); setProject(null);
+        const [y, mo, dd] = easternStamp(new Date()).slice(0, 10).split("-");
+        setTopic(`${y}年${Number(mo)}月${Number(dd)}日`);
+
+        // ④ダッシュボードが書き出す stock-catalog:SP500/SOXL（storage.get経由）が揃うまで待つ（最大30秒）
+        const waitUntil = Date.now() + 30000;
+        for (;;) {
+          const got = await Promise.all(["SP500", "SOXL"].map((src) => storage.get(`stock-catalog:${src}`).catch(() => null)));
+          if (got.some((g) => g?.value) || Date.now() > waitUntil) break;
+          await new Promise((res) => setTimeout(res, 500));
+        }
+        await new Promise((res) => setTimeout(res, 800)); // Reactの状態反映（stockSnapshots等）を一拍待つ
+
+        // ⑤台本生成（これで mode=preview はここまで完成）
+        postStatus({ state: "running", message: "台本を生成しています…", steps: addStep("データ読み込み", true) });
+        await handleGenerate();
+        if (lastGenErrorRef.current) throw new Error(lastGenErrorRef.current);
+        postStatus({ state: "running", message: "台本の生成が完了しました", steps: addStep("台本生成", true) });
+
+        if (autoMode === "preview") {
+          postStatus({ state: "ok", message: "プレビューまで完了しました", steps: addStep("完了（プレビューまで）", true) });
+          return;
+        }
+
+        // ⑥動画生成（mode=video）：レンダラーの初期化（canvas・プレビュー）を待ってから書き出す
+        const rendererWaitUntil = Date.now() + 20000;
+        while (!rendererRef.current && Date.now() < rendererWaitUntil) await new Promise((res) => setTimeout(res, 300));
+        if (!rendererRef.current) throw new Error("プレビュー画面の初期化に失敗しました");
+
+        autorunRef.current = { run, mode: autoMode, outDir };
+        postStatus({ state: "running", message: "動画を書き出しています…", steps: addStep("動画書き出し開始", true) });
+        await handleExport();
+        if (lastExportErrorRef.current) throw new Error(lastExportErrorRef.current?.message || String(lastExportErrorRef.current));
+        postStatus({ state: "ok", message: "動画の生成・保存が完了しました", steps: addStep("完了（動画生成まで）", true) });
+      } catch (e) {
+        postStatus({ state: "ng", message: e?.message || String(e), steps: addStep("エラー", false, e?.message || String(e)) });
+      } finally {
+        autorunRef.current = null;
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ---------------- 公開前チェック・YouTube情報 ----------------
   const refTexts = useMemo(() => referenceTexts(refs), [refs]);
