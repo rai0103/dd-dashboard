@@ -105,6 +105,9 @@ export function isKanaReading(s: string): boolean {
 export function sanitizeReading(reading: string, narration: string): { reading: string; ok: boolean } {
   let r = katakanaToHiragana(str(reading, 2000)).replace(/[「」『』（）()【】［］\[\]"“”'’]/g, '').replace(/[！!？?]/g, '。').replace(/[，,]/g, '、').replace(/[．.]/g, '。').replace(/[・]/g, '、');
   r = r.replace(/\s+/g, '').replace(/、{2,}/g, '、').replace(/。{2,}/g, '。');
+  // [Stage G-1] AIが時々間違える読み方の安全網（システムプロンプトでも指示しているが、生成後にも補正する）。
+  // 「からく」→「げらく」は「からくり」との混同を避けるため、直後が「り」でないときだけ置き換える。
+  r = r.replace(/さいこうね/g, 'さいたかね').replace(/からく(?!り)/g, 'げらく');
   if (r && isKanaReading(r)) return { reading: r, ok: true };
   return { reading: narration, ok: false };
 }
