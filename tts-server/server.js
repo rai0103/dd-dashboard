@@ -699,6 +699,35 @@ function resolveBase(dir) {
   return path.resolve(d);
 }
 
+// GET  /api/profile-snapshot  -> 保存済みの設定スナップショット（声・アバター・BGM・背景など、
+//      Stage F-3のlib/videoProfileSnapshot.tsがexportVideoProfile()で作ったJSON文字列）。無ければ null
+// POST /api/profile-snapshot  -> 本文（JSON文字列）をそのままファイルに保存する
+async function handleGetProfileSnapshot(req, res) {
+  if (!isLocal(req)) { sendJson(res, 403, { error: 'forbidden' }); return; }
+  try {
+    const txt = await fs.readFile(path.join(autoBaseDir(), 'profile-snapshot.json'), 'utf-8');
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(txt);
+  } catch (e) {
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end('null');
+  }
+}
+async function handlePostProfileSnapshot(req, res) {
+  if (!isLocal(req)) { sendJson(res, 403, { error: 'forbidden' }); return; }
+  try {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const text = Buffer.concat(chunks).toString('utf-8');
+    JSON.parse(text); // 形式だけ確認（壊れたJSONを保存しない）
+    await fs.mkdir(autoBaseDir(), { recursive: true });
+    await fs.writeFile(path.join(autoBaseDir(), 'profile-snapshot.json'), text);
+    sendJson(res, 200, { ok: true, bytes: Buffer.byteLength(text) });
+  } catch (e) {
+    sendJson(res, 400, { ok: false, error: e && e.message ? e.message : String(e) });
+  }
+}
+
 // GET /api/save-output?dir=<保存先フォルダ> -> そのフォルダに書き込めるか確認（無ければ作る）
 async function handleGetSaveOutput(req, res) {
   if (!isLocal(req)) { sendJson(res, 403, { error: 'forbidden' }); return; }
@@ -759,6 +788,8 @@ const server = http.createServer((req, res) => {
   if (pathname === '/api/auto-status' && req.method === 'POST') { handlePostAutoStatus(req, res); return; }
   if (pathname === '/api/save-output' && req.method === 'GET') { handleGetSaveOutput(req, res); return; }
   if (pathname === '/api/save-output' && req.method === 'POST') { handlePostSaveOutput(req, res); return; }
+  if (pathname === '/api/profile-snapshot' && req.method === 'GET') { handleGetProfileSnapshot(req, res); return; }
+  if (pathname === '/api/profile-snapshot' && req.method === 'POST') { handlePostProfileSnapshot(req, res); return; }
   if (pathname === '/' || pathname === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({ ok: true, service: 'dd-dashboard tts-server', port: PORT }));

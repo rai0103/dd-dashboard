@@ -26,6 +26,7 @@ import { saveImage, listImages, deleteImage } from "@/lib/explainer/imageStore";
 import { generateImage } from "@/lib/explainer/imageClient";
 import { researchTopic } from "@/lib/explainer/researchClient";
 import { safeFileName, canPickFolder, getSavedFolder, pickFolder, ensureWritable, saveBundle, descriptionText } from "@/lib/explainer/exportBundle";
+import { exportVideoProfile } from "@/lib/videoProfileSnapshot";
 import { VISUAL_KINDS, ICON_NAMES } from "@/lib/explainer/types";
 import { storage } from "@/lib/storage";
 import { easternStamp } from "@/lib/marketClock";
@@ -708,6 +709,24 @@ export default function ExplainerStudio() {
   const [presetIoOpen, setPresetIoOpen] = useState(false);
   const [presetIoText, setPresetIoText] = useState("");
   const [presetIoNote, setPresetIoNote] = useState("");
+  // Stage F-3：平日朝の自動実行は専用の別Chromeプロファイルを使うため、この画面の声・アバター・
+  // BGM・背景などの設定をそちらへ引き継ぐ（投資shortsの「設定の引き継ぎ」と同じ考え方）。
+  const [profileSnapshotBusy, setProfileSnapshotBusy] = useState(false);
+  const [profileSnapshotNote, setProfileSnapshotNote] = useState("");
+  const handleExportProfileForAutorun = async () => {
+    setProfileSnapshotBusy(true); setProfileSnapshotNote("");
+    try {
+      const json = await exportVideoProfile();
+      const r = await fetch(`${getTtsBaseUrl()}/api/profile-snapshot`, { method: "POST", headers: { "Content-Type": "application/json" }, body: json });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setProfileSnapshotNote(`引き継ぎました（${((j.bytes ?? json.length) / 1048576).toFixed(1)}MB）。次回の自動実行から反映されます。`);
+    } catch (e) {
+      setProfileSnapshotNote(`⚠ 引き継ぎに失敗しました：${e?.message ?? e}（ローカルサーバーが起動しているかご確認ください）`);
+    } finally {
+      setProfileSnapshotBusy(false);
+    }
+  };
   const importPresets = () => {
     let arr;
     try { arr = JSON.parse(presetIoText.trim()); } catch (e) { setPresetIoNote("読み取れませんでした（JSONを貼り付けてください）"); return; }
@@ -1770,6 +1789,17 @@ export default function ExplainerStudio() {
                     <label className="flex items-center gap-1.5" style={{ color: C.textDim }}>音量<input type="range" min={0} max={100} value={bgmVolume} onChange={(e) => { const v = Number(e.target.value); setBgmVolume(v); updateLocked("bgmVolume", v); }} />{bgmVolume}%</label>
                     <SliderLockButton locked={!!sliderLocks.bgmVolume?.locked} onClick={() => toggleSliderLock("bgmVolume", bgmVolume)} />
                   </div>
+                </Section>
+
+                {/* Stage F-3：平日朝の自動配信（タスクスケジューラ）用の設定引き継ぎ */}
+                <Section title="自動配信用の設定引き継ぎ">
+                  <div className="text-[10px] leading-relaxed mb-1.5" style={{ color: C.textDim }}>
+                    平日朝の自動実行は、この画面とは別の専用Chromeプロファイルで動きます。声・アバター・BGM・背景などの設定を変えたら、このボタンで引き継いでください（自動実行の設定自体は別の画面で行います）。
+                  </div>
+                  <button onClick={handleExportProfileForAutorun} disabled={profileSnapshotBusy} className="text-[11px] px-2.5 py-1 rounded flex items-center gap-1" style={{ ...btn(), opacity: profileSnapshotBusy ? 0.6 : 1 }}>
+                    <Upload size={11} /> {profileSnapshotBusy ? "引き継ぎ中…" : "自動実行用に今の設定を引き継ぐ"}
+                  </button>
+                  {profileSnapshotNote && <div className="text-[10px] mt-1" style={{ color: profileSnapshotNote.startsWith("⚠") ? C.rust : C.teal }}>{profileSnapshotNote}</div>}
                 </Section>
 
                 {/* YouTube */}
