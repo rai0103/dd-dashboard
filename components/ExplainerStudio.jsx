@@ -33,6 +33,7 @@ import { storage } from "@/lib/storage";
 import { easternStamp } from "@/lib/marketClock";
 import { parseStooqCSV } from "@/lib/csvPrice";
 import { buildStockCatalogFromSnapshot, buildStockCatalogFromCsv, mergeStockCatalogs, resolveYearCompareItems } from "@/lib/explainer/stockCatalog";
+import { buildStockIntroScenes } from "@/lib/explainer/stockIntroScenes";
 
 const C = {
   bg: "#0A0F1C", panel: "#111A2C", panel2: "#0D1424",
@@ -394,6 +395,13 @@ export default function ExplainerStudio() {
         await refreshImages(); // 保存した画像をプレビュー/書き出し側の一覧に反映する（手動の「画像を追加」と同じ扱いにする）
       } else if (reusedCount > 0) {
         await refreshImages(); // 新規生成が無くても、再利用した画像をプレビュー側の一覧に反映する
+      }
+      // [Stage G-3] 「株式情報」モードのときだけ、冒頭に前提条件・DD定義・発生回数と深さの分布・「谷間」の
+      // 概念図を固定場面として追加する（AIには生成させない。数値はダッシュボードのfinalReachをそのまま使う）。
+      if (mode === "stock") {
+        const primarySnapshot = stockSnapshots.SP500 ?? stockSnapshots.SOXL;
+        const introScenes = buildStockIntroScenes(primarySnapshot?.finalReach ?? null, primarySnapshot?.instrumentLabel ?? "S&P500");
+        if (introScenes.length) longScenes = [...introScenes, ...longScenes];
       }
       // ラベル（kicker）は、選んだ長尺の長さから自動で入れる（例：5分で解説）。生成後も自由に書き換えられる
       p = { ...p, longScenes, shortScenes: S.scenes, kicker: autoKickerFor(minutes) };

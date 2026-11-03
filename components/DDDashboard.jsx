@@ -8661,7 +8661,7 @@ export default function DDDashboard() {
       const jsonOutput = computeLongformAnalysisJSON({ d, crashFrequency: bottom.stats.crashFrequency, generatedAt: new Date(), bottom, instrumentLabel: "SP500" });
       const video = buildVideoLongform(jsonOutput, d, SP500_KANA, DEFAULT_CONTENT_SECTIONS, [], "S&P500");
       const asOf = d.FULL.length ? d.FULL[d.FULL.length - 1].date.toISOString().slice(0, 10) : null;
-      storage.set("stock-catalog:SP500", JSON.stringify({ asOf, instrumentLabel: "S&P500", catalog: video.catalog, scalarCatalog: video.scalarCatalog })).catch(() => { /* storage unavailable */ });
+      storage.set("stock-catalog:SP500", JSON.stringify({ asOf, instrumentLabel: "S&P500", catalog: video.catalog, scalarCatalog: video.scalarCatalog, finalReach: video.longMd.finalReach })).catch(() => { /* storage unavailable */ });
     } catch (e) { /* 失敗してもダッシュボード本体の動作には影響させない */ }
   }, [d, bottom]);
   useEffect(() => {
@@ -8670,7 +8670,7 @@ export default function DDDashboard() {
       const jsonOutput = computeLongformAnalysisJSON({ d: dSoxl, crashFrequency: bottomSoxl.stats.crashFrequency, generatedAt: new Date(), bottom: bottomSoxl, instrumentLabel: "SOXL" });
       const video = buildVideoLongform(jsonOutput, dSoxl, "えすおーえっくすえる", DEFAULT_CONTENT_SECTIONS, [], "SOXL");
       const asOf = dSoxl.FULL.length ? dSoxl.FULL[dSoxl.FULL.length - 1].date.toISOString().slice(0, 10) : null;
-      storage.set("stock-catalog:SOXL", JSON.stringify({ asOf, instrumentLabel: "SOXL", catalog: video.catalog, scalarCatalog: video.scalarCatalog })).catch(() => { /* storage unavailable */ });
+      storage.set("stock-catalog:SOXL", JSON.stringify({ asOf, instrumentLabel: "SOXL", catalog: video.catalog, scalarCatalog: video.scalarCatalog, finalReach: video.longMd.finalReach })).catch(() => { /* storage unavailable */ });
     } catch (e) { /* 失敗してもダッシュボード本体の動作には影響させない */ }
   }, [dSoxl, bottomSoxl]);
   // [グラフ作成ページ] /chart-studio/ 用：VOO・QQQ・SOXL・GOLDの生の日次終値（{date,close}[]）をそのまま
