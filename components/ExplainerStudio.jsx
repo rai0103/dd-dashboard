@@ -34,6 +34,7 @@ import { easternStamp } from "@/lib/marketClock";
 import { parseStooqCSV } from "@/lib/csvPrice";
 import { buildStockCatalogFromSnapshot, buildStockCatalogFromCsv, mergeStockCatalogs, resolveYearCompareItems } from "@/lib/explainer/stockCatalog";
 import { buildStockIntroScenes } from "@/lib/explainer/stockIntroScenes";
+import { drawVisual, PALETTE } from "@/lib/explainer/visuals";
 
 const C = {
   bg: "#0A0F1C", panel: "#111A2C", panel2: "#0D1424",
@@ -98,6 +99,31 @@ function GenProgressPanel({ step, done, total, elapsedSec, onAbort }) {
       </div>
     </div>
   );
+}
+// [Stage G-4] 場面カードのサムネイル：画像（sc.imageId）が無い場面は、lib/explainer/visuals.tsの
+// drawVisual()を直接呼んで図解（棒グラフ・折れ線・要点カード等）の静止画を小さなcanvasに描く
+// （ExplainerRendererクラス＝アバター・音声込みのフル描画は使わない。図解単体の軽量な描画のみ）。
+// p=1（場面の最後まで進んだ状態）で描くことで、アニメーションの途中状態ではない完成形を見せる。
+function SceneThumbCanvas({ sc, portrait }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    const canvas = ref.current;
+    if (!canvas) return;
+    const vis = portrait ? { W: 420, H: 361 } : { W: 640, H: 400 };
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const cssW = canvas.clientWidth || 240, cssH = canvas.clientHeight || (portrait ? 206 : 150);
+    canvas.width = Math.round(cssW * dpr); canvas.height = Math.round(cssH * dpr);
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const scale = Math.min(canvas.width / vis.W, canvas.height / vis.H);
+    const offX = (canvas.width - vis.W * scale) / 2, offY = (canvas.height - vis.H * scale) / 2;
+    ctx.fillStyle = "#0c1222"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.setTransform(scale, 0, 0, scale, offX, offY);
+    const accent = PALETTE[(sc.chapter || 0) % PALETTE.length];
+    try { drawVisual(ctx, sc, { W: vis.W, H: vis.H, p: 1, t: 1, portrait, image: null, accent, showSource: false }); } catch (e) { /* 図解の描画に失敗しても一覧全体は壊さない */ }
+  }, [sc.visual, sc.chapter, portrait]);
+  return <canvas ref={ref} style={{ width: "100%", height: "100%", display: "block", borderRadius: 4 }} />;
 }
 function Section({ title, right, children }) {
   return (
@@ -1643,6 +1669,46 @@ export default function ExplainerStudio() {
                             <button onClick={() => { setAiOpenId((v) => (v === sc.id ? null : sc.id)); setAiText(""); setAiError(""); }} className="text-[10px] flex items-center gap-0.5" style={{ color: aiOpenId === sc.id ? C.teal : C.textDim, background: "none", border: "none", cursor: "pointer" }} title="AIに作り直しを指示（スライドごと作り直します）"><MessageSquare size={10} />AI</button>
                             <button onClick={() => removeScene(sc.id)} title="この場面を削除" style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer" }}><X size={12} /></button>
                           </div>
+                          {/* [Stage G-4] スライド（図解・画像）のサムネイル。画像が無ければ図解をそのままcanvasに描く */}
+                          <div className="flex gap-2 mb-1.5">
+                            <div className="shrink-0 rounded overflow-hidden" style={{ width: format === "short" ? 92 : 150, height: format === "short" ? 158 : 94, background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
+                              {sc.imageId && imageEls[sc.imageId] ? (
+                                <img src={imageEls[sc.imageId].src} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                              ) : (
+                                <SceneThumbCanvas sc={sc} portrait={format === "short"} />
+                              )}
+                            </div>
+                            <div className="flex-1 min-w-0 flex flex-col gap-1">
+                              <div className="text-[10px] leading-snug" style={{ color: C.textDim }}>使えるのは、自分で撮影・作成した画像、利用条件を確認したフリー素材、画像生成AIで自作したもの（実在の人物・ロゴ・既存作品を含まない）です。</div>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                {sc.imageId ? (
+                                  <button onClick={() => detachImage(sc)} className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={btn()}><X size={10} />画像を外す（図解表示に戻す）</button>
+                                ) : (
+                                  <>
+                                    <label className="text-[10px] px-1.5 py-0.5 rounded cursor-pointer" style={btn()}>ファイル選択
+                                      <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) attachImage(sc.id, f); }} />
+                                    </label>
+                                    {images.length > 0 && (
+                                      <button onClick={() => { setRightsPendingId((v) => (v === sc.id ? null : sc.id)); setImgGenError(""); refreshImages(); }} className="text-[10px] px-1.5 py-0.5 rounded" style={{ ...btn(), color: rightsPendingId === sc.id ? C.teal : C.textMuted }}>ライブラリから選ぶ</button>
+                                    )}
+                                    {sc.visual.imagePrompt && (
+                                      <button onClick={() => genSceneImage(sc)} disabled={imgGenBusyId === sc.id} className="text-[10px] px-1.5 py-0.5 rounded" style={{ ...btn("primary"), opacity: imgGenBusyId === sc.id ? 0.5 : 1 }}>{imgGenBusyId === sc.id ? "生成中…" : "AIで生成"}</button>
+                                    )}
+                                  </>
+                                )}
+                              </div>
+                              {!sc.imageId && rightsPendingId === sc.id && images.length > 0 && (
+                                <div className="flex flex-wrap gap-1" style={{ maxHeight: 92, overflowY: "auto" }}>
+                                  {images.slice().reverse().map((im) => (
+                                    <button key={im.id} onClick={() => { attachExistingImage(sc.id, im.id); setRightsPendingId(null); }} title={im.name} className="shrink-0 rounded overflow-hidden" style={{ width: 36, height: 36, padding: 0, border: `1px solid ${C.borderSoft}`, background: C.panel2, cursor: "pointer" }}>
+                                      {imageEls[im.id] && <img src={imageEls[im.id].src} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />}
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                              {imgGenError && imgGenBusyId === null && <div className="text-[10px]" style={{ color: "#ff6b6b" }}>{imgGenError}</div>}
+                            </div>
+                          </div>
                           <div className="rounded" style={{ background: C.panel }}>
                             <NarrMixedBox value={sc.narration} base={sc.narration}
                               onChange={(t) => { if (isPlayingRef.current) handlePause(); patchScene(sc.id, { narration: t, readingStale: true }); }}
@@ -1657,11 +1723,6 @@ export default function ExplainerStudio() {
                             <button onClick={() => setEditVisualId((v) => (v === sc.id ? null : sc.id))} className="text-[10px] flex items-center gap-0.5" style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer", padding: 0 }}>
                               図解の内容<ChevronRight size={10} style={{ transform: editVisualId === sc.id ? "rotate(90deg)" : "none" }} />
                             </button>
-                            {sc.imageId ? (
-                              <span className="text-[10px] inline-flex items-center gap-1" style={{ color: C.teal }}><ImageIcon size={10} /> 画像あり<button onClick={() => detachImage(sc)} style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer" }}><X size={10} /></button></span>
-                            ) : (
-                              <button onClick={() => { setRightsPendingId((v) => (v === sc.id ? null : sc.id)); setImgGenError(""); refreshImages(); }} className="text-[10px] flex items-center gap-0.5" style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer", padding: 0 }}><ImageIcon size={10} /> 画像を追加</button>
-                            )}
                             <span className="text-[10px] ml-auto" style={{ color: C.textDim }}>テロップ</span>
                             <input value={sc.caption} onChange={(e) => patchScene(sc.id, { caption: e.target.value })} className="text-[10px] px-1 py-0.5 rounded w-40" style={inputStyle} />
                           </div>
@@ -1723,33 +1784,6 @@ export default function ExplainerStudio() {
                                   <button onClick={() => copyText(sc.visual.imagePrompt)} title="コピー" style={{ color: C.teal, background: "none", border: "none", cursor: "pointer" }}><Copy size={10} /></button>
                                 </div>
                               )}
-                            </div>
-                          )}
-                          {rightsPendingId === sc.id && (
-                            <div className="mt-1 p-1.5 rounded text-[10px] flex flex-col gap-1" style={{ background: `${C.amber}12`, border: `1px solid ${C.amber}55`, color: C.textMuted }}>
-                              <div>使えるのは、自分で撮影・作成した画像、利用条件を確認したフリー素材、画像生成AIで自作したもの（実在の人物・ロゴ・既存作品を含まない）です。ニュースサイトの写真や人物写真をそのまま使うのは避けてください。</div>
-                              {sc.visual.imagePrompt && <div className="flex items-center gap-1">プロンプト案をコピー<button onClick={() => copyText(sc.visual.imagePrompt)} style={{ color: C.teal, background: "none", border: "none", cursor: "pointer" }}><Copy size={10} /></button></div>}
-                              {images.length > 0 && (
-                                <div className="flex flex-col gap-1">
-                                  <div style={{ color: C.textDim }}>ライブラリから選ぶ（グラフ作成ページのスクリーンショットもここに出ます）</div>
-                                  <div className="flex flex-wrap gap-1" style={{ maxHeight: 112, overflowY: "auto" }}>
-                                    {images.slice().reverse().map((im) => (
-                                      <button key={im.id} onClick={() => attachExistingImage(sc.id, im.id)} title={im.name} className="shrink-0 rounded overflow-hidden" style={{ width: 44, height: 44, padding: 0, border: `1px solid ${C.borderSoft}`, background: C.panel2, cursor: "pointer" }}>
-                                        {imageEls[im.id] && <img src={imageEls[im.id].src} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />}
-                                      </button>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                <label className="px-2 py-0.5 rounded cursor-pointer" style={btn()}>権利を確認した画像を選ぶ
-                                  <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) attachImage(sc.id, f); }} />
-                                </label>
-                                {sc.visual.imagePrompt && (
-                                  <button onClick={() => genSceneImage(sc)} disabled={imgGenBusyId === sc.id} className="px-2 py-0.5 rounded" style={{ ...btn("primary"), opacity: imgGenBusyId === sc.id ? 0.5 : 1 }}>{imgGenBusyId === sc.id ? "生成中…" : "AIで生成"}</button>
-                                )}
-                              </div>
-                              {imgGenError && <div style={{ color: "#ff6b6b" }}>{imgGenError}</div>}
                             </div>
                           )}
                           {aiOpenId === sc.id && (
