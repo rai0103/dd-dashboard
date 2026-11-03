@@ -76,6 +76,28 @@ function SliderLockButton({ locked, onClick }) {
     </button>
   );
 }
+// Stage G-2：長考（台本生成等）の進行状況を、画面右下に固定表示するフローティングパネル
+// （「Japan Untold Studio」の進行状況パネルを参考に見た目を近づけた。実コードは参照していない）。
+function GenProgressPanel({ step, done, total, elapsedSec, onAbort }) {
+  const pct = Math.round((done / Math.max(1, total)) * 100);
+  return (
+    <div className="fixed bottom-4 right-4 z-50 rounded-lg p-3 shadow-lg" style={{ background: C.panel, border: `1px solid ${C.border}`, width: 300, boxShadow: "0 8px 24px rgba(0,0,0,0.4)" }}>
+      <div className="flex items-center gap-2 mb-1.5">
+        <span className="rounded-full animate-pulse" style={{ width: 8, height: 8, background: C.amber, flexShrink: 0 }} />
+        <span className="text-[12px] font-semibold flex-1 min-w-0 truncate" style={{ color: C.text }}>生成しています…</span>
+        <span className="text-[11px]" style={{ color: C.textMuted }}>{pct}%</span>
+      </div>
+      <div className="text-[11px] mb-1.5 leading-relaxed" style={{ color: C.textMuted }}>{step}</div>
+      <div className="w-full h-1.5 rounded overflow-hidden mb-1.5" style={{ background: C.panel2 }}>
+        <div className="h-full" style={{ width: `${pct}%`, background: C.teal, transition: "width .3s" }} />
+      </div>
+      <div className="flex items-center justify-between">
+        <span className="text-[10px]" style={{ color: C.textDim }}>経過 {fmtTime(elapsedSec)}</span>
+        <button onClick={onAbort} className="text-[11px] px-2 py-0.5 rounded" style={{ background: "transparent", color: C.rust, border: `1px solid ${C.rust}66`, cursor: "pointer" }}>中止</button>
+      </div>
+    </div>
+  );
+}
 function Section({ title, right, children }) {
   return (
     <div>
@@ -272,6 +294,16 @@ export default function ExplainerStudio() {
 
   const [genBusy, setGenBusy] = useState(false);
   const [genProgress, setGenProgress] = useState(null);
+  // Stage G-2：右下の進行状況パネル用の経過時間。genBusyがtrueになった瞬間から1秒ごとに数える。
+  const genStartRef = useRef(0);
+  const [genElapsedSec, setGenElapsedSec] = useState(0);
+  useEffect(() => {
+    if (!genBusy) { setGenElapsedSec(0); return; }
+    genStartRef.current = Date.now();
+    setGenElapsedSec(0);
+    const t = setInterval(() => setGenElapsedSec(Math.floor((Date.now() - genStartRef.current) / 1000)), 1000);
+    return () => clearInterval(t);
+  }, [genBusy]);
   const [genError, setGenError] = useState("");
   const abortRef = useRef(null);
   // Stage F-4：平日朝の自動実行（scripts/auto-run.mjsが開く ?autorun=1&mode=preview|video&run=<id>）用。
@@ -1458,13 +1490,9 @@ export default function ExplainerStudio() {
               </div>
               <div className="flex items-center gap-2 flex-wrap">
                 <button onClick={() => handleGenerate()} disabled={genBusy} className="text-xs px-3 py-1.5 rounded flex items-center gap-1.5" style={{ ...btn("primary"), opacity: genBusy ? 0.6 : 1 }}><Sparkles size={13} /> {project ? "台本を作り直す" : "台本を生成（長尺＋ショート）"}</button>
-                {genBusy && <button onClick={() => abortRef.current?.abort()} className="text-[11px] px-2 py-1 rounded" style={{ ...btn(), color: C.rust, borderColor: C.rust + "88" }}>中止</button>}
-                {genProgress && (
-                  <div className="flex items-center gap-2 text-[11px]" style={{ color: C.textMuted }}>
-                    <div className="w-40 h-1.5 rounded overflow-hidden" style={{ background: C.panel2 }}><div className="h-full" style={{ width: `${Math.round((genProgress.done / Math.max(1, genProgress.total)) * 100)}%`, background: C.teal, transition: "width .3s" }} /></div>
-                    {genProgress.step}
-                  </div>
-                )}
+                {/* Stage G-2：詳細な進捗（手順・%・経過時間・中止）は画面右下のGenProgressPanelに集約した。
+                    ここでは生成中かどうかが一目で分かる短い表示のみ残す。 */}
+                {genBusy && <span className="text-[11px]" style={{ color: C.textMuted }}>生成中…（右下に進み具合を表示）</span>}
                 {!genBusy && <span className="text-[10px]" style={{ color: C.textDim }}>長さは、いま選んでいる声の速さ（{rate.toFixed(2)}x）で約{targetMinutes}分以内に収まるよう見積もって作ります。先に声と速さを決めてから生成すると正確です。</span>}
               </div>
               {genError && <div className="text-[11px] px-2 py-1.5 rounded" style={{ background: `${C.rust}1a`, border: `1px solid ${C.rust}44`, color: C.rust }}>{genError}</div>}
@@ -1964,6 +1992,7 @@ export default function ExplainerStudio() {
           図解・イラストはこのアプリが描くオリジナルです。参考資料の文章は言い換えて使い、出典は動画末尾と概要欄に記載します。公開前に、数値・日付・固有名詞を元の資料で確認してください。
         </div>
       </div>
+      {genBusy && genProgress && <GenProgressPanel step={genProgress.step} done={genProgress.done} total={genProgress.total} elapsedSec={genElapsedSec} onAbort={() => abortRef.current?.abort()} />}
     </div>
   );
 }
