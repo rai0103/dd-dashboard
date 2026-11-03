@@ -27,6 +27,7 @@ import { generateImage } from "@/lib/explainer/imageClient";
 import { researchTopic } from "@/lib/explainer/researchClient";
 import { safeFileName, canPickFolder, getSavedFolder, pickFolder, ensureWritable, saveBundle, descriptionText } from "@/lib/explainer/exportBundle";
 import { exportVideoProfile, importVideoProfile } from "@/lib/videoProfileSnapshot";
+import AutoScheduleStudio from "@/components/AutoScheduleStudio";
 import { VISUAL_KINDS, ICON_NAMES } from "@/lib/explainer/types";
 import { storage } from "@/lib/storage";
 import { easternStamp } from "@/lib/marketClock";
@@ -721,6 +722,8 @@ export default function ExplainerStudio() {
   // BGM・背景などの設定をそちらへ引き継ぐ（投資shortsの「設定の引き継ぎ」と同じ考え方）。
   const [profileSnapshotBusy, setProfileSnapshotBusy] = useState(false);
   const [profileSnapshotNote, setProfileSnapshotNote] = useState("");
+  // Stage F-5：配信設定パネル（既定は折りたたみ。頻繁に開くものではないため）
+  const [autoScheduleOpen, setAutoScheduleOpen] = useState(false);
   const handleExportProfileForAutorun = async () => {
     setProfileSnapshotBusy(true); setProfileSnapshotNote("");
     try {
@@ -1918,12 +1921,17 @@ export default function ExplainerStudio() {
                 {/* Stage F-3：平日朝の自動配信（タスクスケジューラ）用の設定引き継ぎ */}
                 <Section title="自動配信用の設定引き継ぎ">
                   <div className="text-[10px] leading-relaxed mb-1.5" style={{ color: C.textDim }}>
-                    平日朝の自動実行は、この画面とは別の専用Chromeプロファイルで動きます。声・アバター・BGM・背景などの設定を変えたら、このボタンで引き継いでください（自動実行の設定自体は別の画面で行います）。
+                    平日朝の自動実行は、この画面とは別の専用Chromeプロファイルで動きます。声・アバター・BGM・背景などの設定を変えたら、このボタンで引き継いでください（自動実行の曜日・時刻・モードの設定は、すぐ下の「平日朝の自動配信」で行います）。
                   </div>
                   <button onClick={handleExportProfileForAutorun} disabled={profileSnapshotBusy} className="text-[11px] px-2.5 py-1 rounded flex items-center gap-1" style={{ ...btn(), opacity: profileSnapshotBusy ? 0.6 : 1 }}>
                     <Upload size={11} /> {profileSnapshotBusy ? "引き継ぎ中…" : "自動実行用に今の設定を引き継ぐ"}
                   </button>
                   {profileSnapshotNote && <div className="text-[10px] mt-1" style={{ color: profileSnapshotNote.startsWith("⚠") ? C.rust : C.teal }}>{profileSnapshotNote}</div>}
+                </Section>
+
+                {/* Stage F-5：平日朝の自動配信（タスクスケジューラ）の設定パネル（最小構成） */}
+                <Section title="平日朝の自動配信" right={<button onClick={() => setAutoScheduleOpen((v) => !v)} className="text-[10px] px-1.5 py-0.5 rounded" style={btn()}>{autoScheduleOpen ? "閉じる" : "開く"}</button>}>
+                  {autoScheduleOpen ? <AutoScheduleStudio colors={C} btn={btn} /> : <div className="text-[10px]" style={{ color: C.textDim }}>曜日・時刻・「プレビューまで／動画生成まで」を設定してWindowsのタスクスケジューラに登録します。</div>}
                 </Section>
 
                 {/* YouTube */}
