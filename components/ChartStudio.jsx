@@ -161,6 +161,20 @@ export default function ChartStudio() {
   };
   const removeSeries = (id) => setAddedSeries((list) => list.filter((s) => s.id !== id));
   const updateSeriesLabel = (id, label) => setAddedSeries((list) => list.map((s) => (s.id === id ? { ...s, label } : s)));
+  // [追加] 「系列を追加」の期間ドロップダウンを変えたら、次に追加する系列だけでなく、既に追加済みの
+  // 期間指定系列（mode:'period'）もまとめて同じ期間に揃える（複数年セットの系列は対象外。横軸の種類が違うため）。
+  // ラベルは「（期間ラベル）」部分が追加時の自動生成のまま（手で書き換えていない）場合のみ、新しい期間に合わせて更新する。
+  const applyPeriodToAll = (newKey) => {
+    const newLabel = PERIOD_OPTIONS.find((p) => p.key === newKey)?.label ?? newKey;
+    setAddedSeries((list) => list.map((s) => {
+      if (s.mode !== "period") return s;
+      const src = sourceByKey(s.sourceKey);
+      const oldLabel = PERIOD_OPTIONS.find((p) => p.key === s.periodKey)?.label ?? s.periodKey;
+      const autoLabel = src ? `${src.label}（${oldLabel}）` : null;
+      const label = (autoLabel && s.label === autoLabel && src) ? `${src.label}（${newLabel}）` : s.label;
+      return { ...s, periodKey: newKey, label };
+    }));
+  };
 
   // 追加済みの各系列を実際の{t,v}パスに解決する（データ更新・追加のたびに作り直す）。
   // xAxisKind：横軸ラベルの組み立て方を区別するための印。
@@ -334,9 +348,12 @@ export default function ChartStudio() {
                 ))}
               </div>
               {draft.mode === "period" ? (
-                <select value={draft.periodKey} onChange={(e) => setDraft((d) => ({ ...d, periodKey: e.target.value }))} className="w-full text-xs rounded px-2 py-1 mb-1.5" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }}>
-                  {PERIOD_OPTIONS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
-                </select>
+                <>
+                  <select value={draft.periodKey} onChange={(e) => { const v = e.target.value; setDraft((d) => ({ ...d, periodKey: v })); applyPeriodToAll(v); }} className="w-full text-xs rounded px-2 py-1" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }}>
+                    {PERIOD_OPTIONS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+                  </select>
+                  <div className="text-[10px] mb-1.5" style={{ color: C.textDim }}>追加済みの期間指定の系列も、この期間に一括で揃います。</div>
+                </>
               ) : (
                 <select value={draft.yearSetKey} onChange={(e) => setDraft((d) => ({ ...d, yearSetKey: e.target.value }))} className="w-full text-xs rounded px-2 py-1 mb-1.5" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }}>
                   {draftCatalogOptions.length ? draftCatalogOptions.map((o) => <option key={o.key} value={o.key}>{o.label}</option>) : <option value="">（データなし）</option>}
