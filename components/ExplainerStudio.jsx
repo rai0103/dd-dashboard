@@ -125,6 +125,52 @@ function SceneThumbCanvas({ sc, portrait }) {
   }, [sc.visual, sc.chapter, portrait]);
   return <canvas ref={ref} style={{ width: "100%", height: "100%", display: "block", borderRadius: 4 }} />;
 }
+// [ライブラリピッカーのポップアップ化] 56px丸グリッドだと見えにくいという指摘を受け、画面中央に大きく
+// 表示するモーダルに変更。チェックボックスで複数選択→まとめて追加できる（単押しのその場追加はしない）。
+function LibraryPickerModal({ images, imageEls, selectedIds, setSelectedIds, onConfirm, onClose }) {
+  const toggle = (id) => setSelectedIds((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+  const list = images.slice().reverse();
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.6)" }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} className="rounded-lg flex flex-col" style={{ background: C.panel, border: `1px solid ${C.border}`, width: "min(720px, 100%)", maxHeight: "85vh", boxShadow: "0 8px 32px rgba(0,0,0,0.5)" }}>
+        <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: `1px solid ${C.borderSoft}` }}>
+          <div className="text-sm font-semibold" style={{ color: C.text }}>画像ライブラリから選ぶ</div>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: C.textMuted, cursor: "pointer" }}><X size={16} /></button>
+        </div>
+        <div className="px-4 py-2 text-[11px]" style={{ color: C.textDim }}>グラフ作成ページ（/chart-studio/）で保存したスクリーンショットなど。クリックで選択・解除し、複数選べます。</div>
+        <div className="flex-1 overflow-y-auto px-4 py-2">
+          {list.length ? (
+            <div className="grid gap-2.5" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))" }}>
+              {list.map((im) => {
+                const checked = selectedIds.has(im.id);
+                return (
+                  <button key={im.id} onClick={() => toggle(im.id)} className="flex flex-col rounded overflow-hidden text-left" style={{ padding: 0, border: `2px solid ${checked ? C.teal : C.borderSoft}`, background: C.panel2, cursor: "pointer" }}>
+                    <div className="relative" style={{ width: "100%", height: 120, background: C.panel }}>
+                      {imageEls[im.id] && <img src={imageEls[im.id].src} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />}
+                      <div className="absolute top-1 right-1 rounded-full flex items-center justify-center" style={{ width: 18, height: 18, background: checked ? C.teal : "rgba(0,0,0,0.5)", border: `1px solid ${checked ? C.teal : "rgba(255,255,255,0.5)"}` }}>
+                        {checked && <Check size={12} style={{ color: C.bg }} />}
+                      </div>
+                    </div>
+                    <div className="px-1.5 py-1 text-[10px] leading-snug" style={{ color: C.textMuted, minHeight: 28 }}>{im.caption || im.name}</div>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="text-[11px] py-6 text-center" style={{ color: C.textDim }}>まだ画像ライブラリに何もありません。グラフ作成ページでスクリーンショットを保存すると、ここに出てきます。</div>
+          )}
+        </div>
+        <div className="flex items-center justify-between px-4 py-3" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+          <span className="text-[11px]" style={{ color: C.textDim }}>{selectedIds.size}枚選択中</span>
+          <div className="flex gap-2">
+            <button onClick={onClose} className="text-[11px] px-3 py-1.5 rounded" style={{ ...btn(), color: C.textMuted, borderColor: C.borderSoft }}>やめる</button>
+            <button onClick={onConfirm} disabled={!selectedIds.size} className="text-[11px] px-3 py-1.5 rounded" style={{ ...btn("primary"), opacity: selectedIds.size ? 1 : 0.5 }}>選択した画像を追加（{selectedIds.size}件）</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 function Section({ title, right, children }) {
   return (
     <div>
@@ -157,7 +203,8 @@ export default function ExplainerStudio() {
     try { localStorage.setItem(INPUT_KEY, JSON.stringify({ topic, mode, audience, targetMinutes, extraInstruction, refs: keep })); } catch (e) { /* 容量超過などは無視 */ }
   }, [topic, mode, audience, targetMinutes, extraInstruction, refs]);
   const [refTextOpen, setRefTextOpen] = useState(false);
-  const [refImgLibOpen, setRefImgLibOpen] = useState(false); // 参考情報「スクショを追加」の、画像ライブラリから選ぶ小さな一覧の開閉
+  const [refImgLibOpen, setRefImgLibOpen] = useState(false); // 参考情報「スクショを追加」の、画像ライブラリから選ぶポップアップの開閉
+  const [libSelectedIds, setLibSelectedIds] = useState(() => new Set()); // ライブラリピッカー内での複数選択（ポップアップを開くたびにリセット）
   const [expandedRefId, setExpandedRefId] = useState(null); // 参考情報（テキスト）の本文をその場で確認する
   const [selectedRefIds, setSelectedRefIds] = useState(() => new Set()); // 参考情報のチェックボックス選択（まとめて削除・必須設定・サイトを開く用）
   const toggleRefSelected = (id) => setSelectedRefIds((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
@@ -257,13 +304,24 @@ export default function ExplainerStudio() {
   // グラフ作成ページ（/chart-studio/）で保存したスクリーンショット等、画像ライブラリ（IndexedDB）に
   // 既にある画像を、ファイル選択なしでそのまま参考情報として追加する（listImages()はIndexedDBを都度読むため、
   // 直前に別タブで保存したものもrefreshImages()を挟めばすぐに反映される）。
-  const addScreenshotFromLibrary = async (im) => {
-    try {
-      if (im.blob.size > MAX_IMAGE_BYTES) { alert(`画像が大きすぎます（8MBまで）：${im.name}`); return; }
-      const base64 = await fileToBase64(im.blob);
-      setRefs((p) => [...p, { id: newRefId(), kind: "image", title: im.name, base64, mediaType: im.blob.type || "image/png", sizeBytes: im.blob.size }]);
-      setRefImgLibOpen(false);
-    } catch (e) { alert(`画像の読み込みに失敗しました：${e?.message ?? e}`); }
+  // [複数選択対応] 一度に複数枚まとめて追加できる。titleにはグラフ作成ページが自動で付けたcaption（どの銘柄・
+  // どんなグラフかの説明）があればそれを使う（無ければファイル名）。これが参考情報としてAIに渡るテキストになり、
+  // 「スクショの情報を把握できるか」という問いへの回答＝画像に説明を持たせて文章として一緒に渡す、という仕組み。
+  const addScreenshotsFromLibrary = async (ims) => {
+    if (!ims.length) return;
+    const tooBig = [];
+    const added = [];
+    for (const im of ims) {
+      if (im.blob.size > MAX_IMAGE_BYTES) { tooBig.push(im.name); continue; }
+      try {
+        const base64 = await fileToBase64(im.blob);
+        added.push({ id: newRefId(), kind: "image", title: im.caption || im.name, base64, mediaType: im.blob.type || "image/png", sizeBytes: im.blob.size });
+      } catch (e) { tooBig.push(im.name); }
+    }
+    if (added.length) setRefs((p) => [...p, ...added]);
+    if (tooBig.length) alert(`以下の画像は追加できませんでした（8MBまで、または読み込みエラー）：${tooBig.join("、")}`);
+    setRefImgLibOpen(false);
+    setLibSelectedIds(new Set());
   };
   // テーマから、Claude（Web検索）とGemini（Google検索）にまとめて参考情報を探させる。
   // 何度でも押せる（見つかったURLの中身が合わなければ削除して、もう一度押せば別の候補に入れ替わる）。
@@ -1486,26 +1544,10 @@ export default function ExplainerStudio() {
                   <label className="text-[11px] px-2 py-1 rounded flex items-center gap-1" style={btn()}><Camera size={11} /> スクショを追加
                     <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) addScreenshot(f); }} />
                   </label>
-                  <button onClick={() => { setRefImgLibOpen((v) => !v); refreshImages(); }} className="text-[11px] px-2 py-1 rounded flex items-center gap-1" style={{ ...btn(), color: refImgLibOpen ? C.teal : C.textMuted }}><ImageIcon size={11} /> ライブラリから選ぶ</button>
+                  <button onClick={() => { setLibSelectedIds(new Set()); setRefImgLibOpen(true); refreshImages(); }} className="text-[11px] px-2 py-1 rounded flex items-center gap-1" style={btn()}><ImageIcon size={11} /> ライブラリから選ぶ</button>
                   <button onClick={() => setRefTextOpen((v) => !v)} className="text-[11px] px-2 py-1 rounded flex items-center gap-1" style={btn()}><Type size={11} /> テキストを追加</button>
                 </div>
                 <div className="text-[10px] mt-1" style={{ color: C.textDim }}>URLの本文はローカルサーバー（{getTtsBaseUrl()}）が取得します。YouTube動画はタイトル・概要欄・字幕（公開されている場合）を読み込みます。字幕が取れない動画は、YouTubeの「文字起こしを表示」の内容をコピーして「テキスト」で追加してください。ログインが必要なページや有料記事は読めないため、本文をコピーして「テキスト」で追加してください。グラフ作成ページで保存したスクリーンショットは「ライブラリから選ぶ」からすぐに追加できます。</div>
-                {refImgLibOpen && (
-                  <div className="mt-2 p-2 rounded flex flex-col gap-1.5" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
-                    <div className="text-[10px]" style={{ color: C.textDim }}>グラフ作成ページ（/chart-studio/）で保存したスクリーンショットなど、画像ライブラリから選べます。</div>
-                    {images.length ? (
-                      <div className="flex flex-wrap gap-1.5" style={{ maxHeight: 180, overflowY: "auto" }}>
-                        {images.slice().reverse().map((im) => (
-                          <button key={im.id} onClick={() => addScreenshotFromLibrary(im)} title={im.name} className="shrink-0 rounded overflow-hidden" style={{ width: 56, height: 56, padding: 0, border: `1px solid ${C.borderSoft}`, background: C.panel, cursor: "pointer" }}>
-                            {imageEls[im.id] && <img src={imageEls[im.id].src} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />}
-                          </button>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="text-[10px]" style={{ color: C.textDim }}>まだ画像ライブラリに何もありません。グラフ作成ページでスクリーンショットを保存すると、ここに出てきます。</div>
-                    )}
-                  </div>
-                )}
                 {refTextOpen && (
                   <div className="mt-2 flex flex-col gap-1.5 p-2 rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
                     <input value={refTextTitle} onChange={(e) => setRefTextTitle(e.target.value)} placeholder="資料名（例：日銀の公表文、○○新聞 10月25日）" className="px-2 py-1 rounded text-[11px]" style={{ ...inputStyle, background: C.panel }} />
@@ -2064,6 +2106,16 @@ export default function ExplainerStudio() {
         </div>
       </div>
       {genBusy && genProgress && <GenProgressPanel step={genProgress.step} done={genProgress.done} total={genProgress.total} elapsedSec={genElapsedSec} onAbort={() => abortRef.current?.abort()} />}
+      {refImgLibOpen && (
+        <LibraryPickerModal
+          images={images}
+          imageEls={imageEls}
+          selectedIds={libSelectedIds}
+          setSelectedIds={setLibSelectedIds}
+          onConfirm={() => addScreenshotsFromLibrary(images.filter((im) => libSelectedIds.has(im.id)))}
+          onClose={() => { setRefImgLibOpen(false); setLibSelectedIds(new Set()); }}
+        />
+      )}
     </div>
   );
 }

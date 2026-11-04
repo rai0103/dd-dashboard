@@ -233,8 +233,11 @@ export default function ChartStudio() {
       if (!blob) throw new Error("画像の生成に失敗しました");
       const stamp = new Date().toISOString().replace(/[:.]/g, "-");
       const file = new File([blob], `chart-${stamp}.png`, { type: "image/png" });
-      await saveImage(file);
-      setShotNote("保存しました。解説動画作成の各場面「画像を追加」→「ライブラリから選ぶ」で使えます。");
+      // どの銘柄・どんなグラフかが解説動画作成（参考情報・各場面の画像選択）側でも分かるよう、
+      // チャートのタイトル（入力されていれば）と、追加済みの系列名を短い説明として画像に持たせる。
+      const caption = [chartTitle.trim(), addedSeries.map((s) => s.label).filter(Boolean).join("、")].filter(Boolean).join("　");
+      await saveImage(file, caption);
+      setShotNote("保存しました。解説動画作成の「参考情報」→「ライブラリから選ぶ」、または各場面「画像を追加」→「ライブラリから選ぶ」で使えます。");
     } catch (e) {
       setShotNote("保存に失敗しました。もう一度お試しください。");
     } finally {

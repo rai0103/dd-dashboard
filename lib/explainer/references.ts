@@ -89,7 +89,10 @@ export function referenceBlocks(refs: ReferenceItem[]): any[] {
       // 丸写しチェック（referenceTexts）の対象には含めない＝pdfと同じ扱い）
       blocks.push({ type: 'document', title: capDocumentTitle(`参考${n}：${r.title}（CSV）`), source: { type: 'text', media_type: 'text/plain', data: r.text.slice(0, 80000) } });
     } else if (r.kind === 'image') {
-      // [Stage E-3] スクリーンショット参照（ニュース・株式情報どちらでも使える）。documentではなくimageブロック
+      // [Stage E-3] スクリーンショット参照（ニュース・株式情報どちらでも使える）。documentではなくimageブロック。
+      // タイトル（画像ライブラリから選んだ場合は「どの銘柄・どんなグラフか」の説明が入る）を、画像の直前に
+      // 短いテキストブロックとして添えることで、AIが画像の内容を見た目だけでなく文章としても把握できるようにする。
+      if (r.title) blocks.push({ type: 'text', text: `参考${n}の画像：${r.title}` });
       blocks.push({ type: 'image', source: { type: 'base64', media_type: r.mediaType, data: r.base64 } });
     }
   });

@@ -28,8 +28,8 @@ function run<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<
   }));
 }
 
-export async function saveImage(file: File): Promise<ImageAsset> {
-  const item: ImageAsset = { id: `img-${Date.now()}-${Math.floor(Math.random() * 1e6)}`, name: file.name, blob: file, rightsConfirmed: true, createdAt: Date.now() };
+export async function saveImage(file: File, caption?: string): Promise<ImageAsset> {
+  const item: ImageAsset = { id: `img-${Date.now()}-${Math.floor(Math.random() * 1e6)}`, name: file.name, blob: file, rightsConfirmed: true, createdAt: Date.now(), caption: caption || undefined };
   await run('readwrite', (s) => s.put(item));
   return item;
 }
