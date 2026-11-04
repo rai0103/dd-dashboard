@@ -36,13 +36,15 @@ function cutoffDate(period: PeriodKey, asOf: Date): Date | null {
 }
 
 /**
- * 日次終値（dailyは日付文字列昇順を前提）を、指定期間の開始時点を100とした{t,v}[]に変換する。
+ * 日次終値（dailyは日付文字列昇順を前提）を、指定期間の開始時点を100とした{t,v,date}[]に変換する。
  * - t：0（期間開始）〜1（期間終端）の、データ点インデックスに基づく経過割合（日数そのものではない＝等間隔描画になる）
  * - v：開始時点の終値を100とした指数値
+ * - date：その点の実際の日付（"YYYY-MM-DD"）。横軸を「実際の日付」表示にする際、tから実日付を逆算する代わりに
+ *   各点が持つ実日付をそのまま使う（グラフ作成ページのxAxisStyle:'date'向け）。
  * asOfDate（"YYYY-MM-DD"）を渡すと、その日以前で最も新しい点を終端として扱う（省略時はdailyの最終点）。
  * 期間の開始点が見つからない（上場前で全期間カバー外等）場合は空配列を返す。
  */
-export function periodPath(daily: StockDataPoint[], period: PeriodKey, asOfDate?: string): { t: number; v: number }[] {
+export function periodPath(daily: StockDataPoint[], period: PeriodKey, asOfDate?: string): { t: number; v: number; date: string }[] {
   if (!daily.length) return [];
   let endIdx = daily.length - 1;
   if (asOfDate) {
@@ -56,8 +58,8 @@ export function periodPath(daily: StockDataPoint[], period: PeriodKey, asOfDate?
   const base = daily[startIdx].close;
   if (!base) return [];
   const span = Math.max(1, endIdx - startIdx);
-  const out: { t: number; v: number }[] = [];
-  for (let i = startIdx; i <= endIdx; i++) out.push({ t: (i - startIdx) / span, v: (daily[i].close / base) * 100 });
+  const out: { t: number; v: number; date: string }[] = [];
+  for (let i = startIdx; i <= endIdx; i++) out.push({ t: (i - startIdx) / span, v: (daily[i].close / base) * 100, date: daily[i].date });
   return out;
 }
 

@@ -176,10 +176,11 @@ export default function ChartStudio() {
     }));
   };
 
-  // 追加済みの各系列を実際の{t,v}パスに解決する（データ更新・追加のたびに作り直す）。
+  // 追加済みの各系列を実際の{t,v,date}パスに解決する（データ更新・追加のたびに作り直す）。
   // xAxisKind：横軸ラベルの組み立て方を区別するための印。
   // - "calendar"：複数年セット（年ごとの推移を1年のグリッドに正規化）＝tがそのまま年内の経過（1/1〜12/31）
   // - "elapsed"：期間指定（1週間〜最長）＝spanDaysに実際の経過日数を添えて、日/週/ヶ月/年の単位で表示する
+  //   （下のxAxisStyleで「実際の日付」表示に切り替えられる。periodPathが各点に持たせたdateをそのまま使う）
   const resolvedSeries = useMemo(() => addedSeries.map((s) => {
     const src = sourceByKey(s.sourceKey);
     if (!src || !src.points.length) return { ...s, pts: [] };
@@ -193,15 +194,22 @@ export default function ChartStudio() {
     return { ...s, pts: entry?.pts ?? [], linePaths: entry?.linePaths, xAxisKind: "calendar" };
   }), [addedSeries, allSources]);
 
+  // 横軸の表示方法：期間指定（xAxisKind:"elapsed"）の系列を、経過（日/週/ヶ月/年）で見せるか、
+  // 実際の日付（11/1・10月等）で見せるか。複数年セット（xAxisKind:"calendar"、年内の月名表示）には影響しない。
+  const [xAxisStyle, setXAxisStyle] = useState("elapsed"); // "elapsed" | "date"
+
   // チャート全体の横軸の種類・基準期間：有効な系列のうち最初のもの（通常は同種の系列を重ねて使うため、
   // これで事実上チャート全体の横軸を代表できる）から決める。系列が無ければ従来の0%〜100%表示にフォールバック。
   const xAxisInfo = useMemo(() => {
     const valid = resolvedSeries.find((s) => (s.pts && s.pts.length > 1) || (s.linePaths && s.linePaths.length));
     if (!valid) return { kind: "percent" };
     if (valid.xAxisKind === "calendar") return { kind: "calendar" };
-    if (valid.xAxisKind === "elapsed" && valid.spanDays) return { kind: "elapsed", spanDays: valid.spanDays };
+    if (valid.xAxisKind === "elapsed" && valid.spanDays) {
+      if (xAxisStyle === "date") return { kind: "date", spanDays: valid.spanDays, points: valid.pts.map((p) => ({ t: p.t, date: p.date })) };
+      return { kind: "elapsed", spanDays: valid.spanDays };
+    }
     return { kind: "percent" };
-  }, [resolvedSeries]);
+  }, [resolvedSeries, xAxisStyle]);
 
   // ---------------- 出力サイズ・描画 ----------------
   const [format, setFormat] = useState("long"); // long=16:9（1920x1080）、short=9:16（1080x1920）
@@ -287,6 +295,13 @@ export default function ChartStudio() {
                 {axisSizeLocked ? <Lock size={12} /> : <Unlock size={12} />}
               </button>
               <AxisSizeStepper label="横軸の目盛り" value={xTickSize} onChange={handleXTickChange} />
+            </div>
+            <div className="flex items-center gap-1.5 mb-2 text-[11px]">
+              <span style={{ color: C.textMuted }}>横軸の表示</span>
+              {[["elapsed", "経過（日数・ヶ月等）"], ["date", "実際の日付"]].map(([k, l]) => (
+                <button key={k} type="button" onClick={() => setXAxisStyle(k)} className="px-2 py-1 rounded-full" style={btn(xAxisStyle === k)}>{l}</button>
+              ))}
+              <span className="text-[10px]" style={{ color: C.textDim }}>（期間指定の系列のみ。複数年セットは常に月名表示）</span>
             </div>
             <div className="mx-auto" style={{ aspectRatio: format === "long" ? "16/9" : "9/16", maxWidth: format === "long" ? 680 : 360 }}>
               <canvas ref={canvasRef} style={{ width: "100%", height: "100%", display: "block", borderRadius: 8, border: `1px solid ${C.border}` }} />
@@ -389,11 +404,22 @@ export default function ChartStudio() {
   );
 }
 
+// 実際の日付目盛り用：unitKindに応じて「11/1」「11月」「2024年」のいずれかの形でdateStrを表示する
+// （lib/videoNarrText.ts等とは無関係の、このページ専用の軽量フォーマッタ）。
+function formatDateTick(dateStr, unitKind) {
+  const d = new Date(`${dateStr}T00:00:00Z`);
+  if (unitKind === "year") return `${d.getUTCFullYear()}年`;
+  if (unitKind === "month") return `${d.getUTCMonth() + 1}月`;
+  return `${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
+}
 // 横軸の目盛り位置・ラベルを決める。xAxis.kind:
 // - "calendar"：複数年セット（年ごとの推移を1年グリッドに正規化）＝tがそのまま年内の経過（1/1〜12/31）なので、
 //   月名（1月・4月・7月・10月・12月）で表示する。
 // - "elapsed"：期間指定（1週間〜最長）＝xAxis.spanDaysの実経過日数を、規模に応じて日/週/ヶ月/年の「きりのいい」
 //   間隔を選んで「期間の経過」として表示する（目盛り位置自体も単位に揃える。0%〜100%の固定割合ではない）。
+// - "date"：期間指定の系列を「実際の日付」表示にした場合（xAxisStyle:'date'）。目盛りの間隔（何日おきか）の
+//   決め方自体は"elapsed"と同じだが、ラベルは経過日数ではなく、xAxis.points（各点の実日付）から求めた
+//   最も近い実データ点の実際の日付を使う（開始日からの経過日数で目標時点を決め、一番近い点を探す）。
 // - それ以外（系列が無い等）：従来通り0%〜100%表示にフォールバックする。
 function buildXAxisTicks(xAxis) {
   const percentFallback = () => [0, 0.25, 0.5, 0.75, 1].map((t) => ({ t, label: `${Math.round(t * 100)}%` }));
@@ -422,6 +448,43 @@ function buildXAxisTicks(xAxis) {
     }
     if (!ticks.length || ticks[ticks.length - 1].t < 0.999) {
       ticks.push({ t: 1, label: `${totalUnits.toFixed(decimals)}${unitLabel}` });
+    }
+    return ticks;
+  }
+  if (xAxis.kind === "date" && xAxis.spanDays > 0 && xAxis.points?.length) {
+    const spanDays = xAxis.spanDays;
+    const points = xAxis.points; // [{t, date}]（tの昇順＝日付の昇順）
+    let unitDays, unitKind;
+    if (spanDays <= 60) { unitDays = spanDays <= 10 ? 1 : 7; unitKind = "day"; }
+    else if (spanDays <= 450) { unitDays = 30.44; unitKind = "month"; }
+    else { unitDays = 365.25; unitKind = "year"; }
+    const totalUnits = spanDays / unitDays;
+    const roughStep = totalUnits / 5;
+    const pow = Math.pow(10, Math.floor(Math.log10(roughStep || 1)));
+    const frac = roughStep / pow;
+    const niceFrac = frac < 1.5 ? 1 : frac < 3 ? 2 : frac < 7 ? 5 : 10;
+    const step = Math.max(niceFrac * pow, 1);
+    const startTime = new Date(`${points[0].date}T00:00:00Z`).getTime();
+    // 開始日からdayOffset日後に最も近い実データ点を探す（periodPathのtはインデックス基準の等間隔描画のため、
+    // 経過日数から直接tを計算できない＝実データ点のdateを総当たりで比較して一番近いものを採用する）。
+    const nearestPoint = (dayOffset) => {
+      const targetTime = startTime + Math.min(spanDays, dayOffset) * 86400000;
+      let best = points[0], bestDiff = Infinity;
+      for (const p of points) {
+        const diff = Math.abs(new Date(`${p.date}T00:00:00Z`).getTime() - targetTime);
+        if (diff < bestDiff) { bestDiff = diff; best = p; }
+        else if (diff > bestDiff) break; // datesは昇順なので、差が広がり始めたら以降は探す必要が無い
+      }
+      return best;
+    };
+    const ticks = [];
+    for (let u = 0; u <= totalUnits + 1e-6; u += step) {
+      const p = nearestPoint(u * unitDays);
+      ticks.push({ t: p.t, label: formatDateTick(p.date, unitKind) });
+    }
+    const lastPoint = points[points.length - 1];
+    if (!ticks.length || ticks[ticks.length - 1].t < 0.999) {
+      ticks.push({ t: 1, label: formatDateTick(lastPoint.date, unitKind) });
     }
     return ticks;
   }
