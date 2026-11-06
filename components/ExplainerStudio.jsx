@@ -35,6 +35,7 @@ import { parseStooqCSV } from "@/lib/csvPrice";
 import { buildStockCatalogFromSnapshot, buildStockCatalogFromCsv, mergeStockCatalogs, resolveYearCompareItems } from "@/lib/explainer/stockCatalog";
 import { buildStockIntroScenes } from "@/lib/explainer/stockIntroScenes";
 import { buildAccelScenes } from "@/lib/explainer/accelIntroScene";
+import { buildAthPaceScene } from "@/lib/explainer/athPaceScene";
 import { drawVisual, PALETTE } from "@/lib/explainer/visuals";
 
 const C = {
@@ -512,6 +513,9 @@ export default function ExplainerStudio() {
         // lib/explainer/に固定場面ビルダーを足す→ここで呼ぶ）で対応できる。
         const accelScenes = buildAccelScenes(primarySnapshot?.accel ?? null, primarySnapshot?.instrumentLabel ?? "S&P500");
         introScenes.push(...accelScenes);
+        // [動画連携][Stage E-11] 最高値更新ペース（lib/accelSensor.ts）の実績を、ヒストグラムの固定場面として追加する。
+        const athPaceScene = buildAthPaceScene(primarySnapshot?.athPace ?? null, primarySnapshot?.instrumentLabel ?? "S&P500");
+        if (athPaceScene) introScenes.push(athPaceScene);
         if (introScenes.length) longScenes = [...introScenes, ...longScenes];
       }
       // ラベル（kicker）は、選んだ長尺の長さから自動で入れる（例：5分で解説）。生成後も自由に書き換えられる

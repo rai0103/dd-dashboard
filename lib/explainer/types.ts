@@ -200,6 +200,21 @@ export interface StockCatalog {
   };
   // [動画連携] ダッシュボードの加速度センサー（lib/accelSensor.ts）の要約。未対応の銘柄・未計算のときはundefined。
   accel?: AccelSummary;
+  // [動画連携][Stage E-11] 最高値更新ペース（lib/accelSensor.tsのsummarizeAthPaceForVideo）の要約。
+  // 未対応の銘柄・未計算のときはundefined。
+  athPace?: AthPaceSummary;
+}
+
+// [動画連携][Stage E-11] 最高値更新ペース（lib/accelSensor.tsのsummarizeAthPaceForVideo）が書き出す要約と同じ形。
+// AIには渡さず、lib/explainer/に置く固定場面ビルダーが'histogram'の場面を組み立てるためだけに使う。
+export interface AthPaceBinSummary { label: string; min: number; max: number | null; count: number }
+export interface AthPaceSummary {
+  periodStart: string | null; periodEnd: string | null; periodYears: number;
+  updateCount: number;
+  avgIntervalDays: number | null; medianIntervalDays: number | null;
+  bins: AthPaceBinSummary[];
+  currentElapsedDays: number;
+  currentBinIndex: number | null;
 }
 
 // [Stage E-10] 'branch'専用：ある時点（分岐点）までの実績パスと、そこから分かれる複数の結末。

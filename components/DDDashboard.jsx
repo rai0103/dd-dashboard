@@ -14,7 +14,7 @@ import { formatPct, calendarYearPrincipalChanges, calendarYearPriceTwr, calendar
 import { fxExposureOf } from "@/lib/fxExposure";
 import { isStaleSince } from "@/lib/marketClock";
 import { amountsByClass, largestRemainderPercent, allocationDiff, topHoldingsByClass, ddLabel } from "@/lib/currentAllocation";
-import { computeAccelSensor, summarizeAccelForVideo } from "@/lib/accelSensor";
+import { computeAccelSensor, summarizeAccelForVideo, summarizeAthPaceForVideo } from "@/lib/accelSensor";
 import { buildVooEquivalentSeries } from "@/lib/sp500Synthetic";
 import { buildYearSeries, completeYears, selectCompareYears, computeYearStats, averageYearStats, sortYearsBy, YEAR_PRESETS, presidentialTermYear } from "@/lib/yearCompare";
 import { yearEventText, recoveryInfo, presidentFor } from "@/lib/yearEvents";
@@ -8664,7 +8664,9 @@ export default function DDDashboard() {
       // [動画連携] 加速度センサー（lib/accelSensor.ts）をSP500本系列（d.FULL、70年の合成シリーズ）に適用し、
       // 画面表示（AccelSensorCardはVOO単独の2010年〜を対象）とは別に、70年分の標本でExplainerStudio用に書き出す。
       const accel = summarizeAccelForVideo(d.FULL);
-      storage.set("stock-catalog:SP500", JSON.stringify({ asOf, instrumentLabel: "S&P500", catalog: video.catalog, scalarCatalog: video.scalarCatalog, finalReach: video.longMd.finalReach, accel })).catch(() => { /* storage unavailable */ });
+      // [動画連携][Stage E-11] 最高値更新ペース（lib/accelSensor.ts）も同じSP500本系列（d.FULL）から算出して書き出す。
+      const athPace = summarizeAthPaceForVideo(d.FULL);
+      storage.set("stock-catalog:SP500", JSON.stringify({ asOf, instrumentLabel: "S&P500", catalog: video.catalog, scalarCatalog: video.scalarCatalog, finalReach: video.longMd.finalReach, accel, athPace })).catch(() => { /* storage unavailable */ });
     } catch (e) { /* 失敗してもダッシュボード本体の動作には影響させない */ }
   }, [d, bottom]);
   useEffect(() => {
@@ -8675,7 +8677,8 @@ export default function DDDashboard() {
       const asOf = dSoxl.FULL.length ? dSoxl.FULL[dSoxl.FULL.length - 1].date.toISOString().slice(0, 10) : null;
       // [動画連携] SP500と同じパターンでSOXL本系列にも加速度センサーを適用して書き出す（今後の銘柄追加もこの形を踏襲）。
       const accel = summarizeAccelForVideo(dSoxl.FULL);
-      storage.set("stock-catalog:SOXL", JSON.stringify({ asOf, instrumentLabel: "SOXL", catalog: video.catalog, scalarCatalog: video.scalarCatalog, finalReach: video.longMd.finalReach, accel })).catch(() => { /* storage unavailable */ });
+      const athPace = summarizeAthPaceForVideo(dSoxl.FULL);
+      storage.set("stock-catalog:SOXL", JSON.stringify({ asOf, instrumentLabel: "SOXL", catalog: video.catalog, scalarCatalog: video.scalarCatalog, finalReach: video.longMd.finalReach, accel, athPace })).catch(() => { /* storage unavailable */ });
     } catch (e) { /* 失敗してもダッシュボード本体の動作には影響させない */ }
   }, [dSoxl, bottomSoxl]);
   // [グラフ作成ページ] /chart-studio/ 用：VOO・QQQ・SOXL・GOLDの生の日次終値（{date,close}[]）をそのまま

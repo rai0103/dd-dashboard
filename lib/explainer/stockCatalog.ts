@@ -49,7 +49,9 @@ export function buildStockCatalogFromSnapshot(snapshot: any): StockCatalog {
   // [動画連携] ダッシュボードが書き出したaccel（lib/accelSensor.tsのsummarizeAccelForVideo）をそのまま通す。
   // 形の検証はせず「オブジェクトであればそのまま使う」だけにする（新しい連携データを足すときも同じ要領でよい）。
   const accel = snapshot?.accel && typeof snapshot.accel === 'object' ? snapshot.accel : undefined;
-  return { instrumentLabel: String(snapshot?.instrumentLabel ?? ''), asOf: String(snapshot?.asOf ?? ''), scalars, series, yearCompare, accel };
+  // [動画連携][Stage E-11] 同じ要領で、最高値更新ペース（lib/accelSensor.tsのsummarizeAthPaceForVideo）もそのまま通す。
+  const athPace = snapshot?.athPace && typeof snapshot.athPace === 'object' ? snapshot.athPace : undefined;
+  return { instrumentLabel: String(snapshot?.instrumentLabel ?? ''), asOf: String(snapshot?.asOf ?? ''), scalars, series, yearCompare, accel, athPace };
 }
 
 // [Stage E-10] AIがdataKey/seriesKey/seriesKeysに、mergeStockCatalogsが付けた「銘柄名::」の接頭辞を

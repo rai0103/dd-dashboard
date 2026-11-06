@@ -1,7 +1,7 @@
 // 実行: npm test
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { prepareSeries, extractEpisodes, computeAccelStats, currentAccelState, computeAccelSensor, wilsonInterval, DEFAULT_ACCEL_CONFIG } from "./accelSensor.ts";
+import { prepareSeries, extractEpisodes, computeAccelStats, currentAccelState, computeAccelSensor, wilsonInterval, DEFAULT_ACCEL_CONFIG, summarizeAthPaceForVideo, DEFAULT_ATH_PACE_BINS } from "./accelSensor.ts";
 
 // 終値の配列から日次シリーズを作る（日付は連番の営業日扱い）。
 const mk = (closes: number[]) => closes.map((close, i) => ({ date: `2020-01-${String(i + 1).padStart(2, "0")}`, close }));
@@ -109,4 +109,40 @@ test("設定値（しきい値・バケット区分）を変えて計算でき�
   const r = computeAccelSensor(mk([100, 98, 96, 101]), cfg);
   assert.equal(r.stats.judgedCount, 1);
   assert.equal(r.stats.buckets[0].label, "全部");
+});
+
+test("最高値更新ペース：更新日インデックスから間隔（営業日）を求め、区分ごとに件数を数える", () => {
+  // i0=100(起点) i3=101(更新,間隔3) i6=102(更新,間隔3) i7=80(最新日・更新待ち1日)
+  const r = summarizeAthPaceForVideo(mk([100, 90, 95, 101, 85, 90, 102, 80]))!;
+  assert.equal(r.updateCount, 2);
+  assert.equal(r.avgIntervalDays, 3);
+  assert.equal(r.medianIntervalDays, 3);
+  assert.equal(r.currentElapsedDays, 1);
+  assert.equal(r.currentBinIndex, 0); // 「1〜5日」区分
+  assert.equal(r.bins[0].label, "1〜5日");
+  assert.equal(r.bins[0].count, 2);
+  assert.equal(r.bins.slice(1).every((b) => b.count === 0), true);
+  assert.deepEqual([r.periodStart, r.periodEnd], ["2020-01-01", "2020-01-08"]);
+});
+
+test("最高値更新ペース：当日が更新日なら経過0日・区分はnull", () => {
+  const r = summarizeAthPaceForVideo(mk([100, 90, 101]))!;
+  assert.equal(r.currentElapsedDays, 0);
+  assert.equal(r.currentBinIndex, null);
+});
+
+test("最高値更新ペース：区分（bins）は差し替え可能", () => {
+  const r = summarizeAthPaceForVideo(mk([100, 90, 95, 101, 85, 90, 102, 80]), [{ label: "全部", min: 1, max: null }])!;
+  assert.equal(r.bins.length, 1);
+  assert.equal(r.bins[0].count, 2);
+});
+
+test("最高値更新ペース：データ不足（空・1行）はnull", () => {
+  assert.equal(summarizeAthPaceForVideo([]), null);
+  assert.equal(summarizeAthPaceForVideo(mk([100])), null);
+});
+
+test("最高値更新ペース：既定の区分（DEFAULT_ATH_PACE_BINS）は10区分・最後は上限なし", () => {
+  assert.equal(DEFAULT_ATH_PACE_BINS.length, 10);
+  assert.equal(DEFAULT_ATH_PACE_BINS[DEFAULT_ATH_PACE_BINS.length - 1].max, null);
 });

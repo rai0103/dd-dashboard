@@ -199,3 +199,72 @@ export function summarizeAccelForVideo(points: { date: string | Date; close?: nu
     },
   };
 }
+
+// [動画連携][Stage E-11] 最高値更新ペース（ATH更新の間隔のヒストグラム）。summarizeAccelForVideoと同じ方針で、
+// d.FULL（70年の合成シリーズ）から機械的に計算し、AIに数値を作文させない。既存のperiodStats.athUpdateCount
+// （DDDashboard.jsx、表示期間に限定した「更新回数」のみ）とは別物。ここでは全期間を対象に、ATH更新と次のATH更新の
+// 間隔（営業日数）を1件ずつ求め、区分（bins）ごとに件数を数える。現在「更新待ち」の営業日数も返し、
+// 「このまま更新が続けば入るはずの区分」を動画側でハイライトできるようにする。
+export interface AthPaceBin { label: string; min: number; max: number | null; count: number }
+export const DEFAULT_ATH_PACE_BINS: { label: string; min: number; max: number | null }[] = [
+  { label: "1〜5日", min: 1, max: 5 },
+  { label: "6〜10日", min: 6, max: 10 },
+  { label: "11〜15日", min: 11, max: 15 },
+  { label: "16〜20日", min: 16, max: 20 },
+  { label: "21〜30日", min: 21, max: 30 },
+  { label: "31〜45日", min: 31, max: 45 },
+  { label: "46〜60日", min: 46, max: 60 },
+  { label: "61〜90日", min: 61, max: 90 },
+  { label: "91〜120日", min: 91, max: 120 },
+  { label: "121日以上", min: 121, max: null },
+];
+export interface AthPaceSummary {
+  periodStart: string | null; periodEnd: string | null; periodYears: number;
+  updateCount: number; // 全期間の高値更新回数（起点の1件目は間隔計算の基準のみに使い、回数には含めない）
+  avgIntervalDays: number | null; medianIntervalDays: number | null;
+  bins: AthPaceBin[];
+  currentElapsedDays: number; // 直近の高値更新から現在までの営業日数（当日が更新日なら0）
+  currentBinIndex: number | null; // 経過日数が現時点で属する区分（更新待ちが0日なら null）
+}
+export function summarizeAthPaceForVideo(
+  points: { date: string | Date; close?: number | null; price?: number | null }[],
+  bins: { label: string; min: number; max: number | null }[] = DEFAULT_ATH_PACE_BINS,
+): AthPaceSummary | null {
+  const series = prepareSeries(points);
+  if (series.length < 2) return null;
+  // 全日についてその日までの終値の最高値（peak）を追跡し、終値がpeak以上になった日（＝高値更新日）のインデックスを集める。
+  // 1行目は「初めての最高値」として間隔計算の起点に使うだけで、更新そのものには数えない。
+  let peak = series[0].close;
+  const athIdx: number[] = [0];
+  for (let i = 1; i < series.length; i++) {
+    if (series[i].close >= peak) { peak = series[i].close; athIdx.push(i); }
+  }
+  const updateCount = athIdx.length - 1;
+  const gaps: number[] = [];
+  for (let k = 1; k < athIdx.length; k++) gaps.push(athIdx[k] - athIdx[k - 1]);
+  const binCounts: AthPaceBin[] = bins.map((b) => ({ ...b, count: 0 }));
+  for (const g of gaps) {
+    const b = binCounts.find((bb) => g >= bb.min && (bb.max == null || g <= bb.max));
+    if (b) b.count++;
+  }
+  const sorted = [...gaps].sort((a, b) => a - b);
+  const medianIntervalDays = sorted.length
+    ? (sorted.length % 2 ? sorted[(sorted.length - 1) / 2] : (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2)
+    : null;
+  const avgIntervalDays = gaps.length ? gaps.reduce((a, b) => a + b, 0) / gaps.length : null;
+  const lastAthIdx = athIdx[athIdx.length - 1];
+  const currentElapsedDays = series.length - 1 - lastAthIdx;
+  const currentBinIndex = currentElapsedDays > 0
+    ? (() => { const idx = binCounts.findIndex((b) => currentElapsedDays >= b.min && (b.max == null || currentElapsedDays <= b.max)); return idx >= 0 ? idx : null; })()
+    : null;
+  const periodYears = (new Date(series[series.length - 1].date).getTime() - new Date(series[0].date).getTime()) / (365.2425 * 24 * 3600 * 1000);
+  return {
+    periodStart: series[0].date, periodEnd: series[series.length - 1].date, periodYears: Math.round(periodYears * 10) / 10,
+    updateCount,
+    avgIntervalDays: avgIntervalDays != null ? Math.round(avgIntervalDays * 10) / 10 : null,
+    medianIntervalDays,
+    bins: binCounts,
+    currentElapsedDays,
+    currentBinIndex,
+  };
+}
