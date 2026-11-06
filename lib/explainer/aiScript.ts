@@ -9,7 +9,7 @@ import { resolveYearCompareItems, resolveCatalogKey } from './stockCatalog';
 
 export interface GenerateInput {
   topic: string;
-  mode: 'news' | 'stock' | 'keyword';
+  mode: 'news' | 'stock' | 'sp500' | 'keyword';
   audience: 'beginner' | 'general' | 'advanced' | 'expert';
   targetMinutes: number;
   extraInstruction: string;
@@ -256,6 +256,14 @@ const SCENE_ANGLES: Record<GenerateInput['mode'], string[]> = {
     '長期的な資産形成の観点を中心にした構成',
     'リスク（下落シナリオ）に焦点を当てた構成',
   ],
+  sp500: [
+    '直近の下落局面を起点に、過去の似た局面との比較を軸にした構成',
+    'DD（ドローダウン）の加速度センサーの観点から、下落の深まり方に注目する構成',
+    '1日の大きな下落そのものに注目し、その後の値動きの確率を中心にした構成',
+    '長期（数十年）の視点で、下落と回復の繰り返しを俯瞰する構成',
+    '直近のニュース・値動きから入り、過去70年の実績データで裏付ける構成',
+    'リスク（さらなる下落シナリオ）とその後の回復実績を対比させる構成',
+  ],
   keyword: [
     '身近な具体例から入る構成',
     '歴史的な由来・語源から掘り下げる構成',
@@ -271,7 +279,7 @@ function pickAngle(mode: GenerateInput['mode']): string {
 }
 
 export function header(inp: GenerateInput): string {
-  const kind = inp.mode === 'news' ? 'ニュース' : inp.mode === 'stock' ? '株式情報' : 'キーワード（用語）';
+  const kind = inp.mode === 'news' ? 'ニュース' : inp.mode === 'stock' ? '株式情報' : inp.mode === 'sp500' ? 'S&P500（最新データ分析）' : 'キーワード（用語）';
   return [
     `【テーマ（${kind}）】${inp.topic}`,
     `【想定視聴者】${AUDIENCE[inp.audience]}`,

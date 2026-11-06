@@ -14,7 +14,7 @@ import { formatPct, calendarYearPrincipalChanges, calendarYearPriceTwr, calendar
 import { fxExposureOf } from "@/lib/fxExposure";
 import { isStaleSince } from "@/lib/marketClock";
 import { amountsByClass, largestRemainderPercent, allocationDiff, topHoldingsByClass, ddLabel } from "@/lib/currentAllocation";
-import { computeAccelSensor } from "@/lib/accelSensor";
+import { computeAccelSensor, summarizeAccelForVideo } from "@/lib/accelSensor";
 import { buildVooEquivalentSeries } from "@/lib/sp500Synthetic";
 import { buildYearSeries, completeYears, selectCompareYears, computeYearStats, averageYearStats, sortYearsBy, YEAR_PRESETS, presidentialTermYear } from "@/lib/yearCompare";
 import { yearEventText, recoveryInfo, presidentFor } from "@/lib/yearEvents";
@@ -3253,7 +3253,7 @@ function TrackRecordContent({ currentT, trackRecord, instrumentLabel = "VOO", st
 }
 
 /* ---------------- 加速度センサー（VOO・QQQ。lib/accelSensor.ts） ---------------- */
-// 既存のDD加速度アラート（SP500の統計を流用）とは別の機能。各シリーズ自身の履歴から、半値戻しで区切った調整エピソードを抽出し、
+// 既存のDD加速度アラート（SP500の統計を流用）とは別の機能。各シリーズ自身の履歴から、DD−3%到達〜高値更新までを1つの調整エピソードとして抽出し（途中の浅い戻りでは終了・リセットしない）、
 // DD−3%→−5%の到達営業日数（acc）別に「最終的にどこまで深くなったか」の割合を毎回再計算して表示する（データ更新で自動的に再計算）。
 const ACCEL_DISCLAIMER = "過去の標本に基づく参考値であり、予測ではありません。高速に到達した場合の深い下落の確率は、標本数が少なく、不確実性が大きい。";
 const ACCEL_STATUS = { normal: { label: "平常", color: C.teal }, over3: { label: "DD−3%超過中", color: C.amber }, reached5: { label: "DD−5%到達済み", color: C.rust } };
@@ -3315,7 +3315,7 @@ function AccelSensorSection({ vooSeries, qqqSeries, compact = false }) {
     <div>
       <div className="text-xs font-semibold mb-1">加速度センサー（VOO・QQQ）</div>
       <div className="text-[10px] mb-2 leading-relaxed" style={{ color: C.textDim }}>
-        各銘柄自身の終値の履歴から、DD−3%で始まり「高値更新」または「最大DDの半値戻し」で終わる調整局面を抽出し、−3%→−5%の到達営業日数（acc、同日到達は0）ごとに、最終的な最大DDが各水準以上になった割合を集計しています。データ更新のたびに再計算します。
+        各銘柄自身の終値の履歴から、DD−3%で始まり「高値更新」で終わる調整局面を抽出し（−3%到達後は、途中で浅い戻りを挟んでも高値を更新するまで同じ局面として扱います）、−3%→−5%の到達営業日数（acc、同日到達は0）ごとに、最終的な最大DDが各水準以上になった割合を集計しています。データ更新のたびに再計算します。
       </div>
       <div className="grid gap-3" style={{ gridTemplateColumns: compact ? "1fr" : "repeat(auto-fit, minmax(300px, 1fr))" }}>
         <AccelSensorCard label="VOO" series={vooSeries} />
@@ -8661,7 +8661,10 @@ export default function DDDashboard() {
       const jsonOutput = computeLongformAnalysisJSON({ d, crashFrequency: bottom.stats.crashFrequency, generatedAt: new Date(), bottom, instrumentLabel: "SP500" });
       const video = buildVideoLongform(jsonOutput, d, SP500_KANA, DEFAULT_CONTENT_SECTIONS, [], "S&P500");
       const asOf = d.FULL.length ? d.FULL[d.FULL.length - 1].date.toISOString().slice(0, 10) : null;
-      storage.set("stock-catalog:SP500", JSON.stringify({ asOf, instrumentLabel: "S&P500", catalog: video.catalog, scalarCatalog: video.scalarCatalog, finalReach: video.longMd.finalReach })).catch(() => { /* storage unavailable */ });
+      // [動画連携] 加速度センサー（lib/accelSensor.ts）をSP500本系列（d.FULL、70年の合成シリーズ）に適用し、
+      // 画面表示（AccelSensorCardはVOO単独の2010年〜を対象）とは別に、70年分の標本でExplainerStudio用に書き出す。
+      const accel = summarizeAccelForVideo(d.FULL);
+      storage.set("stock-catalog:SP500", JSON.stringify({ asOf, instrumentLabel: "S&P500", catalog: video.catalog, scalarCatalog: video.scalarCatalog, finalReach: video.longMd.finalReach, accel })).catch(() => { /* storage unavailable */ });
     } catch (e) { /* 失敗してもダッシュボード本体の動作には影響させない */ }
   }, [d, bottom]);
   useEffect(() => {
@@ -8670,7 +8673,9 @@ export default function DDDashboard() {
       const jsonOutput = computeLongformAnalysisJSON({ d: dSoxl, crashFrequency: bottomSoxl.stats.crashFrequency, generatedAt: new Date(), bottom: bottomSoxl, instrumentLabel: "SOXL" });
       const video = buildVideoLongform(jsonOutput, dSoxl, "えすおーえっくすえる", DEFAULT_CONTENT_SECTIONS, [], "SOXL");
       const asOf = dSoxl.FULL.length ? dSoxl.FULL[dSoxl.FULL.length - 1].date.toISOString().slice(0, 10) : null;
-      storage.set("stock-catalog:SOXL", JSON.stringify({ asOf, instrumentLabel: "SOXL", catalog: video.catalog, scalarCatalog: video.scalarCatalog, finalReach: video.longMd.finalReach })).catch(() => { /* storage unavailable */ });
+      // [動画連携] SP500と同じパターンでSOXL本系列にも加速度センサーを適用して書き出す（今後の銘柄追加もこの形を踏襲）。
+      const accel = summarizeAccelForVideo(dSoxl.FULL);
+      storage.set("stock-catalog:SOXL", JSON.stringify({ asOf, instrumentLabel: "SOXL", catalog: video.catalog, scalarCatalog: video.scalarCatalog, finalReach: video.longMd.finalReach, accel })).catch(() => { /* storage unavailable */ });
     } catch (e) { /* 失敗してもダッシュボード本体の動作には影響させない */ }
   }, [dSoxl, bottomSoxl]);
   // [グラフ作成ページ] /chart-studio/ 用：VOO・QQQ・SOXL・GOLDの生の日次終値（{date,close}[]）をそのまま

@@ -34,6 +34,7 @@ import { easternStamp } from "@/lib/marketClock";
 import { parseStooqCSV } from "@/lib/csvPrice";
 import { buildStockCatalogFromSnapshot, buildStockCatalogFromCsv, mergeStockCatalogs, resolveYearCompareItems } from "@/lib/explainer/stockCatalog";
 import { buildStockIntroScenes } from "@/lib/explainer/stockIntroScenes";
+import { buildAccelIntroScene } from "@/lib/explainer/accelIntroScene";
 import { drawVisual, PALETTE } from "@/lib/explainer/visuals";
 
 const C = {
@@ -218,7 +219,7 @@ export default function ExplainerStudio() {
   // （lib/explainer/stockCatalog.tsのmergeStockCatalogsで1つに統合してgenInput()が渡す）。
   const [stockSnapshots, setStockSnapshots] = useState({ SP500: null, SOXL: null });
   useEffect(() => {
-    if (mode !== "stock") return;
+    if (mode !== "stock" && mode !== "sp500") return;
     ["SP500", "SOXL"].forEach((src) => {
       storage.get(`stock-catalog:${src}`).then((res) => {
         if (res?.value) { try { setStockSnapshots((p) => ({ ...p, [src]: JSON.parse(res.value) })); } catch (e) { /* 読めなければそのまま無視（キーが使えないだけ） */ } }
@@ -231,6 +232,9 @@ export default function ExplainerStudio() {
     if (k === "stock" && !topic.trim()) {
       const [y, m, dd] = easternStamp(new Date()).slice(0, 10).split("-");
       setTopic(`${y}年${Number(m)}月${Number(dd)}日`);
+    } else if (k === "sp500" && !topic.trim()) {
+      const [y, m, dd] = easternStamp(new Date()).slice(0, 10).split("-");
+      setTopic(`S&P500の最新の値動き（${y}年${Number(m)}月${Number(dd)}日時点）`);
     }
   };
   // AI画像の自動生成（Google Gemini / Imagen。費用が発生するため既定はオフ）
@@ -426,10 +430,15 @@ export default function ExplainerStudio() {
     }
     return mergeStockCatalogs(catalogs);
   }, [stockSnapshots, refs]);
+  // [Stage G-?]「S&P500」モード専用：SOXLや参考CSVは混ぜず、ダッシュボードのS&P500データだけで
+  // 常に最新の情報を基に生成できるようにする（テーマ・参考情報の手入力を不要にする）。
+  const sp500OnlyCatalog = useMemo(() => mergeStockCatalogs([stockSnapshots.SP500 && buildStockCatalogFromSnapshot(stockSnapshots.SP500)]), [stockSnapshots]);
   const genInput = (minutes = targetMinutes) => {
     let stockCatalog;
     if (mode === "stock" && (Object.keys(stockOverlayCatalog.scalars).length || Object.keys(stockOverlayCatalog.series).length)) {
       stockCatalog = stockOverlayCatalog;
+    } else if (mode === "sp500" && (Object.keys(sp500OnlyCatalog.scalars).length || Object.keys(sp500OnlyCatalog.series).length)) {
+      stockCatalog = sp500OnlyCatalog;
     }
     return { topic: topic.trim(), mode, audience, targetMinutes: minutes, extraInstruction, refBlocks: referenceBlocks(refs), today: todayStr(), speechRate: rate, imageTarget: imageGenEnabled ? imageGenCount : 0, stockCatalog, requiredRefNotes: requiredRefNotes(refs) };
   };
@@ -494,9 +503,14 @@ export default function ExplainerStudio() {
       }
       // [Stage G-3] 「株式情報」モードのときだけ、冒頭に前提条件・DD定義・発生回数と深さの分布・「谷間」の
       // 概念図を固定場面として追加する（AIには生成させない。数値はダッシュボードのfinalReachをそのまま使う）。
-      if (mode === "stock") {
-        const primarySnapshot = stockSnapshots.SP500 ?? stockSnapshots.SOXL;
+      if (mode === "stock" || mode === "sp500") {
+        const primarySnapshot = mode === "sp500" ? stockSnapshots.SP500 : (stockSnapshots.SP500 ?? stockSnapshots.SOXL);
         const introScenes = buildStockIntroScenes(primarySnapshot?.finalReach ?? null, primarySnapshot?.instrumentLabel ?? "S&P500");
+        // [動画連携] ダッシュボードの加速度センサー（lib/accelSensor.ts）の実績をもう1場面として追加する。
+        // 新しい分析をダッシュボードに足して動画にも反映したいときは、同じ要領（DDDashboard.jsx側でstock-catalog:*に
+        // 書き出す→lib/explainer/に固定場面ビルダーを足す→ここで呼ぶ）で対応できる。
+        const accelScene = buildAccelIntroScene(primarySnapshot?.accel ?? null, primarySnapshot?.instrumentLabel ?? "S&P500");
+        if (accelScene) introScenes.push(accelScene);
         if (introScenes.length) longScenes = [...introScenes, ...longScenes];
       }
       // ラベル（kicker）は、選んだ長尺の長さから自動で入れる（例：5分で解説）。生成後も自由に書き換えられる
@@ -1457,10 +1471,10 @@ export default function ExplainerStudio() {
           {inputOpen && (
             <div className="flex flex-col gap-3 mt-3 text-xs">
               <div className="flex flex-wrap gap-2 items-center">
-                {[["news", "ニュース"], ["stock", "株式情報"], ["keyword", "キーワード（用語）"]].map(([k, l]) => (
+                {[["news", "ニュース"], ["stock", "株式情報"], ["sp500", "S&P500"], ["keyword", "キーワード（用語）"]].map(([k, l]) => (
                   <button key={k} onClick={() => handleModeClick(k)} className="text-[11px] px-2.5 py-1 rounded" style={{ color: mode === k ? C.bg : C.textMuted, background: mode === k ? C.teal : "transparent", border: `1px solid ${C.borderSoft}`, cursor: "pointer", fontWeight: mode === k ? 700 : 400 }}>{l}</button>
                 ))}
-                <input value={topic} onChange={(e) => setTopic(e.target.value)} placeholder={mode === "news" ? "例：日銀が政策金利を0.75%に引き上げ" : mode === "stock" ? "例：2026年10月28日（消去・書き換え可）" : "例：インフレ／NISA／半導体の微細化"} className="flex-1 min-w-[220px] px-2 py-1.5 rounded text-sm" style={inputStyle} />
+                <input value={topic} onChange={(e) => setTopic(e.target.value)} placeholder={mode === "news" ? "例：日銀が政策金利を0.75%に引き上げ" : mode === "stock" ? "例：2026年10月28日（消去・書き換え可）" : mode === "sp500" ? "例：S&P500の最新の値動き（消去・書き換え可）" : "例：インフレ／NISA／半導体の微細化"} className="flex-1 min-w-[220px] px-2 py-1.5 rounded text-sm" style={inputStyle} />
               </div>
               <div className="flex flex-wrap gap-3 items-center" style={{ color: C.textMuted }}>
                 <label className="flex items-center gap-1.5">視聴者

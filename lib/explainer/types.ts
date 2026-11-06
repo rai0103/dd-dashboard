@@ -120,7 +120,7 @@ export interface SourceNote { title: string; detail: string }
 export interface ExplainerProject {
   version: 1;
   topic: string;
-  mode: 'news' | 'stock' | 'keyword';
+  mode: 'news' | 'stock' | 'sp500' | 'keyword';
   audience: 'beginner' | 'general' | 'advanced' | 'expert';
   targetMinutes: number;
   videoTitle: string;
@@ -151,6 +151,23 @@ export interface ImageAsset { id: string; name: string; blob: Blob; rightsConfir
 // [Stage E-4] 株式情報モード：台本生成に実数を保証して渡すためのデータカタログ。
 // scalars＝1時点の数値（前日比・年初来騰落率など）、series＝複数時点の推移（折れ線用）。
 // value は常に数値のまま保持し、文字列化（単位付け）はaiScript.tsのapplyStockDataKeysが行う。
+// [動画連携] ダッシュボードの加速度センサー（lib/accelSensor.tsのsummarizeAccelForVideo）が書き出す要約と
+// 同じ形。AIには渡さず、lib/explainer/accelIntroScene.tsが固定場面を組み立てるためだけに使う
+// （数値をAIに作文させず、ダッシュボードの実データをそのまま場面にする既存の方針を踏襲）。
+export interface AccelRateSummary { threshold: number; hits: number; p: number | null }
+export interface AccelBucketSummary { label: string; min: number; max: number | null; n: number; lowSample: boolean; rates: AccelRateSummary[] }
+export interface AccelSummary {
+  periodStart: string | null; periodEnd: string | null; periodYears: number;
+  episodeCount: number; judgedCount: number; judgedRate: number | null;
+  overall: { n: number; lowSample: boolean; rates: AccelRateSummary[] };
+  buckets: AccelBucketSummary[];
+  accMedian: number | null;
+  current: {
+    status: 'normal' | 'over3' | 'reached5'; currentDD: number | null; startDate: string | null;
+    elapsedDays: number | null; acc: number | null; maxDD: number | null; bucketLabel: string | null;
+  } | null;
+}
+
 export interface StockCatalog {
   instrumentLabel: string;
   asOf: string;
@@ -164,6 +181,8 @@ export interface StockCatalog {
     unit: string;
     series: Record<string, { label: string; emphasis: boolean; points: { x: number; value: number }[] }>;
   };
+  // [動画連携] ダッシュボードの加速度センサー（lib/accelSensor.ts）の要約。未対応の銘柄・未計算のときはundefined。
+  accel?: AccelSummary;
 }
 
 export const emptyVisual = (kind: VisualKind = 'point'): VisualSpec => ({

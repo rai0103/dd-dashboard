@@ -46,7 +46,10 @@ export function buildStockCatalogFromSnapshot(snapshot: any): StockCatalog {
   const yearCompare = Object.keys(yearCompareSeries).length
     ? { xLabel: '年初からの経過日数', unit: '（指数・年初=100）', series: yearCompareSeries }
     : undefined;
-  return { instrumentLabel: String(snapshot?.instrumentLabel ?? ''), asOf: String(snapshot?.asOf ?? ''), scalars, series, yearCompare };
+  // [動画連携] ダッシュボードが書き出したaccel（lib/accelSensor.tsのsummarizeAccelForVideo）をそのまま通す。
+  // 形の検証はせず「オブジェクトであればそのまま使う」だけにする（新しい連携データを足すときも同じ要領でよい）。
+  const accel = snapshot?.accel && typeof snapshot.accel === 'object' ? snapshot.accel : undefined;
+  return { instrumentLabel: String(snapshot?.instrumentLabel ?? ''), asOf: String(snapshot?.asOf ?? ''), scalars, series, yearCompare, accel };
 }
 
 // [Stage E-10] AIがdataKey/seriesKey/seriesKeysに、mergeStockCatalogsが付けた「銘柄名::」の接頭辞を
@@ -136,13 +139,17 @@ export function mergeStockCatalogs(catalogs: (StockCatalog | undefined | null)[]
   let yearCompareXLabel = '', yearCompareUnit = '';
   const labels: string[] = [];
   let asOf = '';
+  // [動画連携] accelは銘柄固有のデータなので、複数カタログを混ぜても最初に見つかったものだけを残す
+  // （「株式情報」モードのように複数銘柄を合成する場合でも、どの銘柄のaccelか取り違えないようにする）。
+  let accel: StockCatalog['accel'];
   for (const cat of catalogs) {
     if (!cat) continue;
     const hasYearCompare = !!cat.yearCompare && Object.keys(cat.yearCompare.series).length;
-    if (!Object.keys(cat.scalars).length && !Object.keys(cat.series).length && !hasYearCompare) continue;
+    if (!Object.keys(cat.scalars).length && !Object.keys(cat.series).length && !hasYearCompare && !cat.accel) continue;
     const label = cat.instrumentLabel || '銘柄';
     labels.push(label);
     if (cat.asOf && !asOf) asOf = cat.asOf;
+    if (cat.accel && !accel) accel = cat.accel;
     for (const [k, v] of Object.entries(cat.scalars)) scalars[`${label}::${k}`] = { label: `${label}：${v.label}`, value: v.value };
     for (const [k, v] of Object.entries(cat.series)) series[`${label}::${k}`] = { label: `${label}：${v.label}`, points: v.points };
     if (hasYearCompare) {
@@ -153,5 +160,5 @@ export function mergeStockCatalogs(catalogs: (StockCatalog | undefined | null)[]
     }
   }
   const yearCompare = yearCompareSeries ? { xLabel: yearCompareXLabel, unit: yearCompareUnit, series: yearCompareSeries } : undefined;
-  return { instrumentLabel: labels.join('・'), asOf, scalars, series, yearCompare };
+  return { instrumentLabel: labels.join('・'), asOf, scalars, series, yearCompare, accel };
 }

@@ -7,7 +7,8 @@
 //   2. 開始：DD = 1 − 終値/peak が startDD（3%）以上になった最初の日（i3）。この日から最安値・最大DDの更新を始める。
 //   3. 進行中：最大DD（maxDD）を更新し、DDが judgeDD（5%）以上になった最初の日を i5 とする。
 //      ギャップダウンで i3 の当日に5%以上に達していれば i5 = i3（acc = 0）。
-//   4. 終了：終値がpeak以上（高値更新）、またはDDが maxDD × recoveryRatio（半値戻し）以下まで戻った日。終了時にpeakを当日の終値にリセットする。
+//      −3%に一度到達した後は、途中でDDが縮んでも（部分的な戻りでも）エピソードは終了・リセットしない。
+//   4. 終了：終値がpeak以上になった日（高値更新）のみ。終了時にpeakを当日の終値へ更新する。
 //   5. 終了していない最新のエピソードは標本に含めず「進行中」として別に返す。
 //   acc = i5 − i3（judgeDDに達したエピソードのみ）。
 // 統計：母集団はjudgeDDに達した終了済みエピソード。accバケットごと・全体で、maxDDが各しきい値以上だった割合・標本数・Wilson信頼区間を出す。
@@ -17,7 +18,6 @@ export interface AccelBucket { label: string; min: number; max: number }
 export interface AccelConfig {
   startDD: number; // エピソード開始のDD（0.03＝3%）
   judgeDD: number; // 判定のDD（0.05＝5%）
-  recoveryRatio: number; // 半値戻しの係数（0.5）
   buckets: AccelBucket[]; // accの区分（営業日）
   thresholds: number[]; // 最終maxDDのしきい値
   minSample: number; // これ未満の標本数は「標本が少ない」と警告する
@@ -26,7 +26,6 @@ export interface AccelConfig {
 export const DEFAULT_ACCEL_CONFIG: AccelConfig = {
   startDD: 0.03,
   judgeDD: 0.05,
-  recoveryRatio: 0.5,
   buckets: [{ label: "0〜3日（高速）", min: 0, max: 3 }, { label: "4日以上（低速）", min: 4, max: Infinity }],
   thresholds: [0.08, 0.10, 0.15, 0.20],
   minSample: 30,
@@ -40,7 +39,7 @@ export interface AccelEpisode {
   judgeIdx: number | null; judgeDate: string | null; // i5
   acc: number | null; // i5 − i3
   maxDD: number; troughDate: string;
-  endDate: string | null; endReason: "newHigh" | "halfRetrace" | null; // 進行中はnull
+  endDate: string | null; endReason: "newHigh" | null; // 進行中はnull
 }
 
 // 入力の整形：日付の重複は後勝ちで除去し、終値が数値でない行（欠損）を除いて日付順に並べる。
@@ -74,12 +73,12 @@ export function extractEpisodes(series: PricePoint[], cfg: AccelConfig = DEFAULT
     const dd = 1 - close / ep.peak;
     if (dd > ep.maxDD) { ep.maxDD = dd; ep.troughDate = date; }
     if (ep.judgeIdx === null && dd >= cfg.judgeDD) { ep.judgeIdx = i; ep.judgeDate = date; ep.acc = i - ep.startIdx; }
-    const newHigh = close >= ep.peak;
-    if (newHigh || dd <= ep.maxDD * cfg.recoveryRatio) {
-      ep.endDate = date; ep.endReason = newHigh ? "newHigh" : "halfRetrace";
+    // −3%到達後は、高値更新（close >= peak）でしか終了しない。部分的な戻り（半値戻し等）では終了・リセットしない。
+    if (close >= ep.peak) {
+      ep.endDate = date; ep.endReason = "newHigh";
       episodes.push(ep);
       ep = null;
-      peak = close; peakDate = date; // 終了時に基準高値を当日の終値へリセット
+      peak = close; peakDate = date; // 終了時に基準高値を当日の終値（＝新しい高値）へ更新
     }
   }
   return { episodes, current: ep, peak: ep ? ep.peak : peak, peakDate: ep ? ep.peakDate : peakDate };
@@ -159,4 +158,44 @@ export function computeAccelSensor(points: { date: string | Date; close?: number
   const series = prepareSeries(points);
   const extracted = extractEpisodes(series, cfg);
   return { series, extracted, stats: computeAccelStats(series, extracted.episodes, cfg), state: currentAccelState(series, extracted, cfg), config: cfg };
+}
+
+// [動画連携] 解説動画作成（ExplainerStudio）向けの要約。StockCatalog.accel（lib/explainer/types.ts）と
+// 同じ形にして、stock-catalog:*（components/DDDashboard.jsx）へそのまま書き出す。本番UI（AccelSensorCard）
+// と同じ computeAccelSensor() の結果から作るため、動画側の数値は常にダッシュボード画面の表示と一致する。
+// 新しい銘柄・新しい分析を動画に連携したいときは、同じパターン（①ここに summarize*ForVideo() を足す →
+// ②lib/explainer/types.tsにその型を足す → ③DDDashboard.jsxのstock-catalog書き出しに1行足す →
+// ④必要なら lib/explainer/ に固定場面ビルダーを足す）で対応できる。
+export interface AccelVideoRate { threshold: number; hits: number; p: number | null }
+export interface AccelVideoGroup { n: number; lowSample: boolean; rates: AccelVideoRate[] }
+export interface AccelVideoBucket extends AccelVideoGroup { label: string; min: number; max: number | null }
+export interface AccelVideoCurrent {
+  status: AccelStatus; currentDD: number | null; startDate: string | null; elapsedDays: number | null;
+  acc: number | null; maxDD: number | null; bucketLabel: string | null;
+}
+export interface AccelVideoSummary {
+  periodStart: string | null; periodEnd: string | null; periodYears: number;
+  episodeCount: number; judgedCount: number; judgedRate: number | null;
+  overall: AccelVideoGroup; buckets: AccelVideoBucket[]; accMedian: number | null;
+  current: AccelVideoCurrent | null;
+}
+export function summarizeAccelForVideo(points: { date: string | Date; close?: number | null; price?: number | null }[], cfg: AccelConfig = DEFAULT_ACCEL_CONFIG): AccelVideoSummary | null {
+  const { series, stats, state } = computeAccelSensor(points, cfg);
+  if (series.length < 2) return null;
+  const periodYears = (new Date(series[series.length - 1].date).getTime() - new Date(series[0].date).getTime()) / (365.2425 * 24 * 3600 * 1000);
+  const toGroup = (g: { n: number; lowSample: boolean; rates: AccelRate[] }): AccelVideoGroup => ({
+    n: g.n, lowSample: g.lowSample, rates: g.rates.map((r) => ({ threshold: r.threshold, hits: r.hits, p: r.p })),
+  });
+  return {
+    periodStart: stats.periodStart, periodEnd: stats.periodEnd, periodYears: Math.round(periodYears * 10) / 10,
+    episodeCount: stats.episodeCount, judgedCount: stats.judgedCount,
+    judgedRate: stats.episodeCount ? stats.judgedCount / stats.episodeCount : null,
+    overall: toGroup(stats.overall),
+    buckets: stats.buckets.map((b) => ({ label: b.label, min: b.min, max: Number.isFinite(b.max) ? b.max : null, ...toGroup(b) })),
+    accMedian: stats.accMedian,
+    current: state.status === 'normal' ? null : {
+      status: state.status, currentDD: state.currentDD, startDate: state.startDate, elapsedDays: state.elapsedDays,
+      acc: state.acc, maxDD: state.maxDD, bucketLabel: state.bucket?.label ?? null,
+    },
+  };
 }

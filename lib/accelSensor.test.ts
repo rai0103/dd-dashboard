@@ -22,14 +22,23 @@ test("ギャップダウンで−3%と−5%を同日に超えたら i5 = i3（ac
   assert.equal(episodes[0].startIdx, episodes[0].judgeIdx);
 });
 
-test("半値戻しで終了し、基準高値をその日の終値にリセットして次のエピソードを探す（高値を更新できない期間も分割される）", () => {
-  // 100 → 80（maxDD 20%）→ 91（DD 9% ≤ 10% で半値戻し終了、peak=91）→ 88（91から3.3%：次のエピソード開始）→ 92（高値更新で終了）
-  const { episodes, current } = extractEpisodes(prepareSeries(mk([100, 96, 80, 91, 88, 92])));
+test("部分的な戻り（半値戻し相当）だけでは終了・リセットしない。高値更新（100以上）まで1つのエピソードとして続く", () => {
+  // 100 → 80（maxDD 20%）→ 91（DD 9%まで戻るが100未満なのでエピソード継続）→ 88（maxDDはまだ20%のまま）→ 101（高値更新で終了）
+  const { episodes, current } = extractEpisodes(prepareSeries(mk([100, 96, 80, 91, 88, 101])));
   assert.equal(current, null);
-  assert.equal(episodes.length, 2);
-  assert.equal(episodes[0].endReason, "halfRetrace");
-  assert.equal(episodes[1].peak, 91);
-  assert.equal(episodes[1].endReason, "newHigh");
+  assert.equal(episodes.length, 1);
+  const e = episodes[0];
+  assert.equal(e.peak, 100);
+  assert.equal(Math.round(e.maxDD * 100), 20);
+  assert.equal(e.endReason, "newHigh");
+});
+test("−3%到達後に何度DDが縮んでも、高値を更新するまでは同じエピソードのまま（途中で浅い戻りを挟んでも分割されない）", () => {
+  // 100 → 97(i3, DD3%) → 99.5(DD0.5%まで戻るがエピソードは継続) → 94(DD6%・judgeDD到達、acc=2) → 101(高値更新で終了)
+  const { episodes, current } = extractEpisodes(prepareSeries(mk([100, 97, 99.5, 94, 101])));
+  assert.equal(current, null);
+  assert.equal(episodes.length, 1);
+  const e = episodes[0];
+  assert.deepEqual([e.startIdx, e.judgeIdx, e.acc, e.endReason], [1, 3, 2, "newHigh"]);
 });
 
 test("終了していない最新のエピソードは標本に含めず、進行中として返す", () => {
@@ -95,7 +104,7 @@ test("Wilson信頼区間（95%）", () => {
   assert.equal(wilsonInterval(0, 0), null);
 });
 
-test("設定値（しきい値・バケット・半値戻し係数）を変えて計算できる", () => {
+test("設定値（しきい値・バケット区分）を変えて計算できる", () => {
   const cfg = { ...DEFAULT_ACCEL_CONFIG, startDD: 0.02, judgeDD: 0.04, buckets: [{ label: "全部", min: 0, max: Infinity }] };
   const r = computeAccelSensor(mk([100, 98, 96, 101]), cfg);
   assert.equal(r.stats.judgedCount, 1);
