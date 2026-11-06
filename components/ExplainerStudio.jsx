@@ -34,7 +34,7 @@ import { easternStamp } from "@/lib/marketClock";
 import { parseStooqCSV } from "@/lib/csvPrice";
 import { buildStockCatalogFromSnapshot, buildStockCatalogFromCsv, mergeStockCatalogs, resolveYearCompareItems } from "@/lib/explainer/stockCatalog";
 import { buildStockIntroScenes } from "@/lib/explainer/stockIntroScenes";
-import { buildAccelIntroScene } from "@/lib/explainer/accelIntroScene";
+import { buildAccelScenes } from "@/lib/explainer/accelIntroScene";
 import { drawVisual, PALETTE } from "@/lib/explainer/visuals";
 
 const C = {
@@ -506,11 +506,12 @@ export default function ExplainerStudio() {
       if (mode === "stock" || mode === "sp500") {
         const primarySnapshot = mode === "sp500" ? stockSnapshots.SP500 : (stockSnapshots.SP500 ?? stockSnapshots.SOXL);
         const introScenes = buildStockIntroScenes(primarySnapshot?.finalReach ?? null, primarySnapshot?.instrumentLabel ?? "S&P500");
-        // [動画連携] ダッシュボードの加速度センサー（lib/accelSensor.ts）の実績をもう1場面として追加する。
-        // 新しい分析をダッシュボードに足して動画にも反映したいときは、同じ要領（DDDashboard.jsx側でstock-catalog:*に
-        // 書き出す→lib/explainer/に固定場面ビルダーを足す→ここで呼ぶ）で対応できる。
-        const accelScene = buildAccelIntroScene(primarySnapshot?.accel ?? null, primarySnapshot?.instrumentLabel ?? "S&P500");
-        if (accelScene) introScenes.push(accelScene);
+        // [動画連携] ダッシュボードの加速度センサー（lib/accelSensor.ts）の実績をもう1〜2場面として追加する
+        // （①速度区分の棒グラフ、②今回の局面がすでに−5%を超えて確定していれば分岐図）。新しい分析をダッシュボードに
+        // 足して動画にも反映したいときは、同じ要領（DDDashboard.jsx側でstock-catalog:*に書き出す→
+        // lib/explainer/に固定場面ビルダーを足す→ここで呼ぶ）で対応できる。
+        const accelScenes = buildAccelScenes(primarySnapshot?.accel ?? null, primarySnapshot?.instrumentLabel ?? "S&P500");
+        introScenes.push(...accelScenes);
         if (introScenes.length) longScenes = [...introScenes, ...longScenes];
       }
       // ラベル（kicker）は、選んだ長尺の長さから自動で入れる（例：5分で解説）。生成後も自由に書き換えられる

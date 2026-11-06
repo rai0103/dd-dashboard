@@ -425,14 +425,15 @@ const drawLine: Draw = (c, sc, e) => {
 const drawOverlay: Draw = (c, sc, e) => {
   const v = sc.visual;
   const top = heading(c, e, v.heading, v.subheading, e.accent) + 6;
-  const groups = new Map<string, { label: string; emphasis: boolean; pts: { x: number; n: number }[] }>();
+  const groups = new Map<string, { label: string; emphasis: boolean; tone?: 'warn'; pts: { x: number; n: number; markerLabel?: string }[] }>();
   v.items.forEach((it, idx) => {
     const n = parseValue(it.value);
     if (n === null) return;
     const key = it.seriesKey || it.seriesLabel || it.label || `s${idx}`;
-    const g = groups.get(key) ?? { label: it.seriesLabel || it.label || key, emphasis: !!it.seriesEmphasis, pts: [] };
+    const g = groups.get(key) ?? { label: it.seriesLabel || it.label || key, emphasis: !!it.seriesEmphasis, tone: it.seriesTone, pts: [] };
     const x = Number.isFinite(it.x) ? (it.x as number) : g.pts.length;
-    g.pts.push({ x, n });
+    g.pts.push({ x, n, markerLabel: it.markerLabel });
+    if (it.seriesTone) g.tone = it.seriesTone;
     groups.set(key, g);
   });
   const series = [...groups.values()].map((g) => ({ ...g, pts: [...g.pts].sort((a, b) => a.x - b.x) })).filter((g) => g.pts.length >= 2);
@@ -455,7 +456,7 @@ const drawOverlay: Draw = (c, sc, e) => {
     text(c, fmtNum(gv), x0 - 8, gy + 4, 11, WHITE, { align: 'right', alpha: 0.5 });
   }
   const k = ease(sub(e.p, 0.08, 0.8));
-  const drawSeries = (g: { pts: { x: number; n: number }[] }, rgb: string, alpha: number, lw: number, glow: boolean) => {
+  const drawSeries = (g: { pts: { x: number; n: number; markerLabel?: string }[] }, rgb: string, alpha: number, lw: number, glow: boolean) => {
     const n = g.pts.length;
     const upto = k * (n - 1);
     const fi = Math.floor(upto), fr = upto - fi;
@@ -471,16 +472,30 @@ const drawOverlay: Draw = (c, sc, e) => {
     if (glow) { c.shadowColor = `rgba(${rgb},0.7)`; c.shadowBlur = 10; }
     c.stroke();
     c.shadowBlur = 0;
+    // [Stage E-10] この点に注釈（markerLabel）があり、線がそこまで届いていれば丸印とラベルを添える
+    g.pts.forEach((p, i) => {
+      if (!p.markerLabel || i > upto + 1e-6) return;
+      const mx = X(p.x), my = Y(p.n);
+      c.beginPath(); c.arc(mx, my, 5, 0, Math.PI * 2); c.fillStyle = `rgb(${rgb})`; c.fill();
+      c.lineWidth = 1.5; c.strokeStyle = '#05080f'; c.stroke();
+      const above = i % 2 === 0;
+      font(c, 11, true); const w = c.measureText(p.markerLabel).width + 12;
+      const by = above ? my - 26 : my + 10;
+      rr(c, mx - w / 2, by, w, 18, 9); c.fillStyle = 'rgba(6,10,19,0.88)'; c.fill();
+      c.strokeStyle = `rgba(${rgb},0.7)`; c.lineWidth = 1; c.stroke();
+      text(c, p.markerLabel, mx, by + 13, 11, rgb, { bold: true, align: 'center' });
+    });
   };
-  series.filter((g) => !g.emphasis).forEach((g) => drawSeries(g, WHITE, 0.26, 2, false));
+  series.filter((g) => !g.emphasis && g.tone !== 'warn').forEach((g) => drawSeries(g, WHITE, 0.26, 2, false));
+  series.filter((g) => !g.emphasis && g.tone === 'warn').forEach((g) => drawSeries(g, RUST, 0.55, 2.5, false));
   series.filter((g) => g.emphasis).forEach((g) => drawSeries(g, e.accent, 0.95, 4, true));
   text(c, fmtNum(xLo), x0, y1 + 20, 11, WHITE, { alpha: 0.5 });
   text(c, fmtNum(xHi), x1, y1 + 20, 11, WHITE, { align: 'right', alpha: 0.5 });
   if (v.unit) text(c, v.unit, x1, y0 - 10, 11, WHITE, { align: 'right', alpha: 0.45 });
   let lx = x0, ly = y1 + 36;
   series.forEach((g) => {
-    const rgb = g.emphasis ? e.accent : WHITE;
-    const alpha = g.emphasis ? 1 : 0.7;
+    const rgb = g.emphasis ? e.accent : g.tone === 'warn' ? RUST : WHITE;
+    const alpha = g.emphasis || g.tone === 'warn' ? 1 : 0.7;
     c.beginPath(); c.moveTo(lx, ly - 4); c.lineTo(lx + 14, ly - 4);
     c.strokeStyle = `rgba(${rgb},${alpha})`; c.lineWidth = g.emphasis ? 4 : 2; c.stroke();
     font(c, 11); const w = c.measureText(g.label).width;
@@ -857,12 +872,186 @@ const drawSources: Draw = (c, sc, e) => {
   text(c, '図解・イラストはオリジナルです。数値は各資料の公表値にもとづきます。', 8, e.H - 6, 11, WHITE, { alpha: 0.55, maxW: e.W - 16 });
 };
 
+// [Stage E-10] 'branch'：ある時点（分岐点）までの実績パス（白い太線）から、複数の結末（色分けした破線＋
+// 統計パネル）へ分岐する図。sc.visual.branch（types.tsのBranchSpec）を直接描く。AI生成では使わず、
+// lib/explainer/の固定場面ビルダー（例：accelIntroScene.ts）からのみ使う。
+const drawBranch: Draw = (c, sc, e) => {
+  const v = sc.visual;
+  const top = heading(c, e, v.heading, v.subheading, e.accent) + 4;
+  const br = v.branch;
+  if (!br || !br.lead?.length) { sourceNote(c, e, v.source); return; }
+  // 統計パネルは専用の右側レーンに固定し、分岐の線・ラベルと重ならないようにする
+  const hasPanels = br.outcomes.some((o) => o.stat);
+  const panelW = hasPanels ? Math.min(e.W * 0.4, 230) : 0;
+  const x0 = 54, x1 = e.W - 20 - (hasPanels ? panelW + 16 : 0), y0 = top + 6, y1 = e.H - 34;
+  const allPts = [...br.lead, ...br.outcomes.flatMap((o) => o.path)];
+  const xs = allPts.map((p) => p.x), ns = allPts.map((p) => p.n);
+  const xLo = Math.min(...xs), xHi = Math.max(...xs) || 1;
+  const nVals = br.thresholdY != null ? [...ns, br.thresholdY] : ns;
+  const nLo0 = Math.min(...nVals), nHi0 = Math.max(...nVals);
+  const pad = (nHi0 - nLo0) * 0.12 || 1;
+  const nLo = nLo0 - pad, nHi = nHi0 + pad;
+  const X = (x: number) => x0 + ((x1 - x0) * (x - xLo)) / Math.max(1e-6, xHi - xLo);
+  const Y = (n: number) => y1 - ((n - nLo) / Math.max(1e-6, nHi - nLo)) * (y1 - y0);
+  c.save();
+  for (let g = 0; g <= 4; g++) {
+    const gv = nLo + ((nHi - nLo) * g) / 4, gy = Y(gv);
+    c.fillStyle = 'rgba(255,255,255,0.08)'; c.fillRect(x0, gy, x1 - x0, 1);
+    text(c, fmtNum(gv), x0 - 8, gy + 4, 11, WHITE, { align: 'right', alpha: 0.5 });
+  }
+  if (br.thresholdY != null) {
+    const ty = Y(br.thresholdY);
+    c.save(); c.setLineDash([4, 5]); c.strokeStyle = `rgba(${AMBER},0.85)`; c.lineWidth = 1.5;
+    c.beginPath(); c.moveTo(x0, ty); c.lineTo(x1, ty); c.stroke(); c.restore();
+    if (br.thresholdLabel) text(c, br.thresholdLabel, x0 + 4, ty - 6, 11, AMBER, { bold: true, alpha: 0.9 });
+  }
+  const leadN = br.lead.length;
+  const leadK = ease(sub(e.p, 0.06, 0.45));
+  const leadUpto = leadK * (leadN - 1);
+  const leadFi = Math.min(leadN - 1, Math.floor(leadUpto)), leadFr = leadUpto - leadFi;
+  c.beginPath(); c.moveTo(X(br.lead[0].x), Y(br.lead[0].n));
+  for (let i = 1; i <= leadFi; i++) c.lineTo(X(br.lead[i].x), Y(br.lead[i].n));
+  if (leadFi < leadN - 1) {
+    const bx = br.lead[leadFi].x + (br.lead[leadFi + 1].x - br.lead[leadFi].x) * leadFr;
+    const bn = br.lead[leadFi].n + (br.lead[leadFi + 1].n - br.lead[leadFi].n) * leadFr;
+    c.lineTo(X(bx), Y(bn));
+  }
+  c.strokeStyle = `rgb(${WHITE})`; c.lineWidth = 4.5; c.lineJoin = 'round'; c.lineCap = 'round'; c.stroke();
+  if (leadK >= 0.999) {
+    const lp = br.lead[leadN - 1];
+    c.beginPath(); c.arc(X(lp.x), Y(lp.n), 7, 0, Math.PI * 2); c.fillStyle = `rgb(${AMBER})`; c.fill();
+    c.lineWidth = 2; c.strokeStyle = '#05080f'; c.stroke();
+  }
+
+  const brK = ease(sub(e.p, 0.4, 0.85));
+  let panelY = top;
+  br.outcomes.forEach((o, i) => {
+    const rgb = o.tone === 'up' ? TEAL : RUST;
+    const n = o.path.length;
+    if (n < 1) return;
+    const upto = brK * (n - 1);
+    const fi = Math.min(n - 1, Math.floor(upto)), fr = upto - fi;
+    c.save(); c.globalAlpha *= clamp01(brK * 1.3); c.setLineDash([7, 6]);
+    c.beginPath(); c.moveTo(X(o.path[0].x), Y(o.path[0].n));
+    for (let k2 = 1; k2 <= fi; k2++) c.lineTo(X(o.path[k2].x), Y(o.path[k2].n));
+    let hx = o.path[fi].x, hn = o.path[fi].n;
+    if (fi < n - 1) { hx = o.path[fi].x + (o.path[fi + 1].x - o.path[fi].x) * fr; hn = o.path[fi].n + (o.path[fi + 1].n - o.path[fi].n) * fr; }
+    c.lineTo(X(hx), Y(hn));
+    c.strokeStyle = `rgba(${rgb},0.9)`; c.lineWidth = 3; c.lineJoin = 'round'; c.stroke();
+    c.setLineDash([]);
+    c.beginPath(); c.arc(X(hx), Y(hn), 6, 0, Math.PI * 2); c.fillStyle = `rgb(${rgb})`; c.fill();
+    const labelAlign: CanvasTextAlign = X(hx) > x1 - 70 ? 'right' : 'center';
+    text(c, o.label, Math.min(X(hx), x1), Y(hn) + (o.tone === 'up' ? -14 : 22), 13, rgb, { bold: true, align: labelAlign, maxW: 170 });
+    c.restore();
+    if (o.stat && brK > 0.3) {
+      const ph = 22 + o.stat.lines.length * 18 + 8;
+      const px = e.W - 20 - panelW;
+      c.save(); c.globalAlpha *= ease(sub(e.p, 0.5 + i * 0.1, 0.75 + i * 0.1));
+      rr(c, px, panelY, panelW, ph, 12); c.fillStyle = 'rgba(6,10,19,0.92)'; c.fill();
+      c.strokeStyle = `rgba(${rgb},0.6)`; c.lineWidth = 1.5; c.stroke();
+      text(c, o.stat.title, px + 14, panelY + 20, 13, rgb, { bold: true, maxW: panelW - 24 });
+      o.stat.lines.forEach((ln, j) => text(c, ln, px + 14, panelY + 40 + j * 18, 12, WHITE, { alpha: 0.85, maxW: panelW - 24 }));
+      c.restore();
+      panelY += ph + 10;
+    }
+  });
+  c.restore();
+  sourceNote(c, e, v.source);
+};
+
+// [Stage E-10] 'histogram'：区間ごとの棒グラフ（更新間隔など分布の形を見せる）。items[i].seriesEmphasis=true の
+// 1項目を「現在」として強調する。
+const drawHistogram: Draw = (c, sc, e) => {
+  const v = sc.visual;
+  const top = heading(c, e, v.heading, v.subheading, e.accent);
+  const items = v.items.map((it) => ({ ...it, n: Math.max(0, parseValue(it.value) ?? 0) }));
+  const n = items.length;
+  if (!n) { sourceNote(c, e, v.source); return; }
+  const maxN = Math.max(1e-9, ...items.map((x) => x.n));
+  const curIdx = items.findIndex((it) => it.seriesEmphasis);
+  const bottom = e.H - 30, x0 = 16, aw = e.W - 32, slot = aw / n, bw = Math.max(3, slot * 0.78);
+  const hMax = Math.max(10, bottom - top - 24);
+  c.fillStyle = 'rgba(255,255,255,0.08)';
+  for (let g = 1; g <= 3; g++) c.fillRect(x0, bottom - (hMax * g) / 3, aw, 1);
+  items.forEach((it, i) => {
+    const k = ease(sub(e.p, 0.06 + (i * 0.6) / n, 0.3 + (i * 0.6) / n));
+    const h = (it.n / maxN) * hMax * k;
+    const x = x0 + slot * i + (slot - bw) / 2;
+    const isCur = i === curIdx;
+    const rgb = isCur ? e.accent : '150,165,190';
+    if (isCur) glowCircle(c, x + bw / 2, bottom - h, 50, e.accent, 0.22 * k);
+    rr(c, x, bottom - h, bw, Math.max(2, h), Math.min(4, bw / 2)); c.fillStyle = `rgb(${rgb})`; c.fill();
+    if (isCur) text(c, '現在', x + bw / 2, bottom - h - 10, 12, e.accent, { bold: true, align: 'center' });
+  });
+  const step = Math.max(1, Math.ceil(n / (e.portrait ? 6 : 12)));
+  items.forEach((it, i) => {
+    if (i % step === 0 || i === n - 1 || i === curIdx) {
+      text(c, it.label, x0 + slot * i + slot / 2, bottom + 16, 11, WHITE, { align: 'center', alpha: i === curIdx ? 1 : 0.6, maxW: slot * step, bold: i === curIdx });
+    }
+  });
+  c.fillStyle = 'rgba(255,255,255,0.4)'; c.fillRect(x0, bottom, aw, 1.5);
+  sourceNote(c, e, v.source);
+};
+
+// [Stage E-10] 'distribution'：カテゴリごとの個別サンプルをドット1つずつ（ビーズウォーム）で示し、
+// 平均をアクセント色の丸で重ねる。sc.visual.distribution（types.tsのDistributionSpec）を直接描く。
+const drawDistribution: Draw = (c, sc, e) => {
+  const v = sc.visual;
+  const top = heading(c, e, v.heading, v.subheading, e.accent);
+  const dist = v.distribution;
+  const groups = (dist?.groups ?? []).filter((g) => g.samples.length);
+  const n = groups.length;
+  if (!n) { sourceNote(c, e, v.source); return; }
+  const allVals = groups.flatMap((g) => g.samples);
+  const lo0 = Math.min(...allVals), hi0 = Math.max(...allVals);
+  const pad = (hi0 - lo0) * 0.12 || Math.abs(hi0) * 0.1 || 1;
+  const logScale = !!dist!.logScale && lo0 > 0;
+  const lo = logScale ? Math.max(lo0 * 0.85, 1e-6) : lo0 - pad;
+  const hi = hi0 + pad;
+  const bottom = e.H - 28, x0 = 54, aw = e.W - 70, slot = aw / n;
+  const y1 = bottom, y0 = top + 10;
+  const toLog = (val: number) => Math.log(Math.max(val, 1e-6));
+  const Y = logScale
+    ? (val: number) => y1 - ((toLog(Math.max(val, lo)) - toLog(lo)) / Math.max(1e-6, toLog(hi) - toLog(lo))) * (y1 - y0)
+    : (val: number) => y1 - ((val - lo) / Math.max(1e-6, hi - lo)) * (y1 - y0);
+  c.save();
+  for (let g = 0; g <= 4; g++) {
+    const gv = lo + ((hi - lo) * g) / 4, gy = Y(gv);
+    c.fillStyle = 'rgba(255,255,255,0.07)'; c.fillRect(x0 - 6, gy, aw + 12, 1);
+    text(c, `${fmtNum(gv)}${dist?.unit || ''}`, x0 - 12, gy + 4, 10, WHITE, { align: 'right', alpha: 0.45 });
+  }
+  if (lo < 0 && hi > 0) { c.fillStyle = 'rgba(255,255,255,0.3)'; c.fillRect(x0 - 6, Y(0), aw + 12, 1.5); }
+  const k = ease(sub(e.p, 0.1, 0.8));
+  groups.forEach((g, gi) => {
+    const cx = x0 + slot * gi + slot / 2;
+    const shown = Math.floor(g.samples.length * clamp01(k - gi * 0.05));
+    const r = Math.max(1.6, Math.min(4, slot / 16));
+    for (let i = 0; i < shown; i++) {
+      const val = g.samples[i];
+      const jitter = (((i * 92821 + gi * 71) % 1000) / 1000 - 0.5) * (slot * 0.62);
+      c.beginPath(); c.arc(cx + jitter, Y(val), r, 0, Math.PI * 2);
+      c.fillStyle = `rgba(${WHITE},0.45)`; c.fill();
+    }
+    const mean = g.mean ?? g.samples.reduce((a, b) => a + b, 0) / g.samples.length;
+    const mk = ease(sub(e.p, 0.55 + gi * 0.03, 0.8 + gi * 0.03));
+    if (mk > 0) {
+      c.beginPath(); c.arc(cx, Y(mean), 7 * mk, 0, Math.PI * 2);
+      c.fillStyle = `rgb(${e.accent})`; c.fill();
+      c.lineWidth = 2; c.strokeStyle = '#fff'; c.stroke();
+    }
+    text(c, g.label, cx, bottom + 20, 12, WHITE, { align: 'center', alpha: 0.85, maxW: slot - 4, bold: true });
+  });
+  c.restore();
+  sourceNote(c, e, v.source);
+};
+
 const DRAWERS: Record<string, Draw> = {
   title: drawTitle, chapter: drawChapter, keyword: drawKeyword, points: drawPoints, number: drawNumber,
   bar: drawBar, line: drawLine, donut: drawDonut, timeline: drawTimeline, flow: drawFlow, compare: drawCompare,
   cycle: drawCycle, illustration: drawIllustration, image: drawImage, point: drawPoint, qa: drawQa,
   summary: drawSummary, cta: drawCta, sources: drawSources,
   yearCompare: drawOverlay, // [Stage E-9]
+  branch: drawBranch, histogram: drawHistogram, distribution: drawDistribution, // [Stage E-10]
 };
 
 /** 場面の図解を、仮想サイズ（e.W×e.H）の座標で描く */

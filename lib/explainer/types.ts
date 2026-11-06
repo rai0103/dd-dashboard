@@ -28,6 +28,13 @@ export const VISUAL_KINDS = [
   // [Stage E-9] 株式情報モードのみ使う。ダッシュボードの「年比較」グラフ（複数年の値動きを同じ年内日数で重ねる）を
   // そのまま動画内に再現する。実データはStockCatalog.yearCompareから解決する（lib/explainer/stockCatalog.tsのresolveYearCompareItems）。
   'yearCompare',  // 年比較グラフ（複数年の推移を重ねて比較）
+  // [Stage E-10] 投資情報・SP500分析モード向けの強化図解。既存の棒グラフ・折れ線等では再現できない、
+  // ダッシュボードならではの分析チャートをそのまま動画に持ち込むために追加。このモードのAI台本生成
+  // （lib/explainer/aiScript.ts）には渡さず、lib/explainer/に置く固定場面ビルダー（accelIntroSceneなど）
+  // からのみ使う想定（数値をAIに作文させない既存の方針を踏襲）。
+  'branch',       // 分岐図：ある時点までの実績パス→そこから分かれる複数の結末（結末ごとの統計パネル付き）
+  'histogram',    // 区間ヒストグラム：間隔・幅などの分布を区間ごとの棒で示し、現在の区間を強調できる
+  'distribution', // 分布（ビーズウォーム）：カテゴリごとの個別サンプルを1点1点のドットで示し、平均を併記する
 ] as const;
 export type VisualKind = typeof VISUAL_KINDS[number] | 'chapter' | 'sources';
 
@@ -59,6 +66,12 @@ export interface VisualItem {
   seriesLabel?: string;
   /** 強調する系列（例：今年）かどうか */
   seriesEmphasis?: boolean;
+  // [Stage E-10] yearCompare（drawOverlay）向けの追加オプション。
+  /** この系列を「注意を引く参考事例」として着色する（例：2008年リーマンショックの系列を赤系で目立たせる）。
+   * seriesEmphasisの強調系列とは別に、背景系列の中の1本だけを目立たせたい場合に使う */
+  seriesTone?: 'warn';
+  /** このデータ点に添える短い注釈（例：「11/5 現在」「3年後」）。該当する点にだけ丸印＋ラベルを出す */
+  markerLabel?: string;
 }
 
 export interface VisualSpec {
@@ -74,6 +87,10 @@ export interface VisualSpec {
   emphasis: string;
   /** 画像を自分で用意する場合の生成AI用プロンプト案（実在の人物・ロゴ・既存作品を含めない） */
   imagePrompt: string;
+  // [Stage E-10] kind:'branch'・'distribution'のときだけ使う。他のkindではundefinedのままでよい
+  // （AIには渡さない固定場面専用の図解なので、他のkind用の生成コードに影響しない）。
+  branch?: BranchSpec;
+  distribution?: DistributionSpec;
 }
 
 export interface ExplainerScene {
@@ -184,6 +201,35 @@ export interface StockCatalog {
   // [動画連携] ダッシュボードの加速度センサー（lib/accelSensor.ts）の要約。未対応の銘柄・未計算のときはundefined。
   accel?: AccelSummary;
 }
+
+// [Stage E-10] 'branch'専用：ある時点（分岐点）までの実績パスと、そこから分かれる複数の結末。
+export interface BranchPoint { x: number; n: number }
+export interface BranchOutcome {
+  key: string;
+  /** 分岐の結末ラベル（例：「新高値を回復」「さらに下落」） */
+  label: string;
+  /** 色味（up=良い方向＝テール、down=悪い方向＝ラスト） */
+  tone: 'up' | 'down';
+  /** 分岐後の経路（先頭は分岐点と同じ座標にする） */
+  path: BranchPoint[];
+  /** 結末ごとの統計パネル（見出し＋複数行の説明） */
+  stat?: { title: string; lines: string[] };
+}
+export interface BranchSpec {
+  /** 分岐点までの実績パス（白い太線で表示） */
+  lead: BranchPoint[];
+  outcomes: BranchOutcome[];
+  /** 横軸・縦軸の単位（任意） */
+  xLabel?: string;
+  unit?: string;
+  /** 分岐の基準線（例：「-3%（分岐の起点）」）を横線で添える場合のy値とラベル */
+  thresholdY?: number;
+  thresholdLabel?: string;
+}
+
+// [Stage E-10] 'distribution'専用：カテゴリごとの個別サンプル値（ビーズウォーム表示に使う）。
+export interface DistributionGroup { label: string; samples: number[]; mean?: number }
+export interface DistributionSpec { groups: DistributionGroup[]; unit?: string; logScale?: boolean }
 
 export const emptyVisual = (kind: VisualKind = 'point'): VisualSpec => ({
   kind, heading: '', subheading: '', items: [], unit: '', source: '', emphasis: '', imagePrompt: '',
