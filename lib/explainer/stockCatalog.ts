@@ -51,7 +51,9 @@ export function buildStockCatalogFromSnapshot(snapshot: any): StockCatalog {
   const accel = snapshot?.accel && typeof snapshot.accel === 'object' ? snapshot.accel : undefined;
   // [動画連携][Stage E-11] 同じ要領で、最高値更新ペース（lib/accelSensor.tsのsummarizeAthPaceForVideo）もそのまま通す。
   const athPace = snapshot?.athPace && typeof snapshot.athPace === 'object' ? snapshot.athPace : undefined;
-  return { instrumentLabel: String(snapshot?.instrumentLabel ?? ''), asOf: String(snapshot?.asOf ?? ''), scalars, series, yearCompare, accel, athPace };
+  // [動画連携][Stage E-12] 同じ要領で、保有期間別ローリングリターン（lib/rollingReturn.ts）もそのまま通す。
+  const rollingReturns = snapshot?.rollingReturns && typeof snapshot.rollingReturns === 'object' ? snapshot.rollingReturns : undefined;
+  return { instrumentLabel: String(snapshot?.instrumentLabel ?? ''), asOf: String(snapshot?.asOf ?? ''), scalars, series, yearCompare, accel, athPace, rollingReturns };
 }
 
 // [Stage E-10] AIがdataKey/seriesKey/seriesKeysに、mergeStockCatalogsが付けた「銘柄名::」の接頭辞を

@@ -203,6 +203,21 @@ export interface StockCatalog {
   // [動画連携][Stage E-11] 最高値更新ペース（lib/accelSensor.tsのsummarizeAthPaceForVideo）の要約。
   // 未対応の銘柄・未計算のときはundefined。
   athPace?: AthPaceSummary;
+  // [動画連携][Stage E-12] 保有期間別ローリングリターン（lib/rollingReturn.tsのsummarizeRollingReturnsForVideo）
+  // の要約。未対応の銘柄・未計算のときはundefined。
+  rollingReturns?: RollingReturnSummary;
+}
+
+// [動画連携][Stage E-12] 保有期間別ローリングリターン（lib/rollingReturn.tsのsummarizeRollingReturnsForVideo）が
+// 書き出す要約と同じ形。AIには渡さず、lib/explainer/に置く固定場面ビルダーが'distribution'の場面を
+// 組み立てるためだけに使う。
+export interface RollingReturnGroupSummary {
+  label: string; tradingDays: number; samples: number[]; n: number;
+  winRate: number | null; mean: number | null; median: number | null;
+}
+export interface RollingReturnSummary {
+  periodStart: string | null; periodEnd: string | null; periodYears: number;
+  groups: RollingReturnGroupSummary[];
 }
 
 // [動画連携][Stage E-11] 最高値更新ペース（lib/accelSensor.tsのsummarizeAthPaceForVideo）が書き出す要約と同じ形。

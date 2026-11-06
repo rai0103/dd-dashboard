@@ -15,6 +15,7 @@ import { fxExposureOf } from "@/lib/fxExposure";
 import { isStaleSince } from "@/lib/marketClock";
 import { amountsByClass, largestRemainderPercent, allocationDiff, topHoldingsByClass, ddLabel } from "@/lib/currentAllocation";
 import { computeAccelSensor, summarizeAccelForVideo, summarizeAthPaceForVideo } from "@/lib/accelSensor";
+import { summarizeRollingReturnsForVideo } from "@/lib/rollingReturn";
 import { buildVooEquivalentSeries } from "@/lib/sp500Synthetic";
 import { buildYearSeries, completeYears, selectCompareYears, computeYearStats, averageYearStats, sortYearsBy, YEAR_PRESETS, presidentialTermYear } from "@/lib/yearCompare";
 import { yearEventText, recoveryInfo, presidentFor } from "@/lib/yearEvents";
@@ -8666,7 +8667,9 @@ export default function DDDashboard() {
       const accel = summarizeAccelForVideo(d.FULL);
       // [動画連携][Stage E-11] 最高値更新ペース（lib/accelSensor.ts）も同じSP500本系列（d.FULL）から算出して書き出す。
       const athPace = summarizeAthPaceForVideo(d.FULL);
-      storage.set("stock-catalog:SP500", JSON.stringify({ asOf, instrumentLabel: "S&P500", catalog: video.catalog, scalarCatalog: video.scalarCatalog, finalReach: video.longMd.finalReach, accel, athPace })).catch(() => { /* storage unavailable */ });
+      // [動画連携][Stage E-12] 保有期間別ローリングリターン（lib/rollingReturn.ts）も同じSP500本系列から算出して書き出す。
+      const rollingReturns = summarizeRollingReturnsForVideo(d.FULL);
+      storage.set("stock-catalog:SP500", JSON.stringify({ asOf, instrumentLabel: "S&P500", catalog: video.catalog, scalarCatalog: video.scalarCatalog, finalReach: video.longMd.finalReach, accel, athPace, rollingReturns })).catch(() => { /* storage unavailable */ });
     } catch (e) { /* 失敗してもダッシュボード本体の動作には影響させない */ }
   }, [d, bottom]);
   useEffect(() => {
@@ -8678,7 +8681,8 @@ export default function DDDashboard() {
       // [動画連携] SP500と同じパターンでSOXL本系列にも加速度センサーを適用して書き出す（今後の銘柄追加もこの形を踏襲）。
       const accel = summarizeAccelForVideo(dSoxl.FULL);
       const athPace = summarizeAthPaceForVideo(dSoxl.FULL);
-      storage.set("stock-catalog:SOXL", JSON.stringify({ asOf, instrumentLabel: "SOXL", catalog: video.catalog, scalarCatalog: video.scalarCatalog, finalReach: video.longMd.finalReach, accel, athPace })).catch(() => { /* storage unavailable */ });
+      const rollingReturns = summarizeRollingReturnsForVideo(dSoxl.FULL);
+      storage.set("stock-catalog:SOXL", JSON.stringify({ asOf, instrumentLabel: "SOXL", catalog: video.catalog, scalarCatalog: video.scalarCatalog, finalReach: video.longMd.finalReach, accel, athPace, rollingReturns })).catch(() => { /* storage unavailable */ });
     } catch (e) { /* 失敗してもダッシュボード本体の動作には影響させない */ }
   }, [dSoxl, bottomSoxl]);
   // [グラフ作成ページ] /chart-studio/ 用：VOO・QQQ・SOXL・GOLDの生の日次終値（{date,close}[]）をそのまま

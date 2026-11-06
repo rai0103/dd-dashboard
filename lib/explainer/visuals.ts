@@ -1008,7 +1008,7 @@ const drawDistribution: Draw = (c, sc, e) => {
   const logScale = !!dist!.logScale && lo0 > 0;
   const lo = logScale ? Math.max(lo0 * 0.85, 1e-6) : lo0 - pad;
   const hi = hi0 + pad;
-  const bottom = e.H - 28, x0 = 54, aw = e.W - 70, slot = aw / n;
+  const bottom = e.H - 42, x0 = 54, aw = e.W - 70, slot = aw / n; // 下に区分ラベル＋出典の2段を確保する（28だと出典行と重なっていた）
   const y1 = bottom, y0 = top + 10;
   const toLog = (val: number) => Math.log(Math.max(val, 1e-6));
   const Y = logScale
@@ -1039,7 +1039,7 @@ const drawDistribution: Draw = (c, sc, e) => {
       c.fillStyle = `rgb(${e.accent})`; c.fill();
       c.lineWidth = 2; c.strokeStyle = '#fff'; c.stroke();
     }
-    text(c, g.label, cx, bottom + 20, 12, WHITE, { align: 'center', alpha: 0.85, maxW: slot - 4, bold: true });
+    text(c, g.label, cx, bottom + 18, 12, WHITE, { align: 'center', alpha: 0.85, maxW: slot - 4, bold: true });
   });
   c.restore();
   sourceNote(c, e, v.source);
