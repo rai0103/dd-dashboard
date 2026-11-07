@@ -238,7 +238,7 @@ export default function ExplainerStudio() {
       setTopic(`${y}年${Number(m)}月${Number(dd)}日`);
     } else if (k === "sp500" && !topic.trim()) {
       const [y, m, dd] = easternStamp(new Date()).slice(0, 10).split("-");
-      setTopic(`S&P500の最新の値動き（${y}年${Number(m)}月${Number(dd)}日時点）`);
+      setTopic(`S&P500　最新分析（${y}.${m}.${dd}）`);
     }
   };
   // AI画像の自動生成（Google Gemini / Imagen。費用が発生するため既定はオフ）
