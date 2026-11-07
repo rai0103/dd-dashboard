@@ -230,17 +230,34 @@ export default function ExplainerStudio() {
       }).catch(() => {});
     });
   }, [mode]);
-  // 「株式情報」ボタンを押した瞬間、テーマ欄が空ならその場で米国東部時間の「今日」を入れる（消去・書き換えは自由）
+  // 「株式情報」「S&P500」ボタンを押した瞬間、テーマ欄が空、または自動入力の既定文言のまま（別のボタンや
+  // 前回保存分で入った日付入りの既定文言を含む）なら、その場で米国東部時間の「今日」入りの既定文言に入れ替える。
+  // 自分で書き換えたテーマはそのまま残す（消去・書き換えは自由）。
+  const AUTO_TOPIC_PATTERNS = [
+    /^\d{4}年\d{1,2}月\d{1,2}日$/, // 株式情報の既定
+    /^S&P500の最新の値動き（\d{4}年\d{1,2}月\d{1,2}日時点）$/, // S&P500の旧既定
+    /^S&P500[ 　]最新分析（\d{4}\.\d{2}\.\d{2}）$/, // S&P500の既定
+  ];
+  const isAutoTopic = (t) => !t.trim() || AUTO_TOPIC_PATTERNS.some((re) => re.test(t.trim()));
+  const defaultTopicFor = (k) => {
+    const [y, m, dd] = easternStamp(new Date()).slice(0, 10).split("-");
+    if (k === "stock") return `${y}年${Number(m)}月${Number(dd)}日`;
+    if (k === "sp500") return `S&P500　最新分析（${y}.${m}.${dd}）`;
+    return null;
+  };
   const handleModeClick = (k) => {
     setMode(k);
-    if (k === "stock" && !topic.trim()) {
-      const [y, m, dd] = easternStamp(new Date()).slice(0, 10).split("-");
-      setTopic(`${y}年${Number(m)}月${Number(dd)}日`);
-    } else if (k === "sp500" && !topic.trim()) {
-      const [y, m, dd] = easternStamp(new Date()).slice(0, 10).split("-");
-      setTopic(`S&P500　最新分析（${y}.${m}.${dd}）`);
-    }
+    const def = defaultTopicFor(k);
+    if (def && isAutoTopic(topic)) setTopic(def);
   };
+  // 画面を開いた時点で前回のモード（株式情報／S&P500）が復元され、テーマ欄が既定文言のまま（別モードの既定や
+  // 前日の日付を含む）なら、ボタンを押し直さなくても今日の日付入りの既定文言に揃える。
+  useEffect(() => {
+    const def = defaultTopicFor(mode);
+    if (def && isAutoTopic(topic) && topic !== def) setTopic(def);
+    // 初回表示時のみ
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // AI画像の自動生成（Google Gemini / Imagen。費用が発生するため既定はオフ）
   const [imageGenEnabled, setImageGenEnabled] = useState(false);
   const [imageGenCount, setImageGenCount] = useState(3);
