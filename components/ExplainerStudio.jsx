@@ -34,6 +34,8 @@ import { easternStamp } from "@/lib/marketClock";
 import { parseStooqCSV } from "@/lib/csvPrice";
 import { buildStockCatalogFromSnapshot, buildStockCatalogFromCsv, mergeStockCatalogs, resolveYearCompareItems } from "@/lib/explainer/stockCatalog";
 import { buildFixedDataChapters, fixedChaptersNote, mergeFixedChapters, dataPeriodOf, dataPeriodNoteOf } from "@/lib/explainer/dataChapters";
+import { decorateTitleScene } from "@/lib/explainer/sp500SheetScenes";
+import { computeSp500Sheets } from "@/lib/sp500Sheets";
 import { drawVisual, PALETTE } from "@/lib/explainer/visuals";
 
 const C = {
@@ -47,6 +49,8 @@ const KIND_LABEL = {
   timeline: "年表", flow: "流れ図", compare: "比較", cycle: "循環図", illustration: "イメージ図", image: "画像", point: "ポイント", qa: "Q&A",
   summary: "まとめ", cta: "締め", chapter: "章の扉", sources: "参考資料",
   yearCompare: "年比較グラフ", // [Stage E-9] 株式情報モードのみ使う
+  branch: "分岐図", histogram: "ヒストグラム", distribution: "分布（ドット）", groupedBar: "グループ棒グラフ", // [Stage E-10〜13]
+  fan: "重ね描き＋レンジ", zoomLine: "年初来→直近ズーム", butterfly: "バタフライ", ddHistory: "DDの推移（暴落）", // [Stage E-16] 固定場面専用
 };
 // 取り込み元のページのConsoleで実行する1行：localStorageの中から「登録した声」の形の配列を探してクリップボードにコピーする
 const PRESET_EXPORT_SNIPPET = `copy(JSON.stringify(Object.keys(localStorage).flatMap(k=>{try{const v=JSON.parse(localStorage.getItem(k));return Array.isArray(v)&&v.length&&v.every(p=>p&&typeof p.name==='string'&&typeof p.voice==='string')?v:[]}catch(e){return[]}})))`;
@@ -226,6 +230,9 @@ export default function ExplainerStudio() {
   // 常に背景で読み込んでおき（UIには出さない）、シナリオに応じてAIが必要な銘柄のキーだけを選んで使う
   // （lib/explainer/stockCatalog.tsのmergeStockCatalogsで1つに統合してgenInput()が渡す）。
   const [stockSnapshots, setStockSnapshots] = useState({ SP500: null, SOXL: null });
+  // [Stage E-16] モックアップ25枚のシート（年初来ズーム・騰落日数・暴落の歴史・将来シナリオ等）は、ダッシュボードが書き出す
+  // S&P500の日次終値（price-series:VOO）からこの画面で計算する（lib/sp500Sheets.ts）。
+  const [sp500Points, setSp500Points] = useState(null);
   useEffect(() => {
     if (mode !== "stock" && mode !== "sp500") return;
     ["SP500", "SOXL"].forEach((src) => {
@@ -233,7 +240,13 @@ export default function ExplainerStudio() {
         if (res?.value) { try { setStockSnapshots((p) => ({ ...p, [src]: JSON.parse(res.value) })); } catch (e) { /* 読めなければそのまま無視（キーが使えないだけ） */ } }
       }).catch(() => {});
     });
+    storage.get("price-series:VOO").then((res) => {
+      if (res?.value) { try { const j = JSON.parse(res.value); if (Array.isArray(j?.points)) setSp500Points(j.points); } catch (e) { /* 読めなければシートの場面を省くだけ */ } }
+    }).catch(() => {});
   }, [mode]);
+  const sp500Sheets = useMemo(() => { try { return sp500Points?.length ? computeSp500Sheets(sp500Points) : null; } catch (e) { return null; } }, [sp500Points]);
+  // シートはS&P500のデータなので、主に使う銘柄がS&P500のときだけ渡す
+  const sheetInputFor = (snap) => (snap && /S&P500|SP500/.test(String(snap.instrumentLabel ?? "")) && sp500Sheets ? { sheets: sp500Sheets, points: sp500Points } : null);
   // 「株式情報」「S&P500」ボタンを押した瞬間、テーマ欄が空、または自動入力の既定文言のまま（別のボタンや
   // 前回保存分で入った日付入りの既定文言を含む）なら、その場で米国東部時間の「今日」入りの既定文言に入れ替える。
   // 自分で書き換えたテーマはそのまま残す（消去・書き換えは自由）。
@@ -471,7 +484,7 @@ export default function ExplainerStudio() {
     if (mode === "stock" || mode === "sp500") {
       const snap = primaryStockSnapshot();
       const label = snap?.instrumentLabel ?? "S&P500";
-      const fixed = buildFixedDataChapters(snap, label);
+      const fixed = buildFixedDataChapters(snap, label, sheetInputFor(snap));
       const period = dataPeriodOf(snap);
       dataExtra = {
         dataPeriodNote: dataPeriodNoteOf(snap, label) ?? undefined,
@@ -550,12 +563,15 @@ export default function ExplainerStudio() {
       // lib/explainer/に固定場面ビルダーを足し→lib/explainer/dataChapters.tsのbuildFixedDataChaptersに追加する。
       if (mode === "stock" || mode === "sp500") {
         const snap = primaryStockSnapshot();
-        const fixed = buildFixedDataChapters(snap, snap?.instrumentLabel ?? "S&P500");
+        const fixed = buildFixedDataChapters(snap, snap?.instrumentLabel ?? "S&P500", sheetInputFor(snap));
         if (fixed.length) {
           const merged = mergeFixedChapters(p.chapters, longScenes, fixed);
           longScenes = assembleLong(merged.chapters, merged.perChapter, p.sources, true, sourcesInVideo);
           p = { ...p, chapters: merged.chapters };
         }
+        // [Stage E-16] タイトル場面の背景に、全期間の推移をうっすら描く（モックアップ1枚目）
+        const ti = longScenes.findIndex((sc) => sc.visual.kind === "title");
+        if (ti >= 0 && sheetInputFor(snap)) longScenes = longScenes.map((sc, i) => (i === ti ? decorateTitleScene(sc, sp500Sheets.title) : sc));
       }
       // ラベル（kicker）は、選んだ長尺の長さから自動で入れる（例：5分で解説）。生成後も自由に書き換えられる
       p = { ...p, longScenes, shortScenes: S.scenes, kicker: autoKickerFor(minutes) };

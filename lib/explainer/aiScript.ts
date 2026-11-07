@@ -2,7 +2,7 @@
 // 長い出力を1回で作らせると途中で切れやすく時間もかかるため、章ごとに分けて生成する。
 // 参考資料（PDF・URL本文・テキスト）は毎回同じ先頭部分として渡し、プロンプトキャッシュで再利用する。
 import { callTool } from './aiClient';
-import { ICON_NAMES, VISUAL_KINDS } from './types';
+import { ICON_NAMES, VISUAL_KINDS, FIXED_ONLY_KINDS } from './types';
 import type { ChapterPlan, ExplainerProject, ExplainerScene, SourceNote, StockCatalog, YoutubeMeta } from './types';
 import { assembleLong, normalizeScene, sanitizeReading, fixBannedWording } from './scriptModel';
 import { resolveYearCompareItems, resolveCatalogKey } from './stockCatalog';
@@ -223,7 +223,7 @@ const ITEM_SCHEMA = {
 const VISUAL_SCHEMA = {
   type: 'object',
   properties: {
-    kind: { type: 'string', enum: [...VISUAL_KINDS] },
+    kind: { type: 'string', enum: VISUAL_KINDS.filter((k) => !FIXED_ONLY_KINDS.includes(k)) },
     heading: { type: 'string' }, subheading: { type: 'string' },
     items: { type: 'array', items: ITEM_SCHEMA },
     unit: { type: 'string' }, source: { type: 'string' }, emphasis: { type: 'string' }, imagePrompt: { type: 'string' },

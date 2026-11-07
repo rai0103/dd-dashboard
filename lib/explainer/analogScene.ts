@@ -28,12 +28,15 @@ export function buildAnalogScene(af: AnalogFinderSummary | null | undefined, ins
   const matches = af.matches.slice(0, MAX_SCENE_MATCHES);
 
   const items: VisualItem[] = [];
-  af.currentPath.forEach((p) => {
+  // 保存サイズを抑えるため、線の点は3営業日おき（＋最後の点）に間引く（見た目はほぼ変わらない）
+  const thin = <T,>(arr: T[]) => arr.filter((_, k) => k % 3 === 0 || k === arr.length - 1);
+  thin(af.currentPath).forEach((p) => {
     items.push({ label: '現在まで', value: String(p.pct), text: '', icon: 'chartUp', x: p.x, seriesKey: 'current', seriesLabel: '現在までの軌跡', seriesEmphasis: true });
   });
   matches.forEach((m, i) => {
     if (m.forward.length < 2) return;
     m.forward.forEach((f, k) => {
+      if (k % 3 !== 0 && k !== m.forward.length - 1) return;
       items.push({ label: m.date, value: String(f.pct), text: '', icon: 'chartDown', x: k, seriesKey: `analog${i}`, seriesLabel: m.date });
     });
   });

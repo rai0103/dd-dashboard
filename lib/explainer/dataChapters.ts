@@ -10,8 +10,14 @@ import { buildAthPaceScene } from './athPaceScene';
 import { buildRollingReturnScene } from './rollingReturnScene';
 import { buildDailyMoveScene } from './dailyMoveScene';
 import { buildAnalogScene } from './analogScene';
+import { buildSheetScenes } from './sp500SheetScenes';
+import { kanaizeReading } from './readingUtil';
+import type { Sp500Sheets } from '../sp500Sheets';
 
-export interface FixedDataChapter { plan: ChapterPlan; scenes: ExplainerScene[] }
+/** position：afterIntro＝AIの導入章の直後（既定）、beforeOutro＝AIのまとめ章の直前 */
+export interface FixedDataChapter { plan: ChapterPlan; scenes: ExplainerScene[]; position?: 'afterIntro' | 'beforeOutro' }
+/** [Stage E-16] 日次終値から計算したS&P500のシート（lib/sp500Sheets.ts）と、その元の日次終値 */
+export interface SheetInput { sheets: Sp500Sheets | null; points: { date: string | Date; close?: number | null; price?: number | null }[] | null }
 
 const plan = (title: string, reading: string, goal: string): ChapterPlan => ({ title, reading, role: 'body', goal, keyPoints: '', sceneCount: 0 });
 
@@ -32,23 +38,46 @@ export function dataPeriodNoteOf(snapshot: any, instrumentLabel: string): string
   return `${instrumentLabel}：${ym(p.start)}〜${ym(p.end)}（約${p.years}年・日次終値）`;
 }
 
-export function buildFixedDataChapters(snapshot: any, instrumentLabel = 'S&P500'): FixedDataChapter[] {
+/**
+ * モックアップ（25枚）の章立ての順に、実データの固定章を組み立てる。sheet（日次終値から計算したS&P500のシート）は
+ * S&P500のときだけ渡す（無ければ、その章・場面は省く）。
+ */
+export function buildFixedDataChapters(snapshot: any, instrumentLabel = 'S&P500', sheet?: SheetInput | null): FixedDataChapter[] {
   if (!snapshot) return [];
   const out: FixedDataChapter[] = [];
-  const push = (p: ChapterPlan, scenes: (ExplainerScene | null | undefined)[]) => {
-    const list = scenes.filter((s): s is ExplainerScene => !!s);
-    if (list.length) out.push({ plan: { ...p, sceneCount: list.length }, scenes: list });
+  const push = (p: ChapterPlan, scenes: (ExplainerScene | null | undefined)[], position: FixedDataChapter['position'] = 'afterIntro') => {
+    const list = scenes.filter((s): s is ExplainerScene => !!s).map((s) => ({ ...s, reading: kanaizeReading(s.reading) }));
+    if (list.length) out.push({ plan: { ...p, sceneCount: list.length }, scenes: list, position });
   };
+  const sh = sheet?.sheets ? buildSheetScenes(sheet.sheets, sheet.points, instrumentLabel) : null;
+  const accel = buildAccelScenes(snapshot.accel ?? null, instrumentLabel);
+  // 2〜3（前提条件・DDの定義）
   push(plan('前提とドローダウンの基本', 'ぜんていと、どろーだうんの、きほん', 'データの前提と、下落（DD）の発生回数・深さの分布'),
     buildStockIntroScenes(snapshot.finalReach ?? null, instrumentLabel));
-  push(plan('DD速度センサー：下落の深まり方', 'でぃーでぃー、そくどせんさー、げらくの、ふかまりかた', '下落の速さ別のその後と、1日の大幅下落のその後'),
-    [...buildAccelScenes(snapshot.accel ?? null, instrumentLabel), buildDailyMoveScene(snapshot.dailyMoveDown ?? null, instrumentLabel)]);
-  push(plan('保有期間で変わる勝率', 'ほゆうきかんで、かわる、しょうりつ', '保有期間ごとのリターンの分布と勝率'),
+  // 4〜6（現在の状況）
+  push(plan('現在の状況', 'げんざいの、じょうきょう', '年初来の値動き・直近の値動き・上昇日と下落日の数'), [sh?.zoom, sh?.upDown]);
+  // 7〜10（DD速度センサー）
+  push(plan('DD速度センサー：下落の深まり方', 'でぃーでぃー、そくどせんさー、げらくの、ふかまりかた', '下落の速さ別のその後・過去の局面との重ね描き・分岐・1日の大幅下落のその後'),
+    [accel[0], sh?.ddOverlay, ...accel.slice(1), buildDailyMoveScene(snapshot.dailyMoveDown ?? null, instrumentLabel)]);
+  // 11（中期ローリングリターン）
+  push(plan('保有期間で変わる勝率', 'ほゆうきかんで、かわる、しょうりつ', '1ヶ月〜1年の保有期間ごとのリターンの分布と勝率'),
     [buildRollingReturnScene(snapshot.rollingReturns ?? null, instrumentLabel)]);
+  // 12（最高値更新ペース）
   push(plan('最高値更新のペース', 'さいたかねこうしんの、ぺーす', '最高値を更新する間隔の分布と、現在の位置'),
     [buildAthPaceScene(snapshot.athPace ?? null, instrumentLabel)]);
-  push(plan('似た値動きの局面とその後', 'にた、ねうごきの、きょくめんと、そのご', '直近の値動きが似ていた過去の局面と、その後の値動き'),
-    [buildAnalogScene(snapshot.analogFinder ?? null, instrumentLabel)]);
+  // 13（暴落発生確率）
+  push(plan('暴落の歴史', 'ぼうらくの、れきし', '全期間の下落率の推移と主な暴落、各水準に到達した年の割合'), [sh?.ddHistory]);
+  // 14（現在地点からの深掘り）
+  push(plan('現在地点からの深掘り', 'げんざいちてんからの、ふかぼり', '似た状態だった日の、その後の3つのパターン'), [sh?.athZone]);
+  // 15（長期ローリングリターン）
+  push(plan('長期で見ると', 'ちょうきで、みると', '5〜30年の保有期間ごとの年率リターンと勝率'), [sh?.longRolling]);
+  // 16（年初来パス比較）
+  push(plan('今年の値動きは強い？弱い？', 'ことしの、ねうごきは、つよい、よわい', '過去の各年の年初来の推移と比べた今年の位置'), [sh?.ytdPaths]);
+  // 17〜23（将来シナリオ）＋類似局面サーチ
+  push(plan('将来シナリオ', 'しょうらい、しなりお', '条件が似た過去の年・局面の、その後の値動き'),
+    [...(sh?.scenarios ?? []), buildAnalogScene(snapshot.analogFinder ?? null, instrumentLabel)]);
+  // 24〜25（まとめの事実・免責事項）はAIのまとめ章の直前
+  push(plan('データで分かったこと', 'でーたで、わかったこと', '全期間のデータで分かった事実と、予測についての注意'), [sh?.facts, sh?.disclaimer], 'beforeOutro');
   return out;
 }
 
@@ -65,8 +94,11 @@ export function mergeFixedChapters(aiChapters: ChapterPlan[], aiScenes: Explaine
   const perAi = aiChapters.map((_, i) => aiScenes.filter((s) => s.chapter === i && s.visual.kind !== 'chapter' && s.visual.kind !== 'sources'));
   const introIdx = aiChapters.findIndex((c) => c.role === 'intro');
   const pos = introIdx >= 0 ? introIdx + 1 : 0;
+  const outroIdx = aiChapters.findIndex((c, i) => i >= pos && c.role === 'outro');
+  const pos2 = outroIdx >= 0 ? outroIdx : aiChapters.length;
+  const early = fixed.filter((f) => f.position !== 'beforeOutro'), late = fixed.filter((f) => f.position === 'beforeOutro');
   return {
-    chapters: [...aiChapters.slice(0, pos), ...fixed.map((f) => f.plan), ...aiChapters.slice(pos)],
-    perChapter: [...perAi.slice(0, pos), ...fixed.map((f) => f.scenes), ...perAi.slice(pos)],
+    chapters: [...aiChapters.slice(0, pos), ...early.map((f) => f.plan), ...aiChapters.slice(pos, pos2), ...late.map((f) => f.plan), ...aiChapters.slice(pos2)],
+    perChapter: [...perAi.slice(0, pos), ...early.map((f) => f.scenes), ...perAi.slice(pos, pos2), ...late.map((f) => f.scenes), ...perAi.slice(pos2)],
   };
 }

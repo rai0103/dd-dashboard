@@ -3,7 +3,7 @@
 // 外部の画像は使わず（ユーザーが追加した画像を除く）、すべて自作の図形・アイコンで構成する。
 import { drawIcon } from './icons';
 import { parseValue } from './scriptModel';
-import type { ExplainerScene, VisualItem } from './types';
+import type { ExplainerScene, VisualItem, FanRole } from './types';
 
 type Ctx = CanvasRenderingContext2D;
 
@@ -148,6 +148,24 @@ type Draw = (c: Ctx, sc: ExplainerScene, e: VisualEnv) => void;
 
 const drawTitle: Draw = (c, sc, e) => {
   const v = sc.visual, cx = e.W / 2;
+  // [Stage E-16] 背景の推移（例：全期間の指数）をうっすら描く
+  if (v.background && v.background.length > 1) {
+    const bg = v.background;
+    const bxLo = bg[0].x, bxHi = bg[bg.length - 1].x;
+    const byLo = Math.min(...bg.map((p) => p.y)), byHi = Math.max(...bg.map((p) => p.y));
+    const BX = (x: number) => 10 + ((e.W - 20) * (x - bxLo)) / Math.max(1e-9, bxHi - bxLo);
+    const BY = (y: number) => e.H * 0.92 - ((y - byLo) / Math.max(1e-9, byHi - byLo)) * e.H * 0.6;
+    const bk = ease(sub(e.p, 0, 0.5));
+    const cut = bxLo + (bxHi - bxLo) * bk;
+    const vis = bg.filter((p) => p.x <= cut);
+    if (vis.length > 1) {
+      const g2 = c.createLinearGradient(0, e.H * 0.3, 0, e.H);
+      g2.addColorStop(0, `rgba(${e.accent},0.16)`); g2.addColorStop(1, `rgba(${e.accent},0)`);
+      c.beginPath(); c.moveTo(BX(vis[0].x), e.H); vis.forEach((p) => c.lineTo(BX(p.x), BY(p.y))); c.lineTo(BX(vis[vis.length - 1].x), e.H); c.closePath(); c.fillStyle = g2; c.fill();
+      c.beginPath(); c.moveTo(BX(vis[0].x), BY(vis[0].y)); vis.forEach((p) => c.lineTo(BX(p.x), BY(p.y)));
+      c.strokeStyle = `rgba(${e.accent},0.4)`; c.lineWidth = 2; c.stroke();
+    }
+  }
   // 回るリングと浮かぶアイコン
   c.save();
   c.translate(cx, e.H * 0.48);
@@ -1015,11 +1033,14 @@ const drawDistribution: Draw = (c, sc, e) => {
     ? (val: number) => y1 - ((toLog(Math.max(val, lo)) - toLog(lo)) / Math.max(1e-6, toLog(hi) - toLog(lo))) * (y1 - y0)
     : (val: number) => y1 - ((val - lo) / Math.max(1e-6, hi - lo)) * (y1 - y0);
   c.save();
-  for (let g = 0; g <= 4; g++) {
-    const gv = lo + ((hi - lo) * g) / 4, gy = Y(gv);
+  // [Stage E-16] 目盛りはきりのよい値に（対数目盛のときは従来どおり等分）
+  const dTicks = logScale ? [0, 1, 2, 3, 4].map((g) => lo * Math.pow(hi / lo, g / 4)) : niceTicks(lo, hi, 5);
+  const dStep = dTicks.length > 1 ? Math.abs(dTicks[1] - dTicks[0]) : 1;
+  dTicks.forEach((gv) => {
+    const gy = Y(gv);
     c.fillStyle = 'rgba(255,255,255,0.07)'; c.fillRect(x0 - 6, gy, aw + 12, 1);
-    text(c, `${fmtNum(gv)}${dist?.unit || ''}`, x0 - 12, gy + 4, 10, WHITE, { align: 'right', alpha: 0.45 });
-  }
+    text(c, `${logScale ? fmtNum(gv) : tickText(gv, dStep)}${dist?.unit || ''}`, x0 - 12, gy + 4, 10, WHITE, { align: 'right', alpha: 0.45 });
+  });
   if (lo < 0 && hi > 0) { c.fillStyle = 'rgba(255,255,255,0.3)'; c.fillRect(x0 - 6, Y(0), aw + 12, 1.5); }
   const k = ease(sub(e.p, 0.1, 0.8));
   groups.forEach((g, gi) => {
@@ -1123,6 +1144,354 @@ const drawGroupedBar: Draw = (c, sc, e) => {
   sourceNote(c, e, v.source);
 };
 
+// ======================================================================
+// [Stage E-16] S&P500動画（モックアップ25枚）の固定場面専用の図解。仕様データ（visual.fan等）を直接描く。
+// ======================================================================
+/** 目盛り用のきりのよい値（1・2・2.5・5×10^k刻み） */
+function niceTicks(lo: number, hi: number, count = 4): number[] {
+  const raw = (hi - lo) / Math.max(1, count);
+  if (!(raw > 0)) return [lo];
+  const p10 = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 2.5, 5, 10].map((m) => m * p10).find((st) => st >= raw) ?? 10 * p10;
+  const out: number[] = [];
+  for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(Math.round(v * 1e6) / 1e6 || 0); // −0を0に
+  return out;
+}
+const tickText = (v: number, step: number) => fmtNum(v, step >= 1 ? 0 : step >= 0.1 ? 1 : 2);
+/** 暗い角丸の札に文字を描く（線や塗りの上でも読めるように） */
+function pill(c: Ctx, s: string, x: number, y: number, rgb: string, align: 'left' | 'right' | 'center' = 'left', size = 10) {
+  font(c, size, true); const w = c.measureText(s).width + 10;
+  const bx = align === 'left' ? x : align === 'right' ? x - w : x - w / 2;
+  rr(c, bx, y - size - 2, w, size + 7, (size + 7) / 2); c.fillStyle = 'rgba(6,10,19,0.85)'; c.fill();
+  text(c, s, bx + w / 2, y + 1, size, rgb, { bold: true, align: 'center' });
+}
+
+const ROLE_RGB = (role: FanRole | undefined, accent: string): string =>
+  role === 'focus' ? accent : role === 'median' ? AMBER : role === 'avg' ? BLUE : role === 'warn' ? RUST : WHITE;
+
+/** 数値チップ（ラベル＋値）を横に並べる。描いた高さを返す */
+function chipsRow(c: Ctx, e: VisualEnv, chips: { label: string; value: string; role?: FanRole }[] | undefined, y: number): number {
+  if (!chips || !chips.length) return 0;
+  const gap = 6, h = 34;
+  const perRow = Math.min(4, chips.length);
+  const w = (e.W - 16 - gap * (perRow - 1)) / perRow;
+  chips.forEach((ch, i) => {
+    const row = Math.floor(i / perRow), col = i % perRow;
+    const x = 8 + col * (w + gap), yy = y + row * (h + gap);
+    const k = ease(sub(e.p, 0.1 + i * 0.05, 0.25 + i * 0.05));
+    if (k <= 0) return;
+    const rgb = ch.role ? ROLE_RGB(ch.role, e.accent) : WHITE;
+    c.save(); c.globalAlpha *= k;
+    rr(c, x, yy, w, h, 9); c.fillStyle = `rgba(${rgb},${ch.role ? 0.14 : 0.07})`; c.fill();
+    if (ch.role) { c.strokeStyle = `rgba(${rgb},0.6)`; c.lineWidth = 1.2; c.stroke(); }
+    text(c, ch.label, x + 8, yy + 13, e.portrait ? 9 : 10, WHITE, { alpha: 0.7, maxW: w - 14 });
+    text(c, ch.value, x + 8, yy + 29, e.portrait ? 13 : 14, ch.role ? rgb : WHITE, { bold: true, maxW: w - 14 });
+    c.restore();
+  });
+  return Math.ceil(chips.length / perRow) * (h + gap);
+}
+
+const drawFan: Draw = (c, sc, e) => {
+  const v = sc.visual, f = v.fan;
+  let top = heading(c, e, v.heading, v.subheading, e.accent);
+  if (!f) { sourceNote(c, e, v.source); return; }
+  top += chipsRow(c, e, f.chips, top - 4);
+  const fg = f.series.filter((s) => s.role !== 'bg');
+  const bgCount = f.series.length - fg.length;
+  const legendItems = [...fg.map((s) => ({ label: s.label, rgb: ROLE_RGB(s.role, e.accent), w: s.role === 'focus' ? 4 : 2.5, band: false })),
+    ...(f.band ? [{ label: f.band.label, rgb: BLUE, w: 10, band: true }] : []),
+    ...(bgCount && f.bgLegend ? [{ label: f.bgLegend, rgb: WHITE, w: 1.2, band: false }] : [])];
+  // 凡例の行数（実際の幅で折り返しを数える）
+  let legendRows = 1;
+  { let lx = 48; font(c, 10); legendItems.forEach((it) => { const w = 20 + c.measureText(it.label).width + 14; if (lx + w > e.W - 8) { legendRows++; lx = 48; } lx += w; }); }
+  const legendH = legendRows * 15;
+  const hasEnd = fg.some((s) => s.endLabel);
+  // 下から：出典(14)・凡例・目盛り(16)
+  const x0 = 46, x1 = e.W - (hasEnd ? 80 : 14), y0 = top + 8, y1 = e.H - (e.showSource ? 16 : 6) - legendH - 18;
+  const xs: number[] = [], ys: number[] = [];
+  f.series.forEach((s) => s.points.forEach((p) => { xs.push(p.x); ys.push(p.y); }));
+  f.band?.points.forEach((p) => { xs.push(p.x); ys.push(p.lo, p.hi); });
+  f.markers?.forEach((m) => { xs.push(m.x); ys.push(m.y); });
+  f.hLines?.forEach((h) => ys.push(h.y));
+  if (!xs.length) { sourceNote(c, e, v.source); return; }
+  const xLo = Math.min(...xs), xHi = Math.max(...xs);
+  let lo0 = Math.min(...ys), hi0 = Math.max(...ys);
+  if (f.clipBg) {
+    // 背景の細線は外れ値で縦軸が広がりすぎないよう5〜95%の範囲だけを軸に含める（はみ出した分は枠で切る）
+    const fgY: number[] = [];
+    fg.forEach((s2) => s2.points.forEach((p) => fgY.push(p.y)));
+    f.band?.points.forEach((p) => fgY.push(p.lo, p.hi));
+    const bgY = f.series.filter((s2) => s2.role === 'bg').flatMap((s2) => s2.points.map((p) => p.y)).sort((a, b) => a - b);
+    const q = (t: number) => bgY[Math.min(bgY.length - 1, Math.max(0, Math.round((bgY.length - 1) * t)))];
+    lo0 = Math.min(...fgY, bgY.length ? q(0.03) : Infinity); hi0 = Math.max(...fgY, bgY.length ? q(0.97) : -Infinity);
+  }
+  const pad = (hi0 - lo0) * 0.08 || 1;
+  const lo = lo0 - pad, hi = hi0 + pad;
+  const X = (x: number) => x0 + ((x1 - x0) * (x - xLo)) / Math.max(1e-9, xHi - xLo);
+  const Y = (y: number) => y1 - ((y - lo) / Math.max(1e-9, hi - lo)) * (y1 - y0);
+  const u = f.yUnit ?? '';
+  c.save();
+  const yt = niceTicks(lo, hi, 5), ystep = yt.length > 1 ? yt[1] - yt[0] : 1;
+  yt.forEach((gv) => {
+    const gy = Y(gv);
+    c.fillStyle = 'rgba(255,255,255,0.07)'; c.fillRect(x0, gy, x1 - x0, 1);
+    text(c, `${tickText(gv, ystep)}${u}`, x0 - 6, gy + 4, 10, WHITE, { align: 'right', alpha: 0.5 });
+  });
+  c.save(); c.beginPath(); c.rect(x0 - 1, y0 - 4, x1 - x0 + 2, y1 - y0 + 8); c.clip();
+  if (lo < 0 && hi > 0) { c.fillStyle = 'rgba(255,255,255,0.28)'; c.fillRect(x0, Y(0), x1 - x0, 1); }
+  const ticks = f.xTicks ?? [xLo, (xLo + xHi) / 2, xHi].map((x) => ({ x: Math.round(x), label: `${fmtNum(Math.round(x))}${f.xUnit ?? ''}` }));
+  ticks.forEach((t) => { if (t.x >= xLo && t.x <= xHi) text(c, t.label, Math.min(x1 - 12, Math.max(x0 + 12, X(t.x))), y1 + 15, 10, WHITE, { align: 'center', alpha: 0.6 }); });
+  f.hLines?.forEach((h) => {
+    c.save(); c.setLineDash([5, 5]); c.strokeStyle = 'rgba(255,255,255,0.35)'; c.lineWidth = 1;
+    c.beginPath(); c.moveTo(x0, Y(h.y)); c.lineTo(x1, Y(h.y)); c.stroke(); c.restore();
+  });
+  const k = ease(sub(e.p, 0.08, 0.7));
+  const xCut = xLo + (xHi - xLo) * k;
+  if (f.band && f.band.points.length > 1) {
+    const pts = f.band.points.filter((p) => p.x <= xCut + 1e-9);
+    if (pts.length > 1) {
+      c.beginPath(); c.moveTo(X(pts[0].x), Y(pts[0].hi));
+      pts.forEach((p) => c.lineTo(X(p.x), Y(p.hi)));
+      [...pts].reverse().forEach((p) => c.lineTo(X(p.x), Y(p.lo)));
+      c.closePath(); c.fillStyle = `rgba(${BLUE},0.2)`; c.fill();
+    }
+  }
+  const drawPath = (pts: { x: number; y: number }[], rgb: string, alpha: number, lw: number, glow: boolean, dash = false) => {
+    const vis = pts.filter((p) => p.x <= xCut + 1e-9);
+    if (vis.length < 2) return null;
+    c.save();
+    c.beginPath(); c.moveTo(X(vis[0].x), Y(vis[0].y));
+    for (let i = 1; i < vis.length; i++) c.lineTo(X(vis[i].x), Y(vis[i].y));
+    c.strokeStyle = `rgba(${rgb},${alpha})`; c.lineWidth = lw; c.lineJoin = 'round';
+    if (dash) c.setLineDash([6, 5]);
+    if (glow) { c.shadowColor = `rgba(${rgb},0.75)`; c.shadowBlur = 10; }
+    c.stroke(); c.restore();
+    return vis[vis.length - 1];
+  };
+  f.series.filter((s) => s.role === 'bg').forEach((s) => drawPath(s.points, WHITE, Math.max(0.1, Math.min(0.3, 4 / Math.max(1, bgCount))), 1.1, false));
+  const order: FanRole[] = ['avg', 'warn', 'median', 'focus'];
+  const ends: { x: number; y: number; label: string; rgb: string }[] = [];
+  order.forEach((role) => f.series.filter((s) => s.role === role).forEach((s) => {
+    const rgb = ROLE_RGB(role, e.accent);
+    const end = drawPath(s.points, rgb, role === 'focus' ? 1 : 0.92, role === 'focus' ? 3.6 : 2.4, role === 'focus');
+    if (end && s.endLabel && k > 0.97) ends.push({ x: X(end.x), y: Y(end.y), label: s.endLabel, rgb });
+  }));
+  c.restore(); // クリップ解除
+  f.hLines?.forEach((h) => pill(c, h.label, x1 - 2, Y(h.y) - 3, WHITE, 'right'));
+  // 右端のラベル（重ならないよう縦に押し下げる）
+  ends.sort((a, b) => a.y - b.y);
+  let lastY = -Infinity;
+  ends.forEach((en) => {
+    const ey = Math.min(y1 + 4, Math.max(y0 + 4, en.y));
+    const y = Math.max(ey + 4, lastY + 14); lastY = y;
+    c.beginPath(); c.arc(en.x, ey, 3.5, 0, Math.PI * 2); c.fillStyle = `rgb(${en.rgb})`; c.fill();
+    text(c, en.label, en.x + 6, y, 11, en.rgb, { bold: true, maxW: e.W - en.x - 8 });
+  });
+  if (f.nowX != null && f.nowX >= xLo && f.nowX <= xHi) {
+    const nx = X(f.nowX);
+    c.save(); c.setLineDash([4, 4]); c.strokeStyle = `rgba(${AMBER},0.8)`; c.lineWidth = 1.2;
+    c.beginPath(); c.moveTo(nx, y0); c.lineTo(nx, y1); c.stroke(); c.restore();
+    text(c, f.nowLabel ?? '現在', nx, y0 + 10, 10, AMBER, { align: 'center', bold: true });
+  }
+  f.markers?.forEach((m, i) => {
+    if (m.x > xCut + 1e-9) return;
+    const rgb = ROLE_RGB(m.role ?? 'median', e.accent);
+    const mx = X(m.x), my = Y(m.y);
+    c.beginPath(); c.arc(mx, my, 4.5, 0, Math.PI * 2); c.fillStyle = `rgb(${rgb})`; c.fill();
+    c.lineWidth = 1.5; c.strokeStyle = '#05080f'; c.stroke();
+    font(c, 10, true); const w = c.measureText(m.label).width + 10;
+    const above = i % 2 === 0;
+    const bx = Math.min(e.W - w - 4, Math.max(4, mx - w / 2)), by = above ? my - 24 : my + 8;
+    rr(c, bx, by, w, 16, 8); c.fillStyle = 'rgba(6,10,19,0.88)'; c.fill();
+    c.strokeStyle = `rgba(${rgb},0.7)`; c.lineWidth = 1; c.stroke();
+    text(c, m.label, bx + w / 2, by + 12, 10, rgb, { bold: true, align: 'center' });
+  });
+  // 凡例
+  let lx = 48, ly = y1 + 30;
+  legendItems.forEach((it) => {
+    font(c, 10); const w = c.measureText(it.label).width;
+    if (lx + 20 + w + 14 > e.W - 8) { lx = 48; ly += 15; }
+    if (it.band) { c.fillStyle = `rgba(${BLUE},0.35)`; c.fillRect(lx, ly - 8, 16, 7); }
+    else { c.beginPath(); c.moveTo(lx, ly - 4); c.lineTo(lx + 16, ly - 4); c.strokeStyle = `rgba(${it.rgb},${it.rgb === WHITE && it.w < 2 ? 0.5 : 1})`; c.lineWidth = Math.min(4, it.w); c.stroke(); }
+    text(c, it.label, lx + 20, ly, 10, it.rgb, { alpha: 0.85 });
+    lx += 20 + w + 14;
+  });
+  c.restore();
+  sourceNote(c, e, v.source);
+};
+
+const drawZoomLine: Draw = (c, sc, e) => {
+  const v = sc.visual, z = v.zoomLine;
+  let top = heading(c, e, v.heading, v.subheading, e.accent);
+  if (!z || z.points.length < 2) { sourceNote(c, e, v.source); return; }
+  top += chipsRow(c, e, z.chips, top - 4);
+  const n = z.points.length, zf = Math.max(0, Math.min(n - 2, z.zoomFrom));
+  const x0 = 56, x1 = e.W - 34, y0 = top + 14, y1 = e.H - (e.showSource ? 34 : 24);
+  // 0〜0.45：全体を描く／0.35〜0.45：ズーム範囲の枠／0.5〜0.7：横軸・縦軸をズーム範囲へ／0.7〜：各日の騰落率
+  const zk = ease(sub(e.p, 0.5, 0.7));
+  const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+  const iLo = lerp(0, zf, zk), iHi = n - 1;
+  const ysAll = z.points.map((p) => p.y), ysZoom = z.points.slice(zf).map((p) => p.y);
+  const pad = (a: number[]) => { const lo = Math.min(...a), hi = Math.max(...a), d = (hi - lo) * 0.15 || 0.5; return [lo - d, hi + d]; };
+  const [aLo, aHi] = pad(ysAll), [bLo, bHi] = pad(ysZoom);
+  const lo = lerp(aLo, bLo, zk), hi = lerp(aHi, bHi, zk);
+  const X = (i: number) => x0 + ((x1 - x0) * (i - iLo)) / Math.max(1e-9, iHi - iLo);
+  const Y = (y: number) => y1 - ((y - lo) / Math.max(1e-9, hi - lo)) * (y1 - y0);
+  c.save();
+  c.beginPath(); c.rect(x0 - 2, y0 - 10, x1 - x0 + 4, y1 - y0 + 20); c.clip();
+  const zt = niceTicks(lo, hi, 4), zstep = zt.length > 1 ? zt[1] - zt[0] : 1;
+  zt.forEach((gv) => { c.fillStyle = 'rgba(255,255,255,0.07)'; c.fillRect(x0, Y(gv), x1 - x0, 1); });
+  if (lo < 0 && hi > 0) { c.fillStyle = 'rgba(255,255,255,0.3)'; c.fillRect(x0, Y(0), x1 - x0, 1); }
+  const dk = ease(sub(e.p, 0.06, 0.42));
+  const upto = Math.max(1, Math.floor(dk * (n - 1)));
+  const grad = c.createLinearGradient(0, y0, 0, y1);
+  grad.addColorStop(0, `rgba(${e.accent},0.3)`); grad.addColorStop(1, `rgba(${e.accent},0)`);
+  c.beginPath(); c.moveTo(X(0), y1);
+  for (let i = 0; i <= upto; i++) c.lineTo(X(i), Y(z.points[i].y));
+  c.lineTo(X(upto), y1); c.closePath(); c.fillStyle = grad; c.fill();
+  c.beginPath(); c.moveTo(X(0), Y(z.points[0].y));
+  for (let i = 1; i <= upto; i++) c.lineTo(X(i), Y(z.points[i].y));
+  c.strokeStyle = `rgb(${e.accent})`; c.lineWidth = zk > 0.5 ? 3.5 : 2.6; c.lineJoin = 'round'; c.shadowColor = `rgba(${e.accent},0.7)`; c.shadowBlur = 8; c.stroke(); c.shadowBlur = 0;
+  c.restore();
+  zt.forEach((gv) => text(c, `${tickText(gv, zstep)}${z.yUnit}`, x0 - 6, Y(gv) + 4, 10, WHITE, { align: 'right', alpha: 0.5 }));
+  // ズーム前：範囲の点線枠
+  const bk = sub(e.p, 0.35, 0.45) * (1 - sub(e.p, 0.5, 0.58));
+  if (bk > 0) {
+    const bx = X(zf) - 4, bw = X(n - 1) - X(zf) + 8;
+    const zy = ysZoom; const by = Y(Math.max(...zy)) - 12, bh = Y(Math.min(...zy)) - by + 24;
+    c.save(); c.globalAlpha *= bk; c.setLineDash([5, 4]); c.strokeStyle = `rgb(${AMBER})`; c.lineWidth = 1.8; c.strokeRect(bx, by, bw, bh); c.restore();
+    text(c, z.zoomTitle, Math.min(e.W - 8, bx + bw), by - 6, 11, AMBER, { align: 'right', bold: true, alpha: bk });
+  }
+  // 横軸：ズーム前は年初・年末付近の日付、ズーム後は各日の日付
+  if (zk < 0.5) {
+    [0, Math.floor((n - 1) / 2), n - 1].forEach((i) => text(c, z.points[i].label, X(i), y1 + 16, 10, WHITE, { align: 'center', alpha: 0.6 * (1 - zk * 2) }));
+  }
+  const lk = ease(sub(e.p, 0.7, 0.85));
+  if (lk > 0) {
+    z.zoomDays.forEach((d, j) => {
+      const i = zf + j;
+      if (i > n - 1) return;
+      const px = X(i), py = Y(z.points[i].y);
+      const rgb = d.dayPct > 0 ? TEAL : d.dayPct < 0 ? RUST : WHITE;
+      c.save(); c.globalAlpha *= lk;
+      c.beginPath(); c.arc(px, py, 4.5, 0, Math.PI * 2); c.fillStyle = '#fff'; c.fill();
+      const lbl = `${d.dayPct > 0 ? '+' : ''}${d.dayPct.toFixed(1)}%`;
+      font(c, 11, true); const w = c.measureText(lbl).width + 10;
+      const by = Math.max(y0 - 8, Math.min(y1 - 18, j % 2 === 0 ? py - 26 : py + 10));
+      const bx = Math.min(e.W - w - 4, Math.max(4, px - w / 2));
+      rr(c, bx, by, w, 17, 8); c.fillStyle = `rgba(${rgb},0.9)`; c.fill();
+      text(c, lbl, bx + w / 2, by + 12.5, 11, INK, { bold: true, align: 'center' });
+      text(c, d.label, px, y1 + 16, 10, WHITE, { align: 'center', alpha: 0.75 });
+      c.restore();
+    });
+  }
+  sourceNote(c, e, v.source);
+};
+
+const drawButterfly: Draw = (c, sc, e) => {
+  const v = sc.visual, b = v.butterfly;
+  const top = heading(c, e, v.heading, v.subheading, e.accent);
+  if (!b || !b.rows.length) { sourceNote(c, e, v.source); return; }
+  const cx = e.W / 2, labelW = e.portrait ? 0 : 0;
+  const maxV = Math.max(1, ...b.rows.map((r) => Math.max(r.left, r.right)));
+  const half = e.W / 2 - 70 - labelW;
+  text(c, b.leftLabel, cx - 10, top + 6, 13, RUST, { align: 'right', bold: true });
+  text(c, b.rightLabel, cx + 10, top + 6, 13, TEAL, { bold: true });
+  const noteH = b.note ? 30 : 0;
+  const areaTop = top + 18, rowH = Math.min(e.portrait ? 70 : 74, (e.H - areaTop - 12 - noteH) / b.rows.length);
+  c.fillStyle = 'rgba(255,255,255,0.35)'; c.fillRect(cx - 0.5, areaTop, 1, rowH * b.rows.length);
+  b.rows.forEach((r, i) => {
+    const y = areaTop + i * rowH;
+    const k = ease(sub(e.p, 0.1 + i * 0.12, 0.4 + i * 0.12));
+    const em = !!r.emphasis;
+    text(c, r.label, cx, y + 14, 12, em ? e.accent : WHITE, { align: 'center', bold: true, alpha: em ? 1 : 0.85 });
+    const bh = Math.min(22, rowH * 0.32), by = y + 22;
+    const lw = (r.left / maxV) * half * k, rw = (r.right / maxV) * half * k;
+    rr(c, cx - 4 - lw, by, lw, bh, 5); c.fillStyle = `rgba(${RUST},${em ? 0.95 : 0.6})`; c.fill();
+    rr(c, cx + 4, by, rw, bh, 5); c.fillStyle = `rgba(${TEAL},${em ? 0.95 : 0.6})`; c.fill();
+    if (k > 0.9) {
+      text(c, `${fmtNum(r.left, Number.isInteger(r.left) ? 0 : 1)}日`, cx - 10 - lw, by + bh - 6, 13, WHITE, { align: 'right', bold: true });
+      text(c, `${fmtNum(r.right, Number.isInteger(r.right) ? 0 : 1)}日`, cx + 10 + rw, by + bh - 6, 13, WHITE, { bold: true });
+      text(c, r.leftSub, cx - 10, by + bh + 14, 10, RUST, { align: 'right', alpha: 0.9 });
+      text(c, r.rightSub, cx + 10, by + bh + 14, 10, TEAL, { alpha: 0.9 });
+    }
+  });
+  if (b.note) textBlock(c, b.note, 8, e.H - noteH + 4, e.W - 16, 12, WHITE, { alpha: 0.75 * ease(sub(e.p, 0.5, 0.7)), maxLines: 2 });
+  sourceNote(c, e, v.source);
+};
+
+const drawDdHistory: Draw = (c, sc, e) => {
+  const v = sc.visual, h = v.ddHistory;
+  const top = heading(c, e, v.heading, v.subheading, e.accent);
+  if (!h || h.points.length < 2) { sourceNote(c, e, v.source); return; }
+  const bandH = (e.portrait ? 3 : 3) * 18 + 6; // 暴落ラベルを並べる帯
+  const x0 = 44, x1 = e.W - 12, y0 = top + 8, yAxis = e.H - (e.showSource ? 30 : 18), y1 = yAxis - bandH;
+  const xLo = h.points[0].x, xHi = h.points[h.points.length - 1].x;
+  const lo = Math.min(...h.points.map((p) => p.y), ...h.hLines.map((l) => l.y)) * 1.12, hi = 2;
+  const X = (x: number) => x0 + ((x1 - x0) * (x - xLo)) / Math.max(1e-9, xHi - xLo);
+  const Y = (y: number) => y0 + ((hi - y) / (hi - lo)) * (y1 - y0);
+  c.save();
+  if (h.highlight) {
+    const hk = ease(sub(e.p, 0.75, 0.9));
+    if (hk > 0) {
+      c.fillStyle = `rgba(${AMBER},${0.12 * hk})`; c.fillRect(X(h.highlight.from), y0, X(h.highlight.to) - X(h.highlight.from), y1 - y0);
+      text(c, h.highlight.label, (X(h.highlight.from) + X(h.highlight.to)) / 2, y0 + 12, 10, AMBER, { align: 'center', bold: true, alpha: hk, maxW: Math.max(120, X(h.highlight.to) - X(h.highlight.from) + 60) });
+    }
+  }
+  h.hLines.forEach((l) => {
+    c.save(); c.setLineDash([5, 5]); c.strokeStyle = 'rgba(255,255,255,0.3)'; c.lineWidth = 1;
+    c.beginPath(); c.moveTo(x0, Y(l.y)); c.lineTo(x1, Y(l.y)); c.stroke(); c.restore();
+    text(c, `${l.y}%`, x0 - 5, Y(l.y) + 4, 10, WHITE, { align: 'right', alpha: 0.55 });
+  });
+  c.fillStyle = 'rgba(255,255,255,0.35)'; c.fillRect(x0, Y(0), x1 - x0, 1);
+  text(c, '0%', x0 - 5, Y(0) + 4, 10, WHITE, { align: 'right', alpha: 0.55 });
+  const k = ease(sub(e.p, 0.06, 0.7));
+  const xCut = xLo + (xHi - xLo) * k;
+  const vis = h.points.filter((p) => p.x <= xCut);
+  if (vis.length > 1) {
+    const grad = c.createLinearGradient(0, Y(0), 0, y1);
+    grad.addColorStop(0, `rgba(${RUST},0.15)`); grad.addColorStop(1, `rgba(${RUST},0.6)`);
+    c.beginPath(); c.moveTo(X(vis[0].x), Y(0));
+    vis.forEach((p) => c.lineTo(X(p.x), Y(p.y)));
+    c.lineTo(X(vis[vis.length - 1].x), Y(0)); c.closePath(); c.fillStyle = grad; c.fill();
+    c.beginPath(); c.moveTo(X(vis[0].x), Y(vis[0].y));
+    vis.forEach((p) => c.lineTo(X(p.x), Y(p.y)));
+    c.strokeStyle = `rgb(${RUST})`; c.lineWidth = 1.4; c.stroke();
+  }
+  const decades = [];
+  for (let yr = Math.ceil(xLo / 10) * 10; yr <= xHi; yr += 10) decades.push(yr);
+  h.hLines.forEach((l) => pill(c, l.label, x1 - 2, Y(l.y) - 3, WHITE, 'right'));
+  decades.forEach((yr) => text(c, `${yr}`, X(yr), yAxis + 13, 10, WHITE, { align: 'center', alpha: 0.6 }));
+  // 暴落ラベル：グラフの下の帯に、横に重ならない段へ順に置く（谷から引き出し線を下ろす）
+  const rowsUsed: [number, number][][] = [[], [], []];
+  font(c, 10, true);
+  // 縦長では幅が足りないので「1987年 ブラックマンデー −34%」→「1987年 −34%」に縮める
+  const shortLabel = (s2: string) => { const parts = s2.split(' '); return parts.length >= 3 ? `${parts[0]} ${parts[parts.length - 1]}` : s2; };
+  const placed = h.labels.map((l0) => {
+    const l = { ...l0, label: e.portrait ? shortLabel(l0.label) : l0.label };
+    const w = c.measureText(l.label).width + 10;
+    const px = X(l.x);
+    const bx = Math.min(e.W - w - 4, Math.max(4, px - w / 2));
+    const row = rowsUsed.findIndex((r) => r.every(([a, b]) => bx + w + 4 < a || bx > b + 4));
+    if (row >= 0) rowsUsed[row].push([bx, bx + w]);
+    return { l, w, bx, row };
+  }).filter((x) => x.row >= 0); // 置き場所が無いラベルは重ねずに省く（深い順に優先されている）
+  placed.forEach(({ l, w, bx, row }) => {
+    if (l.x > xCut) return;
+    const lk = ease(sub(e.p, 0.1 + (0.6 * (l.x - xLo)) / Math.max(1e-9, xHi - xLo), 0.2 + (0.6 * (l.x - xLo)) / Math.max(1e-9, xHi - xLo)));
+    const px = X(l.x), py = Y(l.y);
+    const by = y1 + 6 + row * 18;
+    c.save(); c.globalAlpha *= lk;
+    c.strokeStyle = 'rgba(255,255,255,0.45)'; c.lineWidth = 1; c.beginPath(); c.moveTo(px, py); c.lineTo(px, by); c.stroke();
+    c.beginPath(); c.arc(px, py, 3, 0, Math.PI * 2); c.fillStyle = '#fff'; c.fill();
+    rr(c, bx, by, w, 16, 8); c.fillStyle = 'rgba(6,10,19,0.9)'; c.fill(); c.strokeStyle = `rgba(${RUST},0.8)`; c.stroke();
+    text(c, l.label, bx + w / 2, by + 12, 10, WHITE, { bold: true, align: 'center' });
+    c.restore();
+  });
+  c.restore();
+  sourceNote(c, e, v.source);
+};
+
 const DRAWERS: Record<string, Draw> = {
   title: drawTitle, chapter: drawChapter, keyword: drawKeyword, points: drawPoints, number: drawNumber,
   bar: drawBar, line: drawLine, donut: drawDonut, timeline: drawTimeline, flow: drawFlow, compare: drawCompare,
@@ -1131,6 +1500,7 @@ const DRAWERS: Record<string, Draw> = {
   yearCompare: drawOverlay, // [Stage E-9]
   branch: drawBranch, histogram: drawHistogram, distribution: drawDistribution, // [Stage E-10]
   groupedBar: drawGroupedBar, // [Stage E-13]
+  fan: drawFan, zoomLine: drawZoomLine, butterfly: drawButterfly, ddHistory: drawDdHistory, // [Stage E-16]
 };
 
 /** 場面の図解を、仮想サイズ（e.W×e.H）の座標で描く */

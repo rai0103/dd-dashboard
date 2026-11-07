@@ -38,7 +38,14 @@ export const VISUAL_KINDS = [
   // [Stage E-13] 同上の理由で追加。カテゴリ（例：下落幅の区分）ごとに複数系列（例：翌営業日・20営業日後）を
   // 並べて比較したいときに使う（既存の'bar'は1カテゴリ1系列のみ）。
   'groupedBar',   // グループ棒グラフ：同じカテゴリ内で複数系列を並べて比較する
+  // [Stage E-16] S&P500動画（モックアップ25枚）の固定場面専用。AIの台本生成には渡さない（FIXED_ONLY_KINDS）。
+  'fan',          // 重ね描き＋レンジ帯：過去の各局面・各年の推移を細線で重ね、中央値・今年・レンジ帯を強調する
+  'zoomLine',     // 年初来の折れ線→直近数営業日へズームして日々の騰落率を示す
+  'butterfly',    // バタフライ：左右に上昇日・下落日の数を伸ばして複数の行（今年・平均など）を比べる
+  'ddHistory',    // 全期間のドローダウン推移（主な暴落にラベル、到達水準の横線）
 ] as const;
+/** [Stage E-16] 固定場面ビルダーだけが使う図解（専用の仕様データが必要なため、AIには選ばせない） */
+export const FIXED_ONLY_KINDS: readonly string[] = ['fan', 'zoomLine', 'butterfly', 'ddHistory'];
 export type VisualKind = typeof VISUAL_KINDS[number] | 'chapter' | 'sources';
 
 /** 自作のアイコン（lib/explainer/icons.ts）。実在の人物・ロゴ・キャラクターは描かない汎用図形のみ */
@@ -94,6 +101,13 @@ export interface VisualSpec {
   // （AIには渡さない固定場面専用の図解なので、他のkind用の生成コードに影響しない）。
   branch?: BranchSpec;
   distribution?: DistributionSpec;
+  // [Stage E-16] 固定場面専用の仕様データ（kindに対応するものだけ入る）
+  fan?: FanSpec;
+  zoomLine?: ZoomLineSpec;
+  butterfly?: ButterflySpec;
+  ddHistory?: DdHistorySpec;
+  /** kind:'title'の背景にうっすら描く推移（例：全期間の指数の対数値） */
+  background?: { x: number; y: number }[];
 }
 
 export interface ExplainerScene {
@@ -301,3 +315,46 @@ export interface DistributionSpec { groups: DistributionGroup[]; unit?: string; 
 export const emptyVisual = (kind: VisualKind = 'point'): VisualSpec => ({
   kind, heading: '', subheading: '', items: [], unit: '', source: '', emphasis: '', imagePrompt: '',
 });
+
+// [Stage E-16] 'fan'専用：系列（role=bg は細い白線で背景、focus=アクセント色の太線、median=黄、avg=青、warn=赤）、
+// レンジ帯（lo〜hi）、注釈の丸印、横軸の目盛り、「現在」の縦線、基準の横線、数値チップ。
+export type FanRole = 'bg' | 'focus' | 'median' | 'avg' | 'warn';
+export interface FanSeries { key: string; label: string; role: FanRole; points: { x: number; y: number }[]; endLabel?: string }
+export interface FanSpec {
+  series: FanSeries[];
+  band?: { label: string; points: { x: number; lo: number; hi: number }[] };
+  markers?: { x: number; y: number; label: string; role?: FanRole }[];
+  xTicks?: { x: number; label: string }[];
+  /** 自動の目盛りに付ける単位（例：営業日） */
+  xUnit?: string;
+  yUnit?: string;
+  nowX?: number; nowLabel?: string;
+  hLines?: { y: number; label: string }[];
+  chips?: { label: string; value: string; role?: FanRole }[];
+  /** 背景の細線の凡例（例：「各年（67本）」） */
+  bgLegend?: string;
+  /** 縦軸の範囲を、背景の細線は3〜97%の範囲だけで決める（外れ値で他の線がつぶれないように） */
+  clipBg?: boolean;
+}
+// [Stage E-16] 'zoomLine'専用：年初来の推移（%）→ points[zoomFrom..]の区間へズームし、各日の騰落率を表示する。
+export interface ZoomLineSpec {
+  points: { label: string; y: number }[];
+  zoomFrom: number;
+  zoomDays: { label: string; dayPct: number }[];
+  yUnit: string;
+  zoomTitle: string;
+  chips: { label: string; value: string; role?: FanRole }[];
+}
+// [Stage E-16] 'butterfly'専用：左（下落日）・右（上昇日）に棒を伸ばして行どうしを比べる。
+export interface ButterflySpec {
+  leftLabel: string; rightLabel: string;
+  rows: { label: string; left: number; right: number; leftSub: string; rightSub: string; emphasis?: boolean }[];
+  note?: string;
+}
+// [Stage E-16] 'ddHistory'専用：全期間のドローダウン（%）と主な暴落のラベル、到達水準の横線、最長の回復期間の帯。
+export interface DdHistorySpec {
+  points: { x: number; y: number }[];
+  labels: { x: number; y: number; label: string }[];
+  hLines: { y: number; label: string }[];
+  highlight?: { from: number; to: number; label: string };
+}
