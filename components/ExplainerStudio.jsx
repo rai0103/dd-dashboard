@@ -21,7 +21,7 @@ import { ExplainerRenderer, RENDER_SIZE } from "@/lib/explainer/renderer";
 import { generateProject, generateShort, rewriteScene, rewriteNarration, CHARS_PER_MIN } from "@/lib/explainer/aiScript";
 import { AiClientError } from "@/lib/explainer/aiClient";
 import { referenceBlocks, referenceTexts, fetchUrlReference, fileToBase64, newRefId, refLabel, requiredRefNotes, MAX_PDF_BYTES } from "@/lib/explainer/references";
-import { lintScenes, buildDescription, sourcesScene, findVerbatimOverlaps, predictTotalSec, suggestRate, COMFORT_RATE, normalizeVisual, minSecFor, sanitizeReading, isKanaReading } from "@/lib/explainer/scriptModel";
+import { lintScenes, buildDescription, sourcesScene, assembleLong, findVerbatimOverlaps, predictTotalSec, suggestRate, COMFORT_RATE, normalizeVisual, minSecFor, sanitizeReading, isKanaReading } from "@/lib/explainer/scriptModel";
 import { saveImage, listImages, deleteImage } from "@/lib/explainer/imageStore";
 import { generateImage } from "@/lib/explainer/imageClient";
 import { researchTopic } from "@/lib/explainer/researchClient";
@@ -33,12 +33,7 @@ import { storage } from "@/lib/storage";
 import { easternStamp } from "@/lib/marketClock";
 import { parseStooqCSV } from "@/lib/csvPrice";
 import { buildStockCatalogFromSnapshot, buildStockCatalogFromCsv, mergeStockCatalogs, resolveYearCompareItems } from "@/lib/explainer/stockCatalog";
-import { buildStockIntroScenes } from "@/lib/explainer/stockIntroScenes";
-import { buildAccelScenes } from "@/lib/explainer/accelIntroScene";
-import { buildAthPaceScene } from "@/lib/explainer/athPaceScene";
-import { buildRollingReturnScene } from "@/lib/explainer/rollingReturnScene";
-import { buildDailyMoveScene } from "@/lib/explainer/dailyMoveScene";
-import { buildAnalogScene } from "@/lib/explainer/analogScene";
+import { buildFixedDataChapters, fixedChaptersNote, mergeFixedChapters, dataPeriodOf, dataPeriodNoteOf } from "@/lib/explainer/dataChapters";
 import { drawVisual, PALETTE } from "@/lib/explainer/visuals";
 
 const C = {
@@ -176,14 +171,23 @@ function LibraryPickerModal({ images, imageEls, selectedIds, setSelectedIds, onC
     </div>
   );
 }
-function Section({ title, right, children }) {
+function Section({ title, right, children, collapsible = false, defaultOpen = true }) {
+  // collapsible=true のときは見出しの▼/▶で本文を開閉する（既定の開閉はdefaultOpen）
+  const [open, setOpen] = useState(defaultOpen);
+  const shown = !collapsible || open;
   return (
     <div>
-      <div className="flex items-center justify-between mb-1.5 gap-2">
-        <div className="text-[11px] font-semibold" style={{ color: C.textMuted }}>{title}</div>
-        {right}
+      <div className={`flex items-center justify-between ${shown ? "mb-1.5" : ""} gap-2`}>
+        {collapsible ? (
+          <button onClick={() => setOpen((v) => !v)} className="text-[11px] font-semibold flex items-center gap-1 text-left" style={{ color: C.textMuted, background: "none", border: "none", cursor: "pointer", padding: 0 }} aria-expanded={open}>
+            <span style={{ display: "inline-block", width: 10 }}>{open ? "▼" : "▶"}</span>{title}
+          </button>
+        ) : (
+          <div className="text-[11px] font-semibold" style={{ color: C.textMuted }}>{title}</div>
+        )}
+        {shown && right}
       </div>
-      {children}
+      {shown && children}
     </div>
   );
 }
@@ -461,8 +465,25 @@ export default function ExplainerStudio() {
     } else if (mode === "sp500" && (Object.keys(sp500OnlyCatalog.scalars).length || Object.keys(sp500OnlyCatalog.series).length)) {
       stockCatalog = sp500OnlyCatalog;
     }
-    return { topic: topic.trim(), mode, audience, targetMinutes: minutes, extraInstruction, refBlocks: referenceBlocks(refs), today: todayStr(), speechRate: rate, imageTarget: imageGenEnabled ? imageGenCount : 0, stockCatalog, requiredRefNotes: requiredRefNotes(refs) };
+    // [Stage E-15] 株式情報・S&P500モード：保有データの期間（「数十年」等の曖昧な表現の禁止に使う）と、
+    // アプリが本編に挿入する実データの固定章（AIの場面数の予算から差し引く）をAIに伝える。
+    let dataExtra = {};
+    if (mode === "stock" || mode === "sp500") {
+      const snap = primaryStockSnapshot();
+      const label = snap?.instrumentLabel ?? "S&P500";
+      const fixed = buildFixedDataChapters(snap, label);
+      const period = dataPeriodOf(snap);
+      dataExtra = {
+        dataPeriodNote: dataPeriodNoteOf(snap, label) ?? undefined,
+        dataYears: period?.years,
+        reservedScenes: fixed.reduce((a, c) => a + c.scenes.length + 1, 0),
+        ...(mode === "sp500" && fixed.length ? { fixedBodyNote: fixedChaptersNote(fixed) } : {}),
+      };
+    }
+    return { topic: topic.trim(), mode, audience, targetMinutes: minutes, extraInstruction, refBlocks: referenceBlocks(refs), today: todayStr(), speechRate: rate, imageTarget: imageGenEnabled ? imageGenCount : 0, stockCatalog, requiredRefNotes: requiredRefNotes(refs), ...dataExtra };
   };
+  // 株式情報モードはS&P500を優先（無ければSOXL）、S&P500モードはS&P500のみ
+  function primaryStockSnapshot() { return mode === "sp500" ? stockSnapshots.SP500 : (stockSnapshots.SP500 ?? stockSnapshots.SOXL); }
   const errMsg = (e) => (e instanceof AiClientError ? e.message : e?.message || String(e));
   // visual.kind=image の場面（AIがimagePromptを用意している場面）のうち、先頭から指定枚数だけAIで画像を生成して
   // 自動で割り当てる。GEMINI_API_KEY未設定・生成失敗は場面単位でスキップし、台本自体は壊さない（呼び出し側でまとめて案内する）。
@@ -522,30 +543,19 @@ export default function ExplainerStudio() {
       } else if (reusedCount > 0) {
         await refreshImages(); // 新規生成が無くても、再利用した画像をプレビュー側の一覧に反映する
       }
-      // [Stage G-3] 「株式情報」モードのときだけ、冒頭に前提条件・DD定義・発生回数と深さの分布・「谷間」の
-      // 概念図を固定場面として追加する（AIには生成させない。数値はダッシュボードのfinalReachをそのまま使う）。
+      // [Stage G-3→E-15] 「株式情報」「S&P500」モードでは、ダッシュボードの実データから作る固定場面（前提条件・DD速度センサー・
+      // ローリングリターン・最高値更新ペース・類似局面サーチ等。AIには生成させない）を、内容ごとの章にまとめて
+      // AIの導入章の直後に挿入する（以前は導入章＝「つかみ」の章の先頭にまとめて差し込んでいた）。章の扉・章番号は振り直す。
+      // 新しい分析をダッシュボードに足して動画にも反映したいときは、DDDashboard.jsx側でstock-catalog:*に書き出し→
+      // lib/explainer/に固定場面ビルダーを足し→lib/explainer/dataChapters.tsのbuildFixedDataChaptersに追加する。
       if (mode === "stock" || mode === "sp500") {
-        const primarySnapshot = mode === "sp500" ? stockSnapshots.SP500 : (stockSnapshots.SP500 ?? stockSnapshots.SOXL);
-        const introScenes = buildStockIntroScenes(primarySnapshot?.finalReach ?? null, primarySnapshot?.instrumentLabel ?? "S&P500");
-        // [動画連携] ダッシュボードの加速度センサー（lib/accelSensor.ts）の実績をもう1〜2場面として追加する
-        // （①速度区分の棒グラフ、②今回の局面がすでに−5%を超えて確定していれば分岐図）。新しい分析をダッシュボードに
-        // 足して動画にも反映したいときは、同じ要領（DDDashboard.jsx側でstock-catalog:*に書き出す→
-        // lib/explainer/に固定場面ビルダーを足す→ここで呼ぶ）で対応できる。
-        const accelScenes = buildAccelScenes(primarySnapshot?.accel ?? null, primarySnapshot?.instrumentLabel ?? "S&P500");
-        introScenes.push(...accelScenes);
-        // [動画連携][Stage E-11] 最高値更新ペース（lib/accelSensor.ts）の実績を、ヒストグラムの固定場面として追加する。
-        const athPaceScene = buildAthPaceScene(primarySnapshot?.athPace ?? null, primarySnapshot?.instrumentLabel ?? "S&P500");
-        if (athPaceScene) introScenes.push(athPaceScene);
-        // [動画連携][Stage E-12] 保有期間別ローリングリターンの実績を、ビーズウォーム分布の固定場面として追加する。
-        const rollingReturnScene = buildRollingReturnScene(primarySnapshot?.rollingReturns ?? null, primarySnapshot?.instrumentLabel ?? "S&P500");
-        if (rollingReturnScene) introScenes.push(rollingReturnScene);
-        // [動画連携][Stage E-13] 「1日◯%超下落のその後」を、区分別グループ棒グラフの固定場面として追加する。
-        const dailyMoveScene = buildDailyMoveScene(primarySnapshot?.dailyMoveDown ?? null, primarySnapshot?.instrumentLabel ?? "S&P500");
-        if (dailyMoveScene) introScenes.push(dailyMoveScene);
-        // [動画連携][Stage E-14] 類似局面サーチの実績を、一致局面を重ねたファンチャート（年比較と同じdrawOverlay）の固定場面として追加する。
-        const analogScene = buildAnalogScene(primarySnapshot?.analogFinder ?? null, primarySnapshot?.instrumentLabel ?? "S&P500");
-        if (analogScene) introScenes.push(analogScene);
-        if (introScenes.length) longScenes = [...introScenes, ...longScenes];
+        const snap = primaryStockSnapshot();
+        const fixed = buildFixedDataChapters(snap, snap?.instrumentLabel ?? "S&P500");
+        if (fixed.length) {
+          const merged = mergeFixedChapters(p.chapters, longScenes, fixed);
+          longScenes = assembleLong(merged.chapters, merged.perChapter, p.sources, true, sourcesInVideo);
+          p = { ...p, chapters: merged.chapters };
+        }
       }
       // ラベル（kicker）は、選んだ長尺の長さから自動で入れる（例：5分で解説）。生成後も自由に書き換えられる
       p = { ...p, longScenes, shortScenes: S.scenes, kicker: autoKickerFor(minutes) };
@@ -1508,8 +1518,18 @@ export default function ExplainerStudio() {
                 {[["news", "ニュース"], ["stock", "株式情報"], ["sp500", "S&P500"], ["keyword", "キーワード（用語）"]].map(([k, l]) => (
                   <button key={k} onClick={() => handleModeClick(k)} className="text-[11px] px-2.5 py-1 rounded" style={{ color: mode === k ? C.bg : C.textMuted, background: mode === k ? C.teal : "transparent", border: `1px solid ${C.borderSoft}`, cursor: "pointer", fontWeight: mode === k ? 700 : 400 }}>{l}</button>
                 ))}
-                <input value={topic} onChange={(e) => setTopic(e.target.value)} placeholder={mode === "news" ? "例：日銀が政策金利を0.75%に引き上げ" : mode === "stock" ? "例：2026年10月28日（消去・書き換え可）" : mode === "sp500" ? "例：S&P500の最新の値動き（消去・書き換え可）" : "例：インフレ／NISA／半導体の微細化"} className="flex-1 min-w-[220px] px-2 py-1.5 rounded text-sm" style={inputStyle} />
+                <input value={topic} onChange={(e) => setTopic(e.target.value)} placeholder={mode === "news" ? "例：日銀が政策金利を0.75%に引き上げ" : mode === "stock" ? "例：2026年10月28日（消去・書き換え可）" : mode === "sp500" ? "例：S&P500　最新分析（消去・書き換え可）" : "例：インフレ／NISA／半導体の微細化"} className="flex-1 min-w-[220px] px-2 py-1.5 rounded text-sm" style={inputStyle} />
               </div>
+              {(mode === "stock" || mode === "sp500") && (() => {
+                // [Stage E-15] 動画に使う実データの期間を表示する（ダッシュボードを開いた時点のデータが使われるため、古い・未取得に気づけるように）
+                const snap = primaryStockSnapshot();
+                const note = snap ? dataPeriodNoteOf(snap, snap.instrumentLabel ?? "S&P500") : null;
+                return (
+                  <div className="text-[10px]" style={{ color: note ? C.textDim : C.amber }}>
+                    {note ? `使用するデータ：${note}。最新にするには、先にダッシュボードを開いてデータを読み込んでください。` : "ダッシュボードのデータがまだ書き出されていません。先にダッシュボードを開いてから作成してください。"}
+                  </div>
+                );
+              })()}
               <div className="flex flex-wrap gap-3 items-center" style={{ color: C.textMuted }}>
                 <label className="flex items-center gap-1.5">視聴者
                   <select value={audience} onChange={(e) => setAudience(e.target.value)} className="px-1.5 py-1 rounded text-[11px]" style={inputStyle}>
@@ -1714,7 +1734,7 @@ export default function ExplainerStudio() {
               {/* ---------- 設定パネル（常にプレビューの右横に枠として表示し、内側のスクロールバーで移動する） ---------- */}
               <div className="flex flex-col gap-4 text-xs flex-1 min-w-0 rounded-lg p-3 overflow-y-auto" style={{ border: `1px solid ${C.border}`, background: C.panel, maxHeight: "min(85vh, 900px)" }}>
                 {/* 公開前チェック */}
-                <Section title={`公開前チェック（${issues.filter((x) => x.level === "warn").length}件の注意・${issues.filter((x) => x.level === "info").length}件の確認）`} right={issues.some((x) => x.message.startsWith("参考資料の文章")) ? <button onClick={paraphraseAll} disabled={!!paraAllBusy} className="text-[10px] px-1.5 py-0.5 rounded" style={{ ...btn("primary"), opacity: paraAllBusy ? 0.5 : 1 }}>{paraAllBusy || "参考資料と同じ言い回しをまとめて言い換える"}</button> : null}>
+                <Section collapsible defaultOpen={false} title={`公開前チェック（${issues.filter((x) => x.level === "warn").length}件の注意・${issues.filter((x) => x.level === "info").length}件の確認）`} right={issues.some((x) => x.message.startsWith("参考資料の文章")) ? <button onClick={paraphraseAll} disabled={!!paraAllBusy} className="text-[10px] px-1.5 py-0.5 rounded" style={{ ...btn("primary"), opacity: paraAllBusy ? 0.5 : 1 }}>{paraAllBusy || "参考資料と同じ言い回しをまとめて言い換える"}</button> : null}>
                   {issues.length === 0 ? (
                     <div className="text-[11px] flex items-center gap-1" style={{ color: C.teal }}><Check size={12} /> 出典の記載・丸写し・図解の連続などに問題は見つかりませんでした。</div>
                   ) : (

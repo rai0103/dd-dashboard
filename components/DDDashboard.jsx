@@ -3334,11 +3334,15 @@ function AccelSensorSection({ vooSeries, qqqSeries, compact = false }) {
 // 過去日を段階的に絞り込み、一致した各局面の「その後」の値動きを現在までの軌跡に重ねて表示する。
 const ANALOG_DISCLAIMER = "過去の似た値動きの局面を機械的に検索した参考情報であり、将来の予測や保証ではありません。一致件数が少ない場合は特に不確実性が大きい。全く同じ値動きが繰り返される保証もありません。";
 const ANALOG_FAN_HORIZONS = [20, 60, 120, 252];
+// matchedSteps：全基準点で一致する日が無い場合、1件以上残った最も深い段までで一致した件数を表示する（lib/analogFinder.ts）
+const analogMatchedSteps = (result) => result.matchedSteps ?? result.checkpointTargets.length;
 function analogSummaryText(result) {
   if (!result) return "データ不足（基準点をすべて計算できるだけの履歴がありません）";
   if (!result.matches.length) return "条件（前後0.5%以内）で一致する過去局面はありませんでした。";
   const top = result.matches[0];
-  return `${result.checkpointTargets.length}つの基準点で絞り込み、${result.matches.length}件が一致（最も近い局面：${fmtDateSlash(top.date)}・誤差合計${top.distance.toFixed(1)}pt）`;
+  const total = result.checkpointTargets.length, steps = analogMatchedSteps(result);
+  if (steps < total) return `${total}つの基準点すべてで一致する局面は無し。${result.checkpointTargets[steps - 1].label}までの${steps}条件で一致した${result.matches.length}件（最も近い局面：${fmtDateSlash(top.date)}）`;
+  return `${total}つの基準点で絞り込み、${result.matches.length}件が一致（最も近い局面：${fmtDateSlash(top.date)}・誤差合計${top.distance.toFixed(1)}pt）`;
 }
 function AnalogFunnelView({ result }) {
   const first = result.funnel[0]?.remaining || 1;
@@ -3349,7 +3353,7 @@ function AnalogFunnelView({ result }) {
           <span className="mono whitespace-nowrap" style={{ color: C.textDim, minWidth: 56 }}>{f.label}</span>
           <span className="mono text-right" style={{ color: f.targetPct >= 0 ? C.teal : C.rust, minWidth: 58 }}>{f.targetPct >= 0 ? "+" : ""}{f.targetPct.toFixed(1)}%</span>
           <div className="flex-1 rounded h-2.5 overflow-hidden" style={{ background: C.panel2 }}>
-            <div className="h-full rounded" style={{ width: `${Math.max(2, Math.round((f.remaining / first) * 100))}%`, background: i === result.funnel.length - 1 ? C.amber : C.borderSoft }} />
+            <div className="h-full rounded" style={{ width: `${Math.max(2, Math.round((f.remaining / first) * 100))}%`, background: i === analogMatchedSteps(result) - 1 ? C.amber : C.borderSoft }} />
           </div>
           <span className="mono text-right" style={{ color: C.textMuted, minWidth: 48 }}>{f.remaining}件</span>
         </div>
@@ -3429,6 +3433,9 @@ function AnalogFinderPanel({ result, instrumentLabel = "S&P500" }) {
       {result.matches.length > 0 ? (
         <div>
           <div className="text-xs font-semibold mb-1.5">一致した過去局面（{result.matches.length}件・近接する日付は間引いて代表日のみ表示）とその後</div>
+          {analogMatchedSteps(result) < result.checkpointTargets.length && (
+            <div className="text-[11px] mb-1.5" style={{ color: C.amber }}>{result.checkpointTargets.length}つの基準点すべてで一致する局面は無かったため、{result.checkpointTargets[analogMatchedSteps(result) - 1].label}までの{analogMatchedSteps(result)}条件で一致した局面を表示しています（ファネルの黄色の段）。</div>
+          )}
           <AnalogFinderChart result={result} />
           <AnalogMatchTable result={result} />
         </div>
@@ -8778,6 +8785,9 @@ export default function DDDashboard() {
   // （computeLongformAnalysisJSON・buildVideoLongformが作るcatalog/scalarCatalog）はそのまま再利用し、
   // モーダルを開かなくても、データ更新のたびに自動的に最新化する（ExplainerStudio側は読み取るだけ）。
   useEffect(() => {
+    // 保存データの読み込み（hydrated）前や、同梱の仮データ（seed）のままの状態で書き出すと、動画側が仮データ
+    // （例：1995〜2029年の合成系列）で台本を作ってしまうため、実データが揃ってから書き出す。
+    if (!hydrated || dataSource === "seed") return;
     try {
       const jsonOutput = computeLongformAnalysisJSON({ d, crashFrequency: bottom.stats.crashFrequency, generatedAt: new Date(), bottom, instrumentLabel: "SP500" });
       const video = buildVideoLongform(jsonOutput, d, SP500_KANA, DEFAULT_CONTENT_SECTIONS, [], "S&P500");
@@ -8795,9 +8805,9 @@ export default function DDDashboard() {
       const analogFinder = findHistoricalAnalogs(d.FULL);
       storage.set("stock-catalog:SP500", JSON.stringify({ asOf, instrumentLabel: "S&P500", catalog: video.catalog, scalarCatalog: video.scalarCatalog, finalReach: video.longMd.finalReach, accel, athPace, rollingReturns, dailyMoveDown, analogFinder })).catch(() => { /* storage unavailable */ });
     } catch (e) { /* 失敗してもダッシュボード本体の動作には影響させない */ }
-  }, [d, bottom]);
+  }, [d, bottom, hydrated, dataSource]);
   useEffect(() => {
-    if (!dSoxl || !bottomSoxl) return;
+    if (!hydrated || !dSoxl || !bottomSoxl) return; // 読み込み前は上場前の合成データだけになるため書き出さない
     try {
       const jsonOutput = computeLongformAnalysisJSON({ d: dSoxl, crashFrequency: bottomSoxl.stats.crashFrequency, generatedAt: new Date(), bottom: bottomSoxl, instrumentLabel: "SOXL" });
       const video = buildVideoLongform(jsonOutput, dSoxl, "えすおーえっくすえる", DEFAULT_CONTENT_SECTIONS, [], "SOXL");
@@ -8810,33 +8820,34 @@ export default function DDDashboard() {
       const analogFinder = findHistoricalAnalogs(dSoxl.FULL);
       storage.set("stock-catalog:SOXL", JSON.stringify({ asOf, instrumentLabel: "SOXL", catalog: video.catalog, scalarCatalog: video.scalarCatalog, finalReach: video.longMd.finalReach, accel, athPace, rollingReturns, dailyMoveDown, analogFinder })).catch(() => { /* storage unavailable */ });
     } catch (e) { /* 失敗してもダッシュボード本体の動作には影響させない */ }
-  }, [dSoxl, bottomSoxl]);
+  }, [dSoxl, bottomSoxl, hydrated]);
   // [グラフ作成ページ] /chart-studio/ 用：VOO・QQQ・SOXL・GOLDの生の日次終値（{date,close}[]）をそのまま
   // 共有storageへ書き出す。stock-catalog:*（長尺動画用に年単位へ加工済みのカタログ）とは別に、生データを渡す
   // ことで、グラフ作成ページ側が任意の期間（1週間〜最長）・複数年セットを自由に組み立てられるようにする。
   useEffect(() => {
+    if (!hydrated || dataSource === "seed") return; // 仮データ（seed）を書き出さない（stock-catalogと同じ理由）
     try {
       storage.set("price-series:VOO", JSON.stringify({ label: "S&P500(VOO)", points: dailyPointsFromFull(d.FULL) })).catch(() => { /* storage unavailable */ });
     } catch (e) { /* 失敗してもダッシュボード本体の動作には影響させない */ }
-  }, [d.FULL]);
+  }, [d.FULL, hydrated, dataSource]);
   useEffect(() => {
-    if (!dQqq) return;
+    if (!hydrated || !dQqq) return;
     try {
       storage.set("price-series:QQQ", JSON.stringify({ label: "NQ100(QQQ)", points: dailyPointsFromFull(dQqq.FULL) })).catch(() => { /* storage unavailable */ });
     } catch (e) { /* 失敗してもダッシュボード本体の動作には影響させない */ }
-  }, [dQqq]);
+  }, [dQqq, hydrated]);
   useEffect(() => {
-    if (!dSoxl) return;
+    if (!hydrated || !dSoxl) return;
     try {
       storage.set("price-series:SOXL", JSON.stringify({ label: "SOXL", points: dailyPointsFromFull(dSoxl.FULL) })).catch(() => { /* storage unavailable */ });
     } catch (e) { /* 失敗してもダッシュボード本体の動作には影響させない */ }
-  }, [dSoxl]);
+  }, [dSoxl, hydrated]);
   useEffect(() => {
-    if (!goldSeries.length) return;
+    if (!hydrated || !goldSeries.length) return;
     try {
       storage.set("price-series:GOLD", JSON.stringify({ label: "GOLD", points: dailyPointsFromFull(goldSeries) })).catch(() => { /* storage unavailable */ });
     } catch (e) { /* 失敗してもダッシュボード本体の動作には影響させない */ }
-  }, [goldSeries]);
+  }, [goldSeries, hydrated]);
   // VOO底値判定パネル・モーダルで実際に表示する側（QQQ未取込時はVOOに自動フォールバック）。
   const activeBottomInstrument = bottomScoreInstrument === "qqq" && bottomQqq ? "qqq" : "voo";
   const activeBottom = activeBottomInstrument === "qqq" ? bottomQqq : bottom;

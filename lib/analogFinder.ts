@@ -28,6 +28,9 @@ export interface AnalogFinderResult {
   checkpointTargets: { label: string; lookbackDays: number; targetPct: number }[];
   funnel: AnalogFunnelStep[];
   matches: AnalogMatch[]; // 重複排除・distance昇順（同点は時系列順）・上位maxMatches件
+  /** matchesが満たしている基準点の数（先頭からの段数）。全基準点で一致する日が無いときは、1件以上残った
+   * 最も深い段の候補をmatchesとして返す（全段一致ならcheckpoints.length、1段目から0件なら0） */
+  matchedSteps: number;
   /** 「今」を0%とした直近leadInDays営業日分の値動き（x<=0、将来予測チャートの「ここまでの経緯」に使う） */
   currentPath: { x: number; pct: number }[];
 }
@@ -77,18 +80,26 @@ export function findHistoricalAnalogs(
   for (let i = minIdx; i <= maxCandidateIdx; i++) candidates.push(i);
 
   const funnel: AnalogFunnelStep[] = [];
+  const stageCandidates: number[][] = [];
   for (const cp of targets) {
     candidates = candidates.filter((i) => {
       const v = pctAt(i, cp.lookbackDays);
       return v != null && Math.abs(v - cp.targetPct) <= tolerance;
     });
+    stageCandidates.push(candidates);
     funnel.push({ label: cp.label, lookbackDays: cp.lookbackDays, targetPct: cp.targetPct, remaining: candidates.length });
   }
+  // 全基準点で一致する日が無い場合でも結果を空にせず、1件以上残った最も深い段の候補を返す
+  // （実データでは±0.5%を6点すべて満たす日は滅多に無いため。何段目まで一致したかはmatchedStepsで示す）。
+  let matchedSteps = 0;
+  for (let k = stageCandidates.length - 1; k >= 0; k--) if (stageCandidates[k].length) { matchedSteps = k + 1; break; }
+  const finalCandidates = matchedSteps ? stageCandidates[matchedSteps - 1] : [];
 
-  const scored = candidates
+  const scored = finalCandidates
     .map((i) => {
       const checkpointPct = targets.map((cp) => pctAt(i, cp.lookbackDays) as number);
-      const distance = Math.round(targets.reduce((sum, cp, k) => sum + Math.abs(checkpointPct[k] - cp.targetPct), 0) * 10) / 10;
+      // 距離は「一致している段」までの基準点だけで測る（一致していない深い段の差で順位が崩れないように）
+      const distance = Math.round(targets.slice(0, matchedSteps).reduce((sum, cp, k) => sum + Math.abs(checkpointPct[k] - cp.targetPct), 0) * 10) / 10;
       return { idx: i, distance, checkpointPct };
     })
     .sort((a, b) => a.distance - b.distance);
@@ -119,5 +130,5 @@ export function findHistoricalAnalogs(
     currentPath.push({ x: k, pct: Math.round((series[j].close / series[todayIdx].close - 1) * 1000) / 10 });
   }
 
-  return { asOfDate: series[todayIdx].date, checkpointTargets: targets, funnel, matches, currentPath };
+  return { asOfDate: series[todayIdx].date, checkpointTargets: targets, funnel, matches, matchedSteps, currentPath };
 }

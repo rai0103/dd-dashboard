@@ -45,14 +45,27 @@ export function buildAnalogScene(af: AnalogFinderSummary | null | undefined, ins
   const upCount = atHorizon.filter((v) => v > 0).length;
 
   const checkpointsLabel = af.checkpointTargets.map((t) => `${t.label}${pctJp(t.targetPct)}`).join('・');
-  const narration = `直近の値動き（${checkpointsLabel}）が、前後0.5%の範囲で似ている過去の局面を探すと、${af.matches.length}件見つかりました。それらの局面の${SUMMARY_HORIZON}営業日後を見ると、${atHorizon.length}件中${upCount}件が上昇し、平均は${pctJp(meanAtHorizon)}でした。`;
-  const reading = `ちょっきんの、ねあがねさがり、が、まえご、ぜろてんごぱーせんとの、はんいで、にている、かこの、きょくめんを、さがすと、${integerToKana(af.matches.length)}けん、みつかりました。それらの、きょくめんの、${integerToKana(SUMMARY_HORIZON)}えいぎょうびごを、みると、${integerToKana(atHorizon.length)}けんちゅう、${integerToKana(upCount)}けんが、じょうしょうし、へいきんは、${meanAtHorizon != null ? pctReadable(meanAtHorizon) : 'さんこうちなし'}でした。`;
+  const total = af.checkpointTargets.length;
+  const steps = af.matchedSteps ?? total;
+  // 全基準点で一致する局面が無いときは、何条件まで一致したかを明示する（lib/analogFinder.tsのmatchedSteps）
+  const partial = steps < total;
+  const lastCp = af.checkpointTargets[Math.max(0, steps - 1)];
+  const lastLabel = lastCp?.label ?? '';
+  const lastReading = lastCp ? `${integerToKana(lastCp.lookbackDays)}にちまえ` : '';
+  const findText = partial
+    ? `${total}つの基準点すべてで一致する局面はありませんでしたが、${lastLabel}までの${steps}つの条件で一致した局面が${af.matches.length}件ありました`
+    : `${af.matches.length}件見つかりました`;
+  const findReading = partial
+    ? `${integerToKana(total)}つの、きじゅんてん、すべてで、いっちする、きょくめんは、ありませんでしたが、${lastReading}までの、${integerToKana(steps)}つの、じょうけんで、いっちした、きょくめんが、${integerToKana(af.matches.length)}けん、ありました`
+    : `${integerToKana(af.matches.length)}けん、みつかりました`;
+  const narration = `直近の値動き（${checkpointsLabel}）が、前後0.5%の範囲で似ている過去の局面を探すと、${findText}。それらの局面の${SUMMARY_HORIZON}営業日後を見ると、${atHorizon.length}件中${upCount}件が上昇し、平均は${pctJp(meanAtHorizon)}でした。`;
+  const reading = `ちょっきんの、ねあがねさがり、が、まえご、ぜろてんごぱーせんとの、はんいで、にている、かこの、きょくめんを、さがすと、${findReading}。それらの、きょくめんの、${integerToKana(SUMMARY_HORIZON)}えいぎょうびごを、みると、${integerToKana(atHorizon.length)}けんちゅう、${integerToKana(upCount)}けんが、じょうしょうし、へいきんは、${meanAtHorizon != null ? pctReadable(meanAtHorizon) : 'さんこうちなし'}でした。`;
 
   return {
     id: newSceneId(), title: '類似局面サーチ', caption: `過去の似た値動きとその後（一致${af.matches.length}件・直近${af.checkpointTargets.length}基準点）`,
     narration, reading,
     visual: {
-      ...emptyVisual('yearCompare'), heading: '似た値動きの局面を探すと？', subheading: `一致局面（${af.matches.length}件）とその後の値動き`,
+      ...emptyVisual('yearCompare'), heading: '似た値動きの局面を探すと？', subheading: partial ? `${lastLabel}までの${steps}条件で一致した局面（${af.matches.length}件）とその後` : `一致局面（${af.matches.length}件）とその後の値動き`,
       unit: '%', source: `${instrumentLabel}の実績データ（基準点：${checkpointsLabel}、一致幅±0.5%）`,
       items,
     },

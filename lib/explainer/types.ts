@@ -229,6 +229,8 @@ export interface AnalogFinderSummary {
   checkpointTargets: { label: string; lookbackDays: number; targetPct: number }[];
   funnel: AnalogFunnelStepSummary[];
   matches: AnalogMatchSummary[];
+  /** matchesが満たしている基準点の数（全段一致しない場合は1件以上残った最も深い段まで）。古い書き出しには無い */
+  matchedSteps?: number;
   currentPath: { x: number; pct: number }[];
 }
 

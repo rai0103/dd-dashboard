@@ -27,6 +27,16 @@ export interface GenerateInput {
   /** [Stage E-7] 「必ず動画に含める」とマークした参考情報の説明（lib/explainer/references.tsのrequiredRefNotes）。
    *  指定があればheader()で名指しし、AIがその内容を省略しないよう強制する */
   requiredRefNotes?: string[];
+  /** [Stage E-15] S&P500モード：ダッシュボードが保有する実データの期間の説明（例：1957年3月〜2026年11月（約70年・日次終値））。
+   *  指定があればheader()で明示し、「数十年」等の曖昧な表現を禁止する */
+  dataPeriodNote?: string;
+  /** [Stage E-15] 保有データの年数（四捨五入）。動画タイトルに残った「数十年」をこの年数に置き換えるのに使う */
+  dataYears?: number;
+  /** [Stage E-15] アプリが本編に自動で挿入する、実データの固定章の説明（章タイトルと内容）。指定があれば、AIは
+   *  導入・まとめ（と、データ章と重複しない読み解きの章）だけを作る */
+  fixedBodyNote?: string;
+  /** [Stage E-15] 固定章として挿入される場面の数（章の扉を含む）。AIが作る場面数の予算から差し引く */
+  reservedScenes?: number;
 }
 
 /** 日本語ナレーションの1分あたりの文字数の目安（話速1.0） */
@@ -260,8 +270,8 @@ const SCENE_ANGLES: Record<GenerateInput['mode'], string[]> = {
     '直近の下落局面を起点に、過去の似た局面との比較を軸にした構成',
     'DD（ドローダウン）の加速度センサーの観点から、下落の深まり方に注目する構成',
     '1日の大きな下落そのものに注目し、その後の値動きの確率を中心にした構成',
-    '長期（数十年）の視点で、下落と回復の繰り返しを俯瞰する構成',
-    '直近のニュース・値動きから入り、過去70年の実績データで裏付ける構成',
+    '保有データの全期間という長期の視点で、下落と回復の繰り返しを俯瞰する構成',
+    '直近のニュース・値動きから入り、保有データの全期間の実績で裏付ける構成',
     'リスク（さらなる下落シナリオ）とその後の回復実績を対比させる構成',
   ],
   keyword: [
@@ -285,6 +295,8 @@ export function header(inp: GenerateInput): string {
     `【想定視聴者】${AUDIENCE[inp.audience]}`,
     `【制作日】${inp.today}`,
     inp.refBlocks.length ? '【参考資料】このメッセージ冒頭のドキュメントを参照してください。' : '【参考資料】なし（一般に確立した知識の範囲で解説し、最新の数値・出来事には触れない）',
+    inp.dataPeriodNote ? `【保有データの期間】${inp.dataPeriodNote}。動画タイトル・章タイトル・ナレーションでは「数十年」「長年」のような曖昧な言い方をせず、この期間（過去◯年）を具体的に書く。` : '',
+    inp.fixedBodyNote ? `【アプリが自動で挿入する本編のデータ章】\n${inp.fixedBodyNote}\nこれらの章の場面（グラフと数値の解説）はアプリが実データから作るので、あなたは作らない。導入では、これらの章で何が分かるかを予告し、まとめではこれらの章の内容を振り返る。` : '',
     inp.extraInstruction.trim() ? `【制作者からの追加の指示】${inp.extraInstruction.trim()}` : '',
     // [Stage E-5] マンネリ防止：今回選ばれた切り口を主軸にするよう明示する
     inp.sceneAngle ? `【今回の切り口】${inp.sceneAngle}（毎回変えています。前回と似た構成にならないよう、この切り口を主軸に章立てを考えてください）` : '',
@@ -293,6 +305,13 @@ export function header(inp: GenerateInput): string {
       ? `【必ず扱う参考情報】次の資料は、動画の中で必ず具体的に触れてください（存在を無視したり省略したりせず、該当する数値・固有名詞・出来事を実際に使うこと）：\n${inp.requiredRefNotes.map((s) => `・${s}`).join('\n')}`
       : '',
   ].filter(Boolean).join('\n');
+}
+
+/** [Stage E-15] 章タイトルの先頭に付いた制作用語（「つかみ：」「導入：」等）を取り除く。画面上部に表示されるため */
+export function stripProductionWords(title: string): string {
+  const t = title.replace(/^\s*(つかみ|ツカミ|導入|イントロ|オープニング|intro)\s*[：:・｜|\-－—]\s*/i, '').trim();
+  if (/^(つかみ|ツカミ|導入|イントロ|オープニング|intro)$/i.test(t)) return 'はじめに';
+  return t || title;
 }
 
 export interface Outline {
@@ -304,14 +323,24 @@ export interface Outline {
 }
 
 export async function generateOutline(inp: GenerateInput, signal?: AbortSignal): Promise<Outline> {
-  const { sceneTotal, totalChars, minChars, maxChars } = planBudget(inp.targetMinutes, inp.speechRate ?? 1);
+  const budget = planBudget(inp.targetMinutes, inp.speechRate ?? 1);
+  const { minChars, maxChars } = budget;
+  // [Stage E-15] アプリが挿入する固定のデータ章の場面数を差し引いた分だけをAIに作らせる
+  const sceneTotal = Math.max(4, budget.sceneTotal - Math.max(0, Math.round(inp.reservedScenes || 0)));
+  const totalChars = sceneTotal * budget.perScene;
+  const fixedBody = !!inp.fixedBodyNote;
   const task = [
     header(inp),
     '',
     `${inp.targetMinutes}分以内（ナレーション合計 約${totalChars}文字、場面は合計${sceneTotal}個以内、1場面${minChars}〜${maxChars}文字）の長尺解説動画の「目次」を作ってください。長さは必ず目標以内に収める（要点を絞る）。`,
-    `- 本編の章は${inp.targetMinutes <= 5 ? '3〜4' : '3〜6'}章。各章の sceneCount の合計は${sceneTotal}以下にする。`,
+    fixedBody
+      ? `- 本編の中心はアプリが挿入するデータ章なので、あなたが作る role=body の章は0〜1章だけ（データ章の結果を総合して読み解く・注意点。データ章と同じ内容を繰り返さない）。各章の sceneCount の合計は${sceneTotal}以下にする。`
+      : `- 本編の章は${inp.targetMinutes <= 5 ? '3〜4' : '3〜6'}章。各章の sceneCount の合計は${sceneTotal}以下にする。`,
     '- kicker には分数（○分でわかる 等）を入れない（実際の長さは読み上げで変わるため）。例：ニュース解説、やさしく解説。',
-    '- chapters は、最初に role=intro（つかみ＋この動画でわかること、場面2〜3個）、次に role=body の本編を3〜6章、最後に role=outro（まとめ＋締め、場面2〜3個）。',
+    fixedBody
+      ? '- chapters は、最初に role=intro（動画タイトル＋この動画でわかること、場面2個）、必要なら role=body を1章、最後に role=outro（まとめ＋締め、場面2〜3個）。'
+      : '- chapters は、最初に role=intro（つかみ＋この動画でわかること、場面2〜3個）、次に role=body の本編を3〜6章、最後に role=outro（まとめ＋締め、場面2〜3個）。',
+    '- chapters[].title は動画の画面上部にそのまま表示される視聴者向けの見出し。「つかみ」「導入」「イントロ」などの制作用語を入れない。',
     inp.mode === 'news'
       ? '- 本編の流れの例：何が起きたか → 背景・そもそもの仕組み → なぜ重要か（影響） → 今後の注目点。'
       : '- 本編の流れの例：ひとことで言うと → 仕組み・具体例 → 似た用語との違い・よくある誤解 → 身近な影響・使われ方。',
@@ -359,7 +388,7 @@ export async function generateOutline(inp: GenerateInput, signal?: AbortSignal):
     signal,
   });
   let chapters: ChapterPlan[] = (Array.isArray(r?.chapters) ? r.chapters : []).map((c: any) => ({
-    title: fixBannedWording(String(c?.title || '')).slice(0, 40), reading: fixBannedWording(String(c?.reading || '')),
+    title: stripProductionWords(fixBannedWording(String(c?.title || ''))).slice(0, 40), reading: stripProductionWords(fixBannedWording(String(c?.reading || ''))),
     role: c?.role === 'intro' || c?.role === 'outro' ? c.role : 'body',
     goal: String(c?.goal || ''), keyPoints: String(c?.keyPoints || ''),
     sceneCount: Math.max(2, Math.min(10, Math.round(Number(c?.sceneCount) || 4))),
@@ -367,12 +396,13 @@ export async function generateOutline(inp: GenerateInput, signal?: AbortSignal):
   if (!chapters.length) throw new Error('目次を作れませんでした。もう一度お試しください。');
   chapters = fitSceneCounts(chapters.slice(0, 9), sceneTotal);
   const y = r?.youtube || {};
+  const fixYears = (t: string) => (inp.dataYears ? t.replace(/数十年/g, `${inp.dataYears}年`) : t);
   return {
-    videoTitle: String(r?.videoTitle || inp.topic),
+    videoTitle: fixYears(String(r?.videoTitle || inp.topic)),
     kicker: String(r?.kicker || (inp.mode === 'news' ? 'ニュース解説' : 'キーワード解説')),
     chapters,
     youtube: {
-      title: String(y.title || r?.videoTitle || inp.topic), description: String(y.description || ''),
+      title: fixYears(String(y.title || r?.videoTitle || inp.topic)), description: fixYears(String(y.description || '')),
       tags: Array.isArray(y.tags) ? y.tags.map(String).slice(0, 12) : [],
       thumbnailText: String(y.thumbnailText || ''), shortTitle: String(y.shortTitle || ''), shortDescription: String(y.shortDescription || ''),
     },
