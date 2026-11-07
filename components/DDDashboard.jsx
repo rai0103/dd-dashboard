@@ -17,6 +17,7 @@ import { amountsByClass, largestRemainderPercent, allocationDiff, topHoldingsByC
 import { computeAccelSensor, summarizeAccelForVideo, summarizeAthPaceForVideo } from "@/lib/accelSensor";
 import { summarizeRollingReturnsForVideo } from "@/lib/rollingReturn";
 import { summarizeDailyMoveBucketsForVideo } from "@/lib/dailyMoveBuckets";
+import { findHistoricalAnalogs } from "@/lib/analogFinder";
 import { buildVooEquivalentSeries } from "@/lib/sp500Synthetic";
 import { buildYearSeries, completeYears, selectCompareYears, computeYearStats, averageYearStats, sortYearsBy, YEAR_PRESETS, presidentialTermYear } from "@/lib/yearCompare";
 import { yearEventText, recoveryInfo, presidentFor } from "@/lib/yearEvents";
@@ -3328,6 +3329,117 @@ function AccelSensorSection({ vooSeries, qqqSeries, compact = false }) {
   );
 }
 
+/* ---------------- 類似局面サーチ（lib/analogFinder.ts） ---------------- */
+// 直近の複数チェックポイント（例：1・10・30・90・180・252日前の騰落率）が現在と±0.5pt以内で一致する
+// 過去日を段階的に絞り込み、一致した各局面の「その後」の値動きを現在までの軌跡に重ねて表示する。
+const ANALOG_DISCLAIMER = "過去の似た値動きの局面を機械的に検索した参考情報であり、将来の予測や保証ではありません。一致件数が少ない場合は特に不確実性が大きい。全く同じ値動きが繰り返される保証もありません。";
+const ANALOG_FAN_HORIZONS = [20, 60, 120, 252];
+function analogSummaryText(result) {
+  if (!result) return "データ不足（基準点をすべて計算できるだけの履歴がありません）";
+  if (!result.matches.length) return "条件（前後0.5%以内）で一致する過去局面はありませんでした。";
+  const top = result.matches[0];
+  return `${result.checkpointTargets.length}つの基準点で絞り込み、${result.matches.length}件が一致（最も近い局面：${fmtDateSlash(top.date)}・誤差合計${top.distance.toFixed(1)}pt）`;
+}
+function AnalogFunnelView({ result }) {
+  const first = result.funnel[0]?.remaining || 1;
+  return (
+    <div className="flex flex-col gap-1">
+      {result.funnel.map((f, i) => (
+        <div key={i} className="flex items-center gap-2 text-[11px]">
+          <span className="mono whitespace-nowrap" style={{ color: C.textDim, minWidth: 56 }}>{f.label}</span>
+          <span className="mono text-right" style={{ color: f.targetPct >= 0 ? C.teal : C.rust, minWidth: 58 }}>{f.targetPct >= 0 ? "+" : ""}{f.targetPct.toFixed(1)}%</span>
+          <div className="flex-1 rounded h-2.5 overflow-hidden" style={{ background: C.panel2 }}>
+            <div className="h-full rounded" style={{ width: `${Math.max(2, Math.round((f.remaining / first) * 100))}%`, background: i === result.funnel.length - 1 ? C.amber : C.borderSoft }} />
+          </div>
+          <span className="mono text-right" style={{ color: C.textMuted, minWidth: 48 }}>{f.remaining}件</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+function AnalogFinderChart({ result, fontSize = 10 }) {
+  const data = useMemo(() => {
+    const rows = new Map();
+    for (const p of result.currentPath) {
+      if (!rows.has(p.x)) rows.set(p.x, { x: p.x });
+      rows.get(p.x).cur = p.pct;
+    }
+    result.matches.forEach((m, i) => {
+      m.forward.forEach((f, k) => {
+        if (!rows.has(k)) rows.set(k, { x: k });
+        rows.get(k)[`m${i}`] = f.pct;
+      });
+    });
+    return [...rows.values()].sort((a, b) => a.x - b.x);
+  }, [result]);
+  const maxX = Math.max(0, ...result.matches.map((m) => m.forward.length - 1));
+  const minX = Math.min(0, ...result.currentPath.map((p) => p.x));
+  return (
+    <div style={{ height: 260 }}>
+      <ResponsiveContainer width="100%" height="100%">
+        <LineChart data={data} margin={{ top: 10, right: 16, left: 0, bottom: 0 }}>
+          <CartesianGrid stroke={C.borderSoft} vertical={false} />
+          <XAxis dataKey="x" type="number" domain={[minX, maxX]} tick={{ fill: C.textDim, fontSize }} axisLine={{ stroke: C.border }} tickLine={false} tickFormatter={(v) => (v === 0 ? "現在" : `${v > 0 ? "+" : ""}${v}営業日`)} />
+          <YAxis tick={{ fill: C.textDim, fontSize }} axisLine={false} tickLine={false} width={44} tickFormatter={(v) => `${v}%`} />
+          <ReferenceLine x={0} stroke={C.amber} strokeDasharray="3 3" />
+          <ReferenceLine y={0} stroke={C.border} />
+          <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 11 }} formatter={(v, name) => [`${v}%`, name]} labelFormatter={(v) => (v === 0 ? "現在" : `${v > 0 ? "+" : ""}${v}営業日`)} />
+          {result.matches.map((m, i) => (
+            <Line key={i} type="monotone" dataKey={`m${i}`} stroke={C.white} strokeOpacity={0.35} strokeWidth={1.1} dot={false} isAnimationActive={false} connectNulls={false} name={`${fmtDateSlash(m.date)}〜`} legendType="none" />
+          ))}
+          <Line type="monotone" dataKey="cur" stroke={C.teal} strokeWidth={2.6} dot={false} isAnimationActive={false} connectNulls={false} name="現在までの軌跡" />
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+function AnalogMatchTable({ result }) {
+  return (
+    <table className="mono text-[10px] w-full mt-2" style={{ borderCollapse: "collapse" }}>
+      <thead>
+        <tr style={{ color: C.textDim, borderBottom: `1px solid ${C.borderSoft}` }}>
+          <th className="text-left font-normal py-0.5">日付</th>
+          <th className="text-right font-normal py-0.5">誤差合計</th>
+          {ANALOG_FAN_HORIZONS.map((h) => <th key={h} className="text-right font-normal py-0.5">{h}営業日後</th>)}
+        </tr>
+      </thead>
+      <tbody>
+        {result.matches.map((m, i) => (
+          <tr key={i} style={{ borderBottom: `1px solid ${C.borderSoft}` }}>
+            <td className="py-1 pr-1 whitespace-nowrap" style={{ color: C.text }}>{fmtDateSlash(m.date)}</td>
+            <td className="py-1 text-right" style={{ color: C.textMuted }}>{m.distance.toFixed(1)}pt</td>
+            {ANALOG_FAN_HORIZONS.map((h) => {
+              const f = m.forward[h];
+              return <td key={h} className="py-1 text-right" style={{ color: f == null ? C.textDim : f.pct >= 0 ? C.teal : C.rust }}>{f == null ? "—" : `${f.pct >= 0 ? "+" : ""}${f.pct.toFixed(1)}%`}</td>;
+            })}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+function AnalogFinderPanel({ result, instrumentLabel = "S&P500" }) {
+  if (!result) return <div className="rounded-lg p-3 text-xs" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.textDim }}>{instrumentLabel}：類似局面サーチに必要な履歴が不足しています。</div>;
+  return (
+    <div className="flex flex-col gap-4">
+      <div>
+        <div className="text-xs font-semibold mb-1.5">{instrumentLabel}・{fmtDateSlash(result.asOfDate)}時点の絞り込み</div>
+        <AnalogFunnelView result={result} />
+      </div>
+      {result.matches.length > 0 ? (
+        <div>
+          <div className="text-xs font-semibold mb-1.5">一致した過去局面（{result.matches.length}件・近接する日付は間引いて代表日のみ表示）とその後</div>
+          <AnalogFinderChart result={result} />
+          <AnalogMatchTable result={result} />
+        </div>
+      ) : (
+        <div className="text-[11px]" style={{ color: C.textDim }}>条件（各基準点で前後0.5%以内）を満たす過去局面は見つかりませんでした。</div>
+      )}
+      <div className="text-[10px] rounded px-2 py-1.5" style={{ color: C.amber, background: "rgba(217,162,75,0.10)", border: `1px solid ${C.amber}33` }}>※{ANALOG_DISCLAIMER}</div>
+    </div>
+  );
+}
+
 /* ---------------- DD加速度アラート 詳細モーダル ---------------- */
 function SpeedAlertModalContent({ d, instrumentLabel = "VOO", vooSeries = null, qqqSeries = null, isMobile = false }) {
   const sa = d.speedAlert;
@@ -6455,7 +6567,7 @@ function AnalysisList({ analysis, onNavigate, className = "text-[11px] leading-t
     </ul>
   );
 }
-function MobileAnalysisPage({ analysis, onNavigate, checkpointResults, onOpenCheckpointSettings }) {
+function MobileAnalysisPage({ analysis, onNavigate, checkpointResults, onOpenCheckpointSettings, analogResult, onOpenAnalogFinder }) {
   return (
     <div className="p-3 flex flex-col gap-3 h-full">
       <div className="rounded-lg p-3 shrink-0" style={{ background: C.panel, border: `1px solid ${C.border}` }}>
@@ -6478,6 +6590,13 @@ function MobileAnalysisPage({ analysis, onNavigate, checkpointResults, onOpenChe
             <div className="text-[12px] leading-relaxed" style={{ color: C.textDim }}>チェックポイントが設定されていません。「新設・変更」から設定できます。</div>
           )}
         </div>
+      </div>
+      <div className="rounded-lg p-3 shrink-0" style={{ background: C.panel, border: `1px solid ${C.border}` }}>
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-[11px]" style={{ color: C.textDim }}>類似局面サーチ</span>
+          <button onClick={onOpenAnalogFinder} className="text-[10px] underline" style={{ color: C.textDim, background: "transparent", border: "none", cursor: "pointer" }}>詳細を見る</button>
+        </div>
+        <div className="text-[12px] leading-relaxed" style={{ color: C.textMuted }}>{analogSummaryText(analogResult)}</div>
       </div>
       <div className="flex gap-1.5 text-[11px] leading-relaxed shrink-0" style={{ color: C.textDim }}><Info size={12} style={{ flexShrink: 0, marginTop: 1 }} /><span>投資助言ではなく可視化・判断補助です。過去確率は将来を保証しません。</span></div>
     </div>
@@ -8672,7 +8791,9 @@ export default function DDDashboard() {
       const rollingReturns = summarizeRollingReturnsForVideo(d.FULL);
       // [動画連携][Stage E-13] 1日の騰落率の区分別「その後」（下落日）も同じSP500本系列から算出して書き出す。
       const dailyMoveDown = summarizeDailyMoveBucketsForVideo(d.FULL);
-      storage.set("stock-catalog:SP500", JSON.stringify({ asOf, instrumentLabel: "S&P500", catalog: video.catalog, scalarCatalog: video.scalarCatalog, finalReach: video.longMd.finalReach, accel, athPace, rollingReturns, dailyMoveDown })).catch(() => { /* storage unavailable */ });
+      // [動画連携][Stage E-14] 類似局面サーチ（lib/analogFinder.ts）も同じSP500本系列から算出して書き出す。
+      const analogFinder = findHistoricalAnalogs(d.FULL);
+      storage.set("stock-catalog:SP500", JSON.stringify({ asOf, instrumentLabel: "S&P500", catalog: video.catalog, scalarCatalog: video.scalarCatalog, finalReach: video.longMd.finalReach, accel, athPace, rollingReturns, dailyMoveDown, analogFinder })).catch(() => { /* storage unavailable */ });
     } catch (e) { /* 失敗してもダッシュボード本体の動作には影響させない */ }
   }, [d, bottom]);
   useEffect(() => {
@@ -8686,7 +8807,8 @@ export default function DDDashboard() {
       const athPace = summarizeAthPaceForVideo(dSoxl.FULL);
       const rollingReturns = summarizeRollingReturnsForVideo(dSoxl.FULL);
       const dailyMoveDown = summarizeDailyMoveBucketsForVideo(dSoxl.FULL);
-      storage.set("stock-catalog:SOXL", JSON.stringify({ asOf, instrumentLabel: "SOXL", catalog: video.catalog, scalarCatalog: video.scalarCatalog, finalReach: video.longMd.finalReach, accel, athPace, rollingReturns, dailyMoveDown })).catch(() => { /* storage unavailable */ });
+      const analogFinder = findHistoricalAnalogs(dSoxl.FULL);
+      storage.set("stock-catalog:SOXL", JSON.stringify({ asOf, instrumentLabel: "SOXL", catalog: video.catalog, scalarCatalog: video.scalarCatalog, finalReach: video.longMd.finalReach, accel, athPace, rollingReturns, dailyMoveDown, analogFinder })).catch(() => { /* storage unavailable */ });
     } catch (e) { /* 失敗してもダッシュボード本体の動作には影響させない */ }
   }, [dSoxl, bottomSoxl]);
   // [グラフ作成ページ] /chart-studio/ 用：VOO・QQQ・SOXL・GOLDの生の日次終値（{date,close}[]）をそのまま
@@ -8892,6 +9014,9 @@ export default function DDDashboard() {
     ...(selectedGoldCrashCurve ? [{ key: "gold", label: "GOLD（同期間・右軸$）", color: C.gold }] : []),
   ] : [];
   const analysis = useMemo(() => buildAnalysis(d, currentHoldingPct, holdingsTotal(combinedHoldings), dQqq, qqqAmplification), [d, currentHoldingPct, combinedHoldings, dQqq, qqqAmplification]);
+  // [Stage E-14] 類似局面サーチ（lib/analogFinder.ts）：SP500本系列（d.FULL）から、直近の複数チェックポイント
+  // （1・10・30・90・180・252日前の騰落率）が現在と±0.5pt以内で一致する過去日を絞り込み、その後の値動きを重ねる。
+  const analogResult = useMemo(() => findHistoricalAnalogs(d.FULL), [d.FULL]);
   const checkpointResults = useMemo(() => {
     const total = holdingsTotal(holdings);
     return checkpoints.map((cp) => evaluateCheckpoint(cp, holdings, total)).filter(Boolean);
@@ -8928,6 +9053,7 @@ export default function DDDashboard() {
       {modal?.type === "ddChart" && <FullScreenModal title={chartSourceTitle(chartSource)} onClose={() => setModal(null)}><DDChartModalContent initialTab={chartTab} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} sourceViews={sourceViews} chartSources={chartSources} onToggleChartSource={toggleChartSource} yearCompare={yearCompare} setYearCompare={setYearCompare} /></FullScreenModal>}
       {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} synthetic={sp500Synthetic} qqqSynthetic={qqqSynthetic} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} vooQqqSeries={vooQqqSeries} onAppendVooQqq={handleAppendVooQqq} onImportVooQqq={handleImportVooQqq} onApplyApiGold={handleApplyApiGold} onApplyApiSoxl={handleApplyApiSoxl} onResetVooQqqField={handleResetVooQqqField} virtualAggregateLabels={virtualAggregateLabels} onRegisterBrokerHoldings={handleRegisterBrokerHoldings} brokerSummaries={brokerSummaries} />}
       {modal?.type === "checkpointSettings" && <FullScreenModal title="チェックポイント設定" onClose={() => setModal(null)}><CheckpointSettingsContent checkpoints={checkpoints} onCheckpointChange={handleCheckpointChange} holdings={holdings} /></FullScreenModal>}
+      {modal?.type === "analogFinder" && <FullScreenModal title="類似局面サーチ（過去の似た値動きとその後）" onClose={() => setModal(null)}><AnalogFinderPanel result={analogResult} instrumentLabel="S&P500" /></FullScreenModal>}
       {modal?.type === "bottomScore" && <FullScreenModal title={activeBottom.hold.applicable ? `${activeBottomLabel}底値判定：${bottomLabel(activeBottomFull, activeBottom.hold.state)} が底値として確定する確率（${activeBottomLabel}実績から都度算出）` : `${activeBottomLabel}底値判定（${activeBottomLabel}実績から都度算出）`} onClose={() => setModal(null)}><BottomScoreModalContent bottom={activeBottom} FULL={activeBottomFull} instrumentLabel={activeBottomLabel} qqqGapStats={qqqGapStats} currentQqqDD={dQqq?.currentDD ?? null} /></FullScreenModal>}
       {modal?.type === "yearForecast" && <FullScreenModal title={`${forecastYear}年 年騰落率予測${yearForecast?.blendedForecastPct != null ? `（総合：${yearForecast.blendedForecastPct > 0 ? "+" : ""}${yearForecast.blendedForecastPct.toFixed(1)}%）` : ""}`} onClose={() => setModal(null)}><YearForecastModalContent forecast={yearForecast} trajectory={yearForecastTrajectoryData} yearPoints={forecastYearPoints} forecastYear={forecastYear} forwardPath={yearForecastTrajectoryForwardPath} nextYearForecast={nextYearForecast} thisYearStartPrice={thisYearStartPrice} thisYearEndApproxPrice={thisYearEndApproxPrice} history={yearForecastHistory} forecastPath={yearForecastChartPath} qqqCorrelation={qqqSpxCorrelation} crashFrequency={bottom.stats.crashFrequency} /></FullScreenModal>}
       {modal?.type === "realHoldingsRanking" && <FullScreenModal title="実質保有銘柄ランキング" onClose={() => setModal(null)}><RealHoldingsRankingContent holdings={combinedHoldings} /></FullScreenModal>}
@@ -9001,7 +9127,7 @@ export default function DDDashboard() {
               { key: "portfolio", label: "構成", icon: Layers, content: <MobilePortfolioPage pieView={pieView} setPieView={setPieView} holdings={combinedHoldings} ownerDates={ownerUpdatedDates} fxRates={fxRates} onOpen={() => setModal({ type: "portfolio" })} onOpenRealHoldingsRanking={() => setModal({ type: "realHoldingsRanking" })} dateLabel={holdingsDateLabel} /> },
               { key: "diff", label: "配分乖離", icon: ListChecks, content: <MobileDiffPage modelOverride={modelOverride} setModelOverride={setModelOverride} d={d} currentHoldingPct={currentHoldingPct} currentHoldingAmount={currentHoldingAmount} effectiveModelRow={effectiveModelRow} rankLabels={rankLabels} blocks={blocks} onOpenRank={(rank) => setModal({ type: "rank", rank })} onOpenDDTable={() => setModal({ type: "ddTable" })} dateLabel={holdingsDateLabel} /> },
               { key: "bottom", label: "VOO底値判定", icon: Gauge, content: <MobileBottomScorePage bottom={activeBottom} FULL={activeBottomFull} instrumentLabel={activeBottomLabel} bottomInstrument={bottomScoreInstrument} setBottomInstrument={setBottomScoreInstrument} qqqAvailable={!!dQqq} onOpen={() => setModal({ type: "bottomScore" })} onOpenForecast={() => setModal({ type: "yearForecast" })} forecast={yearForecast} forecastYear={forecastYear} history={yearForecastHistory} forecastPath={yearForecastChartPath} basePrice={thisYearStartPrice} tab={bottomPanelTab} setTab={setBottomPanelTab} qqqGapStats={qqqGapStats} currentQqqDD={dQqq?.currentDD ?? null} /> },
-              { key: "analysis", label: "現状分析", icon: Info, content: <MobileAnalysisPage analysis={analysis} onNavigate={setModal} checkpointResults={checkpointResults} onOpenCheckpointSettings={() => setModal({ type: "checkpointSettings" })} /> },
+              { key: "analysis", label: "現状分析", icon: Info, content: <MobileAnalysisPage analysis={analysis} onNavigate={setModal} checkpointResults={checkpointResults} onOpenCheckpointSettings={() => setModal({ type: "checkpointSettings" })} analogResult={analogResult} onOpenAnalogFinder={() => setModal({ type: "analogFinder" })} /> },
             ]}
           />
         </div>
@@ -9120,6 +9246,13 @@ export default function DDDashboard() {
                     ) : (
                       <div className="text-[11px] leading-tight" style={{ color: C.textDim }}>チェックポイントが設定されていません。「新設・変更」から設定できます。</div>
                     )}
+                  </div>
+                  <div>
+                    <div className="flex items-center justify-between mb-0.5">
+                      <span className="text-[10px]" style={{ color: C.textDim }}>類似局面サーチ</span>
+                      <button onClick={() => setModal({ type: "analogFinder" })} className="text-[9px] underline" style={{ color: C.textDim, background: "transparent", border: "none", cursor: "pointer" }}>詳細を見る</button>
+                    </div>
+                    <div className="text-[11px] leading-tight" style={{ color: C.textMuted }}>{analogSummaryText(analogResult)}</div>
                   </div>
                   <div className="mt-auto flex gap-1.5 text-[10px] leading-tight" style={{ color: C.textDim }}><Info size={11} style={{ flexShrink: 0, marginTop: 1 }} /><span>投資助言ではなく可視化・判断補助です。過去確率は将来を保証しません。</span></div>
                 </div>

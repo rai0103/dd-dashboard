@@ -212,6 +212,24 @@ export interface StockCatalog {
   // [動画連携][Stage E-13] 1日の騰落率の区分別「その後」（lib/dailyMoveBuckets.tsのsummarizeDailyMoveBucketsForVideo）
   // の要約（下落日のみ）。未対応の銘柄・未計算のときはundefined。
   dailyMoveDown?: DailyMoveBucketSummary;
+  // [動画連携][Stage E-14] 類似局面サーチ（lib/analogFinder.tsのfindHistoricalAnalogs）の結果。
+  // 未対応の銘柄・履歴不足のときはundefined。
+  analogFinder?: AnalogFinderSummary;
+}
+
+// [動画連携][Stage E-14] 類似局面サーチ（lib/analogFinder.tsのfindHistoricalAnalogs）が返す結果と同じ形。
+// AIには渡さず、ダッシュボードのUIカードと、lib/explainer/に置く固定場面ビルダーの両方から使う。
+export interface AnalogFunnelStepSummary { label: string; lookbackDays: number; targetPct: number; remaining: number }
+export interface AnalogMatchSummary {
+  idx: number; date: string; checkpointPct: number[]; distance: number;
+  forward: { date: string; pct: number }[];
+}
+export interface AnalogFinderSummary {
+  asOfDate: string | null;
+  checkpointTargets: { label: string; lookbackDays: number; targetPct: number }[];
+  funnel: AnalogFunnelStepSummary[];
+  matches: AnalogMatchSummary[];
+  currentPath: { x: number; pct: number }[];
 }
 
 // [動画連携][Stage E-13] 1日の騰落率の区分別「その後」（lib/dailyMoveBuckets.tsのsummarizeDailyMoveBucketsForVideo）

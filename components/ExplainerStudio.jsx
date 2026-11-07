@@ -38,6 +38,7 @@ import { buildAccelScenes } from "@/lib/explainer/accelIntroScene";
 import { buildAthPaceScene } from "@/lib/explainer/athPaceScene";
 import { buildRollingReturnScene } from "@/lib/explainer/rollingReturnScene";
 import { buildDailyMoveScene } from "@/lib/explainer/dailyMoveScene";
+import { buildAnalogScene } from "@/lib/explainer/analogScene";
 import { drawVisual, PALETTE } from "@/lib/explainer/visuals";
 
 const C = {
@@ -524,6 +525,9 @@ export default function ExplainerStudio() {
         // [動画連携][Stage E-13] 「1日◯%超下落のその後」を、区分別グループ棒グラフの固定場面として追加する。
         const dailyMoveScene = buildDailyMoveScene(primarySnapshot?.dailyMoveDown ?? null, primarySnapshot?.instrumentLabel ?? "S&P500");
         if (dailyMoveScene) introScenes.push(dailyMoveScene);
+        // [動画連携][Stage E-14] 類似局面サーチの実績を、一致局面を重ねたファンチャート（年比較と同じdrawOverlay）の固定場面として追加する。
+        const analogScene = buildAnalogScene(primarySnapshot?.analogFinder ?? null, primarySnapshot?.instrumentLabel ?? "S&P500");
+        if (analogScene) introScenes.push(analogScene);
         if (introScenes.length) longScenes = [...introScenes, ...longScenes];
       }
       // ラベル（kicker）は、選んだ長尺の長さから自動で入れる（例：5分で解説）。生成後も自由に書き換えられる
