@@ -90,3 +90,31 @@ test("crashName・termYearOf：既知の暴落名と大統領任期の年", () =
   assert.equal(termYearOf(2026), 2);
   assert.equal(termYearOf(2028), 4);
 });
+
+test("athPaceSheet：更新間隔は16区分で、区分の合計＝更新回数−1", async () => {
+  const { athPaceSheet } = await import("./sp500Sheets.ts");
+  const a = athPaceSheet(synth(20) as any)!;
+  assert.equal(a.bins.length, 16);
+  assert.equal(a.bins.reduce((s, b) => s + b.count, 0), a.count - 1);
+  assert.ok(a.currentBin >= 0 && a.currentBin < 16);
+});
+
+test("dropDaySheet：翌営業日の上昇・下落の割合の合計は100%以下、全日平均と比べられる", async () => {
+  const { dropDaySheet } = await import("./sp500Sheets.ts");
+  const d = dropDaySheet(synth(20) as any)!;
+  assert.ok(d.count >= 30);
+  assert.ok(d.nextUp + d.nextDown <= 100.1);
+  assert.deepEqual(d.horizons.map((h) => h.days), [1, 5, 21, 63]);
+});
+
+test("branchSheet：DD−3%到達後の局面では実際の値動き（x=0から）を起点にする", async () => {
+  const { branchSheet } = await import("./sp500Sheets.ts");
+  const pts = synth(20);
+  // 最後の5営業日で約−6%下げて、DD局面（−5%超）を作る
+  const last = pts[pts.length - 1].close;
+  const tail = [0.985, 0.97, 0.965, 0.95, 0.94].map((k, i) => ({ date: `2099-01-0${i + 2}`, close: last * k }));
+  const b = branchSheet([...pts, ...tail] as any)!;
+  assert.ok(b.state === "reached5" || b.state === "over3");
+  assert.equal(b.lead[0].x, 0);
+  assert.equal(b.recovered + b.judged, b.total);
+});

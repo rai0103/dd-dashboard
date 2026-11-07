@@ -196,6 +196,8 @@ const drawTitle: Draw = (c, sc, e) => {
   const used = textBlock(c, v.heading || sc.title, cx, e.H * 0.4, e.W - 40, e.portrait ? 36 : 44, WHITE, { bold: true, align: 'center', maxLines: 3, lh: 1.25, shadow: true });
   c.restore();
   if (v.subheading) textBlock(c, v.subheading, cx, e.H * 0.4 + used + 6, e.W - 60, 18, WHITE, { align: 'center', alpha: 0.78 * ease(sub(e.p, 0.2, 0.4)), maxLines: 2 });
+  // [Stage E-16] 下部の注意書き（任意）
+  if (v.titleNote) textBlock(c, v.titleNote, cx, e.H - 14, e.W - 40, 11, WHITE, { align: 'center', alpha: 0.6 * ease(sub(e.p, 0.25, 0.45)), maxLines: 1 });
   // 光が横切る
   const sx = ((e.t * 0.35) % 1.6 - 0.3) * e.W;
   const g = c.createLinearGradient(sx - 80, 0, sx + 80, 0);
@@ -912,11 +914,12 @@ const drawBranch: Draw = (c, sc, e) => {
   const X = (x: number) => x0 + ((x1 - x0) * (x - xLo)) / Math.max(1e-6, xHi - xLo);
   const Y = (n: number) => y1 - ((n - nLo) / Math.max(1e-6, nHi - nLo)) * (y1 - y0);
   c.save();
-  for (let g = 0; g <= 4; g++) {
-    const gv = nLo + ((nHi - nLo) * g) / 4, gy = Y(gv);
+  const bt = niceTicks(nLo, nHi, 4), bstep = bt.length > 1 ? bt[1] - bt[0] : 1; // [Stage E-16] きりのよい目盛り
+  bt.forEach((gv) => {
+    const gy = Y(gv);
     c.fillStyle = 'rgba(255,255,255,0.08)'; c.fillRect(x0, gy, x1 - x0, 1);
-    text(c, fmtNum(gv), x0 - 8, gy + 4, 11, WHITE, { align: 'right', alpha: 0.5 });
-  }
+    text(c, `${tickText(gv, bstep)}${br.unit ?? ''}`, x0 - 8, gy + 4, 11, WHITE, { align: 'right', alpha: 0.5 });
+  });
   if (br.thresholdY != null) {
     const ty = Y(br.thresholdY);
     c.save(); c.setLineDash([4, 5]); c.strokeStyle = `rgba(${AMBER},0.85)`; c.lineWidth = 1.5;
@@ -981,13 +984,14 @@ const drawBranch: Draw = (c, sc, e) => {
 // 1項目を「現在」として強調する。
 const drawHistogram: Draw = (c, sc, e) => {
   const v = sc.visual;
-  const top = heading(c, e, v.heading, v.subheading, e.accent);
+  let top = heading(c, e, v.heading, v.subheading, e.accent);
+  top += chipsRow(c, e, v.chips, top - 4); // [Stage E-16] 数値チップ（任意）
   const items = v.items.map((it) => ({ ...it, n: Math.max(0, parseValue(it.value) ?? 0) }));
   const n = items.length;
   if (!n) { sourceNote(c, e, v.source); return; }
   const maxN = Math.max(1e-9, ...items.map((x) => x.n));
   const curIdx = items.findIndex((it) => it.seriesEmphasis);
-  const bottom = e.H - 30, x0 = 16, aw = e.W - 32, slot = aw / n, bw = Math.max(3, slot * 0.78);
+  const bottom = e.H - (e.showSource ? 36 : 30), x0 = 16, aw = e.W - 32, slot = aw / n, bw = Math.max(3, slot * 0.78);
   const hMax = Math.max(10, bottom - top - 24);
   c.fillStyle = 'rgba(255,255,255,0.08)';
   for (let g = 1; g <= 3; g++) c.fillRect(x0, bottom - (hMax * g) / 3, aw, 1);
@@ -1003,8 +1007,10 @@ const drawHistogram: Draw = (c, sc, e) => {
   });
   const step = Math.max(1, Math.ceil(n / (e.portrait ? 6 : 12)));
   items.forEach((it, i) => {
-    if (i % step === 0 || i === n - 1 || i === curIdx) {
-      text(c, it.label, x0 + slot * i + slot / 2, bottom + 16, 11, WHITE, { align: 'center', alpha: i === curIdx ? 1 : 0.6, maxW: slot * step, bold: i === curIdx });
+    // 現在の区分のラベルは必ず出し、その両隣は重なるので省く
+    const nearCur = curIdx >= 0 && Math.abs(i - curIdx) === 1;
+    if ((i % step === 0 || (i === n - 1 && (n - 1) % step === 0) || i === curIdx) && (!nearCur || i === curIdx)) {
+      text(c, it.label, x0 + slot * i + slot / 2, bottom + 16, 10, i === curIdx ? e.accent : WHITE, { align: 'center', alpha: i === curIdx ? 1 : 0.6, maxW: slot * (i === curIdx ? 2 : step) - 2, bold: i === curIdx });
     }
   });
   c.fillStyle = 'rgba(255,255,255,0.4)'; c.fillRect(x0, bottom, aw, 1.5);
@@ -1034,7 +1040,7 @@ const drawDistribution: Draw = (c, sc, e) => {
     : (val: number) => y1 - ((val - lo) / Math.max(1e-6, hi - lo)) * (y1 - y0);
   c.save();
   // [Stage E-16] 目盛りはきりのよい値に（対数目盛のときは従来どおり等分）
-  const dTicks = logScale ? [0, 1, 2, 3, 4].map((g) => lo * Math.pow(hi / lo, g / 4)) : niceTicks(lo, hi, 5);
+  const dTicks = logScale ? [0.25, 0.5, 1, 2, 5, 10, 20, 50, 100].filter((v2) => v2 >= lo && v2 <= hi) : niceTicks(lo, hi, 5);
   const dStep = dTicks.length > 1 ? Math.abs(dTicks[1] - dTicks[0]) : 1;
   dTicks.forEach((gv) => {
     const gy = Y(gv);
@@ -1071,7 +1077,8 @@ const drawDistribution: Draw = (c, sc, e) => {
 // 横に並べる（yearCompareと同じ要領でseriesKey等を流用。専用のSpecは持たない）。
 const drawGroupedBar: Draw = (c, sc, e) => {
   const v = sc.visual;
-  const top = heading(c, e, v.heading, v.subheading, e.accent);
+  let top = heading(c, e, v.heading, v.subheading, e.accent);
+  top += chipsRow(c, e, v.chips, top - 4); // [Stage E-16] 数値チップ（任意）
   const unit = unitOf(c, e, v.unit, top);
   // カテゴリ（label）の出現順を保ったまま、その中の系列（seriesKey）も出現順でまとめる
   const catOrder: string[] = [];
@@ -1158,6 +1165,8 @@ function niceTicks(lo: number, hi: number, count = 4): number[] {
   return out;
 }
 const tickText = (v: number, step: number) => fmtNum(v, step >= 1 ? 0 : step >= 0.1 ? 1 : 2);
+/** 札の幅（pillと同じ寸法） */
+function pillW(c: Ctx, s: string, size = 10) { font(c, size, true); return c.measureText(s).width + 10; }
 /** 暗い角丸の札に文字を描く（線や塗りの上でも読めるように） */
 function pill(c: Ctx, s: string, x: number, y: number, rgb: string, align: 'left' | 'right' | 'center' = 'left', size = 10) {
   font(c, size, true); const w = c.measureText(s).width + 10;
@@ -1240,7 +1249,7 @@ const drawFan: Draw = (c, sc, e) => {
   c.save(); c.beginPath(); c.rect(x0 - 1, y0 - 4, x1 - x0 + 2, y1 - y0 + 8); c.clip();
   if (lo < 0 && hi > 0) { c.fillStyle = 'rgba(255,255,255,0.28)'; c.fillRect(x0, Y(0), x1 - x0, 1); }
   const ticks = f.xTicks ?? [xLo, (xLo + xHi) / 2, xHi].map((x) => ({ x: Math.round(x), label: `${fmtNum(Math.round(x))}${f.xUnit ?? ''}` }));
-  ticks.forEach((t) => { if (t.x >= xLo && t.x <= xHi) text(c, t.label, Math.min(x1 - 12, Math.max(x0 + 12, X(t.x))), y1 + 15, 10, WHITE, { align: 'center', alpha: 0.6 }); });
+
   f.hLines?.forEach((h) => {
     c.save(); c.setLineDash([5, 5]); c.strokeStyle = 'rgba(255,255,255,0.35)'; c.lineWidth = 1;
     c.beginPath(); c.moveTo(x0, Y(h.y)); c.lineTo(x1, Y(h.y)); c.stroke(); c.restore();
@@ -1268,16 +1277,25 @@ const drawFan: Draw = (c, sc, e) => {
     c.stroke(); c.restore();
     return vis[vis.length - 1];
   };
+  if (f.predictBox && f.predictBox.fromX < xHi) {
+    // 「予測」の枠（実績線の先を赤枠で囲む）
+    const bx = X(Math.max(xLo, f.predictBox.fromX)) + 2;
+    c.save(); rr(c, bx, y0 - 2, x1 - bx + 2, y1 - y0 + 4, 10);
+    c.fillStyle = `rgba(${RUST},0.06)`; c.fill(); c.setLineDash([]); c.strokeStyle = `rgba(${RUST},0.85)`; c.lineWidth = 1.6; c.stroke(); c.restore();
+  }
   f.series.filter((s) => s.role === 'bg').forEach((s) => drawPath(s.points, WHITE, Math.max(0.1, Math.min(0.3, 4 / Math.max(1, bgCount))), 1.1, false));
-  const order: FanRole[] = ['avg', 'warn', 'median', 'focus'];
+  const order: FanRole[] = ['lead', 'avg', 'warn', 'median', 'focus'];
   const ends: { x: number; y: number; label: string; rgb: string }[] = [];
   order.forEach((role) => f.series.filter((s) => s.role === role).forEach((s) => {
     const rgb = ROLE_RGB(role, e.accent);
-    const end = drawPath(s.points, rgb, role === 'focus' ? 1 : 0.92, role === 'focus' ? 3.6 : 2.4, role === 'focus');
+    const end = drawPath(s.points, rgb, role === 'focus' || role === 'lead' ? 1 : 0.92, s.dash ? 1.8 : role === 'focus' ? 3.6 : role === 'lead' ? 3 : 2.4, role === 'focus' && !s.dash, !!s.dash);
     if (end && s.endLabel && k > 0.97) ends.push({ x: X(end.x), y: Y(end.y), label: s.endLabel, rgb });
   }));
   c.restore(); // クリップ解除
+  ticks.forEach((t) => { if (t.x >= xLo && t.x <= xHi) text(c, t.label, Math.min(x1 - 12, Math.max(x0 + 12, X(t.x))), y1 + 15, 10, WHITE, { align: 'center', alpha: 0.6 }); });
   f.hLines?.forEach((h) => pill(c, h.label, x1 - 2, Y(h.y) - 3, WHITE, 'right'));
+  if (f.predictBox && f.predictBox.fromX < xHi) pill(c, f.predictBox.label, X(Math.max(xLo, f.predictBox.fromX)) + 8, y0 + 12, RUST, 'left', 11);
+  if (f.note) textBlock(c, f.note, x0 + 4, f.notePos === 'bottom' ? y1 - 30 : y0 + (f.predictBox ? 30 : 12), Math.min(x1 - x0 - 8, e.portrait ? 300 : 340), 10, WHITE, { alpha: 0.8 * ease(sub(e.p, 0.4, 0.6)), maxLines: 3 });
   // 右端のラベル（重ならないよう縦に押し下げる）
   ends.sort((a, b) => a.y - b.y);
   let lastY = -Infinity;
@@ -1397,7 +1415,7 @@ const drawButterfly: Draw = (c, sc, e) => {
   const half = e.W / 2 - 70 - labelW;
   text(c, b.leftLabel, cx - 10, top + 6, 13, RUST, { align: 'right', bold: true });
   text(c, b.rightLabel, cx + 10, top + 6, 13, TEAL, { bold: true });
-  const noteH = b.note ? 30 : 0;
+  const noteH = b.note ? (b.note.includes('\n') ? 36 : 22) : 0;
   const areaTop = top + 18, rowH = Math.min(e.portrait ? 70 : 74, (e.H - areaTop - 12 - noteH) / b.rows.length);
   c.fillStyle = 'rgba(255,255,255,0.35)'; c.fillRect(cx - 0.5, areaTop, 1, rowH * b.rows.length);
   b.rows.forEach((r, i) => {
@@ -1416,7 +1434,7 @@ const drawButterfly: Draw = (c, sc, e) => {
       text(c, r.rightSub, cx + 10, by + bh + 14, 10, TEAL, { alpha: 0.9 });
     }
   });
-  if (b.note) textBlock(c, b.note, 8, e.H - noteH + 4, e.W - 16, 12, WHITE, { alpha: 0.75 * ease(sub(e.p, 0.5, 0.7)), maxLines: 2 });
+  if (b.note) textBlock(c, b.note, 8, e.H - noteH - (e.showSource ? 8 : 0), e.W - 16, 11, WHITE, { alpha: 0.75 * ease(sub(e.p, 0.5, 0.7)), maxLines: 2, lh: 1.4 });
   sourceNote(c, e, v.source);
 };
 
@@ -1431,13 +1449,11 @@ const drawDdHistory: Draw = (c, sc, e) => {
   const X = (x: number) => x0 + ((x1 - x0) * (x - xLo)) / Math.max(1e-9, xHi - xLo);
   const Y = (y: number) => y0 + ((hi - y) / (hi - lo)) * (y1 - y0);
   c.save();
-  if (h.highlight) {
-    const hk = ease(sub(e.p, 0.75, 0.9));
-    if (hk > 0) {
-      c.fillStyle = `rgba(${AMBER},${0.12 * hk})`; c.fillRect(X(h.highlight.from), y0, X(h.highlight.to) - X(h.highlight.from), y1 - y0);
-      text(c, h.highlight.label, (X(h.highlight.from) + X(h.highlight.to)) / 2, y0 + 12, 10, AMBER, { align: 'center', bold: true, alpha: hk, maxW: Math.max(120, X(h.highlight.to) - X(h.highlight.from) + 60) });
-    }
-  }
+  [...(h.highlights ?? []), ...(h.highlight ? [h.highlight] : [])].forEach((hl, hi2) => {
+    const hk = ease(sub(e.p, 0.72 + hi2 * 0.06, 0.88 + hi2 * 0.06));
+    if (hk <= 0) return;
+    c.fillStyle = `rgba(${AMBER},${0.12 * hk})`; c.fillRect(X(hl.from), y0, X(hl.to) - X(hl.from), y1 - y0);
+  });
   h.hLines.forEach((l) => {
     c.save(); c.setLineDash([5, 5]); c.strokeStyle = 'rgba(255,255,255,0.3)'; c.lineWidth = 1;
     c.beginPath(); c.moveTo(x0, Y(l.y)); c.lineTo(x1, Y(l.y)); c.stroke(); c.restore();
@@ -1486,6 +1502,15 @@ const drawDdHistory: Draw = (c, sc, e) => {
     c.beginPath(); c.arc(px, py, 3, 0, Math.PI * 2); c.fillStyle = '#fff'; c.fill();
     rr(c, bx, by, w, 16, 8); c.fillStyle = 'rgba(6,10,19,0.9)'; c.fill(); c.strokeStyle = `rgba(${RUST},0.8)`; c.stroke();
     text(c, l.label, bx + w / 2, by + 12, 10, WHITE, { bold: true, align: 'center' });
+    c.restore();
+  });
+  // 長い回復期間の札は、DDの線の上に重ねて読めるように最後に描く
+  [...(h.highlights ?? []), ...(h.highlight ? [h.highlight] : [])].forEach((hl, hi2) => {
+    const hk = ease(sub(e.p, 0.72 + hi2 * 0.06, 0.88 + hi2 * 0.06));
+    if (hk <= 0) return;
+    c.save(); c.globalAlpha *= hk;
+    const pw = pillW(c, hl.label);
+    pill(c, hl.label, Math.min(x1 - pw - 2, Math.max(x0 + 2, (X(hl.from) + X(hl.to)) / 2 - pw / 2)), Y(0) + 22 + (hi2 % 2) * 16, AMBER, 'left');
     c.restore();
   });
   c.restore();

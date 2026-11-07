@@ -165,7 +165,12 @@ export function ddOverlaySheet(s: PricePoint[], pick = 7): DdOverlaySheet | null
 
 // ---------------------------------------------------------------- S13 暴落ラベル付きDDチャート
 export interface CrashLabel { label: string; peakDate: string; troughDate: string; troughDD: number; recoveryDate: string | null; x: number; y: number }
-export interface DdHistorySheet { points: XY[]; crashes: CrashLabel[]; reach: { level: number; share: number; years: number }[]; yearsCounted: number; longest: { peakDate: string; recoveryDate: string | null; years: number } | null; maxDD: number }
+export interface DdHistorySheet {
+  points: XY[]; crashes: CrashLabel[]; reach: { level: number; share: number; years: number }[]; yearsCounted: number;
+  longest: { peakDate: string; recoveryDate: string | null; years: number } | null; maxDD: number;
+  /** 最高値を付けた日から「その後二度とその水準を下回らなくなった日」までが10年以上かかった期間（例：2000年ITバブル〜2013年） */
+  permanent: { peakDate: string; recoveryDate: string | null; years: number; label: string }[];
+}
 const CRASH_NAMES: { from: number; to: number; name: string }[] = [
   { from: 1957, to: 1957, name: '1957年 景気後退' },
   { from: 1962, to: 1962, name: '1962年 ケネディ・ショック' },
@@ -182,6 +187,7 @@ const CRASH_NAMES: { from: number; to: number; name: string }[] = [
   { from: 2018, to: 2018, name: '2018年 利上げ・貿易摩擦' },
   { from: 2020, to: 2020, name: '2020年 コロナショック' },
   { from: 2022, to: 2022, name: '2022年 急速な利上げ' },
+  { from: 2025, to: 2025, name: '2025年 関税ショック' },
 ];
 export function crashName(troughYear: number): string {
   return CRASH_NAMES.find((c) => troughYear >= c.from && troughYear <= c.to)?.name ?? `${troughYear}年の下落`;
@@ -212,62 +218,232 @@ export function ddHistorySheet(s: PricePoint[], labelDepth = -19, maxLabels = 10
   const reach = [-5, -10, -20, -30].map((level) => ({ level, share: r1((yearMins.filter((m) => m <= level).length / yearMins.length) * 100), years: yearMins.filter((m) => m <= level).length }));
   const longestP = periods.reduce<typeof periods[number] | null>((b, p) => { const len = (p.rec ?? last) - p.peak; return !b || len > (b.rec ?? last) - b.peak ? p : b; }, null);
   const longest = longestP ? { peakDate: s[longestP.peak].date, recoveryDate: longestP.rec != null ? s[longestP.rec].date : null, years: r1((Date.parse(s[longestP.rec ?? last].date) - Date.parse(s[longestP.peak].date)) / (365.2425 * 864e5)) } : null;
-  return { points, crashes, reach, yearsCounted: yearMins.length, longest, maxDD: r1(Math.min(...dd)) };
+  // 「本格回復」：ピークの水準を一度上回っても、その後また下回るなら回復とみなさない（2000年→2007年→2008年→2013年）
+  const sufMin: number[] = new Array(s.length);
+  for (let i = last, m = Infinity; i >= 0; i--) { m = Math.min(m, s[i].close); sufMin[i] = m; }
+  const permanent: DdHistorySheet['permanent'] = [];
+  let coveredTo = -1;
+  for (const pr of periods.filter((q) => dd[q.trough] <= -20)) {
+    if (pr.peak <= coveredTo) continue; // すでに数えた長い期間の中に含まれるピークは飛ばす
+    const pc = s[pr.peak].close;
+    let rec: number | null = null;
+    for (let j = pr.peak + 1; j <= last; j++) if (s[j].close >= pc && sufMin[j] >= pc) { rec = j; break; }
+    const years = (Date.parse(s[rec ?? last].date) - Date.parse(s[pr.peak].date)) / (365.2425 * 864e5);
+    if (years < 10) continue;
+    coveredTo = rec ?? last;
+    const y0 = yearOf(s[pr.peak].date), y1 = yearOf(s[rec ?? last].date);
+    const names = periods.filter((q) => q.trough >= pr.peak && q.trough <= (rec ?? last) && dd[q.trough] <= -20).map((q) => crashName(yearOf(s[q.trough].date)).replace(/^[\d-]+年\s*/, ''));
+    permanent.push({ peakDate: s[pr.peak].date, recoveryDate: rec != null ? s[rec].date : null, years: r1(years), label: `${(() => { const u = [...new Set(names)]; return u.length > 1 ? `${u[0]}〜${u[u.length - 1]}` : u[0] ?? `${y0}年の下落`; })()}：${y0}〜${y1}年` });
+  }
+  return { points, crashes, reach, yearsCounted: yearMins.length, longest, maxDD: r1(Math.min(...dd)), permanent };
 }
 
 // ---------------------------------------------------------------- S14 現在地点からの3パターン
+export interface ZoneOutcome { label: string; share: number }
 export interface AthZoneSheet {
-  state: 'athZone' | 'drawdown'; dd: number; daysSinceATH: number; horizon: number; n: number;
-  outcomes: { label: string; share: number }[];
-  lead: XY[]; band: { x: number; lo: number; mid: number; hi: number }[];
+  state: 'athZone' | 'drawdown'; dd: number; daysSinceATH: number; horizon: number;
+  /** 最高値圏（−3%以内）にいた日の、horizon営業日以内の結果（新高値更新／ATH圏内継続／DD局面入り） */
+  base: { n: number; outcomes: ZoneOutcome[] };
+  /** 現在と似た状態（DDが±1ポイント以内）だった日の結果。下落局面中のときの分岐（回復／横ばい／さらに下落） */
+  current: { n: number; outcomes: ZoneOutcome[] };
+  /** 最高値を更新した日から、t営業日以内にDD局面（−3%超の下落）に入った割合 */
+  ddEntryAfterAth: { days: number; share: number }[];
+  /** 直近の最高値更新の1ヶ月前〜今日の実際の値動き（x：最高値更新日からの営業日、y：その最高値からの%） */
+  path: XY[];
+  /** 今日から先：似た状態だった日のその後を当てはめた範囲（同じ単位。上限＝90%点・下限＝10%点・平均） */
+  forward: { x: number; lo: number; mean: number; hi: number }[];
+  athDate: string;
+  /** 互換用（以前の場面ビルダーが使っていた形） */
+  outcomes: ZoneOutcome[]; n: number;
 }
-export function athZoneSheet(s: PricePoint[], horizon = 20, forward = 60, lead = 20): AthZoneSheet | null {
-  const last = s.length - 1;
-  if (last < 600) return null;
-  const { dd, athIdx } = drawdowns(s);
-  const ddNow = dd[last];
-  const state: AthZoneSheet['state'] = ddNow > -3 ? 'athZone' : 'drawdown';
-  const samples: number[] = [];
-  for (let i = 0; i + forward <= last; i++) {
-    if (Math.abs(dd[i] - ddNow) > 1) continue;
-    if (state === 'athZone' ? dd[i] <= -3 : dd[i] > -3) continue;
-    samples.push(i);
-  }
-  if (samples.length < 20) return null;
+function zoneOutcomes(s: PricePoint[], dd: number[], athIdx: number[], samples: number[], horizon: number, kind: 'athZone' | 'drawdown', ddRef: number): number[] {
   const counts = [0, 0, 0];
   for (const i of samples) {
     const peak = s[athIdx[i]].close;
     let res = 1;
     for (let j = i + 1; j <= i + horizon; j++) {
-      if (state === 'athZone') {
+      if (kind === 'athZone') {
         if (s[j].close > peak) { res = 0; break; }
         if (dd[j] <= -3) { res = 2; break; }
       } else {
         if (dd[j] > -3) { res = 0; break; }
-        if (dd[j] <= ddNow - 2) { res = 2; break; }
+        if (dd[j] <= ddRef - 2) { res = 2; break; }
       }
     }
     counts[res]++;
   }
-  const labels = state === 'athZone' ? ['最高値を更新', '最高値圏（−3%以内）で推移', 'DD局面（−3%超の下落）入り'] : ['−3%以内まで回復', '同じ水準で推移', 'さらに2ポイント以上下落'];
-  const outcomes = labels.map((label, k) => ({ label, share: r1((counts[k] / samples.length) * 100) }));
-  // 「今日」を0%とした直近の値動きと、似た状態だった日のその後（10・50・90パーセンタイル）
-  const leadPath: XY[] = [];
-  for (let t = -lead; t <= 0; t++) leadPath.push({ x: t, y: pctOf(s[last].close, s[last + t].close) });
-  const thin = samples.filter((_, k) => k % 3 === 0);
-  const band: AthZoneSheet['band'] = [];
-  for (let t = 0; t <= forward; t += 2) {
-    const v = thin.map((i) => (s[i + t].close / s[i].close - 1) * 100).sort((a, b) => a - b);
-    band.push({ x: t, lo: r1(quantile(v, 0.1)), mid: r1(quantile(v, 0.5)), hi: r1(quantile(v, 0.9)) });
+  return counts;
+}
+export function athZoneSheet(s: PricePoint[], horizon = 20, forward = 60, preDays = 21): AthZoneSheet | null {
+  const last = s.length - 1;
+  if (last < 600) return null;
+  const { dd, athIdx } = drawdowns(s);
+  const ddNow = dd[last];
+  const state: AthZoneSheet['state'] = ddNow > -3 ? 'athZone' : 'drawdown';
+  // 最高値圏（−3%以内）にいた日全体の結果（基準となる3パターン）
+  const baseSamples: number[] = [];
+  for (let i = 0; i + horizon <= last; i++) if (dd[i] > -3) baseSamples.push(i);
+  const bc = zoneOutcomes(s, dd, athIdx, baseSamples, horizon, 'athZone', 0);
+  const baseLabels = ['新高値を更新', 'ATH圏内（−3%以内）で推移', 'DD局面（−3%超の下落）入り'];
+  const base = { n: baseSamples.length, outcomes: baseLabels.map((label, k) => ({ label, share: r1((bc[k] / Math.max(1, baseSamples.length)) * 100) })) };
+  // 現在と似た状態だった日の結果
+  const curSamples: number[] = [];
+  for (let i = 0; i + forward <= last; i++) {
+    if (Math.abs(dd[i] - ddNow) > 1) continue;
+    if (state === 'athZone' ? dd[i] <= -3 : dd[i] > -3) continue;
+    curSamples.push(i);
   }
-  return { state, dd: r1(ddNow), daysSinceATH: last - athIdx[last], horizon, n: samples.length, outcomes, lead: leadPath, band };
+  if (curSamples.length < 20) return null;
+  const cc = zoneOutcomes(s, dd, athIdx, curSamples, horizon, state, ddNow);
+  const curLabels = state === 'athZone' ? baseLabels : ['−3%以内まで回復', '同じ水準で推移', 'さらに2ポイント以上下落'];
+  const current = { n: curSamples.length, outcomes: curLabels.map((label, k) => ({ label, share: r1((cc[k] / curSamples.length) * 100) })) };
+  // 最高値更新の日から、t営業日以内にDD局面に入った割合
+  const athDays: number[] = [];
+  for (let i = 1; i <= last; i++) if (athIdx[i] === i && i + 60 <= last) athDays.push(i);
+  const ddEntryAfterAth = [5, 10, 20, 60].map((t) => {
+    let hit = 0;
+    for (const i of athDays) { for (let j = i + 1; j <= i + t; j++) if (dd[j] <= -3) { hit++; break; } }
+    return { days: t, share: r1((hit / Math.max(1, athDays.length)) * 100) };
+  });
+  const ai = athIdx[last], athClose = s[ai].close;
+  const path: XY[] = [];
+  for (let i = Math.max(0, ai - preDays); i <= last; i++) path.push({ x: i - ai, y: pctOf(athClose, s[i].close) });
+  const thin = curSamples.filter((_, k) => k % 3 === 0);
+  const fwd: AthZoneSheet['forward'] = [];
+  const x0 = last - ai;
+  for (let t = 0; t <= forward; t += 2) {
+    const v = thin.map((i) => ((1 + ddNow / 100) * (s[i + t].close / s[i].close) - 1) * 100).sort((a, b) => a - b);
+    fwd.push({ x: x0 + t, lo: r1(quantile(v, 0.1)), mean: r1(mean(v)), hi: r1(quantile(v, 0.9)) });
+  }
+  return {
+    state, dd: r1(ddNow), daysSinceATH: last - ai, horizon, base, current, ddEntryAfterAth, path, forward: fwd, athDate: s[ai].date,
+    outcomes: current.outcomes, n: current.n,
+  };
+}
+
+// ---------------------------------------------------------------- S3 DDの定義（実例）
+export interface DdDefinitionSheet {
+  peakDate: string; troughDate: string; recoveryDate: string; mdd: number; ddDays: number; recoverDays: number;
+  path: XY[]; troughX: number; recX: number; dd3PerYear: number; dd5Share: number; label: string;
+}
+export function ddDefinitionSheet(s: PricePoint[], minDepth = -10): DdDefinitionSheet | null {
+  const last = s.length - 1;
+  if (last < 600) return null;
+  const { dd } = drawdowns(s);
+  // 直近の「最高値→底（−10%以上）→最高値の回復」まで終わった局面を実例に使う
+  let ex: { peak: number; trough: number; rec: number } | null = null;
+  let start = -1, trough = -1;
+  for (let i = 0; i <= last; i++) {
+    if (dd[i] < 0) { if (start < 0) { start = Math.max(0, i - 1); trough = i; } if (dd[i] < dd[trough]) trough = i; }
+    else if (start >= 0) { if (dd[trough] <= minDepth) ex = { peak: start, trough, rec: i }; start = -1; }
+  }
+  if (!ex) return null;
+  const pre = 15, post = 15;
+  const path: XY[] = [];
+  for (let i = Math.max(0, ex.peak - pre); i <= Math.min(last, ex.rec + post); i++) path.push({ x: i - ex.peak, y: r1(dd[i]) });
+  const { episodes } = extractEpisodes(s);
+  const years = (Date.parse(s[last].date) - Date.parse(s[0].date)) / (365.2425 * 864e5);
+  const done = episodes.filter((e) => e.endDate);
+  return {
+    peakDate: s[ex.peak].date, troughDate: s[ex.trough].date, recoveryDate: s[ex.rec].date, mdd: r1(dd[ex.trough]),
+    ddDays: ex.rec - ex.peak, recoverDays: ex.rec - ex.trough, path, troughX: ex.trough - ex.peak, recX: ex.rec - ex.peak,
+    dd3PerYear: r1(episodes.length / years), dd5Share: r1((done.filter((e) => e.judgeIdx != null).length / Math.max(1, done.length)) * 100),
+    label: crashName(yearOf(s[ex.trough].date)),
+  };
+}
+
+// ---------------------------------------------------------------- S9 DD速度センサーの分岐
+export interface BranchSheet {
+  state: 'normal' | 'over3' | 'reached5';
+  /** 今回の実際の値動き（x：DD−3%到達日からの営業日、y：最高値からの%）。平常時は直近20営業日（x≦0） */
+  lead: XY[];
+  total: number; judged: number; recovered: number;
+  /** 今回の速さ（acc）と同じ区分の局面（reached5のときのみ） */
+  bucket: { label: string; n: number; rates: { threshold: number; share: number }[]; medianDD: number } | null;
+  /** −5%を超えた局面全体のその後の深さ（over3のとき） */
+  judgedRates: { threshold: number; share: number }[];
+  acc: number | null; elapsed: number; ddNow: number;
+  /** 平常時：最高値圏（−3%以内）からの20営業日以内の結果 */
+  zone: ZoneOutcome[] | null;
+}
+export function branchSheet(s: PricePoint[]): BranchSheet | null {
+  const last = s.length - 1;
+  if (last < 600) return null;
+  const { episodes, current } = extractEpisodes(s);
+  const done = episodes.filter((e) => e.endDate);
+  if (!done.length) return null;
+  const { dd } = drawdowns(s);
+  const judgedEps = done.filter((e) => e.judgeIdx != null);
+  const rateOf = (list: typeof done, t: number) => r1((list.filter((e) => e.maxDD >= t).length / Math.max(1, list.length)) * 100);
+  const TH = [0.08, 0.10, 0.15, 0.20];
+  const state: BranchSheet['state'] = current ? (current.judgeIdx != null ? 'reached5' : 'over3') : 'normal';
+  const lead: XY[] = [];
+  if (current) for (let i = current.startIdx; i <= last; i++) lead.push({ x: i - current.startIdx, y: r1(dd[i]) });
+  else for (let i = Math.max(0, last - 20); i <= last; i++) lead.push({ x: i - last, y: r1(dd[i]) });
+  let bucket: BranchSheet['bucket'] = null;
+  if (current && current.acc != null) {
+    const fast = current.acc <= 3;
+    const same = judgedEps.filter((e) => e.acc != null && (fast ? e.acc <= 3 : e.acc >= 4));
+    bucket = { label: fast ? '0〜3日（高速）' : '4日以上（低速）', n: same.length, rates: TH.map((t) => ({ threshold: Math.round(t * 100), share: rateOf(same, t) })), medianDD: r1(-median(same.map((e) => e.maxDD * 100))) };
+  }
+  const zone = state === 'normal' ? athZoneSheet(s)?.base.outcomes ?? null : null;
+  return {
+    state, lead, total: done.length, judged: judgedEps.length, recovered: done.length - judgedEps.length, bucket,
+    judgedRates: TH.map((t) => ({ threshold: Math.round(t * 100), share: rateOf(judgedEps, t) })),
+    acc: current?.acc ?? null, elapsed: current ? last - current.startIdx : 0, ddNow: r1(dd[last]), zone,
+  };
+}
+
+// ---------------------------------------------------------------- S10 1日で1%超下がったら
+export interface DropDaySheet {
+  threshold: number; count: number; perYear: number; nextUp: number; nextDown: number;
+  horizons: { label: string; days: number; afterDrop: number; allDays: number }[];
+}
+export function dropDaySheet(s: PricePoint[], threshold = -1): DropDaySheet | null {
+  const last = s.length - 1;
+  if (last < 600) return null;
+  const H = [{ label: '翌営業日', days: 1 }, { label: '1週間後', days: 5 }, { label: '1ヶ月後', days: 21 }, { label: '3ヶ月後', days: 63 }];
+  const drops: number[] = [];
+  for (let i = 1; i <= last; i++) if ((s[i].close / s[i - 1].close - 1) * 100 <= threshold) drops.push(i);
+  if (drops.length < 30) return null;
+  const nx = drops.filter((i) => i + 1 <= last);
+  const up = nx.filter((i) => s[i + 1].close > s[i].close).length, down = nx.filter((i) => s[i + 1].close < s[i].close).length;
+  const avgAfter = (idx: number[], d: number) => { const v = idx.filter((i) => i + d <= last).map((i) => (s[i + d].close / s[i].close - 1) * 100); return r2(mean(v)); };
+  const all = Array.from({ length: last }, (_, k) => k + 1);
+  const years = (Date.parse(s[last].date) - Date.parse(s[0].date)) / (365.2425 * 864e5);
+  return {
+    threshold, count: drops.length, perYear: r1(drops.length / years), nextUp: r1((up / nx.length) * 100), nextDown: r1((down / nx.length) * 100),
+    horizons: H.map((h) => ({ ...h, afterDrop: avgAfter(drops, h.days), allDays: avgAfter(all, h.days) })),
+  };
+}
+
+// ---------------------------------------------------------------- S12 最高値更新のペース（16区分）
+export interface AthPaceSheet {
+  count: number; perYear: number; thisYear: number; year: number; elapsed: number;
+  bins: { label: string; min: number; max: number | null; count: number }[]; currentBin: number;
+}
+const PACE_BINS: [number, number | null][] = [[1, 1], [2, 2], [3, 3], [4, 4], [5, 5], [6, 7], [8, 10], [11, 15], [16, 20], [21, 30], [31, 40], [41, 60], [61, 80], [81, 100], [101, 120], [121, null]];
+export function athPaceSheet(s: PricePoint[]): AthPaceSheet | null {
+  const last = s.length - 1;
+  if (last < 600) return null;
+  const ath: number[] = [];
+  let peak = s[0].close;
+  for (let i = 1; i <= last; i++) if (s[i].close > peak) { peak = s[i].close; ath.push(i); }
+  if (ath.length < 10) return null;
+  const gaps = ath.slice(1).map((v, k) => v - ath[k]);
+  const year = yearOf(s[last].date);
+  const elapsed = last - ath[ath.length - 1];
+  const bins = PACE_BINS.map(([min, max]) => ({ label: max == null ? `${min}日〜` : min === max ? `${min}日` : `${min}〜${max}日`, min, max, count: gaps.filter((g) => g >= min && (max == null || g <= max)).length }));
+  const currentBin = elapsed <= 0 ? 0 : bins.findIndex((b) => elapsed >= b.min && (b.max == null || elapsed <= b.max));
+  const years = (Date.parse(s[last].date) - Date.parse(s[0].date)) / (365.2425 * 864e5);
+  return { count: ath.length, perYear: r1(ath.length / years), thisYear: ath.filter((i) => yearOf(s[i].date) === year).length, year, elapsed, bins, currentBin };
 }
 
 // ---------------------------------------------------------------- S16 年初来パス比較
 export interface YtdPathsSheet {
   year: number; k: number; current: XY[]; past: { year: number; path: XY[] }[]; avg: XY[];
   ytdNow: number; avgAtK: number; rankPct: number; nYears: number;
-  outlook: { x: number; lo: number; mid: number; hi: number }[];
+  outlook: { x: number; lo: number; mid: number; hi: number; mean: number }[];
 }
 export function ytdPathsSheet(s: PricePoint[], step = 5): YtdPathsSheet | null {
   const last = s.length - 1, year = yearOf(s[last].date);
@@ -302,7 +478,7 @@ export function ytdPathsSheet(s: PricePoint[], step = 5): YtdPathsSheet | null {
   const outlook: YtdPathsSheet['outlook'] = [];
   for (let t = k; t < maxLen; t += step) {
     const v = full.filter((f) => f.p.length > t).map((f) => ((1 + ytdNow / 100) * (1 + f.p[t] / 100) / (1 + f.p[Math.min(k, f.p.length - 1)] / 100) - 1) * 100).sort((a, b) => a - b);
-    if (v.length) outlook.push({ x: t, lo: r1(quantile(v, 0.1)), mid: r1(quantile(v, 0.5)), hi: r1(quantile(v, 0.9)) });
+    if (v.length) outlook.push({ x: t, lo: r1(quantile(v, 0.1)), mid: r1(quantile(v, 0.5)), hi: r1(quantile(v, 0.9)), mean: r1(mean(v)) });
   }
   return { year, k, current: thinPath(curPath), past: full.map((f) => ({ year: f.year, path: thinPath(f.p) })), avg, ytdNow: r1(ytdNow), avgAtK: r1(mean(atK)), rankPct, nYears: full.length, outlook };
 }
@@ -316,7 +492,7 @@ export interface ScenarioSheet {
   range3y: { lo: number; hi: number } | null;
 }
 export interface ScenarioState { k: number; ytd: number; upRatio: number; daysSinceATH: number; termYear: number; vol20: number }
-export interface ScenariosSheet { year: number; asOf: string; state: ScenarioState; scenarios: ScenarioSheet[] }
+export interface ScenariosSheet { year: number; asOf: string; state: ScenarioState; scenarios: ScenarioSheet[]; lead: XY[] }
 export function scenariosSheet(s: PricePoint[], forward = 756, step = 5): ScenariosSheet | null {
   const last = s.length - 1, year = yearOf(s[last].date);
   const ranges = yearRanges(s);
@@ -385,7 +561,10 @@ export function scenariosSheet(s: PricePoint[], forward = 756, step = 5): Scenar
     build('vol', '値動きの荒さが似た年', `直近20営業日の1日の変動率${now.vol20.toFixed(2)}%（±16%以内）`, ['vol']),
     build('all', '5つの条件が重なった年', '年初来騰落率・上昇日の割合・最高値からの日数・大統領任期・値動きの荒さ', ['ytd', 'up', 'ath', 'term', 'vol']),
   ];
-  return { year, asOf: s[last].date, state: { ...now, ytd: r1(now.ytd), upRatio: r1(now.upRatio), vol20: r2(now.vol20) }, scenarios };
+  // 今年の年初からの実際の値動き（今日＝0%に揃える。将来シナリオ⑦で「実績線→予測」をひと続きに描く）
+  const lead: XY[] = [];
+  for (let i = cur.first - 1; i <= last; i++) if ((i - last) % step === 0 || i === last || i === cur.first - 1) lead.push({ x: i - last, y: pctOf(s[last].close, s[i].close) });
+  return { year, asOf: s[last].date, state: { ...now, ytd: r1(now.ytd), upRatio: r1(now.upRatio), vol20: r2(now.vol20) }, scenarios, lead };
 }
 
 // ---------------------------------------------------------------- S24 まとめの事実
@@ -430,6 +609,7 @@ export interface Sp500Sheets {
   asOf: string; title: TitleSheet | null; zoom: ZoomSheet | null; upDown: UpDownSheet | null;
   ddOverlay: DdOverlaySheet | null; ddHistory: DdHistorySheet | null; athZone: AthZoneSheet | null;
   ytdPaths: YtdPathsSheet | null; scenarios: ScenariosSheet | null; facts: FactsSheet | null;
+  ddDefinition: DdDefinitionSheet | null; branch: BranchSheet | null; dropDay: DropDaySheet | null; athPace: AthPaceSheet | null;
 }
 export function computeSp500Sheets(points: InPoint[]): Sp500Sheets | null {
   const s = prepareSeries(points);
@@ -440,5 +620,6 @@ export function computeSp500Sheets(points: InPoint[]): Sp500Sheets | null {
     title: safe(() => titleSheet(s)), zoom: safe(() => zoomSheet(s)), upDown: safe(() => upDownSheet(s)),
     ddOverlay: safe(() => ddOverlaySheet(s)), ddHistory: safe(() => ddHistorySheet(s)), athZone: safe(() => athZoneSheet(s)),
     ytdPaths: safe(() => ytdPathsSheet(s)), scenarios: safe(() => scenariosSheet(s)), facts: safe(() => factsSheet(s)),
+    ddDefinition: safe(() => ddDefinitionSheet(s)), branch: safe(() => branchSheet(s)), dropDay: safe(() => dropDaySheet(s)), athPace: safe(() => athPaceSheet(s)),
   };
 }

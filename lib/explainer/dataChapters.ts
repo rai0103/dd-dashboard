@@ -52,19 +52,22 @@ export function buildFixedDataChapters(snapshot: any, instrumentLabel = 'S&P500'
   const sh = sheet?.sheets ? buildSheetScenes(sheet.sheets, sheet.points, instrumentLabel) : null;
   const accel = buildAccelScenes(snapshot.accel ?? null, instrumentLabel);
   // 2〜3（前提条件・DDの定義）
-  push(plan('前提とドローダウンの基本', 'ぜんていと、どろーだうんの、きほん', 'データの前提と、下落（DD）の発生回数・深さの分布'),
-    buildStockIntroScenes(snapshot.finalReach ?? null, instrumentLabel));
+  // 3枚目（DDの定義）は実例のチャート（sheetがあるとき）。無ければ従来の「谷間」の概念図
+  const intro = buildStockIntroScenes(snapshot.finalReach ?? null, instrumentLabel);
+  const introFirst = intro[0], introRest = intro.slice(1).filter((s) => !(sh?.ddDefinition && s.title === '「谷間」の考え方'));
+  push(plan('前提とドローダウンの基本', 'ぜんていと、どろーだうんの、きほん', 'データの前提、DD（ドローダウン）の定義、下落の発生回数・深さの分布'),
+    [introFirst, sh?.ddDefinition, ...introRest]);
   // 4〜6（現在の状況）
   push(plan('現在の状況', 'げんざいの、じょうきょう', '年初来の値動き・直近の値動き・上昇日と下落日の数'), [sh?.zoom, sh?.upDown]);
   // 7〜10（DD速度センサー）
   push(plan('DD速度センサー：下落の深まり方', 'でぃーでぃー、そくどせんさー、げらくの、ふかまりかた', '下落の速さ別のその後・過去の局面との重ね描き・分岐・1日の大幅下落のその後'),
-    [accel[0], sh?.ddOverlay, ...accel.slice(1), buildDailyMoveScene(snapshot.dailyMoveDown ?? null, instrumentLabel)]);
+    [accel[0], sh?.ddOverlay, ...(sh?.branch ? [sh.branch] : accel.slice(1)), sh?.dropDay ?? buildDailyMoveScene(snapshot.dailyMoveDown ?? null, instrumentLabel)]);
   // 11（中期ローリングリターン）
   push(plan('保有期間で変わる勝率', 'ほゆうきかんで、かわる、しょうりつ', '1ヶ月〜1年の保有期間ごとのリターンの分布と勝率'),
     [buildRollingReturnScene(snapshot.rollingReturns ?? null, instrumentLabel)]);
   // 12（最高値更新ペース）
   push(plan('最高値更新のペース', 'さいたかねこうしんの、ぺーす', '最高値を更新する間隔の分布と、現在の位置'),
-    [buildAthPaceScene(snapshot.athPace ?? null, instrumentLabel)]);
+    [sh?.athPace ?? buildAthPaceScene(snapshot.athPace ?? null, instrumentLabel)]);
   // 13（暴落発生確率）
   push(plan('暴落の歴史', 'ぼうらくの、れきし', '全期間の下落率の推移と主な暴落、各水準に到達した年の割合'), [sh?.ddHistory]);
   // 14（現在地点からの深掘り）

@@ -108,6 +108,10 @@ export interface VisualSpec {
   ddHistory?: DdHistorySpec;
   /** kind:'title'の背景にうっすら描く推移（例：全期間の指数の対数値） */
   background?: { x: number; y: number }[];
+  /** kind:'title'の下部に小さく出す注意書き */
+  titleNote?: string;
+  /** histogram・groupedBar等の見出しの下に並べる数値チップ（任意） */
+  chips?: { label: string; value: string; role?: FanRole }[];
 }
 
 export interface ExplainerScene {
@@ -318,8 +322,8 @@ export const emptyVisual = (kind: VisualKind = 'point'): VisualSpec => ({
 
 // [Stage E-16] 'fan'専用：系列（role=bg は細い白線で背景、focus=アクセント色の太線、median=黄、avg=青、warn=赤）、
 // レンジ帯（lo〜hi）、注釈の丸印、横軸の目盛り、「現在」の縦線、基準の横線、数値チップ。
-export type FanRole = 'bg' | 'focus' | 'median' | 'avg' | 'warn';
-export interface FanSeries { key: string; label: string; role: FanRole; points: { x: number; y: number }[]; endLabel?: string }
+export type FanRole = 'bg' | 'focus' | 'median' | 'avg' | 'warn' | 'lead'; // lead＝白の太線（実績線）
+export interface FanSeries { key: string; label: string; role: FanRole; points: { x: number; y: number }[]; endLabel?: string; /** 点線で描く（例：予測の上限・平均・下限） */ dash?: boolean }
 export interface FanSpec {
   series: FanSeries[];
   band?: { label: string; points: { x: number; lo: number; hi: number }[] };
@@ -335,6 +339,11 @@ export interface FanSpec {
   bgLegend?: string;
   /** 縦軸の範囲を、背景の細線は3〜97%の範囲だけで決める（外れ値で他の線がつぶれないように） */
   clipBg?: boolean;
+  /** グラフ内に添える補足（最大3行）。notePos='bottom'なら左下 */
+  note?: string;
+  notePos?: 'top' | 'bottom';
+  /** x≧fromXを「予測」として赤枠で囲む */
+  predictBox?: { fromX: number; label: string };
 }
 // [Stage E-16] 'zoomLine'専用：年初来の推移（%）→ points[zoomFrom..]の区間へズームし、各日の騰落率を表示する。
 export interface ZoomLineSpec {
@@ -357,4 +366,5 @@ export interface DdHistorySpec {
   labels: { x: number; y: number; label: string }[];
   hLines: { y: number; label: string }[];
   highlight?: { from: number; to: number; label: string };
+  highlights?: { from: number; to: number; label: string }[];
 }
