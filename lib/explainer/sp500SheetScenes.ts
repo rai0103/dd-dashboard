@@ -30,9 +30,16 @@ function scene(title: string, caption: string, narration: string, reading: strin
 const SRC = (label: string, sheets: Sp500Sheets) => `${label}の実績データ（日次終値、〜${sheets.asOf}）`;
 
 // ---------------------------------------------------------------- S1 タイトルの背景
-/** AIが作ったタイトル場面に、全期間の推移を背景として添える（文字はAIのタイトルのまま） */
-export function decorateTitleScene(sc: ExplainerScene, t: TitleSheet | null): ExplainerScene {
+/**
+ * AIが作ったタイトル場面に、全期間の推移を背景として添える。template=true（S&P500モード）のときは、
+ * 見出しを固定のテンプレ「S&P500最新分析」／「過去◯年間のチャートから今後を検証・分析」にする（年数は実データから）。
+ */
+export function decorateTitleScene(sc: ExplainerScene, t: TitleSheet | null, template = false): ExplainerScene {
   if (!t || sc.visual.kind !== 'title') return sc;
+  if (template) {
+    const years = Math.round(t.years);
+    return { ...sc, visual: { ...sc.visual, heading: 'S&P500最新分析', subheading: `過去${years}年間のチャートから今後を検証・分析`, background: t.background, titleNote: '※過去のデータにもとづく参考情報であり、将来の成果を保証するものではありません' } };
+  }
   const sub = sc.visual.subheading || `${t.startDate.slice(0, 4)}〜${t.endDate.slice(0, 4)}年・約${Math.round(t.years)}年の実データで分析`;
   return { ...sc, visual: { ...sc.visual, background: t.background, subheading: sub, titleNote: '※過去のデータにもとづく参考情報であり、将来の成果を保証するものではありません' } };
 }

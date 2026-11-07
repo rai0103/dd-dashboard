@@ -571,7 +571,8 @@ export default function ExplainerStudio() {
         }
         // [Stage E-16] タイトル場面の背景に、全期間の推移をうっすら描く（モックアップ1枚目）
         const ti = longScenes.findIndex((sc) => sc.visual.kind === "title");
-        if (ti >= 0 && sheetInputFor(snap)) longScenes = longScenes.map((sc, i) => (i === ti ? decorateTitleScene(sc, sp500Sheets.title) : sc));
+        // S&P500モードは見出しをテンプレ（「S&P500最新分析」／「過去◯年間のチャートから今後を検証・分析」）に固定する
+        if (ti >= 0 && sheetInputFor(snap)) longScenes = longScenes.map((sc, i) => (i === ti ? decorateTitleScene(sc, sp500Sheets.title, mode === "sp500") : sc));
       }
       // ラベル（kicker）は、選んだ長尺の長さから自動で入れる（例：5分で解説）。生成後も自由に書き換えられる
       p = { ...p, longScenes, shortScenes: S.scenes, kicker: autoKickerFor(minutes) };
