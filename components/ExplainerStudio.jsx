@@ -37,6 +37,7 @@ import { buildStockIntroScenes } from "@/lib/explainer/stockIntroScenes";
 import { buildAccelScenes } from "@/lib/explainer/accelIntroScene";
 import { buildAthPaceScene } from "@/lib/explainer/athPaceScene";
 import { buildRollingReturnScene } from "@/lib/explainer/rollingReturnScene";
+import { buildDailyMoveScene } from "@/lib/explainer/dailyMoveScene";
 import { drawVisual, PALETTE } from "@/lib/explainer/visuals";
 
 const C = {
@@ -520,6 +521,9 @@ export default function ExplainerStudio() {
         // [動画連携][Stage E-12] 保有期間別ローリングリターンの実績を、ビーズウォーム分布の固定場面として追加する。
         const rollingReturnScene = buildRollingReturnScene(primarySnapshot?.rollingReturns ?? null, primarySnapshot?.instrumentLabel ?? "S&P500");
         if (rollingReturnScene) introScenes.push(rollingReturnScene);
+        // [動画連携][Stage E-13] 「1日◯%超下落のその後」を、区分別グループ棒グラフの固定場面として追加する。
+        const dailyMoveScene = buildDailyMoveScene(primarySnapshot?.dailyMoveDown ?? null, primarySnapshot?.instrumentLabel ?? "S&P500");
+        if (dailyMoveScene) introScenes.push(dailyMoveScene);
         if (introScenes.length) longScenes = [...introScenes, ...longScenes];
       }
       // ラベル（kicker）は、選んだ長尺の長さから自動で入れる（例：5分で解説）。生成後も自由に書き換えられる

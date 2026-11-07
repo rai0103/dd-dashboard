@@ -35,6 +35,9 @@ export const VISUAL_KINDS = [
   'branch',       // 分岐図：ある時点までの実績パス→そこから分かれる複数の結末（結末ごとの統計パネル付き）
   'histogram',    // 区間ヒストグラム：間隔・幅などの分布を区間ごとの棒で示し、現在の区間を強調できる
   'distribution', // 分布（ビーズウォーム）：カテゴリごとの個別サンプルを1点1点のドットで示し、平均を併記する
+  // [Stage E-13] 同上の理由で追加。カテゴリ（例：下落幅の区分）ごとに複数系列（例：翌営業日・20営業日後）を
+  // 並べて比較したいときに使う（既存の'bar'は1カテゴリ1系列のみ）。
+  'groupedBar',   // グループ棒グラフ：同じカテゴリ内で複数系列を並べて比較する
 ] as const;
 export type VisualKind = typeof VISUAL_KINDS[number] | 'chapter' | 'sources';
 
@@ -206,6 +209,20 @@ export interface StockCatalog {
   // [動画連携][Stage E-12] 保有期間別ローリングリターン（lib/rollingReturn.tsのsummarizeRollingReturnsForVideo）
   // の要約。未対応の銘柄・未計算のときはundefined。
   rollingReturns?: RollingReturnSummary;
+  // [動画連携][Stage E-13] 1日の騰落率の区分別「その後」（lib/dailyMoveBuckets.tsのsummarizeDailyMoveBucketsForVideo）
+  // の要約（下落日のみ）。未対応の銘柄・未計算のときはundefined。
+  dailyMoveDown?: DailyMoveBucketSummary;
+}
+
+// [動画連携][Stage E-13] 1日の騰落率の区分別「その後」（lib/dailyMoveBuckets.tsのsummarizeDailyMoveBucketsForVideo）
+// が書き出す要約と同じ形。AIには渡さず、lib/explainer/に置く固定場面ビルダーが'groupedBar'の場面を
+// 組み立てるためだけに使う。
+export interface MoveHorizonStatsSummary { horizonDays: number; n: number; mean: number | null; median: number | null; winRate: number | null }
+export interface MoveBucketStatsSummary { label: string; min: number; max: number | null; n: number; perYear: number; horizons: MoveHorizonStatsSummary[] }
+export interface DailyMoveBucketSummary {
+  periodStart: string | null; periodEnd: string | null; periodYears: number;
+  direction: 'down' | 'up';
+  buckets: MoveBucketStatsSummary[];
 }
 
 // [動画連携][Stage E-12] 保有期間別ローリングリターン（lib/rollingReturn.tsのsummarizeRollingReturnsForVideo）が

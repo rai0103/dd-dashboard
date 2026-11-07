@@ -1045,6 +1045,84 @@ const drawDistribution: Draw = (c, sc, e) => {
   sourceNote(c, e, v.source);
 };
 
+// [Stage E-13] 'groupedBar'：同じカテゴリ内で複数系列（例：翌営業日・20営業日後）を棒で並べて比較する。
+// drawBarと違い、items内で同じlabel（カテゴリ）を持つ複数のVisualItemを、seriesKey/seriesLabelで束ねて
+// 横に並べる（yearCompareと同じ要領でseriesKey等を流用。専用のSpecは持たない）。
+const drawGroupedBar: Draw = (c, sc, e) => {
+  const v = sc.visual;
+  const top = heading(c, e, v.heading, v.subheading, e.accent);
+  const unit = unitOf(c, e, v.unit, top);
+  // カテゴリ（label）の出現順を保ったまま、その中の系列（seriesKey）も出現順でまとめる
+  const catOrder: string[] = [];
+  const seriesOrder: string[] = [];
+  const seriesLabelOf = new Map<string, string>();
+  const table = new Map<string, Map<string, number>>(); // category -> seriesKey -> value
+  v.items.forEach((it, idx) => {
+    const n = parseValue(it.value);
+    if (n === null) return;
+    const cat = it.label || `c${idx}`;
+    const sk = it.seriesKey || it.seriesLabel || 's0';
+    if (!catOrder.includes(cat)) catOrder.push(cat);
+    if (!seriesOrder.includes(sk)) { seriesOrder.push(sk); seriesLabelOf.set(sk, it.seriesLabel || sk); }
+    const row = table.get(cat) ?? new Map<string, number>();
+    row.set(sk, n);
+    table.set(cat, row);
+  });
+  if (!catOrder.length || !seriesOrder.length) { sourceNote(c, e, v.source); return; }
+  const allVals = [...table.values()].flatMap((row) => [...row.values()]);
+  const maxAbs = Math.max(1e-9, ...allVals.map((x) => Math.abs(x)));
+  const hasNeg = allVals.some((x) => x < 0);
+  const legendRows = Math.max(1, Math.ceil(seriesOrder.length / (e.portrait ? 2 : 4)));
+  const legendH = legendRows * 17;
+  // 下に「区分ラベル行(20)＋余白(16)＋凡例(legendH)＋出典の余白(16)」の4段を確保する
+  // （24+legendHだけだと区分ラベル行の分が足りず、区分ラベル・凡例・出典が重なっていた）
+  const bottom = e.H - 20 - 16 - legendH - 16;
+  const x0 = 16, aw = e.W - 32, nCat = catOrder.length, slot = aw / nCat;
+  const baseY = hasNeg ? top + 16 + (bottom - top - 16) / 2 : bottom;
+  const hMax = hasNeg ? (bottom - top - 16) / 2 - 20 : bottom - top - 30;
+  const nSeries = seriesOrder.length;
+  const groupW = Math.min(slot * 0.82, 26 * nSeries + 8 * (nSeries - 1));
+  const barW = Math.max(4, (groupW - 8 * (nSeries - 1)) / nSeries);
+  c.save();
+  c.fillStyle = 'rgba(255,255,255,0.08)';
+  for (let g = 1; g <= 3; g++) {
+    const gy = hasNeg ? baseY - (hMax * g) / 3 : baseY - (hMax * g) / 3;
+    c.fillRect(x0, gy, aw, 1);
+  }
+  catOrder.forEach((cat, ci) => {
+    const row = table.get(cat)!;
+    const gx = x0 + slot * ci + (slot - groupW) / 2;
+    seriesOrder.forEach((sk, si) => {
+      const val = row.get(sk);
+      if (val == null) return;
+      const k = ease(sub(e.p, 0.08 + (ci * 0.5) / nCat, 0.4 + (ci * 0.5) / nCat));
+      const h = (Math.abs(val) / maxAbs) * hMax * k;
+      const x = gx + si * (barW + 8);
+      const rgb = colorAt(si);
+      rr(c, x, val < 0 ? baseY : baseY - h, barW, Math.max(2, h), Math.min(4, barW / 2));
+      c.fillStyle = `rgb(${rgb})`; c.fill();
+      if (ci === 0 || nCat <= 4) {
+        text(c, `${fmtNum(val, decimalsOf(String(val)))}${unit}`, x + barW / 2, val < 0 ? baseY + h + 14 : baseY - h - 6, 10, WHITE, { align: 'center', alpha: ease(sub(e.p, 0.3, 0.5)), bold: true, maxW: barW + 10 });
+      }
+    });
+    text(c, cat, x0 + slot * ci + slot / 2, bottom + 16, 12, WHITE, { align: 'center', alpha: 0.85, maxW: slot - 4, bold: true });
+  });
+  c.fillStyle = 'rgba(255,255,255,0.4)'; c.fillRect(x0, baseY, aw, 1.5);
+  // 凡例（系列名＋色）
+  let lx = x0, ly = bottom + 36;
+  seriesOrder.forEach((sk, si) => {
+    const rgb = colorAt(si);
+    const label = seriesLabelOf.get(sk) || sk;
+    rr(c, lx, ly - 10, 12, 12, 3); c.fillStyle = `rgb(${rgb})`; c.fill();
+    font(c, 12, false); const w = c.measureText(label).width;
+    text(c, label, lx + 18, ly, 12, WHITE, { alpha: 0.85 });
+    lx += 18 + w + 18;
+    if (lx > e.W - 60 && si < seriesOrder.length - 1) { lx = x0; ly += 17; }
+  });
+  c.restore();
+  sourceNote(c, e, v.source);
+};
+
 const DRAWERS: Record<string, Draw> = {
   title: drawTitle, chapter: drawChapter, keyword: drawKeyword, points: drawPoints, number: drawNumber,
   bar: drawBar, line: drawLine, donut: drawDonut, timeline: drawTimeline, flow: drawFlow, compare: drawCompare,
@@ -1052,6 +1130,7 @@ const DRAWERS: Record<string, Draw> = {
   summary: drawSummary, cta: drawCta, sources: drawSources,
   yearCompare: drawOverlay, // [Stage E-9]
   branch: drawBranch, histogram: drawHistogram, distribution: drawDistribution, // [Stage E-10]
+  groupedBar: drawGroupedBar, // [Stage E-13]
 };
 
 /** 場面の図解を、仮想サイズ（e.W×e.H）の座標で描く */

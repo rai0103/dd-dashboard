@@ -53,7 +53,9 @@ export function buildStockCatalogFromSnapshot(snapshot: any): StockCatalog {
   const athPace = snapshot?.athPace && typeof snapshot.athPace === 'object' ? snapshot.athPace : undefined;
   // [動画連携][Stage E-12] 同じ要領で、保有期間別ローリングリターン（lib/rollingReturn.ts）もそのまま通す。
   const rollingReturns = snapshot?.rollingReturns && typeof snapshot.rollingReturns === 'object' ? snapshot.rollingReturns : undefined;
-  return { instrumentLabel: String(snapshot?.instrumentLabel ?? ''), asOf: String(snapshot?.asOf ?? ''), scalars, series, yearCompare, accel, athPace, rollingReturns };
+  // [動画連携][Stage E-13] 同じ要領で、1日の騰落率の区分別「その後」（lib/dailyMoveBuckets.ts）もそのまま通す。
+  const dailyMoveDown = snapshot?.dailyMoveDown && typeof snapshot.dailyMoveDown === 'object' ? snapshot.dailyMoveDown : undefined;
+  return { instrumentLabel: String(snapshot?.instrumentLabel ?? ''), asOf: String(snapshot?.asOf ?? ''), scalars, series, yearCompare, accel, athPace, rollingReturns, dailyMoveDown };
 }
 
 // [Stage E-10] AIがdataKey/seriesKey/seriesKeysに、mergeStockCatalogsが付けた「銘柄名::」の接頭辞を
