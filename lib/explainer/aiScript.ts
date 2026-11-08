@@ -37,7 +37,11 @@ export interface GenerateInput {
   fixedBodyNote?: string;
   /** [Stage E-15] 固定章として挿入される場面の数（章の扉を含む）。AIが作る場面数の予算から差し引く */
   reservedScenes?: number;
+  /** [Stage E-17] 制作者が以前の台本でナレーションを直した例（直す前→直した後）。同じ書き方で作らせる */
+  learnedEdits?: LearnedEdit[];
 }
+/** [Stage E-17] 制作者がナレーションを直した記録（直す前＝自動生成された文、直した後＝制作者の文） */
+export interface LearnedEdit { before: string; after: string }
 
 /** 日本語ナレーションの1分あたりの文字数の目安（話速1.0） */
 export const CHARS_PER_MIN = 300;
@@ -296,6 +300,9 @@ export function header(inp: GenerateInput): string {
     `【制作日】${inp.today}`,
     inp.refBlocks.length ? '【参考資料】このメッセージ冒頭のドキュメントを参照してください。' : '【参考資料】なし（一般に確立した知識の範囲で解説し、最新の数値・出来事には触れない）',
     inp.dataPeriodNote ? `【保有データの期間】${inp.dataPeriodNote}。動画タイトル・章タイトル・ナレーションでは「数十年」「長年」のような曖昧な言い方をせず、この期間（過去◯年）を具体的に書く。` : '',
+    inp.learnedEdits && inp.learnedEdits.length
+      ? `【制作者が以前の台本で直した箇所（同じ書き方にそろえる）】\n${inp.learnedEdits.slice(-8).map((e) => `・自動：${e.before.slice(0, 160)}\n　直後：${e.after.slice(0, 160)}`).join('\n')}\n言い回し・用語・説明の仕方・語順は「直後」の書き方にそろえてください（数値・日付は今回のデータを使い、例の数値は使わないこと）。`
+      : '',
     inp.fixedBodyNote ? `【アプリが自動で挿入する本編のデータ章】\n${inp.fixedBodyNote}\nこれらの章の場面（グラフと数値の解説）はアプリが実データから作るので、あなたは作らない。導入では、これらの章で何が分かるかを予告し、まとめではこれらの章の内容を振り返る。` : '',
     inp.extraInstruction.trim() ? `【制作者からの追加の指示】${inp.extraInstruction.trim()}` : '',
     // [Stage E-5] マンネリ防止：今回選ばれた切り口を主軸にするよう明示する
@@ -589,6 +596,62 @@ export async function rewriteNarration(inp: GenerateInput, videoTitle: string, i
   if (!narration) throw new Error('AIから空の応答が返りました。');
   const rd = sanitizeReading(typeof r?.reading === 'string' ? r.reading : '', narration);
   return { narration, reading: rd.reading };
+}
+
+/**
+ * [Stage E-17] 固定場面（数値はアプリが毎回作る）に、制作者が以前に加えた直し方を当てはめる。
+ * 以前の自動生成文→制作者の文 の違い（言い回し・用語・語順・説明の足し引き）を、今回の自動生成文に同じように適用し、
+ * 数値・日付・回数は今回の文のものを使う。
+ */
+export async function applyLearnedEdit(inp: GenerateInput, edit: LearnedEdit, current: string, signal?: AbortSignal): Promise<{ narration: string; reading: string }> {
+  const task = [
+    '【以前の自動生成文】' + edit.before,
+    '【制作者が直した文】' + edit.after,
+    '【今回の自動生成文】' + current,
+    '今回の自動生成文に、以前と同じ直し方（言い回し・用語・語順・追加や削除した説明）を当てはめた文を作ってください。',
+    '数値・日付・回数・割合は必ず「今回の自動生成文」のものを使い、以前の文の数値は使わないこと。直していない部分は今回の自動生成文のまま残すこと。',
+    'readingはnarrationをひらがなのみで書いた読み上げ文（数字・記号・漢字・カタカナを使わない）。',
+  ].join('\n');
+  const r = await callTool<any>({
+    system: system(inp),
+    content: [{ type: 'text', text: task }],
+    toolName: 'apply_learned_edit',
+    toolDescription: '以前の直し方を、今回の自動生成のナレーションに当てはめる。',
+    inputSchema: NARRATION_SCHEMA,
+    maxTokens: 1500,
+    signal,
+  });
+  const narration = typeof r?.narration === 'string' ? fixBannedWording(r.narration.trim()) : '';
+  if (!narration) throw new Error('AIから空の応答が返りました。');
+  const rd = sanitizeReading(typeof r?.reading === 'string' ? r.reading : '', narration);
+  return { narration, reading: rd.reading };
+}
+
+/**
+ * [Stage E-17] ナレーションを手で直したとき、読み上げ文（ひらがな）を、直した部分だけ書き換える。
+ * 直していない部分の読み上げ文は一字一句そのまま残させる（読み間違いの修正などを消さないため）。
+ */
+export async function updateReadingForEdit(oldNarration: string, oldReading: string, newNarration: string, signal?: AbortSignal): Promise<string> {
+  const task = [
+    '【修正前のナレーション】' + oldNarration,
+    '【修正前の読み上げ文（ひらがな）】' + oldReading,
+    '【修正後のナレーション】' + newNarration,
+    'ナレーションが修正されました。修正後のナレーションに合う読み上げ文を返してください。',
+    '修正されていない部分に当たる読み上げ文は、修正前の読み上げ文を一字一句そのまま使い、修正された部分だけをひらがなに直して差し替えること。',
+    '読み上げ文はひらがな・読点・句点のみ（数字・記号・漢字・カタカナ・英字を使わない）。数字は読み方どおりにひらがなで書く。',
+  ].join('\n');
+  const r = await callTool<any>({
+    system: system(),
+    content: [{ type: 'text', text: task }],
+    toolName: 'update_reading',
+    toolDescription: '修正されたナレーションに合わせて、読み上げ文（ひらがな）の修正部分だけを書き換える。',
+    inputSchema: { type: 'object', properties: { reading: { type: 'string', description: '修正後のナレーションをひらがなのみで書いた読み上げ文' } }, required: ['reading'] },
+    maxTokens: 1500,
+    signal,
+  });
+  const rd = sanitizeReading(typeof r?.reading === 'string' ? r.reading : '', newNarration);
+  if (!rd.ok) throw new Error('読み上げ文をひらがなにできませんでした。');
+  return rd.reading;
 }
 
 export interface GenerateProgress { step: string; done: number; total: number }

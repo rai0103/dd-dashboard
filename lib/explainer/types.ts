@@ -133,6 +133,10 @@ export interface ExplainerScene {
   imageId?: string | null;
   /** ナレーションを手で直したあと、読み上げ文がまだ合わせられていない（このあいだは通常の文で読み上げる） */
   readingStale?: boolean;
+  /** [Stage E-17] 台本生成の時点で自動生成されたナレーション（制作者の直しを記憶するときの「直す前」） */
+  genNarration?: string;
+  /** [Stage E-17] 実データの固定場面の識別子（例：fixed:DD速度センサー）。直しを次回の同じ場面に当てはめるのに使う */
+  fixedKey?: string;
 }
 
 export interface ChapterPlan {

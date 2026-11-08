@@ -46,7 +46,7 @@ export function buildFixedDataChapters(snapshot: any, instrumentLabel = 'S&P500'
   if (!snapshot) return [];
   const out: FixedDataChapter[] = [];
   const push = (p: ChapterPlan, scenes: (ExplainerScene | null | undefined)[], position: FixedDataChapter['position'] = 'afterIntro') => {
-    const list = scenes.filter((s): s is ExplainerScene => !!s).map((s) => ({ ...s, reading: kanaizeReading(s.reading) }));
+    const list = scenes.filter((s): s is ExplainerScene => !!s).map((s) => ({ ...s, reading: kanaizeReading(s.reading), fixedKey: `fixed:${s.title}` }));
     if (list.length) out.push({ plan: { ...p, sceneCount: list.length }, scenes: list, position });
   };
   const sh = sheet?.sheets ? buildSheetScenes(sheet.sheets, sheet.points, instrumentLabel) : null;

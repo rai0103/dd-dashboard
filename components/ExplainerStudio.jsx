@@ -18,7 +18,7 @@ import { listBackgrounds, saveBackground, deleteBackground } from "@/lib/videoBa
 import { listAvatars, saveAvatar, deleteAvatar, newAvatar, MAX_CLIPS } from "@/lib/videoAvatarLibrary";
 import { VideoAvatar } from "@/lib/videoAvatarRender";
 import { ExplainerRenderer, RENDER_SIZE } from "@/lib/explainer/renderer";
-import { generateProject, generateShort, rewriteScene, rewriteNarration, CHARS_PER_MIN } from "@/lib/explainer/aiScript";
+import { generateProject, generateShort, rewriteScene, rewriteNarration, applyLearnedEdit, updateReadingForEdit, CHARS_PER_MIN } from "@/lib/explainer/aiScript";
 import { AiClientError } from "@/lib/explainer/aiClient";
 import { referenceBlocks, referenceTexts, fetchUrlReference, fileToBase64, newRefId, refLabel, requiredRefNotes, MAX_PDF_BYTES } from "@/lib/explainer/references";
 import { lintScenes, buildDescription, sourcesScene, assembleLong, findVerbatimOverlaps, predictTotalSec, suggestRate, COMFORT_RATE, normalizeVisual, minSecFor, sanitizeReading, isKanaReading } from "@/lib/explainer/scriptModel";
@@ -52,6 +52,16 @@ const KIND_LABEL = {
   branch: "分岐図", histogram: "ヒストグラム", distribution: "分布（ドット）", groupedBar: "グループ棒グラフ", // [Stage E-10〜13]
   fan: "重ね描き＋レンジ", zoomLine: "年初来→直近ズーム", butterfly: "バタフライ", ddHistory: "DDの推移（暴落）", // [Stage E-16] 固定場面専用
 };
+// [Stage E-17] 制作者がナレーションを直した記録（次回以降の台本生成に反映する）。
+// fixed：実データの固定場面ごと（fixedKey→直す前の自動生成文・直した後の文・その読み上げ文）。数値は毎回変わるので、
+//        次回はAIに「同じ直し方」を今回の文へ当てはめさせる（直す前と今回の文が同じなら、直した後の文をそのまま使う）。
+// general：AIが作る場面の直し（モードごと、最新20件）。次回の台本生成のときにAIへ「この書き方にそろえる」例として渡す。
+const LEARNED_KEY = "explainer-learned-edits-v1";
+const loadLearned = () => { try { const j = JSON.parse(localStorage.getItem(LEARNED_KEY) || "null"); return j && typeof j === "object" ? { fixed: j.fixed || {}, general: j.general || {} } : { fixed: {}, general: {} }; } catch (e) { return { fixed: {}, general: {} }; } };
+const saveLearned = (v) => { try { localStorage.setItem(LEARNED_KEY, JSON.stringify(v)); } catch (e) { /* 容量超過などは無視 */ } };
+// fixedKeyを持たない以前の台本でも、固定場面のタイトルなら同じ場面として扱う
+const FIXED_TITLES = new Set(["前提条件", "DD（ドローダウン）とは", "発生回数と深さの分布", "「谷間」の考え方", "現在の状況（年初来→直近）", "年初来の騰落日数", "DD速度センサー", "過去のDD局面との重ね描き", "DD速度センサー（分岐）", "1日で1%超下がったら", "1日下落のその後", "保有期間で変わる勝率", "最高値更新のペース", "最高値更新ペース", "暴落の歴史（DDチャート）", "現在地点からの深掘り", "現在地点からの3パターン", "長期ローリングリターン", "年初来パス比較", "将来シナリオ①", "将来シナリオ②", "将来シナリオ③", "将来シナリオ④", "将来シナリオ⑤", "将来シナリオ⑥", "将来シナリオ⑦", "類似局面サーチ", "まとめ：分かった事実", "免責事項"]);
+const fixedKeyOf = (sc) => sc.fixedKey || (FIXED_TITLES.has(sc.title) ? `fixed:${sc.title}` : null);
 // 取り込み元のページのConsoleで実行する1行：localStorageの中から「登録した声」の形の配列を探してクリップボードにコピーする
 const PRESET_EXPORT_SNIPPET = `copy(JSON.stringify(Object.keys(localStorage).flatMap(k=>{try{const v=JSON.parse(localStorage.getItem(k));return Array.isArray(v)&&v.length&&v.every(p=>p&&typeof p.name==='string'&&typeof p.voice==='string')?v:[]}catch(e){return[]}})))`;
 const LENGTH_OPTIONS = [3, 4, 5, 6, 7, 8];
@@ -493,7 +503,7 @@ export default function ExplainerStudio() {
         ...(mode === "sp500" && fixed.length ? { fixedBodyNote: fixedChaptersNote(fixed) } : {}),
       };
     }
-    return { topic: topic.trim(), mode, audience, targetMinutes: minutes, extraInstruction, refBlocks: referenceBlocks(refs), today: todayStr(), speechRate: rate, imageTarget: imageGenEnabled ? imageGenCount : 0, stockCatalog, requiredRefNotes: requiredRefNotes(refs), ...dataExtra };
+    return { topic: topic.trim(), mode, audience, targetMinutes: minutes, extraInstruction, refBlocks: referenceBlocks(refs), today: todayStr(), speechRate: rate, imageTarget: imageGenEnabled ? imageGenCount : 0, stockCatalog, requiredRefNotes: requiredRefNotes(refs), learnedEdits: (learned.general[mode] || []).map((x) => ({ before: x.before, after: x.after })), ...dataExtra };
   };
   // 株式情報モードはS&P500を優先（無ければSOXL）、S&P500モードはS&P500のみ
   function primaryStockSnapshot() { return mode === "sp500" ? stockSnapshots.SP500 : (stockSnapshots.SP500 ?? stockSnapshots.SOXL); }
@@ -573,6 +583,17 @@ export default function ExplainerStudio() {
         const ti = longScenes.findIndex((sc) => sc.visual.kind === "title");
         // S&P500モードは見出しをテンプレ（「S&P500最新分析」／「過去◯年間のチャートから今後を検証・分析」）に固定する
         if (ti >= 0 && sheetInputFor(snap)) longScenes = longScenes.map((sc, i) => (i === ti ? decorateTitleScene(sc, sp500Sheets.title, mode === "sp500") : sc));
+      }
+      // [Stage E-17] 自動生成のナレーションを「直す前」として残し、固定場面には以前の直し方を当てはめる
+      longScenes = longScenes.map((sc) => ({ ...sc, genNarration: sc.narration }));
+      const toApply = longScenes.map((sc, i) => ({ sc, i, ed: fixedKeyOf(sc) ? learned.fixed[fixedKeyOf(sc)] : null })).filter((x) => x.ed);
+      if (toApply.length) {
+        setGenProgress({ step: `記憶した直しを反映中…（${toApply.length}場面）`, done: 1, total: 1 });
+        const results = await Promise.all(toApply.map(async ({ sc, ed }) => {
+          if (sc.narration.trim() === ed.before.trim() && ed.afterReading) return { narration: ed.after, reading: ed.afterReading };
+          try { return await applyLearnedEdit(inp, { before: ed.before, after: ed.after }, sc.narration, ac.signal); } catch (e) { if (e?.code === "ABORTED") throw e; return null; }
+        }));
+        toApply.forEach(({ i }, k) => { if (results[k]) longScenes[i] = { ...longScenes[i], narration: results[k].narration, reading: results[k].reading, readingStale: false }; });
       }
       // ラベル（kicker）は、選んだ長尺の長さから自動で入れる（例：5分で解説）。生成後も自由に書き換えられる
       p = { ...p, longScenes, shortScenes: S.scenes, kicker: autoKickerFor(minutes) };
@@ -721,6 +742,53 @@ export default function ExplainerStudio() {
     } catch (e) { setAiError(errMsg(e)); }
     finally { setAiBusy(false); }
   };
+  // [Stage E-17] ナレーションの直しの記憶と、読み上げ文の自動更新
+  const [learned, setLearned] = useState(() => (typeof window === "undefined" ? { fixed: {}, general: {} } : loadLearned()));
+  const editBaseRef = useRef({}); // 場面id → 直し始める前の { narration, reading }
+  const [readingBusyIds, setReadingBusyIds] = useState(() => new Set());
+  const learnedOf = (sc) => (fixedKeyOf(sc) ? learned.fixed[fixedKeyOf(sc)] : (learned.general[mode] || []).find((x) => x.sceneId === sc.id)) || null;
+  const rememberEdit = (sc, after, afterReading, fallbackBefore = null) => {
+    const before = sc.genNarration ?? fallbackBefore;
+    if (!before) return;
+    const fk = fixedKeyOf(sc);
+    setLearned((prev) => {
+      const next = { fixed: { ...prev.fixed }, general: { ...prev.general } };
+      if (fk) {
+        if (after.trim() === before.trim()) delete next.fixed[fk];
+        else next.fixed[fk] = { before, after, afterReading, at: Date.now() };
+      } else {
+        const list = (next.general[mode] || []).filter((x) => x.sceneId !== sc.id);
+        if (after.trim() !== before.trim()) list.push({ sceneId: sc.id, title: sc.title, before, after, at: Date.now() });
+        next.general[mode] = list.slice(-20);
+      }
+      saveLearned(next);
+      return next;
+    });
+  };
+  const forgetEdit = (sc) => setLearned((prev) => {
+    const next = { fixed: { ...prev.fixed }, general: { ...prev.general } };
+    if (fixedKeyOf(sc)) delete next.fixed[fixedKeyOf(sc)];
+    else next.general[mode] = (next.general[mode] || []).filter((x) => x.sceneId !== sc.id);
+    saveLearned(next);
+    return next;
+  });
+  // ナレーションの入力欄から離れたとき：直した部分だけ読み上げ文を書き換え（AI）、直しを記憶する
+  const handleNarrBlur = async (sceneId) => {
+    const base = editBaseRef.current[sceneId];
+    delete editBaseRef.current[sceneId];
+    const sc = scenes.find((x) => x.id === sceneId);
+    if (!base || !sc || base.narration === sc.narration) return;
+    const newNarr = sc.narration;
+    setReadingBusyIds((prev) => new Set(prev).add(sceneId));
+    let newReading = null;
+    try {
+      newReading = await updateReadingForEdit(base.narration, base.reading || "", newNarr);
+      // 待っているあいだに、さらに書き換えられていたら反映しない（次の入力欄から離れたときに改めて更新する）
+      setScenes((list) => list.map((x) => (x.id === sceneId && x.narration === newNarr ? { ...x, reading: newReading, readingStale: false } : x)));
+    } catch (e) { /* 失敗時は従来どおり「要確認」のまま（手で直すか「整える」を使う） */ }
+    finally { setReadingBusyIds((prev) => { const n = new Set(prev); n.delete(sceneId); return n; }); }
+    rememberEdit(sc, newNarr, newReading, base.narration);
+  };
   // 場面ごとの「ナレーション変更」：スライド（図解）は変えず、ナレーションだけをAIで変える
   const [narrAiOpenId, setNarrAiOpenId] = useState(null);
   const [narrAiText, setNarrAiText] = useState("");
@@ -736,6 +804,7 @@ export default function ExplainerStudio() {
       const neighbors = [scenes[idx - 1], scenes[idx + 1]].filter(Boolean).map((s) => s.narration);
       const { narration, reading } = await rewriteNarration(genInput(), project.videoTitle, narrAiText.trim(), cur, neighbors, format);
       patchScene(sceneId, { narration, reading, readingStale: false });
+      rememberEdit(cur, narration, reading, cur.narration); // [Stage E-17] AIで直した結果も、次回以降の台本に反映する
       setNarrAiOpenId(null); setNarrAiText("");
     } catch (e) { setNarrAiError(errMsg(e)); }
     finally { setNarrAiBusy(false); }
@@ -1867,15 +1936,21 @@ export default function ExplainerStudio() {
                           </div>
                           <div className="rounded" style={{ background: C.panel }}>
                             <NarrMixedBox value={sc.narration} base={sc.narration}
-                              onChange={(t) => { if (isPlayingRef.current) handlePause(); patchScene(sc.id, { narration: t, readingStale: true }); }}
-                              onBlur={() => {}}
+                              onChange={(t) => { if (isPlayingRef.current) handlePause(); if (!editBaseRef.current[sc.id]) editBaseRef.current[sc.id] = { narration: sc.narration, reading: sc.reading }; patchScene(sc.id, { narration: t, readingStale: true, ...(sc.genNarration ? {} : { genNarration: sc.narration }) }); }}
+                              onBlur={() => handleNarrBlur(sc.id)}
                               colors={{ text: C.text, border: C.borderSoft }}
                               readUpTo={cur && (isPlaying || isExporting) ? readCharIdx : null} />
                           </div>
                           <div className="flex items-center gap-2 mt-1 flex-wrap">
                             <button onClick={() => setReadingOpenId((v) => (v === sc.id ? null : sc.id))} className="text-[10px] flex items-center gap-0.5" style={{ color: isKanaReading(sc.reading) && !sc.readingStale ? C.textDim : C.amber, background: "none", border: "none", cursor: "pointer", padding: 0 }}>
-                              読み上げ文{sc.readingStale ? "（ナレーションと要確認）" : ""}<ChevronRight size={10} style={{ transform: readingOpenId === sc.id ? "rotate(90deg)" : "none" }} />
+                              読み上げ文{readingBusyIds.has(sc.id) ? "（直した部分を更新中…）" : sc.readingStale ? "（ナレーションと要確認）" : ""}<ChevronRight size={10} style={{ transform: readingOpenId === sc.id ? "rotate(90deg)" : "none" }} />
                             </button>
+                            {learnedOf(sc) && (
+                              <span className="text-[10px] flex items-center gap-1" style={{ color: C.teal }} title="この場面のナレーションの直しを記憶しています。次回以降の台本でも同じ直し方を当てはめます。">
+                                <Check size={10} /> 直しを記憶済み（次回以降も反映）
+                                <button onClick={() => forgetEdit(sc)} className="underline" style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer", padding: 0 }}>忘れる</button>
+                              </span>
+                            )}
                             <button onClick={() => setEditVisualId((v) => (v === sc.id ? null : sc.id))} className="text-[10px] flex items-center gap-0.5" style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer", padding: 0 }}>
                               図解の内容<ChevronRight size={10} style={{ transform: editVisualId === sc.id ? "rotate(90deg)" : "none" }} />
                             </button>
