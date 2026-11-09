@@ -79,6 +79,8 @@ const sliderInitValue = (key, fallback) => { const l = loadSliderLocks(); return
 // [Stage E-18] 読み上げる直前にも用語の読み方（MDD→さいげらくりつ、DD→げらくりつ、ATH→かこさいたかね）をそろえる
 // （以前に作った台本の読み上げ文や、読み上げ文が未更新でナレーションをそのまま読む場合にも効くように）。
 const ttsText = (sc) => applyTermReadings(sc.readingStale || !sc.reading ? sc.narration : sc.reading);
+// テキスト欄の高さを中身に合わせる（スクロールバーを出さずに全文を表示する）
+const fitTextarea = (el) => { if (!el) return; el.style.height = "auto"; el.style.height = `${el.scrollHeight + 2}px`; };
 const fmtTime = (sec) => { const s = Math.max(0, Math.round(sec || 0)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
 const todayStr = () => { const d = new Date(); return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`; };
 const btn = (variant = "ghost") => variant === "primary"
@@ -1961,7 +1963,8 @@ export default function ExplainerStudio() {
                           </div>
                           {readingOpenId === sc.id && (
                             <div className="mt-1">
-                              <textarea value={sc.reading} rows={2} onChange={(e) => { if (isPlayingRef.current) handlePause(); patchScene(sc.id, { reading: e.target.value.replace(/\n/g, ""), readingStale: false }); }} className="w-full rounded px-1.5 py-1 text-[11px]" style={{ ...inputStyle, background: C.panel, resize: "vertical" }} />
+                              {/* 読み上げ文は全文を表示する（スクロールバーを出さず、文の長さに合わせて高さを自動で伸ばす） */}
+                              <textarea value={sc.reading} rows={1} ref={(el) => fitTextarea(el)} onInput={(e) => fitTextarea(e.currentTarget)} onChange={(e) => { if (isPlayingRef.current) handlePause(); patchScene(sc.id, { reading: e.target.value.replace(/\n/g, ""), readingStale: false }); }} className="w-full rounded px-1.5 py-1 text-[11px]" style={{ ...inputStyle, background: C.panel, resize: "none", overflow: "hidden", fieldSizing: "content" }} />
                               <div className="text-[10px] flex items-center gap-2" style={{ color: C.textDim }}>
                                 音声はこの文（ひらがな）で読み上げます。ナレーションを直したら、ここも合わせて直すか「AI」で「読み上げ文を今のナレーションに合わせて」と指示してください。
                                 <button onClick={() => patchScene(sc.id, { reading: sanitizeReading(sc.reading, sc.narration).reading })} className="shrink-0" style={{ color: C.teal, background: "none", border: "none", cursor: "pointer" }}>整える</button>
