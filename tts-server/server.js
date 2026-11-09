@@ -771,6 +771,26 @@ async function handlePostSaveOutput(req, res) {
   }
 }
 
+// 著作権フリー画像の検索（日本文化動画アプリの画像検索を移植。詳細は tts-server/freeImages.js）
+const freeImages = require('./freeImages');
+async function handlePostFreeImages(req, res) {
+  const body = await readJsonBody(req);
+  try {
+    const r = await freeImages.handlePostFreeImages(body || {});
+    sendJson(res, r.status, r.json);
+  } catch (e) {
+    sendJson(res, 500, { error: 'UPSTREAM_ERROR', message: e && e.message ? e.message : String(e) });
+  }
+}
+async function handleGetFreeImageProxy(req, res) {
+  try {
+    await freeImages.handleGetFreeImageProxy(req.url || '', res);
+  } catch (e) {
+    if (!res.headersSent) { res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' }); }
+    res.end(e && e.message ? e.message : 'proxy error');
+  }
+}
+
 const server = http.createServer((req, res) => {
   setCors(res);
   const url = req.url || '';
@@ -781,6 +801,8 @@ const server = http.createServer((req, res) => {
   if (pathname === '/api/chat' && req.method === 'POST') { handlePostChat(req, res); return; }
   if (pathname === '/api/image' && req.method === 'POST') { handlePostImage(req, res); return; }
   if (pathname === '/api/research' && req.method === 'POST') { handlePostResearch(req, res); return; }
+  if (pathname === '/api/free-images' && req.method === 'POST') { handlePostFreeImages(req, res); return; }
+  if (pathname === '/api/free-image-proxy' && req.method === 'GET') { handleGetFreeImageProxy(req, res); return; }
   if (pathname === '/api/fetch-url' && req.method === 'GET') { handleFetchUrl(req, res); return; }
   if (pathname === '/api/auto-schedule' && req.method === 'GET') { handleGetAutoSchedule(req, res); return; }
   if (pathname === '/api/auto-schedule' && req.method === 'POST') { handlePostAutoSchedule(req, res); return; }

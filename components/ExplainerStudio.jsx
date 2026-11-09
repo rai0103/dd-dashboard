@@ -24,6 +24,7 @@ import { referenceBlocks, referenceTexts, fetchUrlReference, fileToBase64, newRe
 import { lintScenes, buildDescription, sourcesScene, assembleLong, applyTermReadings, findVerbatimOverlaps, predictTotalSec, suggestRate, COMFORT_RATE, normalizeVisual, minSecFor, sanitizeReading, isKanaReading } from "@/lib/explainer/scriptModel";
 import { saveImage, listImages, deleteImage } from "@/lib/explainer/imageStore";
 import { generateImage } from "@/lib/explainer/imageClient";
+import { searchFreeImages, fetchFreeImage } from "@/lib/explainer/freeImageClient";
 import { researchTopic } from "@/lib/explainer/researchClient";
 import { safeFileName, canPickFolder, getSavedFolder, pickFolder, ensureWritable, saveBundle, descriptionText } from "@/lib/explainer/exportBundle";
 import { exportVideoProfile, importVideoProfile } from "@/lib/videoProfileSnapshot";
@@ -819,6 +820,7 @@ export default function ExplainerStudio() {
   // ---------------- 画像（権利を確認したものだけ・場面ごと） ----------------
   const [images, setImages] = useState([]);
   const refreshImages = () => listImages().then(setImages).catch(() => {});
+  const imageCreditOf = (id) => images.find((im) => im.id === id)?.credit || null;
   useEffect(() => { refreshImages(); }, []);
   // グラフ作成ページ（/chart-studio/）など、別タブ・別ウィンドウで画像ライブラリに保存してからこのタブに
   // 戻ってきたときに一覧が古いままにならないよう、このタブが前面に戻るたびに読み直す
@@ -842,9 +844,9 @@ export default function ExplainerStudio() {
     return () => urls.forEach((u) => URL.revokeObjectURL(u));
   }, [images]);
   const [rightsPendingId, setRightsPendingId] = useState(null);
-  const attachImage = async (sceneId, file) => {
+  const attachImage = async (sceneId, file, credit) => {
     if (!file || !file.type.startsWith("image/")) { alert("画像ファイルを選んでください"); return; }
-    const im = await saveImage(file);
+    const im = await saveImage(file, credit?.caption, credit);
     await refreshImages();
     setScenes((list) => list.map((s) => (s.id === sceneId ? { ...s, imageId: im.id, visual: { ...s.visual, kind: "image" } } : s)));
     setRightsPendingId(null);
@@ -868,6 +870,49 @@ export default function ExplainerStudio() {
     setRightsPendingId(null);
     const idx = scenes.findIndex((s) => s.id === sceneId);
     if (idx >= 0) previewSceneAt(idx);
+  };
+  // [フリー素材を検索] 日本文化動画アプリと同じ検索先（美術館のCC0・Wikimedia Commons・Wikipedia・Openverse・
+  // Pixabay/Pexels）から著作権フリーの画像を探し、選んだものを tts-server 経由で取り込んで場面に添付する。
+  // 出典（提供元・作者・ライセンス・元ページ）は画像と一緒に保存し、概要欄の「■ 画像クレジット」に自動で載せる。
+  const [freeOpenId, setFreeOpenId] = useState(null);
+  const [freeQuery, setFreeQuery] = useState("");
+  const [freeBusy, setFreeBusy] = useState(false);
+  const [freeResults, setFreeResults] = useState([]);
+  const [freeTerms, setFreeTerms] = useState([]);
+  const [freeError, setFreeError] = useState("");
+  const [freePickId, setFreePickId] = useState(null);
+  const freeDefaultQuery = (sc) => (sc.visual?.heading || sc.caption || topic || "").replace(/[「」『』【】]/g, " ").trim().slice(0, 40);
+  const runFreeSearch = async (sc, q) => {
+    const kw = (q ?? freeQuery).trim();
+    if (!kw) return;
+    setFreeBusy(true); setFreeError(""); setFreeResults([]); setFreeTerms([]);
+    try {
+      const r = await searchFreeImages(kw, { context: `${topic}／${sc.narration || ""}`.slice(0, 400) });
+      setFreeResults(r.items); setFreeTerms(r.terms);
+      if (!r.items.length) setFreeError("見つかりませんでした。別の言葉（英語・固有名詞など）で試してください。");
+    } catch (e) {
+      setFreeError(e?.message || String(e));
+    } finally {
+      setFreeBusy(false);
+    }
+  };
+  const openFreeSearch = (sc) => {
+    if (freeOpenId === sc.id) { setFreeOpenId(null); return; }
+    const q = freeDefaultQuery(sc);
+    setFreeOpenId(sc.id); setFreeQuery(q); setFreeResults([]); setFreeTerms([]); setFreeError(""); setRightsPendingId(null);
+    if (q) runFreeSearch(sc, q);
+  };
+  const pickFreeImage = async (sc, c) => {
+    setFreePickId(c.id); setFreeError("");
+    try {
+      const { file, credit } = await fetchFreeImage(c);
+      await attachImage(sc.id, file, credit);
+      setFreeOpenId(null);
+    } catch (e) {
+      setFreeError(e?.message || String(e));
+    } finally {
+      setFreePickId(null);
+    }
   };
   // 場面ごとに「AIで生成」：既存のimagePrompt（台本生成時にAIが用意した英語のプロンプト案）で1枚生成し、そのまま添付する
   const [imgGenBusyId, setImgGenBusyId] = useState(null);
@@ -1511,7 +1556,14 @@ export default function ExplainerStudio() {
   const issues = useMemo(() => lintScenes(scenes, refTexts, sceneDurs), [scenes, refTexts, sceneDurs]);
   const issuesByScene = useMemo(() => { const m = {}; issues.forEach((x) => { (m[x.sceneIndex] ??= []).push(x); }); return m; }, [issues]);
   const urlList = useMemo(() => refs.filter((r) => r.kind === "url" && r.status === "ok").map((r) => r.url), [refs]);
-  const description = useMemo(() => (project ? buildDescription(project, urlList, format === "short") : ""), [project, urlList, format]);
+  // 概要欄：この形式（長尺／ショート）の場面で実際に使っているフリー素材だけ、画像クレジットを載せる
+  const usedImageCredits = useMemo(() => {
+    if (!project) return [];
+    const list = format === "short" ? project.shortScenes : project.longScenes;
+    const ids = Array.from(new Set((list || []).map((s) => s.imageId).filter(Boolean)));
+    return ids.map((id) => images.find((im) => im.id === id)?.credit).filter(Boolean);
+  }, [project, format, images]);
+  const description = useMemo(() => (project ? buildDescription(project, urlList, format === "short", usedImageCredits) : ""), [project, urlList, format, usedImageCredits]);
   const patchYoutube = (patch) => setProject((p) => ({ ...p, youtube: { ...p.youtube, ...patch } }));
 
   // ---------------- 長さと声の速さのガイド ----------------
@@ -1920,6 +1972,7 @@ export default function ExplainerStudio() {
                                     {images.length > 0 && (
                                       <button onClick={() => { setRightsPendingId((v) => (v === sc.id ? null : sc.id)); setImgGenError(""); refreshImages(); }} className="text-[10px] px-1.5 py-0.5 rounded" style={{ ...btn(), color: rightsPendingId === sc.id ? C.teal : C.textMuted }}>ライブラリから選ぶ</button>
                                     )}
+                                    <button onClick={() => openFreeSearch(sc)} title="著作権フリー（パブリックドメイン・CC0・CCライセンス・無料素材）の画像を検索して添付" className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={{ ...btn(), color: freeOpenId === sc.id ? C.teal : C.textMuted }}><Search size={10} />フリー素材を検索</button>
                                     {sc.visual.imagePrompt && (
                                       <button onClick={() => genSceneImage(sc)} disabled={imgGenBusyId === sc.id} className="text-[10px] px-1.5 py-0.5 rounded" style={{ ...btn("primary"), opacity: imgGenBusyId === sc.id ? 0.5 : 1 }}>{imgGenBusyId === sc.id ? "生成中…" : "AIで生成"}</button>
                                     )}
@@ -1933,6 +1986,40 @@ export default function ExplainerStudio() {
                                       {imageEls[im.id] && <img src={imageEls[im.id].src} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />}
                                     </button>
                                   ))}
+                                </div>
+                              )}
+                              {sc.imageId && imageCreditOf(sc.imageId) && (
+                                <div className="text-[10px] leading-snug truncate" style={{ color: C.textDim }} title={[imageCreditOf(sc.imageId).caption, imageCreditOf(sc.imageId).credit, imageCreditOf(sc.imageId).pageUrl].filter(Boolean).join("\n")}>
+                                  出典：{imageCreditOf(sc.imageId).source}{imageCreditOf(sc.imageId).credit ? `｜${imageCreditOf(sc.imageId).credit}` : ""}（概要欄に自動で記載）
+                                </div>
+                              )}
+                              {!sc.imageId && freeOpenId === sc.id && (
+                                <div className="p-1.5 rounded flex flex-col gap-1" style={{ background: C.panel, border: `1px solid ${C.borderSoft}` }}>
+                                  <form className="flex gap-1" onSubmit={(e) => { e.preventDefault(); runFreeSearch(sc); }}>
+                                    <input value={freeQuery} onChange={(e) => setFreeQuery(e.target.value)} placeholder="例：日本銀行、ニューヨーク証券取引所、半導体、原油" className="flex-1 text-[10px] px-1 py-0.5 rounded" style={inputStyle} />
+                                    <button type="submit" disabled={freeBusy || !freeQuery.trim()} className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={{ ...btn("primary"), opacity: freeBusy ? 0.5 : 1 }}><Search size={10} />{freeBusy ? "検索中…" : "検索"}</button>
+                                    <button type="button" onClick={() => setFreeOpenId(null)} className="text-[10px] px-1" style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer" }}><X size={10} /></button>
+                                  </form>
+                                  <div className="text-[10px] leading-snug" style={{ color: C.textDim }}>
+                                    美術館（CC0）・Wikimedia Commons・Wikipedia・Openverse など、日本文化チャンネルと同じ検索先から、パブリックドメイン・CC0・商用可のCCライセンス・無料素材だけを表示します。{freeTerms.length > 0 && `英語でも検索：${freeTerms.join(" / ")}`}
+                                  </div>
+                                  {freeError && <div className="text-[10px]" style={{ color: "#ff6b6b" }}>{freeError}</div>}
+                                  {freeResults.length > 0 && (
+                                    <div className="grid gap-1" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(96px, 1fr))", maxHeight: 300, overflowY: "auto" }}>
+                                      {freeResults.map((c) => (
+                                        <div key={c.id} className="flex flex-col rounded overflow-hidden" style={{ border: `1px solid ${C.borderSoft}`, background: C.panel2, opacity: freePickId && freePickId !== c.id ? 0.5 : 1 }}>
+                                          <button onClick={() => pickFreeImage(sc, c)} disabled={!!freePickId} title={`${c.caption || ""}\n${c.credit || ""}\n${c.source}\nクリックでこの場面に添付`} style={{ padding: 0, border: "none", background: "none", cursor: freePickId ? "wait" : "pointer", aspectRatio: "16 / 10", position: "relative" }}>
+                                            <img src={c.thumbnailUrl} alt="" loading="lazy" referrerPolicy="no-referrer" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                                            {freePickId === c.id && <span className="text-[10px]" style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,.55)", color: "#fff" }}>取り込み中…</span>}
+                                          </button>
+                                          <div className="px-1 py-0.5 text-[9px] leading-tight flex items-start gap-0.5" style={{ color: C.textDim }}>
+                                            <span className="flex-1 min-w-0" style={{ overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{c.source}</span>
+                                            {c.pageUrl && <a href={c.pageUrl} target="_blank" rel="noreferrer" title="元のページ（ライセンスを確認）" style={{ color: C.textDim }}><ExternalLink size={9} /></a>}
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
                                 </div>
                               )}
                               {imgGenError && imgGenBusyId === null && <div className="text-[10px]" style={{ color: "#ff6b6b" }}>{imgGenError}</div>}

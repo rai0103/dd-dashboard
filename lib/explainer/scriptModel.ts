@@ -1,6 +1,6 @@
 // 台本データの検証・補正・組み立て（AIやブラウザに依存しない純粋な関数。lib/explainer/scriptModel.test.ts でテスト）。
 import { ICON_NAMES, VISUAL_KINDS, emptyVisual } from './types.ts';
-import type { ChapterPlan, ExplainerProject, ExplainerScene, IconName, SourceNote, VisualItem, VisualKind, VisualSpec } from './types.ts';
+import type { ChapterPlan, ExplainerProject, ExplainerScene, IconName, ImageCredit, SourceNote, VisualItem, VisualKind, VisualSpec } from './types.ts';
 
 const ICON_SET = new Set<string>(ICON_NAMES);
 const KIND_SET = new Set<string>([...VISUAL_KINDS, 'chapter', 'sources']);
@@ -255,7 +255,25 @@ export function sceneTextForSearch(s: ExplainerScene): string {
 }
 
 /** YouTube概要欄：AIの文案＋参考URL一覧＋AI利用の注記 */
-export function buildDescription(p: Pick<ExplainerProject, 'youtube' | 'sources'>, urls: string[], short = false): string {
+/**
+ * フリー素材のクレジット行（日本文化動画アプリと同じ書き方）：CC BY・CC BY-SA の画像は作者・ライセンス・元ページを
+ * 1枚ずつ明記し（ライセンスの表示義務）、パブリックドメイン・CC0・Pixabay等は提供元の名前をまとめて書く。
+ */
+const NEEDS_ATTRIBUTION = /CC BY/i;
+export function imageCreditLines(credits: ImageCredit[]): string[] {
+  const seen = new Set<string>();
+  const uniq = credits.filter((c) => { const k = `${c.source}|${c.pageUrl || c.caption || ''}`; if (seen.has(k)) return false; seen.add(k); return true; });
+  if (!uniq.length) return [];
+  const lines: string[] = ['', '■ 画像クレジット'];
+  for (const c of uniq.filter((x) => NEEDS_ATTRIBUTION.test(`${x.source} ${x.credit || ''}`))) {
+    lines.push(`・${c.caption ? `${c.caption.slice(0, 60)} — ` : ''}${c.credit || c.source}${c.pageUrl ? ` ${c.pageUrl}` : ''}`);
+  }
+  const free = Array.from(new Set(uniq.filter((x) => !NEEDS_ATTRIBUTION.test(`${x.source} ${x.credit || ''}`)).map((x) => x.source.replace(/\s*\((?:CC0|Free|Public domain|PD[^)]*)\)\s*$/i, '').replace(/^Openverse \/ /, ''))));
+  if (free.length) lines.push(`・パブリックドメイン／CC0・フリー素材：${free.join('、')}`);
+  return lines;
+}
+
+export function buildDescription(p: Pick<ExplainerProject, 'youtube' | 'sources'>, urls: string[], short = false, credits: ImageCredit[] = []): string {
   const lines: string[] = [];
   lines.push(short ? p.youtube.shortDescription : p.youtube.description);
   if (!short) {
@@ -264,7 +282,11 @@ export function buildDescription(p: Pick<ExplainerProject, 'youtube' | 'sources'
       p.sources.forEach((s) => lines.push(`・${s.title}${s.detail ? `（${s.detail}）` : ''}`));
       urls.forEach((u) => lines.push(u));
     }
-    lines.push('', '※本動画は、参考資料をもとにAIで構成・原稿を作成し、内容を確認して制作しています。図解・イラストはオリジナルです。', '※内容は制作時点の情報にもとづきます。');
+    lines.push(...imageCreditLines(credits));
+    lines.push('', `※本動画は、参考資料をもとにAIで構成・原稿を作成し、内容を確認して制作しています。${credits.length ? '図解はオリジナル、写真・画像は上記のフリー素材（各ライセンスに従って使用）です。' : '図解・イラストはオリジナルです。'}`, '※内容は制作時点の情報にもとづきます。');
+  } else if (credits.length) {
+    // ショートは概要欄が短いので、画像クレジットだけを付ける（CC BY の表示義務があるため省略しない）
+    lines.push(...imageCreditLines(credits));
   }
   // 概要欄の末尾に関連ハッシュタグを10個まで並べる（#shortsはショート用に別途追加する、10個のカウントには含めない）
   if (p.youtube.tags.length) lines.push('', p.youtube.tags.slice(0, 10).map((t) => `#${t.replace(/^#/, '').replace(/\s+/g, '')}`).join(' ') + (short ? ' #shorts' : ''));

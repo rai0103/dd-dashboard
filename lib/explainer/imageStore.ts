@@ -1,6 +1,6 @@
 // 場面に追加した画像（ユーザーが権利を確認したもの）をブラウザ内（IndexedDB）に保存する。
 // 長尺動画作成のDB（dd-dashboard-video）とは別のDBにして、既存のDBのバージョンには触れない。
-import type { ImageAsset } from './types';
+import type { ImageAsset, ImageCredit } from './types';
 
 const DB = 'explainer-video';
 const STORE = 'images';
@@ -28,8 +28,8 @@ function run<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<
   }));
 }
 
-export async function saveImage(file: File, caption?: string): Promise<ImageAsset> {
-  const item: ImageAsset = { id: `img-${Date.now()}-${Math.floor(Math.random() * 1e6)}`, name: file.name, blob: file, rightsConfirmed: true, createdAt: Date.now(), caption: caption || undefined };
+export async function saveImage(file: File, caption?: string, credit?: ImageCredit): Promise<ImageAsset> {
+  const item: ImageAsset = { id: `img-${Date.now()}-${Math.floor(Math.random() * 1e6)}`, name: file.name, blob: file, rightsConfirmed: true, createdAt: Date.now(), caption: caption || undefined, ...(credit ? { credit } : {}) };
   await run('readwrite', (s) => s.put(item));
   return item;
 }

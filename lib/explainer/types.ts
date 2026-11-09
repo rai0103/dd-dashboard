@@ -188,7 +188,9 @@ export type ReferenceItem =
   // [Stage E-3] ニュース・株式情報どちらのモードでも使えるスクリーンショット参照（画像としてAIに渡す）
   | (ReferenceItemBase & { kind: 'image'; title: string; base64: string; mediaType: string; sizeBytes: number });
 
-export interface ImageAsset { id: string; name: string; blob: Blob; rightsConfirmed: boolean; createdAt: number; /** どんな画像か（銘柄・期間・グラフの内容など）の短い説明。グラフ作成ページが自動で付ける（任意） */ caption?: string }
+/** フリー素材（「フリー素材を検索」で取り込んだ画像）の出典。概要欄のクレジット表記に使う */
+export interface ImageCredit { source: string; caption?: string; credit?: string; pageUrl?: string }
+export interface ImageAsset { id: string; name: string; blob: Blob; rightsConfirmed: boolean; createdAt: number; /** どんな画像か（銘柄・期間・グラフの内容など）の短い説明。グラフ作成ページが自動で付ける（任意） */ caption?: string; /** フリー素材の出典（任意） */ credit?: ImageCredit }
 
 // [Stage E-4] 株式情報モード：台本生成に実数を保証して渡すためのデータカタログ。
 // scalars＝1時点の数値（前日比・年初来騰落率など）、series＝複数時点の推移（折れ線用）。
