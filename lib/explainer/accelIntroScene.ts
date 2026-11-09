@@ -56,7 +56,7 @@ export function buildAccelIntroScene(accel: AccelSummary | null | undefined, ins
   }
 
   const narration = `過去${yearsInt}年間で、${instrumentLabel}のDD（ドローダウン）がマイナス3%まで進んだ局面は${accel.episodeCount}回。そのうちマイナス5%まで進んだのは${accel.judgedCount}回（${judgedPct ?? '―'}%）でした。${bucketNarr}。${currentNarr}`;
-  const reading = `かこ、${integerToKana(yearsInt)}ねんかんで、どろーだうんが、まいなす、さんぱーせんとまで、すすんだ、きょくめんは、${integerToKana(accel.episodeCount)}かい。そのうち、まいなす、ごぱーせんとまで、すすんだのは、${integerToKana(accel.judgedCount)}かいです。${bucketReading}。${currentReading}`;
+  const reading = `かこ、${integerToKana(yearsInt)}ねんかんで、げらくりつが、まいなす、さんぱーせんとまで、すすんだ、きょくめんは、${integerToKana(accel.episodeCount)}かい。そのうち、まいなす、ごぱーせんとまで、すすんだのは、${integerToKana(accel.judgedCount)}かいです。${bucketReading}。${currentReading}`;
 
   return {
     id: newSceneId(), title: 'DD速度センサー', caption: `DD速度センサー：到達の速さ別の実績（過去${yearsInt}年・${accel.episodeCount}局面）`,
@@ -112,7 +112,7 @@ export function buildAccelBranchScene(accel: AccelSummary | null | undefined, in
   };
 
   const narration = `DD−3%の局面は、その後「−5%を超えて進む」か「−5%の前に新高値を回復する」かに分かれます。過去${yearsInt}年・${accel.episodeCount}回では、回復が${recoverCount}回（${recoverPct ?? '―'}%）、−5%超えが${accel.judgedCount}回（${judgedPct ?? '―'}%）。今回は${cur.acc}営業日で−5%を超えた、−5%超え側に当たります。`;
-  const reading = `どろーだうん、まいなす、さんぱーせんとの、きょくめんは、そのあと、まいなす、ごぱーせんとを、こえてすすむか、まいなす、ごぱーせんとのまえに、しんたかねを、かいふくするかに、わかれます。かこ、${integerToKana(yearsInt)}ねん、${integerToKana(accel.episodeCount)}かいでは、かいふくが、${integerToKana(recoverCount)}かい、まいなす、ごぱーせんと、こえが、${integerToKana(accel.judgedCount)}かいです。こんかいは、${integerToKana(cur.acc ?? 0)}えいぎょうびで、まいなす、ごぱーせんとを、こえた、こえがわに、あたります。`;
+  const reading = `げらくりつ、まいなす、さんぱーせんとの、きょくめんは、そのあと、まいなす、ごぱーせんとを、こえてすすむか、まいなす、ごぱーせんとのまえに、しんたかねを、かいふくするかに、わかれます。かこ、${integerToKana(yearsInt)}ねん、${integerToKana(accel.episodeCount)}かいでは、かいふくが、${integerToKana(recoverCount)}かい、まいなす、ごぱーせんと、こえが、${integerToKana(accel.judgedCount)}かいです。こんかいは、${integerToKana(cur.acc ?? 0)}えいぎょうびで、まいなす、ごぱーせんとを、こえた、こえがわに、あたります。`;
 
   return {
     id: newSceneId(), title: 'DD速度センサー（分岐）', caption: `今回のDD−3%、その後はどちら？（過去${yearsInt}年・${accel.episodeCount}局面）`,

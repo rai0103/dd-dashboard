@@ -66,7 +66,7 @@ export function ddDefinitionScene(d: DdDefinitionSheet | null, label: string, sh
     ],
   };
   const narration = `ドローダウン、DDとは、それまでの最高値からの下落率のことです。例えば${ymJ(d.peakDate)}の最高値から、${ymJ(d.troughDate)}の底まで${pctT(d.mdd)}下がり、この最も深い下落率を最大ドローダウン、MDDと呼びます。最高値を回復したのは${ymJ(d.recoveryDate)}で、この間がDD期間です。過去の実績では、DDがマイナス3%に達する局面が年に平均${d.dd3PerYear}回あり、そのうち${d.dd5Share}%がマイナス5%まで進みました。`;
-  const reading = `どろーだうん、でぃーでぃーとは、それまでの、さいたかねからの、げらくりつの、ことです。たとえば、${ymR(d.peakDate)}の、さいたかねから、${ymR(d.troughDate)}の、そこまで、${pctR(d.mdd)}、さがり、この、もっとも、ふかい、げらくりつを、さいだい、どろーだうんと、よびます。さいたかねを、かいふくしたのは、${ymR(d.recoveryDate)}で、このあいだが、でぃーでぃー、きかんです。かこの、じっせきでは、でぃーでぃーが、まいなす、さんぱーせんとに、たっする、きょくめんが、ねんに、へいきん、${numR(d.dd3PerYear)}かい、あり、そのうち、${numR(d.dd5Share)}ぱーせんとが、まいなす、ごぱーせんとまで、すすみました。`;
+  const reading = `どろーだうん、つまり、げらくりつとは、それまでの、さいたかねからの、げらくりつの、ことです。たとえば、${ymR(d.peakDate)}の、さいたかねから、${ymR(d.troughDate)}の、そこまで、${pctR(d.mdd)}、さがり、この、もっとも、ふかい、げらくりつを、さいだい、どろーだうん、さいげらくりつと、よびます。さいたかねを、かいふくしたのは、${ymR(d.recoveryDate)}で、このあいだが、でぃーでぃー、きかんです。かこの、じっせきでは、でぃーでぃーが、まいなす、さんぱーせんとに、たっする、きょくめんが、ねんに、へいきん、${numR(d.dd3PerYear)}かい、あり、そのうち、${numR(d.dd5Share)}ぱーせんとが、まいなす、ごぱーせんとまで、すすみました。`;
   return scene('DD（ドローダウン）とは', `DD・MDD・DD期間（実例：${ymJ(d.peakDate)}〜${ymJ(d.recoveryDate)}）`, narration, reading, {
     ...emptyVisual('fan'), heading: 'DD（ドローダウン）とは', subheading: `実例：${ymJ(d.peakDate)}の最高値 → 底 → 回復（縦軸：最高値からの下落率）`, source: SRC(label, sheets), fan,
   }, 14);

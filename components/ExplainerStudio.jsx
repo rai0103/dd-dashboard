@@ -21,7 +21,7 @@ import { ExplainerRenderer, RENDER_SIZE } from "@/lib/explainer/renderer";
 import { generateProject, generateShort, rewriteScene, rewriteNarration, applyLearnedEdit, updateReadingForEdit, CHARS_PER_MIN } from "@/lib/explainer/aiScript";
 import { AiClientError } from "@/lib/explainer/aiClient";
 import { referenceBlocks, referenceTexts, fetchUrlReference, fileToBase64, newRefId, refLabel, requiredRefNotes, MAX_PDF_BYTES } from "@/lib/explainer/references";
-import { lintScenes, buildDescription, sourcesScene, assembleLong, findVerbatimOverlaps, predictTotalSec, suggestRate, COMFORT_RATE, normalizeVisual, minSecFor, sanitizeReading, isKanaReading } from "@/lib/explainer/scriptModel";
+import { lintScenes, buildDescription, sourcesScene, assembleLong, applyTermReadings, findVerbatimOverlaps, predictTotalSec, suggestRate, COMFORT_RATE, normalizeVisual, minSecFor, sanitizeReading, isKanaReading } from "@/lib/explainer/scriptModel";
 import { saveImage, listImages, deleteImage } from "@/lib/explainer/imageStore";
 import { generateImage } from "@/lib/explainer/imageClient";
 import { researchTopic } from "@/lib/explainer/researchClient";
@@ -76,7 +76,9 @@ const loadSliderLocks = () => { try { const v = JSON.parse(localStorage.getItem(
 const saveSliderLocks = (m) => { try { localStorage.setItem(VIDEO_SLIDER_LOCK_KEY, JSON.stringify(m)); } catch (e) { /* ignore */ } };
 const sliderInitValue = (key, fallback) => { const l = loadSliderLocks(); return l[key]?.locked && typeof l[key]?.value === "number" ? l[key].value : fallback; };
 // 読み上げに使う文：ナレーションを直して読み上げ文が古いあいだは、通常の文をそのまま読ませる
-const ttsText = (sc) => (sc.readingStale || !sc.reading ? sc.narration : sc.reading);
+// [Stage E-18] 読み上げる直前にも用語の読み方（MDD→さいげらくりつ、DD→げらくりつ、ATH→かこさいたかね）をそろえる
+// （以前に作った台本の読み上げ文や、読み上げ文が未更新でナレーションをそのまま読む場合にも効くように）。
+const ttsText = (sc) => applyTermReadings(sc.readingStale || !sc.reading ? sc.narration : sc.reading);
 const fmtTime = (sec) => { const s = Math.max(0, Math.round(sec || 0)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
 const todayStr = () => { const d = new Date(); return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`; };
 const btn = (variant = "ghost") => variant === "primary"

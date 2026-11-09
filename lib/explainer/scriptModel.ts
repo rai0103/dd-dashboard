@@ -111,6 +111,19 @@ export function isKanaReading(s: string): boolean {
  * 読み上げ文の補正：カタカナはひらがなに直し、使えない記号は読点に寄せる。
  * 漢字・英数字が残る場合は、読み上げを通常の文（narration）にする（音声合成側で読ませる。読み違いの可能性がある）。
  */
+/**
+ * [Stage E-18] 用語の読み方の統一：MDD→さいげらくりつ（最下落率）、DD→げらくりつ（下落率）、ATH→かこさいたかね（過去最高値）、
+ * 最高値→さいたかね。英字・漢字のままの表記（読み上げ文が古く、ナレーションをそのまま読む場合）と、AIが英字読み・音読みにした
+ * ひらがな（でぃーでぃー・さいこうち等）の両方を置き換える。MDDはDDより、過去最高値は最高値より先に置き換える。
+ */
+export function applyTermReadings(s: string): string {
+  return String(s || '')
+    .replace(/ＭＤＤ|MDD/g, 'さいげらくりつ').replace(/えむ、?でぃー、?でぃー/g, 'さいげらくりつ')
+    .replace(/ＡＴＨ|ATH/g, 'かこさいたかね').replace(/(?:えー|えい)、?てぃー、?えいち/g, 'かこさいたかね')
+    .replace(/ＤＤ|DD/g, 'げらくりつ').replace(/でぃー、?でぃー/g, 'げらくりつ')
+    .replace(/過去最高値/g, 'かこさいたかね').replace(/最高値/g, 'さいたかね').replace(/さいこう(?:ち|ね)/g, 'さいたかね');
+}
+
 export function sanitizeReading(reading: string, narration: string): { reading: string; ok: boolean } {
   let r = katakanaToHiragana(str(reading, 2000)).replace(/[「」『』（）()【】［］\[\]"“”'’]/g, '').replace(/[！!？?]/g, '。').replace(/[，,]/g, '、').replace(/[．.]/g, '。').replace(/[・]/g, '、');
   r = r.replace(/\s+/g, '').replace(/、{2,}/g, '、').replace(/。{2,}/g, '。');
@@ -118,6 +131,7 @@ export function sanitizeReading(reading: string, narration: string): { reading: 
   // 「からく」→「げらく」は「からくり」との混同を避けるため、直後が「り」でないときだけ置き換える。
   // 「だっしゅぼーど」は「ダッシュボード」の読みそのものなので、同じく「過去の実績」の読みに置き換える。
   r = r.replace(/さいこうね/g, 'さいたかね').replace(/からく(?!り)/g, 'げらく').replace(/だっしゅぼーど/g, 'かこのじっせき');
+  r = applyTermReadings(r);
   if (r && isKanaReading(r)) return { reading: r, ok: true };
   return { reading: narration, ok: false };
 }
