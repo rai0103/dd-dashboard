@@ -9,6 +9,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import NarrMixedBox from "@/components/NarrMixedBox";
 import FreeImagePicker from "@/components/FreeImagePicker";
 import LowPolyModal from "@/components/LowPolyModal";
+import SceneImagePicker from "@/components/SceneImagePicker";
 import { Play, Pause, Square, Camera, Download, Upload, X, GripVertical, MessageSquare, ChevronRight, Lock, Unlock, Link2, FileText, Type, Sparkles, Copy, AlertTriangle, Check, Image as ImageIcon, RefreshCw, Plus, ArrowLeft, Search, ExternalLink, Eye, EyeOff, Pin, PinOff } from "lucide-react";
 import { voiceGender } from "@/lib/videoAnalysts";
 import { AudioMixer, getTtsBaseUrl } from "@/lib/videoAudioMixer";
@@ -153,8 +154,8 @@ function LibraryPickerModal({ images, imageEls, selectedIds, setSelectedIds, onC
   const toggle = (id) => setSelectedIds((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   const list = images.slice().reverse();
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.6)" }} onClick={onClose}>
-      <div onClick={(e) => e.stopPropagation()} className="rounded-lg flex flex-col" style={{ background: C.panel, border: `1px solid ${C.border}`, width: "min(720px, 100%)", maxHeight: "85vh", boxShadow: "0 8px 32px rgba(0,0,0,0.5)" }}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3" style={{ background: "rgba(0,0,0,0.8)" }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} className="rounded-lg flex flex-col" style={{ background: C.panel, border: `1px solid ${C.border}`, width: "min(1800px, 100%)", height: "96vh", boxShadow: "0 8px 32px rgba(0,0,0,0.5)" }}>
         <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: `1px solid ${C.borderSoft}` }}>
           <div className="text-sm font-semibold" style={{ color: C.text }}>画像ライブラリから選ぶ</div>
           <button onClick={onClose} style={{ background: "none", border: "none", color: C.textMuted, cursor: "pointer" }}><X size={16} /></button>
@@ -162,12 +163,12 @@ function LibraryPickerModal({ images, imageEls, selectedIds, setSelectedIds, onC
         <div className="px-4 py-2 text-[11px]" style={{ color: C.textDim }}>グラフ作成ページ（/chart-studio/）で保存したスクリーンショットなど。クリックで選択・解除し、複数選べます。</div>
         <div className="flex-1 overflow-y-auto px-4 py-2">
           {list.length ? (
-            <div className="grid gap-2.5" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))" }}>
+            <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))" }}>
               {list.map((im) => {
                 const checked = selectedIds.has(im.id);
                 return (
                   <button key={im.id} onClick={() => toggle(im.id)} className="flex flex-col rounded overflow-hidden text-left" style={{ padding: 0, border: `2px solid ${checked ? C.teal : C.borderSoft}`, background: C.panel2, cursor: "pointer" }}>
-                    <div className="relative" style={{ width: "100%", height: 120, background: C.panel }}>
+                    <div className="relative" style={{ width: "100%", aspectRatio: "16 / 9", background: C.panel }}>
                       {imageEls[im.id] && <img src={imageEls[im.id].src} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />}
                       <div className="absolute top-1 right-1 rounded-full flex items-center justify-center" style={{ width: 18, height: 18, background: checked ? C.teal : "rgba(0,0,0,0.5)", border: `1px solid ${checked ? C.teal : "rgba(255,255,255,0.5)"}` }}>
                         {checked && <Check size={12} style={{ color: C.bg }} />}
@@ -2176,14 +2177,11 @@ export default function ExplainerStudio() {
                                   </>
                                 )}
                               </div>
-                              {!sc.imageId && rightsPendingId === sc.id && images.length > 0 && (
-                                <div className="flex flex-wrap gap-1" style={{ maxHeight: 92, overflowY: "auto" }}>
-                                  {images.slice().reverse().map((im) => (
-                                    <button key={im.id} onClick={() => { attachExistingImage(sc.id, im.id); setRightsPendingId(null); }} title={im.name} className="shrink-0 rounded overflow-hidden" style={{ width: 36, height: 36, padding: 0, border: `1px solid ${C.borderSoft}`, background: C.panel2, cursor: "pointer" }}>
-                                      {imageEls[im.id] && <img src={imageEls[im.id].src} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />}
-                                    </button>
-                                  ))}
-                                </div>
+                              {!sc.imageId && rightsPendingId === sc.id && (
+                                <SceneImagePicker title={sc.visual?.heading || sc.caption || ""} images={images} imageEls={imageEls}
+                                  usedIds={new Set((project ? [...project.longScenes, ...project.shortScenes] : []).map((x) => x.imageId).filter(Boolean))}
+                                  onPick={(id) => { attachExistingImage(sc.id, id); setRightsPendingId(null); }}
+                                  onUpload={(f) => attachImage(sc.id, f)} onClose={() => setRightsPendingId(null)} />
                               )}
                               {sc.imageId && imageCreditOf(sc.imageId) && (
                                 <div className="text-[10px] leading-snug truncate" style={{ color: C.textDim }} title={[imageCreditOf(sc.imageId).caption, imageCreditOf(sc.imageId).credit, imageCreditOf(sc.imageId).pageUrl].filter(Boolean).join("\n")}>
