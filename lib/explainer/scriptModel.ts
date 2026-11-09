@@ -1,6 +1,7 @@
 // 台本データの検証・補正・組み立て（AIやブラウザに依存しない純粋な関数。lib/explainer/scriptModel.test.ts でテスト）。
 import { ICON_NAMES, VISUAL_KINDS, emptyVisual } from './types.ts';
-import type { ChapterPlan, ExplainerProject, ExplainerScene, IconName, ImageCredit, SourceNote, VisualItem, VisualKind, VisualSpec } from './types.ts';
+import type { ChapterPlan, ExplainerProject, ExplainerScene, GlossTerm, IconName, ImageCredit, SourceNote, VisualItem, VisualKind, VisualSpec } from './types.ts';
+export type { GlossTerm };
 
 const ICON_SET = new Set<string>(ICON_NAMES);
 const KIND_SET = new Set<string>([...VISUAL_KINDS, 'chapter', 'sources']);
@@ -153,7 +154,8 @@ export function normalizeScene(raw: any, chapter: number): ExplainerScene {
   const visual = normalizeVisual(raw?.visual);
   const narration = str(raw?.narration, 600).replace(/\s*\n\s*/g, '');
   const rd = sanitizeReading(str(raw?.reading, 1200), narration);
-  return {
+  // 「参考1によると」などの参考資料の番号は、視聴者には意味がないので取り除く
+  return stripRefMarksScene({
     id: newSceneId(),
     title: str(raw?.title, 40) || visual.heading || narration.slice(0, 16),
     caption: str(raw?.caption, 60),
@@ -163,7 +165,7 @@ export function normalizeScene(raw: any, chapter: number): ExplainerScene {
     chapter,
     minSec: minSecFor(visual.kind),
     imageId: null,
-  };
+  });
 }
 
 /** 章の扉（章番号＋章タイトル）。短いナレーションで区切りを示す */
@@ -318,3 +320,122 @@ export function suggestRate(scenes: Pick<ExplainerScene, 'narration' | 'minSec'>
   return Math.ceil(hi * 20) / 20; // 0.05刻み（スライダーと同じ）で切り上げ
 }
 export const COMFORT_RATE = { min: 0.9, max: 1.5 };
+
+// ---- 参考資料の番号（「参考1」「添付2」等）を動画から取り除く ----
+// AIには参考資料が「参考1：○○」の名前で渡るため、ナレーション・字幕・図解の出典に「参考1によると」「（添付2）」の
+// ような番号がそのまま出てしまうことがある。視聴者には意味がないため、生成した台本から機械的に取り除く（AIへの指示でも禁止している）。
+const REF_NUM = '[0-9０-９]+';
+const REF_LIST = `${REF_NUM}(?:\\s*(?:[・、,，と〜~\\-－]|および|及び)\\s*${REF_NUM})*`;
+const REF_LABEL = `(?:参考資料|参考情報|参考文献|参考|添付資料|添付ファイル|添付|資料|文献)\\s*(?:No\\.?|＃|#)?\\s*${REF_LIST}`;
+const REF_BRACKETED = new RegExp(`[（(［\\[【〔＜<]\\s*(?:出典\\s*[:：]?\\s*)?${REF_LABEL}[^）)］\\]】〕＞>]{0,40}[）)］\\]】〕＞>]`, 'g');
+const REF_INLINE = new RegExp(`${REF_LABEL}\\s*(?:[:：]\\s*)?(?:の(?:資料|記事|データ|報告|文書|ファイル|内容)?)?(?:によると|によれば|では|でも|より|から|にある(?:ように|とおり|通り)|に(?:は|も)?|で|が|は|も|を|と)?\\s*[、,]?`, 'g');
+const KANA_NUM = '(?:[0-9０-９]+|(?:いち|に|さん|よん|ご|ろく|なな|しち|はち|きゅう|じゅう)+)';
+const REF_READING = new RegExp(`(?:さんこう(?:しりょう|じょうほう|ぶんけん)?|てんぷ(?:しりょう|ふぁいる)?|しりょう)${KANA_NUM}(?:(?:と|、)${KANA_NUM})*(?:の(?:しりょう|きじ|でーた)?|によると|によれば|では|でも|より|から|で|に|が|は|も)、?`, 'g');
+
+function tidy(t: string): string {
+  return t
+    .replace(/[（(［\[【〔]\s*[）)］\]】〕]/g, '')
+    .replace(/[、,]\s*([、,。．.！!？?」』）)])/g, '$1')
+    .replace(/^[\s、,：:]+/, '')
+    .replace(/[ \t　]{2,}/g, ' ')
+    .replace(/\s+([、。])/g, '$1')
+    .trim();
+}
+
+/** 文中の「参考1」「添付2」「（参考3）」などの参考資料の番号を取り除く */
+export function stripRefMarks(text: string): string {
+  if (!text) return text;
+  const t = text.replace(REF_BRACKETED, '').replace(REF_INLINE, '');
+  return t === text ? text : tidy(t);
+}
+/** 読み上げ文（ひらがな）から「さんこういちによると」等を取り除く */
+export function stripRefMarksReading(reading: string): string {
+  if (!reading) return reading;
+  const t = reading.replace(REF_BRACKETED, '').replace(REF_INLINE, '').replace(REF_READING, '');
+  return t === reading ? reading : tidy(t);
+}
+
+/** 場面の全テキスト（ナレーション・読み上げ文・テロップ・見出し・図解の文字・出典）から参考資料の番号を取り除く */
+export function stripRefMarksScene<T extends ExplainerScene>(sc: T): T {
+  const narration = stripRefMarks(sc.narration);
+  let reading = sc.reading;
+  let readingStale = sc.readingStale;
+  if (narration !== sc.narration) {
+    const r2 = stripRefMarksReading(sc.reading);
+    // ナレーションから番号を取ったのに読み上げ文から取れなかった場合は、読み上げ文を「要確認」にしてナレーションで読む
+    if (r2 !== sc.reading) reading = r2; else readingStale = true;
+  }
+  const v = sc.visual;
+  const visual = {
+    ...v,
+    heading: stripRefMarks(v.heading), subheading: stripRefMarks(v.subheading), emphasis: stripRefMarks(v.emphasis),
+    source: stripRefMarks(v.source),
+    items: v.items.map((it) => ({ ...it, label: stripRefMarks(it.label), text: stripRefMarks(it.text) })),
+  };
+  return { ...sc, narration, reading, ...(readingStale ? { readingStale } : {}), title: stripRefMarks(sc.title), caption: stripRefMarks(sc.caption), visual };
+}
+
+// ---- 用語の説明（初めて出てきたときだけ、短い説明を添える） ----
+const WORDISH = /[\p{Script=Han}\p{Script=Katakana}A-Za-z0-9０-９Ａ-Ｚａ-ｚーｰ・]/u;
+const KATALAT = /[\p{Script=Katakana}A-Za-z0-9０-９Ａ-Ｚａ-ｚーｰ]/u;
+/** 用語が単語として出てくる位置（「スター」が「スターリンク」の一部に当たる、などを除く） */
+function findTerm(text: string, term: string, from = 0): number {
+  let i = text.indexOf(term, from);
+  while (i >= 0) {
+    const prev = text[i - 1] || '';
+    const next = text[i + term.length] || '';
+    const okPrev = !prev || !(KATALAT.test(term[0]) && KATALAT.test(prev));
+    const okNext = !next || !(KATALAT.test(term[term.length - 1]) && KATALAT.test(next));
+    if (okPrev && okNext) return i;
+    i = text.indexOf(term, i + 1);
+  }
+  return -1;
+}
+/** 用語の近くですでに説明しているか（「〇〇とは」「〇〇（…）」「〇〇という」「〇〇は、…のこと」） */
+function explainedNear(text: string, i: number, term: string, gloss: string): boolean {
+  if (gloss && text.includes(gloss)) return true;
+  const after = text.slice(i + term.length, i + term.length + 30);
+  return /^(?:とは|って|（|\(|という|、つまり|は、?[^。]{2,28}(?:のこと|を指し|を意味))/.test(after);
+}
+
+/**
+ * 動画全体で、用語が初めて出てくるナレーションにだけ説明を添え（無ければ「説明＋の＋用語」を差し込む）、
+ * 2回目以降に同じ説明が繰り返されていたら取り除く。章の扉・参考資料・固定のデータ場面は対象外。
+ * 読み上げ文は、用語の読み（termReading）が見つかればそこに説明の読みを差し込み、見つからなければ「要確認」にする。
+ */
+export function applyGlossary<T extends ExplainerScene>(scenes: T[], glossary: GlossTerm[] | undefined): T[] {
+  if (!glossary?.length) return scenes;
+  const out = scenes.map((s) => ({ ...s }));
+  for (const g of glossary) {
+    const term = (g.term || '').trim(), gloss = (g.gloss || '').trim().replace(/の$/, '');
+    if (term.length < 2 || !gloss || gloss.includes(term)) continue;
+    const dup = `${gloss}の${term}`;
+    const dupR = g.glossReading && g.termReading ? `${g.glossReading.replace(/の$/, '')}の${g.termReading}` : '';
+    let seen = false;
+    for (const sc of out) {
+      if (sc.fixedKey || sc.visual.kind === 'chapter' || sc.visual.kind === 'sources') continue;
+      const i = findTerm(sc.narration, term);
+      if (i < 0) continue;
+      if (!seen) {
+        seen = true;
+        if (!explainedNear(sc.narration, i, term, gloss)) {
+          const prev = sc.narration[i - 1] || '';
+          if (prev && WORDISH.test(prev) && !/[・]/.test(prev)) continue; // 複合語の途中（例：新〇〇）には差し込まない
+          sc.narration = `${sc.narration.slice(0, i)}${gloss}の${sc.narration.slice(i)}`;
+          const ri = g.termReading ? sc.reading.indexOf(g.termReading) : -1;
+          if (ri >= 0 && g.glossReading) sc.reading = `${sc.reading.slice(0, ri)}${g.glossReading.replace(/の$/, '')}の${sc.reading.slice(ri)}`;
+          else sc.readingStale = true;
+        }
+        // 同じ場面の2回目以降の説明は取り除く
+        const first = sc.narration.indexOf(dup);
+        if (first >= 0) sc.narration = sc.narration.slice(0, first + dup.length) + sc.narration.slice(first + dup.length).split(dup).join(term);
+        if (dupR) { const fr = sc.reading.indexOf(dupR); if (fr >= 0) sc.reading = sc.reading.slice(0, fr + dupR.length) + sc.reading.slice(fr + dupR.length).split(dupR).join(g.termReading!); }
+      } else if (sc.narration.includes(dup)) {
+        sc.narration = sc.narration.split(dup).join(term);
+        if (dupR && sc.reading.includes(dupR)) sc.reading = sc.reading.split(dupR).join(g.termReading!);
+        else if (g.glossReading) sc.readingStale = true;
+      }
+    }
+  }
+  return out;
+}

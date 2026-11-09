@@ -702,7 +702,7 @@ export default function ExplainerStudio() {
     setGenBusy(true); setGenError(""); setGenProgress({ step: "宣伝用ショートを作り直し中…", done: 0, total: 1 });
     const ac = new AbortController(); abortRef.current = ac;
     try {
-      const o = { videoTitle: project.videoTitle, kicker: project.kicker, chapters: project.chapters, youtube: project.youtube, sources: project.sources };
+      const o = { videoTitle: project.videoTitle, kicker: project.kicker, chapters: project.chapters, youtube: project.youtube, sources: project.sources, glossary: project.glossary || [] };
       const inp = genInput();
       const sh0 = await generateShort(inp, o, project.longScenes, ac.signal);
       const sh = (await paraphraseScenes(sh0, inp, project.videoTitle, "short", ac.signal, (k, n) => setGenProgress({ step: `参考資料と同じ言い回しを言い換え中…（${k}/${n}）`, done: 0, total: 1 }))).scenes;

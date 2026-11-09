@@ -172,8 +172,13 @@ export interface ExplainerProject {
   shortScenes: ExplainerScene[];
   youtube: YoutubeMeta;
   sources: SourceNote[];
+  /** 動画に出てくる用語と、初めて出てきたときに添える短い説明（目次の生成時にAIが作る。ショートの作り直しにも使う） */
+  glossary?: GlossTerm[];
   createdAt: number;
 }
+
+/** 用語の説明：初出のナレーションで「gloss＋の＋term」（例：低軌道衛星を使ったインターネット通信サービスのスターリンク） */
+export interface GlossTerm { term: string; termReading?: string; gloss: string; glossReading?: string; chapter?: number }
 
 // ---- 参考情報 ----
 // [Stage E-7] どの参考情報にも共通で持たせる「必ず動画に含める」フラグ。trueのものは、AIへの指示

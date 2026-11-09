@@ -3,8 +3,8 @@
 // 参考資料（PDF・URL本文・テキスト）は毎回同じ先頭部分として渡し、プロンプトキャッシュで再利用する。
 import { callTool } from './aiClient';
 import { ICON_NAMES, VISUAL_KINDS, FIXED_ONLY_KINDS } from './types';
-import type { ChapterPlan, ExplainerProject, ExplainerScene, SourceNote, StockCatalog, YoutubeMeta } from './types';
-import { assembleLong, normalizeScene, sanitizeReading, fixBannedWording } from './scriptModel';
+import type { ChapterPlan, ExplainerProject, ExplainerScene, GlossTerm, SourceNote, StockCatalog, YoutubeMeta } from './types';
+import { assembleLong, normalizeScene, sanitizeReading, fixBannedWording, stripRefMarks, stripRefMarksReading, applyGlossary } from './scriptModel';
 import { resolveYearCompareItems, resolveCatalogKey } from './stockCatalog';
 
 export interface GenerateInput {
@@ -93,7 +93,8 @@ const SYSTEM_RULES = [
   '- 意見が分かれる話題は、特定の立場に偏らず、主な見方を並べて紹介する。',
   '- バージョン番号（8.4.27 等）・日付・型番は量ではないので、数値の図解（number・bar・line・donut）にしない（points・timeline 等で表す）。unit は短く（%・兆円・万人・倍 など4文字以内）。',
   '- 「ダッシュボード」という語は一般には意味が伝わりにくいため使わない。「過去の実績」「過去のデータ」のように言い換える。',
-  '- 数値を使う図解（number・bar・line・donut）は、参考資料にある数値だけを使い、visual.source に資料名（例：参考1 ○○）を必ず書く。資料に数値がなければ数値の図解は使わない。',
+  '- 数値を使う図解（number・bar・line・donut）は、参考資料にある数値だけを使い、visual.source に資料の発行元・名称（例：総務省 情報通信白書）を必ず書く。資料に数値がなければ数値の図解は使わない。',
+  '- 参考資料には「参考1」「参考2」…の番号が付いているが、これは制作用の整理番号。ナレーション・読み上げ文・テロップ・図解の文字・visual.source・sources のどこにも「参考1」「添付2」「資料3」「（参考1）」のような番号を書かない。出典を示すときは発行元や媒体の名前（例：「総務省の発表によると」「日本経済新聞の報道では」）で言う。',
   '',
   '【著作権・肖像権への配慮】',
   '- 参考資料にYouTube動画の字幕がある場合は、発言の要点だけを参考にし、話し言葉をそのまま使わない。発言者の意見は「〇〇の動画では〜と解説されています」のように出典を示して紹介する。',
@@ -105,7 +106,8 @@ const SYSTEM_RULES = [
   '- 1場面は1つの要点だけ。ナレーションは1場面あたり40〜95文字（読み上げ約8〜18秒）。',
   '- 同じ種類の図解（visual.kind）を連続させない。数値の図解・流れ図・比較・年表・イメージ図などを織り交ぜる。',
   '- 冒頭で視聴者の疑問や驚きを引き出し、各章の終わりは次への興味をつなぐ一言で締める。',
-  '- 話し言葉の「です・ます」調。1文は短く。専門用語は初出時に必ず言い換える。',
+  '- 話し言葉の「です・ます」調。1文は短く。',
+  '- 用語（専門用語・略語・サービス名・企業名・制度名・組織名など、視聴者が知らない可能性のある言葉）は、動画の中で初めて出てくるナレーションで、短い説明を名前の前に添える（例：「低軌道衛星を使ったインターネット通信サービスのスターリンク」）。2回目以降は説明を付けず、名前だけ（例：「スターリンク」）にする。',
   '',
   '【読み上げ文（reading）】',
   '- narration と同じ内容を、ひらがなだけで書く（漢字・カタカナ・英数字は使わない。長音「ー」は可）。句読点は「、」「。」のみ。',
@@ -328,6 +330,8 @@ export interface Outline {
   chapters: ChapterPlan[];
   youtube: YoutubeMeta;
   sources: SourceNote[];
+  /** 動画に出てくる用語と、初出で添える短い説明（無い場合は空・未指定） */
+  glossary?: GlossTerm[];
 }
 
 export async function generateOutline(inp: GenerateInput, signal?: AbortSignal): Promise<Outline> {
@@ -355,7 +359,8 @@ export async function generateOutline(inp: GenerateInput, signal?: AbortSignal):
     '- 各章の sceneCount の合計が、場面の目安数に近くなるようにする。goal は章で伝えること、keyPoints は章で扱う要点（他の章と重複させない）。',
     '- chapters[].reading は章タイトルのひらがな読み。',
     '- youtube.title は検索されやすく誇張のないタイトル（40字以内）。thumbnailText はサムネ用の短い文字（12字以内）。tags は概要欄末尾のハッシュタグにそのまま使うので、関連する単語を10個（テーマ・固有名詞・分野などを組み合わせて重複なく）。shortTitle・shortDescription は宣伝用ショート動画用（本編へ誘導）。description は本編の概要（3〜5行、目次付き）。',
-    '- sources は実際に使う参考資料（資料名と、発行元・日付などの補足）。参考資料がなければ空配列。',
+    '- sources は実際に使う参考資料（資料名と、発行元・日付などの補足）。参考資料がなければ空配列。「参考1」等の番号は書かない。',
+    `- glossary は、動画に出てくる用語のうち、上記の視聴者が知らない可能性のあるもの（専門用語・略語・サービス名・企業名・制度名・組織名など）を最大12個。term=用語（ナレーションで使う表記そのまま）、termReading=そのひらがな読み、gloss=初めて出てきたときに名前の前に添える短い説明（12〜30字。名詞で終わり、「gloss＋の＋term」で自然な日本語になる形。例：term=スターリンク、gloss=低軌道衛星を使ったインターネット通信サービス）、glossReading=glossのひらがな読み、chapter=その用語が初めて出てくる章の番号（1始まり）。`,
   ].join('\n');
   const r = await callTool<any>({
     system: system(inp),
@@ -389,8 +394,17 @@ export async function generateOutline(inp: GenerateInput, signal?: AbortSignal):
           required: ['title', 'description', 'tags', 'thumbnailText', 'shortTitle', 'shortDescription'],
         },
         sources: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, detail: { type: 'string' } }, required: ['title', 'detail'] } },
+        glossary: {
+          type: 'array',
+          description: '用語と、初めて出てきたときに名前の前に添える短い説明（最大12個）',
+          items: {
+            type: 'object',
+            properties: { term: { type: 'string' }, termReading: { type: 'string' }, gloss: { type: 'string' }, glossReading: { type: 'string' }, chapter: { type: 'integer' } },
+            required: ['term', 'termReading', 'gloss', 'glossReading', 'chapter'],
+          },
+        },
       },
-      required: ['videoTitle', 'kicker', 'chapters', 'youtube', 'sources'],
+      required: ['videoTitle', 'kicker', 'chapters', 'youtube', 'sources', 'glossary'],
     },
     maxTokens: 8000,
     signal,
@@ -414,8 +428,33 @@ export async function generateOutline(inp: GenerateInput, signal?: AbortSignal):
       tags: Array.isArray(y.tags) ? y.tags.map(String).slice(0, 12) : [],
       thumbnailText: String(y.thumbnailText || ''), shortTitle: String(y.shortTitle || ''), shortDescription: String(y.shortDescription || ''),
     },
-    sources: (Array.isArray(r?.sources) ? r.sources : []).map((s: any) => ({ title: String(s?.title || ''), detail: String(s?.detail || '') })).filter((s: SourceNote) => s.title),
+    sources: (Array.isArray(r?.sources) ? r.sources : []).map((s: any) => ({ title: stripRefMarks(String(s?.title || '')), detail: stripRefMarks(String(s?.detail || '')) })).filter((s: SourceNote) => s.title),
+    glossary: (Array.isArray(r?.glossary) ? r.glossary : []).map((g: any) => ({
+      term: String(g?.term || '').trim(), termReading: String(g?.termReading || '').trim(),
+      gloss: String(g?.gloss || '').trim().replace(/の$/, ''), glossReading: String(g?.glossReading || '').trim().replace(/の$/, ''),
+      chapter: Math.max(1, Math.round(Number(g?.chapter) || 1)),
+    })).filter((g: GlossTerm) => g.term.length >= 2 && g.gloss && !g.gloss.includes(g.term)).slice(0, 12),
   };
+}
+
+/** 章ごと・ショートの指示に付ける「用語の説明」の指示（章は並列に作るため、どの章で説明するかを目次の段階で決めておく） */
+function glossaryNote(o: Outline, idx: number | null): string {
+  const g = o.glossary || [];
+  if (!g.length) return '';
+  const line = (t: GlossTerm) => `・${t.term}：「${t.gloss}の${t.term}」`;
+  if (idx === null) {
+    return `【用語の説明】ショートは単独でも見られるので、ショートの中で初めて出す用語には、名前の前に短い説明を添える（ショート内の2回目以降は名前だけ）。説明の文言は次のとおり：\n${g.map(line).join('\n')}`;
+  }
+  const no = idx + 1;
+  const here = g.filter((t) => (t.chapter || 1) === no);
+  const before = g.filter((t) => (t.chapter || 1) < no);
+  const later = g.filter((t) => (t.chapter || 1) > no);
+  return [
+    here.length ? `【この章で初めて出す用語】名前を初めて出すナレーションで、次の説明をそのまま名前の前に添える（例の文言どおり）。2回目以降は名前だけ：\n${here.map(line).join('\n')}` : '',
+    before.length ? `【前の章で説明済みの用語（説明を繰り返さず、名前だけ使う）】${before.map((t) => t.term).join('、')}` : '',
+    later.length ? `【後の章で説明する用語】${later.map((t) => t.term).join('、')}（この章で使う場合は、上と同じ形で短い説明を添える）` : '',
+    '- 上の一覧にない用語でも、視聴者が知らない可能性があるものは、初めて出すときに短い説明を添える。',
+  ].filter(Boolean).join('\n');
 }
 
 function outlineText(o: Outline): string {
@@ -461,6 +500,7 @@ async function generateChapterPart(inp: GenerateInput, o: Outline, idx: number, 
     `- 扱う要点：${ch.keyPoints}（他の章の要点は扱わない）`,
     roleNote,
     imageQuotaNote(inp, o, ch),
+    glossaryNote(o, idx),
     prev.length ? `【この章ですでに作った場面（続きから書き、内容を繰り返さない）】\n${prev.map((s) => `・[${s.visual.kind}] ${s.narration}`).join('\n')}` : '',
     partTotal > 1 && partNo < partTotal ? '- 章の途中なので、締めの言葉は入れない。' : '',
     '- 図解の種類を毎場面変え、数値の図解・流れ図・比較・イメージ図などをバランスよく使う。',
@@ -515,6 +555,7 @@ export async function generateShort(inp: GenerateInput, o: Outline, longScenes: 
     '- 2〜5場面目：本編の見どころを短く小出しにする（答えを全部言わず、続きが気になるように）。1場面のナレーションは25〜55文字。',
     '- 最後の場面：visual.kind=cta。「くわしくは本編で」と本編動画への誘導（関連動画のリンクから）。',
     '- 縦長の画面なので、図解の項目数は少なめ（2〜4個）。',
+    glossaryNote(o, null),
     '【本編のナレーション（抜粋）】',
     digest,
   ].join('\n');
@@ -529,7 +570,7 @@ export async function generateShort(inp: GenerateInput, o: Outline, longScenes: 
   });
   const scenes = (Array.isArray(r?.scenes) ? r.scenes : []).map((s: any) => applyStockDataKeysToScene(s, inp.stockCatalog)).map((s: any) => normalizeScene(s, 0)).filter((s: ExplainerScene) => s.narration);
   if (!scenes.length) throw new Error('ショートの場面を作れませんでした。');
-  return scenes.map((s) => ({ ...s, minSec: Math.min(s.minSec, 4.5) }));
+  return applyGlossary(scenes, o.glossary).map((s) => ({ ...s, minSec: Math.min(s.minSec, 4.5) }));
 }
 
 /** 1場面をAIへの指示で作り直す（既存場面の書き直し・新しい場面の追加の両方に使う） */
@@ -593,9 +634,9 @@ export async function rewriteNarration(inp: GenerateInput, videoTitle: string, i
     maxTokens: 1200,
     signal,
   });
-  const narration = typeof r?.narration === 'string' ? fixBannedWording(r.narration.trim()) : '';
+  const narration = stripRefMarks(typeof r?.narration === 'string' ? fixBannedWording(r.narration.trim()) : '');
   if (!narration) throw new Error('AIから空の応答が返りました。');
-  const rd = sanitizeReading(typeof r?.reading === 'string' ? r.reading : '', narration);
+  const rd = sanitizeReading(stripRefMarksReading(typeof r?.reading === 'string' ? r.reading : ''), narration);
   return { narration, reading: rd.reading };
 }
 
@@ -622,9 +663,9 @@ export async function applyLearnedEdit(inp: GenerateInput, edit: LearnedEdit, cu
     maxTokens: 1500,
     signal,
   });
-  const narration = typeof r?.narration === 'string' ? fixBannedWording(r.narration.trim()) : '';
+  const narration = stripRefMarks(typeof r?.narration === 'string' ? fixBannedWording(r.narration.trim()) : '');
   if (!narration) throw new Error('AIから空の応答が返りました。');
-  const rd = sanitizeReading(typeof r?.reading === 'string' ? r.reading : '', narration);
+  const rd = sanitizeReading(stripRefMarksReading(typeof r?.reading === 'string' ? r.reading : ''), narration);
   return { narration, reading: rd.reading };
 }
 
@@ -686,7 +727,8 @@ export async function generateProject(inp: GenerateInput, onProgress: (p: Genera
   const rest = Array.from({ length: n - 1 }, (_, k) => k + 1);
   const workers = Array.from({ length: Math.min(3, rest.length) }, async () => { while (rest.length) { const i = rest.shift()!; await runOne(i); } });
   await Promise.all(workers);
-  const longScenes = assembleLong(o.chapters, per, o.sources, true, withSourcesScene);
+  // 用語の説明：動画全体で初めて出てくるナレーションにだけ説明を添え、2回目以降の重複した説明は取り除く
+  const longScenes = applyGlossary(assembleLong(o.chapters, per, o.sources, true, withSourcesScene), o.glossary);
   let shortScenes: ExplainerScene[] = [];
   if (withShort) {
     onProgress({ step: '宣伝用ショートを作成中…', done, total });
@@ -697,6 +739,6 @@ export async function generateProject(inp: GenerateInput, onProgress: (p: Genera
   return {
     version: 1, topic: inp.topic, mode: inp.mode, audience: inp.audience, targetMinutes: inp.targetMinutes,
     videoTitle: o.videoTitle, kicker: o.kicker, chapters: o.chapters, longScenes, shortScenes,
-    youtube: o.youtube, sources: o.sources, createdAt: Date.now(),
+    youtube: o.youtube, sources: o.sources, glossary: o.glossary || [], createdAt: Date.now(),
   };
 }
