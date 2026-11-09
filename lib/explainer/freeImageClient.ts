@@ -23,13 +23,13 @@ export interface FreeImageCandidate {
 const unreachable = () => new AiClientError('SERVER_UNREACHABLE', `ローカルAIサーバー（${getTtsBaseUrl()}）に接続できません。「npm run dev:video」または「npm run tts-server」で起動してください（起動済みなら、一度止めて起動し直してください）。`);
 
 /** キーワードでフリー素材を検索する。terms は日本語キーワードから作った英語の検索語（サーバーが返す。表示用） */
-export async function searchFreeImages(keyword: string, opts: { context?: string; max?: number; signal?: AbortSignal } = {}): Promise<{ items: FreeImageCandidate[]; terms: string[] }> {
+export async function searchFreeImages(keyword: string, opts: { context?: string; max?: number; enTerms?: string[]; signal?: AbortSignal } = {}): Promise<{ items: FreeImageCandidate[]; terms: string[] }> {
   let resp: Response;
   try {
     resp = await fetch(`${getTtsBaseUrl()}/api/free-images`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ keyword, context: opts.context || '', max: opts.max || 30 }),
+      body: JSON.stringify({ keyword, context: opts.context || '', max: opts.max || 30, ...(opts.enTerms?.length ? { enTerms: opts.enTerms } : {}) }),
       signal: opts.signal,
     });
   } catch (e: any) {
@@ -59,4 +59,25 @@ export async function fetchFreeImage(c: FreeImageCandidate): Promise<{ file: Fil
   const file = new File([blob], `free-${c.id}.${ext}`.replace(/[^\w.-]/g, '_'), { type });
   const credit: ImageCredit = { source: c.source, ...(c.caption ? { caption: c.caption } : {}), ...(c.credit ? { credit: c.credit } : {}), ...(c.pageUrl ? { pageUrl: c.pageUrl } : {}) };
   return { file, credit };
+}
+
+/**
+ * 候補画像をAI（Gemini・画像を見て判定）が場面に合うか0〜10点で採点する（日本文化動画アプリと同じ方式）。
+ * GEMINI_API_KEY が無い・失敗した場合は null（呼び出し側は検索の並び順のまま使う）。
+ */
+export async function rankFreeImages(scene: { narration: string; subject?: string; title?: string; topic?: string }, candidates: FreeImageCandidate[], signal?: AbortSignal): Promise<Map<string, { score: number; reason: string }> | null> {
+  try {
+    const resp = await fetch(`${getTtsBaseUrl()}/api/free-images/rank`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...scene, candidates: candidates.slice(0, 16).map((c) => ({ id: c.id, thumbnailUrl: c.thumbnailUrl, url: c.url, caption: c.caption, source: c.source })) }),
+      signal,
+    });
+    if (!resp.ok) return null;
+    const d: any = await resp.json();
+    return new Map((Array.isArray(d?.scores) ? d.scores : []).map((x: any) => [String(x.id), { score: Number(x.score) || 0, reason: String(x.reason || '') }]));
+  } catch (e: any) {
+    if (e?.name === 'AbortError') throw new AiClientError('ABORTED', '中止しました。');
+    return null;
+  }
 }

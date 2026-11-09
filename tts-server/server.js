@@ -782,6 +782,15 @@ async function handlePostFreeImages(req, res) {
     sendJson(res, 500, { error: 'UPSTREAM_ERROR', message: e && e.message ? e.message : String(e) });
   }
 }
+async function handlePostFreeImageRank(req, res) {
+  const body = await readJsonBody(req);
+  try {
+    const r = await freeImages.handlePostFreeImageRank(body || {});
+    sendJson(res, r.status, r.json);
+  } catch (e) {
+    sendJson(res, 500, { error: 'UPSTREAM_ERROR', message: e && e.message ? e.message : String(e) });
+  }
+}
 async function handleGetFreeImageProxy(req, res) {
   try {
     await freeImages.handleGetFreeImageProxy(req.url || '', res);
@@ -802,6 +811,7 @@ const server = http.createServer((req, res) => {
   if (pathname === '/api/image' && req.method === 'POST') { handlePostImage(req, res); return; }
   if (pathname === '/api/research' && req.method === 'POST') { handlePostResearch(req, res); return; }
   if (pathname === '/api/free-images' && req.method === 'POST') { handlePostFreeImages(req, res); return; }
+  if (pathname === '/api/free-images/rank' && req.method === 'POST') { handlePostFreeImageRank(req, res); return; }
   if (pathname === '/api/free-image-proxy' && req.method === 'GET') { handleGetFreeImageProxy(req, res); return; }
   if (pathname === '/api/fetch-url' && req.method === 'GET') { handleFetchUrl(req, res); return; }
   if (pathname === '/api/auto-schedule' && req.method === 'GET') { handleGetAutoSchedule(req, res); return; }

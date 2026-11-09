@@ -20,6 +20,8 @@ export interface GenerateInput {
   speechRate?: number;
   /** AIで画像を自動生成して挿入する場合の目安枚数（長尺動画全体で、visual.kind=imageにする場面のおおよその数）。0/未指定なら従来通りAIの判断に任せる */
   imageTarget?: number;
+  /** スライドに画像を入れる割合（0〜1。AI生成とフリー素材の合計）。指定があれば各章の visual.kind=image の目安数をこの割合から決める */
+  imageShare?: number;
   /** [Stage E-4] mode==='stock' のときの実データカタログ。bar/line/donut/numberの数値はこの中のキーのみ使わせ、AIの創作値を禁止する */
   stockCatalog?: StockCatalog;
   /** [Stage E-5] 今回の生成で使う「切り口」（マンネリ防止）。未指定ならheader()は何も加えない。generateProject/generateShortが内部で自動選択する */
@@ -470,12 +472,78 @@ export const SCENES_PER_CALL = 4;
  * imageにしないよう、あくまで目安として伝える）。imageTargetが0/未指定なら何も付け足さない（従来通り）。
  */
 function imageQuotaNote(inp: GenerateInput, o: Outline, ch: ChapterPlan): string {
+  if (inp.imageShare && inp.imageShare > 0) {
+    const quota = Math.round(ch.sceneCount * Math.min(1, inp.imageShare));
+    if (!quota) return '';
+    return `- この章では、visual.kind=image の場面をおよそ${quota}個使う（写真素材やAI生成の画像を自動で挿入するため）。実在の場所・建物・物・出来事など、写真で見せると伝わる場面を優先する。`;
+  }
   const target = Math.max(0, Math.round(inp.imageTarget || 0));
   if (!target) return '';
   const totalScenes = o.chapters.reduce((a, c) => a + c.sceneCount, 0) || 1;
   const quota = Math.round(target * (ch.sceneCount / totalScenes));
   if (!quota) return '';
   return `- この章では、visual.kind=image の場面をおよそ${quota}個使う（画像生成AIで自動的に画像を作って挿入するため）。内容的に画像が合う場面だけに使い、無理に増やさない。`;
+}
+
+export interface SceneImagePlan { subject: string; freeFit: number; queries: { ja: string; en: string }[]; imagePrompt: string }
+
+/**
+ * スライドに入れる画像の計画（日本文化動画アプリのキーワード抽出・映すものの整理と同じ考え方）：場面ごとに、
+ * 映すもの（subject）、写真素材（フリー素材）で見つかりやすいか（freeFit 0〜10）、画像検索の語（日本語＋英語）、
+ * AI生成用の英語プロンプトを作る。items の key で結果を返す。
+ */
+export async function planSceneImages(inp: GenerateInput, items: { key: string; title: string; caption: string; narration: string; heading: string }[], signal?: AbortSignal): Promise<Map<string, SceneImagePlan>> {
+  const out = new Map<string, SceneImagePlan>();
+  for (let k = 0; k < items.length; k += 16) {
+    const batch = items.slice(k, k + 16);
+    const task = [
+      `動画のテーマ：${inp.topic}`,
+      '次の各スライドに、背景いっぱいに表示する画像を1枚ずつ入れます。スライドごとに次を決めてください。',
+      '- subject：画像に映すもの（具体的に。例：「日本銀行本店の建物」「港に並ぶコンテナ船」「半導体ウェハー」）。',
+      '- freeFit：その画像が、著作権フリーの写真素材（Wikimedia Commons・美術館・Openverse・Pixabay等）で見つかりやすいか0〜10。実在の場所・建物・乗り物・物・自然・一般的な情景は高く、抽象的な概念・架空の状況・将来の予測・特定の人物の表情などは低く。',
+      '- queries：画像検索に使う語を具体的・重要な順に2〜4個。{ja：日本語, en：Wikipedia・美術館・写真サイトで通じる英語（固有名詞は標準の英語表記）}。ロゴや商標ではなく、建物・物・情景を探す語にする。',
+      '- imagePrompt：画像生成AI用の英語プロンプト（実在の人物・有名人の名前、ブランド名・ロゴ、既存作品やキャラクター、画像内の文字を含めない。汎用的な情景にし、末尾に "no text, no logos, no real people" を付ける）。',
+      '',
+      ...batch.map((b) => `#${b.key}\n見出し：${b.heading || b.title}\nテロップ：${b.caption}\nナレーション：${b.narration}`),
+    ].join('\n');
+    const r = await callTool<any>({
+      system: system(),
+      content: [{ type: 'text', text: task }],
+      toolName: 'plan_slide_images',
+      toolDescription: 'スライドごとに、入れる画像（映すもの・検索語・AI生成用プロンプト）を決める。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          slides: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                key: { type: 'string' }, subject: { type: 'string' }, freeFit: { type: 'number' },
+                queries: { type: 'array', items: { type: 'object', properties: { ja: { type: 'string' }, en: { type: 'string' } }, required: ['ja', 'en'] } },
+                imagePrompt: { type: 'string' },
+              },
+              required: ['key', 'subject', 'freeFit', 'queries', 'imagePrompt'],
+            },
+          },
+        },
+        required: ['slides'],
+      },
+      maxTokens: 6000,
+      signal,
+    });
+    for (const x of Array.isArray(r?.slides) ? r.slides : []) {
+      const key = String(x?.key || '').replace(/^#/, '');
+      if (!batch.some((b) => b.key === key)) continue;
+      out.set(key, {
+        subject: String(x?.subject || ''),
+        freeFit: Math.max(0, Math.min(10, Number(x?.freeFit) || 0)),
+        queries: (Array.isArray(x?.queries) ? x.queries : []).map((q: any) => ({ ja: String(q?.ja || '').trim(), en: String(q?.en || '').trim() })).filter((q: any) => q.ja || q.en).slice(0, 4),
+        imagePrompt: String(x?.imagePrompt || ''),
+      });
+    }
+  }
+  return out;
 }
 
 async function generateChapterPart(inp: GenerateInput, o: Outline, idx: number, count: number, partNo: number, partTotal: number, prev: ExplainerScene[], signal?: AbortSignal): Promise<ExplainerScene[]> {

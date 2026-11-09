@@ -19,13 +19,14 @@ import { listBackgrounds, saveBackground, deleteBackground } from "@/lib/videoBa
 import { listAvatars, saveAvatar, deleteAvatar, newAvatar, MAX_CLIPS } from "@/lib/videoAvatarLibrary";
 import { VideoAvatar } from "@/lib/videoAvatarRender";
 import { ExplainerRenderer, RENDER_SIZE } from "@/lib/explainer/renderer";
-import { generateProject, generateShort, rewriteScene, rewriteNarration, applyLearnedEdit, updateReadingForEdit, CHARS_PER_MIN } from "@/lib/explainer/aiScript";
+import { generateProject, generateShort, rewriteScene, rewriteNarration, applyLearnedEdit, updateReadingForEdit, planSceneImages, CHARS_PER_MIN } from "@/lib/explainer/aiScript";
+import { pickImageScenes, splitFreeAi } from "@/lib/explainer/autoImages";
 import { AiClientError } from "@/lib/explainer/aiClient";
 import { referenceBlocks, referenceTexts, fetchUrlReference, fileToBase64, newRefId, refLabel, requiredRefNotes, MAX_PDF_BYTES } from "@/lib/explainer/references";
 import { lintScenes, buildDescription, sourcesScene, assembleLong, applyTermReadings, findVerbatimOverlaps, predictTotalSec, suggestRate, COMFORT_RATE, normalizeVisual, minSecFor, sanitizeReading, isKanaReading } from "@/lib/explainer/scriptModel";
 import { saveImage, listImages, deleteImage } from "@/lib/explainer/imageStore";
 import { generateImage } from "@/lib/explainer/imageClient";
-import { searchFreeImages, fetchFreeImage } from "@/lib/explainer/freeImageClient";
+import { searchFreeImages, fetchFreeImage, rankFreeImages } from "@/lib/explainer/freeImageClient";
 import { researchTopic } from "@/lib/explainer/researchClient";
 import { safeFileName, canPickFolder, getSavedFolder, pickFolder, ensureWritable, saveBundle, descriptionText } from "@/lib/explainer/exportBundle";
 import { exportVideoProfile, importVideoProfile } from "@/lib/videoProfileSnapshot";
@@ -291,9 +292,14 @@ export default function ExplainerStudio() {
     // 初回表示時のみ
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  // AI画像の自動生成（Google Gemini / Imagen。費用が発生するため既定はオフ）
-  const [imageGenEnabled, setImageGenEnabled] = useState(false);
-  const [imageGenCount, setImageGenCount] = useState(3);
+  // スライドへの画像の自動挿入：画像を入れる場面の割合（imgShare）と、そのうちAI生成の割合（imgAiShare。残りは
+  // 著作権フリーの写真素材を日本文化動画アプリと同じ方法で検索し、AIが画像を見て場面に合うものを選ぶ）。設定は記憶する
+  const IMG_AUTO_KEY = "explainer-image-auto-v1";
+  const imgAuto0 = useMemo(() => { try { return JSON.parse(localStorage.getItem(IMG_AUTO_KEY) || "null") || {}; } catch { return {}; } }, []);
+  const [imgAutoEnabled, setImgAutoEnabled] = useState(!!imgAuto0.enabled);
+  const [imgShare, setImgShare] = useState(typeof imgAuto0.share === "number" ? imgAuto0.share : 0.4);
+  const [imgAiShare, setImgAiShare] = useState(typeof imgAuto0.aiShare === "number" ? imgAuto0.aiShare : 0.3);
+  useEffect(() => { try { localStorage.setItem(IMG_AUTO_KEY, JSON.stringify({ enabled: imgAutoEnabled, share: imgShare, aiShare: imgAiShare })); } catch { /* ignore */ } }, [imgAutoEnabled, imgShare, imgAiShare]);
   // 画風・表現の自由記述リクエスト（例：「写真のようなリアルな画像で」）。場面ごとのimagePromptに追記して使う
   const [imageStyleHint, setImageStyleHint] = useState("写真のようなリアルな画像でニュースの途中の映像の画角にしてください。");
   const [reuseImagesEnabled, setReuseImagesEnabled] = useState(true); // 前回の台本で場面に付いていた画像を、作り直し時に再利用する（画像生成の課金を抑える）
@@ -509,7 +515,7 @@ export default function ExplainerStudio() {
         ...(mode === "sp500" && fixed.length ? { fixedBodyNote: fixedChaptersNote(fixed) } : {}),
       };
     }
-    return { topic: topic.trim(), mode, audience, targetMinutes: minutes, extraInstruction, refBlocks: referenceBlocks(refs), today: todayStr(), speechRate: rate, imageTarget: imageGenEnabled ? imageGenCount : 0, stockCatalog, requiredRefNotes: requiredRefNotes(refs), learnedEdits: (learned.general[mode] || []).map((x) => ({ before: x.before, after: x.after })), ...dataExtra };
+    return { topic: topic.trim(), mode, audience, targetMinutes: minutes, extraInstruction, refBlocks: referenceBlocks(refs), today: todayStr(), speechRate: rate, imageShare: imgAutoEnabled ? imgShare : 0, stockCatalog, requiredRefNotes: requiredRefNotes(refs), learnedEdits: (learned.general[mode] || []).map((x) => ({ before: x.before, after: x.after })), ...dataExtra };
   };
   // 株式情報モードはS&P500を優先（無ければSOXL）、S&P500モードはS&P500のみ
   function primaryStockSnapshot() { return mode === "sp500" ? stockSnapshots.SP500 : (stockSnapshots.SP500 ?? stockSnapshots.SOXL); }
@@ -537,6 +543,108 @@ export default function ExplainerStudio() {
     }
     return { scenes: out, failed, noKey };
   };
+  // [画像の自動挿入] 割合に応じて画像を入れる場面を選び、場面ごとに「映すもの・検索語・AI生成用プロンプト」をAIで決めてから、
+  // 写真素材で見つかりやすい場面はフリー素材を検索 → AI（Gemini）が画像を見て場面に合うかを採点 → 一番合うものを挿入
+  // （日本文化動画アプリと同じ流れ）。残りの場面はAIで画像を生成する。合う素材が見つからなかった場面は、AI生成の割合が
+  // 0%でなければAIで生成し、0%なら図解のまま残す。
+  const autoFillImages = async (list, signal, onStep) => {
+    const idx = pickImageScenes(list, imgShare);
+    const res = { scenes: list, free: 0, ai: 0, notFound: 0, failed: 0, noKey: false, serverDown: false };
+    if (!idx.length) return res;
+    onStep?.("画像に映すものを整理中…");
+    const inp = genInput();
+    let plans = new Map();
+    try {
+      plans = await planSceneImages(inp, idx.map((i) => ({ key: String(i), title: list[i].title, caption: list[i].caption, narration: list[i].narration, heading: list[i].visual.heading })), signal);
+    } catch (e) { if (e?.code === "ABORTED") throw e; }
+    const { free, ai } = splitFreeAi(idx, (i) => plans.get(String(i))?.freeFit ?? 5, imgAiShare);
+    const out = list.slice();
+    let done = 0;
+    const step = () => onStep?.(`スライドの画像を用意中…（${++done}/${idx.length}）`);
+    const setImg = (i, imageId, prompt) => { out[i] = { ...out[i], imageId, visual: { ...out[i].visual, kind: "image", imagePrompt: out[i].visual.imagePrompt || prompt || "" } }; };
+    const genAi = async (i) => {
+      const prompt = out[i].visual.imagePrompt || plans.get(String(i))?.imagePrompt;
+      if (!prompt || res.noKey) { res.failed++; return; }
+      try {
+        const blob = await generateImage(withStyleHint(prompt, imageStyleHint), "16:9", signal);
+        const im = await saveImage(new File([blob], `ai-${out[i].id}.png`, { type: blob.type || "image/png" }));
+        setImg(i, im.id, prompt); res.ai++;
+      } catch (e) {
+        if (e?.code === "ABORTED") throw e;
+        if (e?.code === "NO_API_KEY") res.noKey = true;
+        res.failed++;
+      }
+    };
+    const findFree = async (i) => {
+      if (res.serverDown) return false;
+      const pl = plans.get(String(i)), sc = out[i];
+      const queries = pl?.queries?.length ? pl.queries : [{ ja: sc.visual.heading || sc.caption || topic, en: "" }];
+      const seen = new Set(), cands = [];
+      for (const q of queries.slice(0, 2)) {
+        try {
+          const r = await searchFreeImages(q.ja || q.en, { enTerms: q.en ? [q.en] : undefined, max: 16, context: sc.narration, signal });
+          for (const c of r.items) if (!seen.has(c.id)) { seen.add(c.id); cands.push(c); }
+        } catch (e) {
+          if (e?.code === "ABORTED") throw e;
+          if (e?.code === "SERVER_UNREACHABLE" || e?.code === "SERVER_OUTDATED") { res.serverDown = true; return false; }
+        }
+        if (cands.length >= 10) break;
+      }
+      if (!cands.length) return false;
+      const pool = cands.slice(0, 16);
+      const scores = await rankFreeImages({ narration: sc.narration, subject: pl?.subject, title: sc.visual.heading || sc.title, topic }, pool, signal);
+      // AIの採点があれば5点以上のものだけを、高い順に（採点できない場合は検索の並び順で）
+      const ordered = scores && scores.size
+        ? pool.map((c) => ({ c, s: scores.get(c.id)?.score ?? 0 })).filter((x) => x.s >= 5).sort((a, b) => b.s - a.s).map((x) => x.c)
+        : pool;
+      for (const c of ordered.slice(0, 3)) {
+        try {
+          const { file, credit } = await fetchFreeImage(c);
+          const im = await saveImage(file, credit.caption, credit);
+          setImg(i, im.id, pl?.imagePrompt); res.free++;
+          return true;
+        } catch (e) { /* 取り込めない画像は次の候補へ */ }
+      }
+      return false;
+    };
+    // フリー素材は3場面ずつ並行して探す（AI生成は課金・回数制限があるため1枚ずつ）
+    const queue = free.slice();
+    const fallbackAi = [];
+    await Promise.all(Array.from({ length: Math.min(3, queue.length) }, async () => {
+      while (queue.length) {
+        const i = queue.shift();
+        const ok = await findFree(i);
+        if (!ok) { if (imgAiShare > 0) fallbackAi.push(i); else res.notFound++; }
+        step();
+      }
+    }));
+    for (const i of [...ai, ...fallbackAi].sort((a, b) => a - b)) { await genAi(i); if (!fallbackAi.includes(i)) step(); }
+    res.scenes = out;
+    return res;
+  };
+  // 今の台本（長尺）に、設定した割合で画像を入れる（台本は作り直さない）
+  const handleAutoImagesNow = async () => {
+    if (!project || genBusy) return;
+    const ac = new AbortController(); abortRef.current = ac;
+    setGenBusy(true); setGenError(""); setGenProgress({ step: "スライドの画像を用意中…", done: 0, total: 1 });
+    try {
+      const r = await autoFillImages(project.longScenes, ac.signal, (msg) => setGenProgress({ step: msg, done: 0, total: 1 }));
+      await refreshImages();
+      const byId = new Map(r.scenes.map((x) => [x.id, x]));
+      setProject((p) => ({
+        ...p,
+        longScenes: p.longScenes.map((sc) => {
+          const n = byId.get(sc.id);
+          return n && n.imageId && !sc.imageId ? { ...sc, imageId: n.imageId, visual: { ...sc.visual, kind: "image", imagePrompt: n.visual.imagePrompt } } : sc;
+        }),
+      }));
+      const added = r.free + r.ai;
+      if (r.serverDown) alert("フリー素材を検索できませんでした：ローカルAIサーバー（tts-server）を起動し直してください。");
+      else if (!added && !r.failed && !r.notFound) alert("この割合では、すでに画像が足りています（割合を上げると追加されます）。");
+      else alert(`画像を入れました：フリー素材 ${r.free}枚・AI生成 ${r.ai}枚${r.notFound ? `（合う素材が見つからず図解のまま：${r.notFound}場面）` : ""}${r.noKey ? "\nAI生成は、tts-server/.env に GEMINI_API_KEY が無いためできませんでした。" : r.failed ? `\n${r.failed}場面は画像を用意できませんでした。` : ""}`);
+    } catch (e) { if (e?.code !== "ABORTED") setGenError(errMsg(e)); }
+    finally { setGenBusy(false); setGenProgress(null); abortRef.current = null; }
+  };
   const handleGenerate = async (minutesOverride) => {
     const minutes = typeof minutesOverride === "number" ? minutesOverride : targetMinutes;
     if (!topic.trim()) { const m = "テーマ（ニュースやキーワード）を入力してください。"; setGenError(m); lastGenErrorRef.current = m; return; }
@@ -554,7 +662,7 @@ export default function ExplainerStudio() {
       const L = await paraphraseScenes(p.longScenes, inp, p.videoTitle, "long", ac.signal, (k, n) => setGenProgress({ step: `参考資料と同じ言い回しを言い換え中…（長尺 ${k}/${n}）`, done: 1, total: 1 }));
       const S = await paraphraseScenes(p.shortScenes, inp, p.videoTitle, "short", ac.signal, (k, n) => setGenProgress({ step: `参考資料と同じ言い回しを言い換え中…（ショート ${k}/${n}）`, done: 1, total: 1 }));
       let longScenes = L.scenes;
-      let imgFailed = 0, imgNoKey = false, reusedCount = 0;
+      let imgFailed = 0, imgNoKey = false, reusedCount = 0, imgReport = null;
       if (prevImagePool.length) {
         let poolIdx = 0;
         longScenes = longScenes.map((s) => {
@@ -565,9 +673,9 @@ export default function ExplainerStudio() {
         });
         reusedCount = poolIdx;
       }
-      if (imageGenEnabled && imageGenCount > 0) {
-        const r = await genImagesForScenes(longScenes, imageGenCount, ac.signal, (k, n) => setGenProgress({ step: `AIで画像を生成中…（${k}/${n}）`, done: 1, total: 1 }), imageStyleHint);
-        longScenes = r.scenes; imgFailed = r.failed; imgNoKey = r.noKey;
+      if (imgAutoEnabled && imgShare > 0) {
+        const r = await autoFillImages(longScenes, ac.signal, (msg) => setGenProgress({ step: msg, done: 1, total: 1 }));
+        longScenes = r.scenes; imgFailed = r.failed; imgNoKey = r.noKey; imgReport = r;
         await refreshImages(); // 保存した画像をプレビュー/書き出し側の一覧に反映する（手動の「画像を追加」と同じ扱いにする）
       } else if (reusedCount > 0) {
         await refreshImages(); // 新規生成が無くても、再利用した画像をプレビュー側の一覧に反映する
@@ -604,6 +712,7 @@ export default function ExplainerStudio() {
       // ラベル（kicker）は、選んだ長尺の長さから自動で入れる（例：5分で解説）。生成後も自由に書き換えられる
       p = { ...p, longScenes, shortScenes: S.scenes, kicker: autoKickerFor(minutes) };
       setProject(p); setFormat("long"); setInputOpen(false); setSeekPos(0);
+      if (imgReport?.serverDown) alert("フリー素材を検索できませんでした：ローカルAIサーバー（tts-server）を起動し直してください（台本は生成できています）。");
       if (imgNoKey) alert("画像の自動生成に失敗しました：tts-server/.env に GEMINI_API_KEY が設定されていません（tts-server/.env.example を参考に設定してください）。台本自体は生成できています。あとから各場面の「画像を追加」→「AIで生成」からやり直せます。");
       else if (imgFailed > 0) alert(`${imgFailed}件の場面で画像の自動生成に失敗しました（台本は生成できています）。あとから各場面の「画像を追加」→「AIで生成」からやり直せます。`);
     } catch (e) { const msg = errMsg(e); setGenError(msg); lastGenErrorRef.current = msg; }
@@ -1823,28 +1932,39 @@ export default function ExplainerStudio() {
                   </span>
                 </div>
               )}
-              <div className="flex flex-wrap gap-3 items-center p-2 rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
-                <label className="flex items-center gap-1.5 text-[11px]" style={{ color: C.textMuted }}>
-                  <input type="checkbox" checked={imageGenEnabled} onChange={(e) => setImageGenEnabled(e.target.checked)} />
-                  AIで画像を自動生成してスライドに挿入する
-                </label>
-                {imageGenEnabled && (
-                  <label className="flex items-center gap-1.5 text-[11px]" style={{ color: C.textMuted }}>枚数
-                    <select value={imageGenCount} onChange={(e) => setImageGenCount(Number(e.target.value))} className="px-1.5 py-1 rounded text-[11px]" style={inputStyle}>
-                      {[1, 2, 3, 4, 5, 6, 8, 10].map((n) => <option key={n} value={n}>{n}枚</option>)}
-                    </select>
+              <div className="flex flex-col gap-2 p-2 rounded" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
+                <div className="flex flex-wrap gap-3 items-center">
+                  <label className="flex items-center gap-1.5 text-[11px]" style={{ color: C.textMuted }}>
+                    <input type="checkbox" checked={imgAutoEnabled} onChange={(e) => setImgAutoEnabled(e.target.checked)} />
+                    スライドに画像を自動で入れる（図解のテンプレを減らす）
                   </label>
+                  {project && (
+                    <button onClick={handleAutoImagesNow} disabled={genBusy || imgShare <= 0} title="今の台本（長尺）の、画像が付いていない場面に、下の割合で画像を入れます" className="text-[11px] px-2 py-1 rounded flex items-center gap-1" style={{ ...btn(), opacity: genBusy || imgShare <= 0 ? 0.5 : 1 }}><ImageIcon size={11} /> 今の台本に画像を入れる</button>
+                  )}
+                </div>
+                {(imgAutoEnabled || project) && (
+                  <>
+                    <label className="flex items-center gap-2 text-[11px] flex-wrap" style={{ color: C.textMuted }}>
+                      <span className="w-40 shrink-0">画像を入れるスライドの割合</span>
+                      <input type="range" min={0} max={1} step={0.1} value={imgShare} onChange={(e) => setImgShare(Number(e.target.value))} className="flex-1 min-w-[140px]" />
+                      <b className="w-24 text-right" style={{ color: C.text }}>{Math.round(imgShare * 100)}%</b>
+                    </label>
+                    <label className="flex items-center gap-2 text-[11px] flex-wrap" style={{ color: C.textMuted }}>
+                      <span className="w-40 shrink-0">AI生成 ／ フリー素材の割合</span>
+                      <input type="range" min={0} max={1} step={0.1} value={imgAiShare} onChange={(e) => setImgAiShare(Number(e.target.value))} className="flex-1 min-w-[140px]" />
+                      <b className="w-24 text-right" style={{ color: C.text }}>AI {Math.round(imgAiShare * 100)}% ／ 素材 {Math.round((1 - imgAiShare) * 100)}%</b>
+                    </label>
+                    {imgAiShare > 0 && (
+                      <label className="flex items-center gap-1.5 text-[11px] flex-wrap" style={{ color: C.textMuted }}>
+                        <span className="w-40 shrink-0">AI生成の画風（任意）</span>
+                        <input value={imageStyleHint} onChange={(e) => setImageStyleHint(e.target.value)} placeholder="例：写真のようなリアルな画像で表現してください" className="flex-1 min-w-[200px] px-2 py-1 rounded text-[11px]" style={inputStyle} />
+                      </label>
+                    )}
+                    <span className="text-[10px] leading-relaxed" style={{ color: C.textDim }}>
+                      タイトル・まとめ・数値のグラフ・データの場面には入れません。フリー素材は、日本文化チャンネルと同じ検索先（美術館のCC0・Wikimedia Commons・Wikipedia・Openverse など）から、スライドの内容に合う画像をAIが画像を見て選び、出典は概要欄に自動で記載します。実在の場所・建物・物などは素材、抽象的な内容はAI生成に割り振り、合う素材が見つからない場面は{imgAiShare > 0 ? "AIで生成します" : "図解のまま残します"}。AI生成は1枚ごとに課金されるGoogle Gemini、素材の選定もGeminiを使います（tts-server/.envにGEMINI_API_KEYが必要）。
+                    </span>
+                  </>
                 )}
-                {imageGenEnabled && (
-                  <label className="flex items-center gap-1.5 text-[11px] flex-1 min-w-[220px]" style={{ color: C.textMuted }}>画風の指定（任意）
-                    <input value={imageStyleHint} onChange={(e) => setImageStyleHint(e.target.value)} placeholder="例：写真のようなリアルな画像で表現してください" className="flex-1 px-2 py-1 rounded text-[11px]" style={inputStyle} />
-                  </label>
-                )}
-                <span className="text-[10px]" style={{ color: C.textDim }}>
-                  {imageGenEnabled
-                    ? "内容に合う場面を選び、画像1枚ごとに課金されるGoogle Gemini（Imagen）で生成します（tts-server/.envにGEMINI_API_KEYの設定が必要）。実在の人物・ロゴ・既存作品を描かないよう指示しています。生成後も場面ごとに作り直せます。"
-                    : "オフの場合、図解はこれまで通りすべて自作の図形・アイコンで描きます（あとから場面ごとに「画像を追加」→「AIで生成」で追加することもできます）。"}
-                </span>
               </div>
               <div className="flex items-center gap-2 flex-wrap">
                 <button onClick={() => handleGenerate()} disabled={genBusy} className="text-xs px-3 py-1.5 rounded flex items-center gap-1.5" style={{ ...btn("primary"), opacity: genBusy ? 0.6 : 1 }}><Sparkles size={13} /> {project ? "台本を作り直す" : "台本を生成（長尺＋ショート）"}</button>

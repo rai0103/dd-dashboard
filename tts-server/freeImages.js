@@ -344,6 +344,82 @@ async function refreshPixabayUrl(mid, oldUrl) {
   }
 }
 
+// ---- 候補画像をAI（Gemini・画像を実際に見て判定）で採点し、場面に合う順に並べる（日本文化動画アプリの /api/rank を移植） ----
+async function fetchThumbB64(url, id) {
+  const once = async (u) => {
+    if (!/^https:\/\//.test(u || '')) return null;
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 12000);
+    try {
+      const r = await fetch(normalizeWikimediaUrl(u), { headers: { 'user-agent': UA, 'AIC-User-Agent': UA }, signal: ctrl.signal });
+      if (!r.ok) return null;
+      const mime = (r.headers.get('content-type') || 'image/jpeg').split(';')[0];
+      if (!/^image\/(jpeg|png|webp)$/.test(mime)) return null;
+      const buf = Buffer.from(await r.arrayBuffer());
+      if (buf.length > 3000000) return null;
+      return { mime, b64: buf.toString('base64') };
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(t);
+    }
+  };
+  const first = await once(url);
+  if (first || !/^pxb-\d+$/.test(id || '')) return first;
+  const fresh = await refreshPixabayUrl(id, url);
+  return fresh ? once(fresh) : null;
+}
+
+/** POST /api/free-images/rank {narration, subject, title, topic, candidates:[{id,thumbnailUrl,caption,source}]} → {scores:[{id,score,reason}]} */
+async function handlePostFreeImageRank(body) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return { status: 400, json: { error: 'NO_API_KEY', message: 'tts-server/.env に GEMINI_API_KEY が設定されていないため、画像をAIで選べません（検索の1件目を使います）。' } };
+  const list = (Array.isArray(body.candidates) ? body.candidates : []).slice(0, 16);
+  if (!list.length) return { status: 200, json: { scores: [] } };
+  const thumbs = await Promise.all(list.map((c) => fetchThumbB64(c.thumbnailUrl || c.url, c.id)));
+  const parts = [{
+    text: `You are the picture editor of a Japanese news / explainer YouTube video${body.topic ? ` (video topic: ${String(body.topic).slice(0, 120)})` : ''}.
+Score how well each candidate image fits THIS slide, from 0 to 10.
+10 = clearly shows exactly what the narration talks about (the named place, organization's building, object, product type, event or action).
+5-7 = clearly related and suitable as a background photo, but not the specific thing.
+0-3 = unrelated, misleading, wrong country or era, a logo or trademark as the main subject, a screenshot, a chart or map full of text, a document page, low quality, or an old artwork when the topic is modern news (unless the narration is about history or art).
+Prefer clear, high-quality, photographic images that work as a 16:9 slide background.
+
+SLIDE: ${String(body.title || '').slice(0, 120)}
+WHAT TO SHOW: ${String(body.subject || '(not specified)').slice(0, 200)}
+NARRATION (Japanese): ${String(body.narration || '').slice(0, 500)}
+
+Candidates follow. Return one score per candidate index with a very short reason in Japanese (max 25 characters).`,
+  }];
+  list.forEach((c, i) => {
+    parts.push({ text: `\n[${i}] source: ${c.source || ''} / caption: ${String(c.caption || '').slice(0, 200)}` });
+    const th = thumbs[i];
+    if (th) parts.push({ inlineData: { mimeType: th.mime, data: th.b64 } });
+    else parts.push({ text: '(image could not be loaded)' });
+  });
+  const model = process.env.GEMINI_SEARCH_MODEL || 'gemini-3.8-flash';
+  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+    method: 'POST',
+    headers: { 'x-goog-api-key': apiKey, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ role: 'user', parts }],
+      generationConfig: {
+        temperature: 0.1, responseMimeType: 'application/json',
+        responseSchema: { type: 'OBJECT', properties: { scores: { type: 'ARRAY', items: { type: 'OBJECT', properties: { index: { type: 'INTEGER' }, score: { type: 'NUMBER' }, reason: { type: 'STRING' } }, required: ['index', 'score', 'reason'] } } }, required: ['scores'] },
+      },
+    }),
+  });
+  const data = await r.json().catch(() => null);
+  if (!r.ok) return { status: 502, json: { error: 'UPSTREAM_ERROR', message: (data && data.error && data.error.message) || `HTTP ${r.status}` } };
+  const txt = ((data && data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) || []).map((p) => p.text || '').join('');
+  let parsed = {};
+  try { parsed = JSON.parse(txt || '{}'); } catch { parsed = {}; }
+  const scores = (parsed.scores || [])
+    .filter((x) => Number.isInteger(x.index) && x.index >= 0 && x.index < list.length)
+    .map((x) => ({ id: list[x.index].id, score: Math.max(0, Math.min(10, Number(x.score) || 0)), reason: String(x.reason || '').slice(0, 40) }));
+  return { status: 200, json: { scores } };
+}
+
 /** POST /api/free-images {keyword, enTerms?, context?, max?} → {items, terms} */
 async function handlePostFreeImages(body) {
   const kw = typeof body.keyword === 'string' ? body.keyword.trim() : '';
@@ -391,4 +467,4 @@ async function handleGetFreeImageProxy(reqUrl, res) {
   res.end(buf);
 }
 
-module.exports = { handlePostFreeImages, handleGetFreeImageProxy, searchByKeyword, normalizeWikimediaUrl };
+module.exports = { handlePostFreeImages, handleGetFreeImageProxy, handlePostFreeImageRank, searchByKeyword, normalizeWikimediaUrl };
