@@ -362,7 +362,6 @@ export async function generateOutline(inp: GenerateInput, signal?: AbortSignal):
     '- chapters[].reading は章タイトルのひらがな読み。',
     '- youtube.title は検索されやすく誇張のないタイトル（40字以内）。thumbnailText はサムネ用の短い文字（12字以内）。tags は概要欄末尾のハッシュタグにそのまま使うので、関連する単語を10個（テーマ・固有名詞・分野などを組み合わせて重複なく）。shortTitle・shortDescription は宣伝用ショート動画用（本編へ誘導）。description は本編の概要（3〜5行、目次付き）。',
     '- sources は実際に使う参考資料（資料名と、発行元・日付などの補足）。参考資料がなければ空配列。「参考1」等の番号は書かない。',
-    `- glossary は、動画に出てくる用語のうち、上記の視聴者が知らない可能性のあるもの（専門用語・略語・サービス名・企業名・制度名・組織名など）を最大12個。term=用語（ナレーションで使う表記そのまま）、termReading=そのひらがな読み、gloss=初めて出てきたときに名前の前に添える短い説明（12〜30字。名詞で終わり、「gloss＋の＋term」で自然な日本語になる形。例：term=スターリンク、gloss=低軌道衛星を使ったインターネット通信サービス）、glossReading=glossのひらがな読み、chapter=その用語が初めて出てくる章の番号（1始まり）。`,
   ].join('\n');
   const r = await callTool<any>({
     system: system(inp),
@@ -396,19 +395,10 @@ export async function generateOutline(inp: GenerateInput, signal?: AbortSignal):
           required: ['title', 'description', 'tags', 'thumbnailText', 'shortTitle', 'shortDescription'],
         },
         sources: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, detail: { type: 'string' } }, required: ['title', 'detail'] } },
-        glossary: {
-          type: 'array',
-          description: '用語と、初めて出てきたときに名前の前に添える短い説明（最大12個）',
-          items: {
-            type: 'object',
-            properties: { term: { type: 'string' }, termReading: { type: 'string' }, gloss: { type: 'string' }, glossReading: { type: 'string' }, chapter: { type: 'integer' } },
-            required: ['term', 'termReading', 'gloss', 'glossReading', 'chapter'],
-          },
-        },
       },
-      required: ['videoTitle', 'kicker', 'chapters', 'youtube', 'sources', 'glossary'],
+      required: ['videoTitle', 'kicker', 'chapters', 'youtube', 'sources'],
     },
-    maxTokens: 8000,
+    maxTokens: 16000,
     signal,
   });
   let chapters: ChapterPlan[] = (Array.isArray(r?.chapters) ? r.chapters : []).map((c: any) => ({
@@ -431,12 +421,58 @@ export async function generateOutline(inp: GenerateInput, signal?: AbortSignal):
       thumbnailText: String(y.thumbnailText || ''), shortTitle: String(y.shortTitle || ''), shortDescription: String(y.shortDescription || ''),
     },
     sources: (Array.isArray(r?.sources) ? r.sources : []).map((s: any) => ({ title: stripRefMarks(String(s?.title || '')), detail: stripRefMarks(String(s?.detail || '')) })).filter((s: SourceNote) => s.title),
-    glossary: (Array.isArray(r?.glossary) ? r.glossary : []).map((g: any) => ({
+  };
+}
+
+/**
+ * 用語集（用語・読み・初出で添える短い説明・初めて出てくる章）。目次とは別の小さな呼び出しにする
+ * （目次と一緒に作らせると出力が長くなり、参考資料が多いときに途中で切れるため）。失敗しても台本づくりは止めない。
+ */
+export async function generateGlossary(inp: GenerateInput, o: Outline, signal?: AbortSignal): Promise<GlossTerm[]> {
+  const task = [
+    header(inp),
+    '',
+    `動画タイトル：${o.videoTitle}`,
+    '【全体の目次】',
+    outlineText(o),
+    '',
+    'この動画に出てくる用語のうち、上記の視聴者が知らない可能性のあるもの（専門用語・略語・サービス名・企業名・制度名・組織名など）を最大10個挙げてください。',
+    '- term=用語（ナレーションで使う表記そのまま）、termReading=そのひらがな読み',
+    '- gloss=初めて出てきたときに名前の前に添える短い説明（12〜28字。名詞で終わり、「gloss＋の＋term」で自然な日本語になる形。例：term=スターリンク、gloss=低軌道衛星を使ったインターネット通信サービス）、glossReading=glossのひらがな読み',
+    '- chapter=その用語が初めて出てくる章の番号（目次の番号。1始まり）',
+  ].join('\n');
+  try {
+    const r = await callTool<any>({
+      system: system(inp),
+      content: [...inp.refBlocks, { type: 'text', text: task }],
+      toolName: 'list_glossary',
+      toolDescription: '動画に出てくる用語と、初めて出てきたときに添える短い説明をまとめる。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          glossary: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: { term: { type: 'string' }, termReading: { type: 'string' }, gloss: { type: 'string' }, glossReading: { type: 'string' }, chapter: { type: 'integer' } },
+              required: ['term', 'termReading', 'gloss', 'glossReading', 'chapter'],
+            },
+          },
+        },
+        required: ['glossary'],
+      },
+      maxTokens: 4000,
+      signal,
+    });
+    return (Array.isArray(r?.glossary) ? r.glossary : []).map((g: any) => ({
       term: String(g?.term || '').trim(), termReading: String(g?.termReading || '').trim(),
       gloss: String(g?.gloss || '').trim().replace(/の$/, ''), glossReading: String(g?.glossReading || '').trim().replace(/の$/, ''),
-      chapter: Math.max(1, Math.round(Number(g?.chapter) || 1)),
-    })).filter((g: GlossTerm) => g.term.length >= 2 && g.gloss && !g.gloss.includes(g.term)).slice(0, 12),
-  };
+      chapter: Math.max(1, Math.min(o.chapters.length, Math.round(Number(g?.chapter) || 1))),
+    })).filter((g: GlossTerm) => g.term.length >= 2 && g.gloss && !g.gloss.includes(g.term)).slice(0, 10);
+  } catch (e: any) {
+    if (e?.code === 'ABORTED') throw e;
+    return [];
+  }
 }
 
 /** 章ごと・ショートの指示に付ける「用語の説明」の指示（章は並列に作るため、どの章で説明するかを目次の段階で決めておく） */
@@ -775,7 +811,17 @@ export async function generateProject(inp: GenerateInput, onProgress: (p: Genera
   const step = async <T,>(label: string, fn: () => Promise<T>): Promise<T> => {
     try { return await fn(); } catch (e: any) { if (e && typeof e.message === 'string' && e.code !== 'ABORTED') e.message = `【${label}】${e.message}`; throw e; }
   };
-  const o = await step('目次', () => generateOutline(inp, signal));
+  // 目次が長すぎて途中で切れた場合は、各欄を短く書くよう指示して1回だけ作り直す
+  const o0 = await step('目次', async () => {
+    try { return await generateOutline(inp, signal); }
+    catch (e: any) {
+      if (e?.code !== 'MAX_TOKENS') throw e;
+      onProgress({ step: '目次を短くまとめ直しています…', done: 0, total: 1 });
+      return generateOutline({ ...inp, extraInstruction: `${inp.extraInstruction || ''}\n（目次は簡潔に：各章の goal・keyPoints は40字以内、youtube.description は3行以内、sources は5件以内）`.trim() }, signal);
+    }
+  });
+  onProgress({ step: '用語の説明を整理中…', done: 1, total: 2 });
+  const o: Outline = { ...o0, glossary: await generateGlossary(inp, o0, signal) };
   const n = o.chapters.length;
   const total = n + 1 + (withShort ? 1 : 0);
   let done = 1;
