@@ -1205,30 +1205,36 @@ export default function ExplainerStudio() {
   }, [project, scenes, format, avatarObj, backgroundImgEl, backgroundOpacity, imageEls, showSubtitles, sourcesInVideo, estDurs]);
 
   const stopLoop = () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); rafRef.current = 0; isPlayingRef.current = false; };
-  const prepareAudio = async () => {
-    setTtsError(false);
+  // list：音声を用意する場面（省略時は表示中の形式の場面）。表示中でない形式（長尺＋ショートのセット書き出しで
+  // ショートを書き出すとき等）は、画面の実測値（長さ表示・読み上げ位置）を上書きしない
+  const prepareAudio = async (list = scenes) => {
+    const own = list === scenes;
+    if (own) setTtsError(false);
     let failed = false;
     const bufs = [];
     const fb = nonAivisVoiceChoices[0] ?? "";
     let voice = voiceIndex;
-    for (let i = 0; i < scenes.length; i++) {
+    for (let i = 0; i < list.length; i++) {
       try {
-        const { buffer, usedFallback } = await mixer().fetchNarrationBufferSmart(ttsText(scenes[i]), rate, voice, pitch, fb);
+        const { buffer, usedFallback } = await mixer().fetchNarrationBufferSmart(ttsText(list[i]), rate, voice, pitch, fb);
         bufs.push(buffer);
         if (usedFallback && voice !== fb) { voice = fb; setVoiceIndex(fb); setVoiceNote("AivisSpeechに接続できなかったため、既存の声に切り替えました。"); }
       } catch (e) { console.error("TTS error:", e); failed = true; bufs.push(null); }
     }
-    const durs = scenes.map((s, i) => Math.max(s.minSec || 3, bufs[i] ? 0.3 + bufs[i].duration + 0.8 : 0));
+    const durs = list.map((s, i) => Math.max(s.minSec || 3, bufs[i] ? 0.3 + bufs[i].duration + 0.8 : 0));
     const starts = []; durs.reduce((acc, d) => { starts.push(acc); return acc + d; }, 0);
     const total = durs.reduce((a, b) => a + b, 0);
-    setTotalSec(total); setSceneDurs(durs);
-    narrDursRef.current = bufs.map((b) => (b ? b.duration : 0));
-    if (!failed) setNarrMeasure({ rate, secs: bufs.map((b) => (b ? b.duration : 0)) });
+    if (own) {
+      setTotalSec(total); setSceneDurs(durs);
+      narrDursRef.current = bufs.map((b) => (b ? b.duration : 0));
+      if (!failed) setNarrMeasure({ rate, secs: bufs.map((b) => (b ? b.duration : 0)) });
+    }
     if (failed) setTtsError(true);
     return { bufs, durs, starts, total, failed };
   };
+  const exportingRef = useRef(false); // 書き出し中はプレビュー再生をしない（BGM・音声の制御が重なるため）
   const handlePlay = async () => {
-    if (!rendererRef.current || !scenes.length) return;
+    if (!rendererRef.current || !scenes.length || exportingRef.current) return;
     stopLoop(); mixer().stopBGM(); mixer().stopNarration();
     const raw = Math.min(1, Math.max(0, seekPosRef.current ?? 0));
     const pos0 = raw >= 0.999 ? 0 : raw;
@@ -1283,10 +1289,10 @@ export default function ExplainerStudio() {
   const stamp = () => new Date().toISOString().slice(0, 10).replace(/-/g, "");
   // ---- 書き出しの名前 ----
   // 動画：YouTubeに投稿するタイトル（アップロード時にそのまま動画名になる）／サムネ・概要欄テキスト・フォルダ：サムネの文字
-  const exportNames = () => {
+  const exportNames = (fmt = format) => {
     const y = project.youtube;
     const thumb = safeFileName(y.thumbnailText || project.videoTitle);
-    const isShort = format === "short";
+    const isShort = fmt === "short";
     // ファイル名・動画名称は「ラベル＋タイトル」（ラベルを先に、【】で囲んで表示）。
     // 例：【3分で解説】米国の中間選挙ってなに？…　／　ショートはラベルの概念が無いので付けない。
     const rawTitle = isShort ? (y.shortTitle || y.title) : y.title;
@@ -1300,8 +1306,8 @@ export default function ExplainerStudio() {
     };
   };
   // サムネは「タイトル画面が描き終わったところ」（タイトルの場面の終わり0.5秒前）を撮る
-  const thumbTimeSec = (durs) => {
-    const idx = Math.max(0, scenes.findIndex((s) => s.visual.kind === "title"));
+  const thumbTimeSec = (durs, list = scenes) => {
+    const idx = Math.max(0, list.findIndex((s) => s.visual.kind === "title"));
     const before = durs.slice(0, idx).reduce((a, b) => a + b, 0);
     return before + Math.max(0.2, (durs[idx] || 1) - 0.5);
   };
@@ -1357,58 +1363,59 @@ export default function ExplainerStudio() {
     if (!r.ok || !j.ok) throw new Error(j.error || `保存に失敗しました（${name}）`);
     return j.file;
   };
-  const handleExport = async () => {
-    const r = rendererRef.current, canvas = canvasRef.current;
-    if (!r || !canvas || !scenes.length || !project) return;
-    const autorun = autorunRef.current;
-    lastExportErrorRef.current = null;
-    // 保存先フォルダ（ボタンを押した直後でないと選べない・許可を求められないため、録画の前に確認する）。
-    // 自動実行中はユーザー操作が無いためフォルダ選択ダイアログを呼ばず、保存は下のsaveViaServerに委ねる。
-    let folder = exportFolder;
-    if (!autorun && canPickFolder()) {
-      if (!folder) folder = await chooseExportFolder();
-      if (folder && !(await ensureWritable(folder))) folder = await chooseExportFolder();
-    }
-    const names = exportNames();
-    stopLoop(); mixer().stopNarration(); setIsPlaying(false); setIsExporting(true); setExportProgress(0); setExportNote("");
+  // [書き出し] 画面のプレビューは再生せず（音も鳴らさず）、見えない別のCanvasに描きながら録画してファイルに保存する。
+  // ブラウザの録画（MediaRecorder）は実時間で進むため、動画の長さぶんの時間はかかる。
+  // withShort：長尺の書き出しに続けて、ショート動画も同じ保存先へ続けて書き出す（セットで保存）。
+  const [exportWithShort, setExportWithShort] = useState(() => { try { return localStorage.getItem("explainer-export-with-short") !== "0"; } catch { return true; } });
+  useEffect(() => { try { localStorage.setItem("explainer-export-with-short", exportWithShort ? "1" : "0"); } catch { /* ignore */ } }, [exportWithShort]);
+  const [exportStage, setExportStage] = useState("");
+  const descriptionFor = (fmt) => {
+    const list = (fmt === "short" ? project.shortScenes : project.longScenes) || [];
+    const ids = Array.from(new Set(list.map((s) => s.imageId).filter(Boolean)));
+    const credits = ids.map((id) => images.find((im) => im.id === id)?.credit).filter(Boolean);
+    return buildDescription(project, urlList, fmt === "short", credits);
+  };
+  // 1本分（長尺またはショート）を録画して、保存するファイル（動画・サムネ・概要欄）を返す。onProgress(0〜1)
+  const recordOne = async (fmt, onProgress) => {
+    const list = (fmt === "short" ? project.shortScenes : project.longScenes) || [];
+    if (!list.length) throw new Error(fmt === "short" ? "ショートの台本がありません" : "台本がありません");
+    const names = exportNames(fmt);
+    // 見えない録画用のCanvas（画面のプレビューとは別。表示はしないが、録画が止まらないよう文書には入れておく）
+    const canvas = document.createElement("canvas");
+    const size = RENDER_SIZE[fmt];
+    canvas.width = size.w; canvas.height = size.h;
+    Object.assign(canvas.style, { position: "fixed", left: "0", top: "0", width: "2px", height: "2px", opacity: "0", pointerEvents: "none", zIndex: "-1" });
+    document.body.appendChild(canvas);
     const exporter = new VideoExporter();
     let handle = null;
     try {
+      const r = new ExplainerRenderer(canvas, {
+        format: fmt, scenes: list, videoTitle: fmt === "short" && project.youtube.shortTitle ? project.youtube.shortTitle.replace(/#\S+/g, "").trim() : project.videoTitle,
+        kicker: project.kicker, chapterTitles: project.chapters.map((c) => c.title),
+        avatar: avatarObj, backgroundImage: backgroundImgEl, backgroundOpacity: backgroundOpacity / 100,
+        images: imageEls, showSubtitles, showSourceNotes: sourcesInVideo,
+      });
       const audioStream = mixer().startRecordingTap();
-      const pr = await prepareAudio();
+      const pr = await prepareAudio(list);
       r.setDurations(pr.durs); r.setNarration(pr.bufs);
       const animMs = Math.round(pr.total * 1000), totalMs = animMs + 300;
-      const thumbAtMs = thumbTimeSec(pr.durs) * 1000;
+      const thumbAtMs = thumbTimeSec(pr.durs, list) * 1000;
       let thumbBlob = null, thumbPending = null;
       await r.prepare(0); // 人物の動画を先頭にそろえてから録画を始める（出だしで人物が消えないように）
       if (bgmUrl) await mixer().playBGM(bgmUrl, bgmVolume, true);
       handle = exporter.startRecording(canvas, audioStream, 30);
-      // MediaRecorder開始直後の数フレームはエンコーダーのパイプラインがまだ安定しておらず、書き出した
-      // ファイルの先頭が壊れる（YouTube側で「ファイルを読み取れません」となる）ことがごくまれにある。
-      // 特にショート（1分前後）はその不安定な区間が全体に占める割合が大きく、症状が出やすい
-      // （プレビュー再生を一度もせずに書き出すと起きやすい、という報告と一致する）。本編のタイマー
-      // （t0）を始める前に、実際の1コマ目を数フレーム分あらかじめ録画しておき、パイプラインを
-      // 安定させてから本編を始める（音声はまだ鳴らさないため、音ズレは発生しない）。
+      // MediaRecorder開始直後の数フレームはエンコーダーが安定せず、ファイルの先頭が壊れることがごくまれにあるため、
+      // 1コマ目を数フレーム分あらかじめ録画してから本編を始める（音声はまだ鳴らさないため、音ズレは発生しない）
       await new Promise((resolve) => {
         let warmN = 0;
-        const warm = () => {
-          rendererRef.current?.draw(0);
-          warmN++;
-          if (warmN < 9) requestAnimationFrame(warm); else resolve();
-        };
+        const warm = () => { r.draw(0); warmN++; if (warmN < 9) requestAnimationFrame(warm); else resolve(); };
         requestAnimationFrame(warm);
       });
       await new Promise((resolve) => {
         const t0 = performance.now();
         pr.bufs.forEach((b, i) => { if (b) mixer().playBufferAfter(b, pr.starts[i] + 0.3); });
         let fading = false, lastUi = 0, finished = false;
-        // タブを裏に回す・最小化するなどで非表示になると、requestAnimationFrameはブラウザ側で止まるか
-        // ごく低頻度になる（録画中であっても）。一方、canvas.captureStream()によるMediaRecorderの録画と
-        // BGMの再生（Web Audio）はタブの表示状態に関係なく進み続けるため、rAFのtick()だけで終了判定を
-        // していると、本編の時間（totalMs）を過ぎても録画が止まらず、ユーザーがタブに戻って来るまで
-        // BGMだけが流れる静止画面が録画され続けてしまう。setTimeoutはrAFほど厳しく止まらないため、
-        // 本来の終了予定時刻に確実に終了させる保険として使う（tick()が正常に動いていれば、通常は
-        // こちらより先にelがtotalMsへ達してresolveするので、この保険が働くのは裏に回っていた場合のみ）。
+        // タブが裏に回るとrequestAnimationFrameが止まるため、本来の終了時刻に確実に終える保険としてsetTimeoutも使う
         const finish = () => {
           if (finished) return;
           finished = true;
@@ -1419,44 +1426,79 @@ export default function ExplainerStudio() {
         const tick = () => {
           if (finished) return;
           const now = performance.now(), el = now - t0, prog = Math.min(1, el / animMs);
-          rendererRef.current?.draw(prog);
+          r.draw(prog);
           if (!thumbPending && el >= thumbAtMs) thumbPending = canvasPng(canvas).then((b) => { thumbBlob = b; });
-          // 画面の表示更新は1秒に4回まで（毎コマ更新すると画面全体の再描画で録画が引っかかり、人物が途切れる原因になる）
-          if (now - lastUi > 200) { lastUi = now; setSeekPos(prog); updateSceneProgress(prog); setExportProgress(Math.round(Math.min(1, el / totalMs) * 95)); }
+          // 進み具合（%）の表示更新は1秒に4回まで。画面のプレビュー・場面一覧は動かさない
+          if (now - lastUi > 250) { lastUi = now; onProgress(Math.min(1, el / totalMs)); }
           if (!fading && el >= totalMs - 1400) { fading = true; mixer().fadeBGM(1.4); }
           if (el < totalMs) requestAnimationFrame(tick); else finish();
         };
         requestAnimationFrame(tick);
       });
       await new Promise((res) => setTimeout(res, 400));
+      const ext = handle.extension;
       const blob = await handle.stop();
-      mixer().stopBGM(); mixer().stopRecordingTap();
+      handle = null;
+      mixer().stopBGM(); mixer().stopRecordingTap(); r.pauseAvatar();
       if (thumbPending) await thumbPending;
-      setExportProgress(97);
-      const files = [{ name: `${names.video}.${handle.extension}`, blob }];
+      const files = [{ name: `${names.video}.${ext}`, blob }];
       if (thumbBlob) files.push({ name: `${names.thumb}.png`, blob: thumbBlob });
       const tags = project.youtube.tags || [];
-      files.push({ name: `${names.thumb}_概要欄.txt`, blob: new Blob(["\ufeff" + descriptionText(names.title, description, tags)], { type: "text/plain;charset=utf-8" }) });
-      let where;
-      if (autorun) {
-        if (!autorun.outDir) throw new Error("保存先フォルダが設定されていません（配信設定でフォルダを指定してください）");
-        for (const f of files) await saveViaServer(f.blob, f.name, autorun.outDir, names.folder);
-        where = `${autorun.outDir}\\${names.folder}`;
-      } else {
-        where = await saveBundle(folder && (await ensureWritable(folder)) ? folder : null, names.folder, files);
+      files.push({ name: `${names.thumb}_概要欄.txt`, blob: new Blob(["﻿" + descriptionText(names.title, descriptionFor(fmt), tags)], { type: "text/plain;charset=utf-8" }) });
+      return { files, names, failed: pr.failed, webm: ext === "webm" };
+    } finally {
+      if (handle) { try { await handle.stop(); } catch (e2) { /* ignore */ } }
+      canvas.remove();
+    }
+  };
+  const handleExport = async (opts = {}) => {
+    if (!scenes.length || !project) return;
+    const autorun = autorunRef.current;
+    lastExportErrorRef.current = null;
+    // 保存先フォルダ（ボタンを押した直後でないと選べない・許可を求められないため、録画の前に確認する）。
+    // 自動実行中はユーザー操作が無いためフォルダ選択ダイアログを呼ばず、保存は下のsaveViaServerに委ねる。
+    let folder = exportFolder;
+    if (!autorun && canPickFolder()) {
+      if (!folder) folder = await chooseExportFolder();
+      if (folder && !(await ensureWritable(folder))) folder = await chooseExportFolder();
+    }
+    const fmts = [format];
+    if (opts.withShort && format === "long" && project.shortScenes?.length) fmts.push("short");
+    if (isPlayingRef.current) handlePause();
+    stopLoop(); mixer().stopNarration(); mixer().stopBGM(); setIsPlaying(false);
+    setIsExporting(true); setExportProgress(0); setExportNote(""); setExportStage("");
+    mixer().setSpeakerOutput(false); // 書き出し中は音を鳴らさない（録画にだけ入れる）
+    exportingRef.current = true;
+    const notes = [];
+    let anyFailed = false, anyWebm = false;
+    try {
+      for (let k = 0; k < fmts.length; k++) {
+        const fmt = fmts[k];
+        setExportStage(fmts.length > 1 ? `${fmt === "short" ? "ショート" : "長尺"}（${k + 1}/${fmts.length}本目）` : "");
+        const res = await recordOne(fmt, (p) => setExportProgress(Math.round(((k + p * 0.97) / fmts.length) * 100)));
+        let where;
+        if (autorun) {
+          if (!autorun.outDir) throw new Error("保存先フォルダが設定されていません（配信設定でフォルダを指定してください）");
+          for (const f of res.files) await saveViaServer(f.blob, f.name, autorun.outDir, res.names.folder);
+          where = `${autorun.outDir}\\${res.names.folder}`;
+        } else {
+          where = await saveBundle(folder && (await ensureWritable(folder)) ? folder : null, res.names.folder, res.files);
+        }
+        notes.push(where ? `${where}（${res.files.map((f) => f.name).join("、")}）` : `ダウンロードフォルダ（${res.files.map((f) => f.name).join("、")}）`);
+        anyFailed ||= res.failed; anyWebm ||= res.webm;
+        setExportNote(`保存しました：${notes.join(" ／ ")}`);
       }
       setExportProgress(100);
-      setExportNote(where ? `保存しました：${where}（${files.map((f) => f.name).join("、")}）` : `ダウンロードフォルダに保存しました：${files.map((f) => f.name).join("、")}`);
-      if (pr.failed) alert("一部のナレーションを動画に入れられませんでした。ローカルTTSサーバー（npm run dev:video）またはAivisSpeechが起動しているかご確認ください。");
-      if (handle.extension === "webm") alert("WebM形式で保存しました（MP4はYouTube側の取り込み処理が時々失敗するため、より安定するWebMを使っています）。YouTubeにはそのままアップロードできます。");
+      if (anyFailed) alert("一部のナレーションを動画に入れられませんでした。ローカルTTSサーバー（npm run dev:video）またはAivisSpeechが起動しているかご確認ください。");
+      if (anyWebm && !autorun) alert(`${fmts.length > 1 ? "長尺・ショートとも" : ""}WebM形式で保存しました（MP4はYouTube側の取り込み処理が時々失敗するため、より安定するWebMを使っています）。YouTubeにはそのままアップロードできます。`);
     } catch (err) {
       lastExportErrorRef.current = err;
       alert(`書き出しエラー: ${err?.message ?? err}`);
-      try { await handle?.stop(); } catch (e2) { /* ignore */ }
-      mixer().stopBGM(); mixer().stopRecordingTap();
     } finally {
+      mixer().stopBGM(); mixer().stopRecordingTap(); mixer().setSpeakerOutput(true);
+      exportingRef.current = false;
       rendererRef.current?.draw(seekPosRef.current);
-      setTimeout(() => { setIsExporting(false); setExportProgress(0); }, 800);
+      setTimeout(() => { setIsExporting(false); setExportProgress(0); setExportStage(""); }, 800);
     }
   };
 
@@ -1834,7 +1876,7 @@ export default function ExplainerStudio() {
           <>
             <div className="flex items-center gap-2 flex-wrap">
               {[["long", "長尺（16:9）", project.longScenes.length], ["short", "ショート（9:16）", project.shortScenes.length]].map(([k, l, n]) => (
-                <button key={k} onClick={() => { handlePause(); setFormat(k); setSeekPos(0); setCurrentSceneIdx(0); }} className="text-xs px-3 py-1.5 rounded" style={{ color: format === k ? C.bg : C.textMuted, background: format === k ? C.teal : C.panel, border: `1px solid ${C.borderSoft}`, cursor: "pointer", fontWeight: format === k ? 700 : 400 }}>{l}・{n}場面</button>
+                <button key={k} disabled={isExporting} onClick={() => { handlePause(); setFormat(k); setSeekPos(0); setCurrentSceneIdx(0); }} className="text-xs px-3 py-1.5 rounded" style={{ color: format === k ? C.bg : C.textMuted, background: format === k ? C.teal : C.panel, border: `1px solid ${C.borderSoft}`, cursor: isExporting ? "default" : "pointer", fontWeight: format === k ? 700 : 400, opacity: isExporting && format !== k ? 0.5 : 1 }}>{l}・{n}場面</button>
               ))}
               {format === "short" && <button onClick={handleRegenerateShort} disabled={genBusy} className="text-[11px] px-2 py-1 rounded flex items-center gap-1" style={btn()}><RefreshCw size={11} /> ショートを作り直す</button>}
               {genBusy && genProgress && <span className="text-[11px]" style={{ color: C.textMuted }}>{genProgress.step}</span>}
@@ -1846,6 +1888,13 @@ export default function ExplainerStudio() {
               <div className="flex flex-col gap-2 w-full" style={{ flex: "0 0 auto", maxWidth: format === "long" ? 560 : 330, position: "sticky", top: 8, alignSelf: "flex-start" }}>
                 <div className="relative rounded-lg overflow-hidden border" style={{ borderColor: C.borderSoft, background: "#000", aspectRatio: format === "long" ? "16 / 9" : "9 / 16" }}>
                   <canvas ref={canvasRef} className="w-full h-full" />
+                  {isExporting && (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 text-center" style={{ background: "rgba(5,9,18,.72)", color: C.text }}>
+                      <Download size={20} style={{ color: C.amber }} />
+                      <div className="text-sm font-bold">書き出し中{exportStage ? `：${exportStage}` : ""}… {exportProgress}%</div>
+                      <div className="text-[11px]" style={{ color: C.textMuted }}>プレビューは再生しません（音も鳴りません）。完了すると保存されます</div>
+                    </div>
+                  )}
                 </div>
                 <input type="range" min={0} max={1} step={0.001} value={seekPos} onChange={(e) => handleSeek(Number(e.target.value))} className="w-full" />
                 <div className="text-[11px] mono -mt-1" style={{ color: C.textDim }}>
@@ -1857,21 +1906,26 @@ export default function ExplainerStudio() {
                   タイトル<input value={project.videoTitle} onChange={(e) => setProject((p) => ({ ...p, videoTitle: e.target.value }))} className="flex-1 min-w-0 px-1.5 py-0.5 rounded text-[11px]" style={inputStyle} title="画面上部に出す動画タイトル" />
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
-                  <button onClick={isPlaying ? handlePause : handlePlay} className="text-xs px-3 py-1.5 rounded flex items-center gap-1.5" style={btn("primary")}>{isPlaying ? <><Pause size={13} /> 一時停止</> : <><Play size={13} /> プレビュー再生</>}</button>
+                  <button onClick={isPlaying ? handlePause : handlePlay} disabled={isExporting} className="text-xs px-3 py-1.5 rounded flex items-center gap-1.5" style={{ ...btn("primary"), opacity: isExporting ? 0.4 : 1 }}>{isPlaying ? <><Pause size={13} /> 一時停止</> : <><Play size={13} /> プレビュー再生</>}</button>
                   <button onClick={() => { handlePause(); handleSeek(0); }} className="text-xs px-3 py-1.5 rounded flex items-center gap-1.5" style={{ background: C.panel2, color: C.textMuted, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}><Square size={12} /> 先頭へ</button>
                   <button onClick={handleThumbnail} title={format === "long" ? "サムネ用の画像（大きな文字＋人物）をPNGで保存" : "いま表示中の1コマをPNGで保存"} className="text-xs px-3 py-1.5 rounded flex items-center gap-1.5" style={{ background: C.panel2, color: C.textMuted, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}><Camera size={12} /> サムネ保存</button>
-                  <button onClick={handleExport} disabled={isExporting} className="text-xs px-3 py-1.5 rounded flex items-center gap-1.5 ml-auto" style={{ ...btn("amber"), background: isExporting ? C.panel2 : C.amber, color: isExporting ? C.textMuted : C.bg }}><Download size={13} /> {isExporting ? `書き出し中… ${exportProgress}%` : "動画を書き出す"}</button>
+                  {format === "long" && project.shortScenes?.length > 0 && (
+                    <label className="flex items-center gap-1 text-[11px] ml-auto" style={{ color: C.textMuted }} title="長尺の書き出しに続けて、ショート動画（サムネ・概要欄も）を書き出して保存します">
+                      <input type="checkbox" checked={exportWithShort} disabled={isExporting} onChange={(e) => setExportWithShort(e.target.checked)} /> ショートもセットで
+                    </label>
+                  )}
+                  <button onClick={() => handleExport({ withShort: exportWithShort })} disabled={isExporting} className={`text-xs px-3 py-1.5 rounded flex items-center gap-1.5 ${format === "long" && project.shortScenes?.length > 0 ? "" : "ml-auto"}`} style={{ ...btn("amber"), background: isExporting ? C.panel2 : C.amber, color: isExporting ? C.textMuted : C.bg }}><Download size={13} /> {isExporting ? `書き出し中${exportStage ? `：${exportStage}` : ""}… ${exportProgress}%` : format === "long" && exportWithShort && project.shortScenes?.length > 0 ? "長尺＋ショートを書き出す" : "動画を書き出す"}</button>
                 </div>
                 {format === "long" && <label className="flex items-center gap-1.5 text-[11px]" style={{ color: C.textDim }}><input type="checkbox" checked={sourcesInVideo} onChange={(e) => setSourcesInVideo(e.target.checked)} /> 動画に出典を表示（各スライドの「出典：…」と最後の「参考資料」の場面。オフでも概要欄には記載します）</label>}
                 <label className="flex items-center gap-1.5 text-[11px]" style={{ color: C.textDim }}><input type="checkbox" checked={showSubtitles} onChange={(e) => setShowSubtitles(e.target.checked)} /> 字幕（ナレーション）を表示（オフでテロップ）</label>
                 <div className="flex items-center gap-2 flex-wrap text-[11px]" style={{ color: C.textDim }}>
                   <span>保存先：{canPickFolder() ? (exportFolder ? <b style={{ color: C.text }}>{exportFolder.name}</b> : "未選択（書き出し時に選びます）") : "ダウンロードフォルダ"}</span>
                   {canPickFolder() && <button onClick={chooseExportFolder} className="text-[10px] px-1.5 py-0.5 rounded" style={btn()}>{exportFolder ? "変更" : "選ぶ"}</button>}
-                  {project && <span>→ フォルダ「{exportNames().folder}」に、動画「{exportNames().video}」・サムネ「{exportNames().thumb}.png」・概要欄テキストを保存</span>}
+                  {project && <span>→ フォルダ「{exportNames().folder}」に、動画「{exportNames().video}」・サムネ「{exportNames().thumb}.png」・概要欄テキストを保存{format === "long" && exportWithShort && project.shortScenes?.length > 0 ? `。続けてショートをフォルダ「${exportNames("short").folder}」に保存` : ""}</span>}
                 </div>
                 {exportNote && <div className="text-[11px]" style={{ color: C.teal }}>{exportNote}</div>}
                 {ttsError && <div className="text-[11px]" style={{ color: C.rust }}>一部の場面でナレーション音声の生成に失敗しました（TTSサーバーをご確認ください）。</div>}
-                <div className="text-[10px] leading-relaxed" style={{ color: C.textDim }}>書き出しは実時間で録画します（{fmtTime(displayTotal)}かかります）。録画中はこのタブを前面に表示したままにしてください。</div>
+                <div className="text-[10px] leading-relaxed" style={{ color: C.textDim }}>書き出し中はプレビューを再生せず、音も鳴らしません（見えないところで録画してファイルに保存します）。録画は実時間で進むため、動画の長さぶん（{fmtTime(displayTotal)}{format === "long" && exportWithShort && project.shortScenes?.length > 0 ? "＋ショートの長さ" : ""}）かかります。録画中はこのタブを開いたまま、前面に表示しておいてください。</div>
               </div>
 
               {/* ---------- 設定パネル（常にプレビューの右横に枠として表示し、内側のスクロールバーで移動する） ---------- */}
@@ -2006,7 +2060,7 @@ export default function ExplainerStudio() {
                               onChange={(t) => { if (isPlayingRef.current) handlePause(); if (!editBaseRef.current[sc.id]) editBaseRef.current[sc.id] = { narration: sc.narration, reading: sc.reading }; patchScene(sc.id, { narration: t, readingStale: true, ...(sc.genNarration ? {} : { genNarration: sc.narration }) }); }}
                               onBlur={() => handleNarrBlur(sc.id)}
                               colors={{ text: C.text, border: C.borderSoft }}
-                              readUpTo={cur && (isPlaying || isExporting) ? readCharIdx : null} />
+                              readUpTo={cur && isPlaying ? readCharIdx : null} />
                           </div>
                           <div className="flex items-center gap-2 mt-1 flex-wrap">
                             <button onClick={() => setReadingOpenId((v) => (v === sc.id ? null : sc.id))} className="text-[10px] flex items-center gap-0.5" style={{ color: isKanaReading(sc.reading) && !sc.readingStale ? C.textDim : C.amber, background: "none", border: "none", cursor: "pointer", padding: 0 }}>

@@ -21,6 +21,9 @@ export class AudioMixer {
   private tapDest: MediaStreamAudioDestinationNode | null = null;
   private bufSources: AudioBufferSourceNode[] = [];
   private bufferCache = new Map<string, AudioBuffer>();
+  /** falseのあいだは、スピーカーに音を出さず録画（tapDest）にだけ流す（書き出し中に音を鳴らさないため） */
+  private speakerOn = true;
+  setSpeakerOutput(on: boolean): void { this.speakerOn = on; }
 
   private getContext(): AudioContext | null {
     if (typeof window === 'undefined') return null;
@@ -48,6 +51,7 @@ export class AudioMixer {
   startRecordingTap(): MediaStream | null {
     const ctx = this.getContext();
     if (!ctx) return null;
+    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
     this.tapDest = ctx.createMediaStreamDestination();
     return this.tapDest.stream;
   }
@@ -153,7 +157,7 @@ export class AudioMixer {
     if (!ctx) return 0;
     const gain = ctx.createGain();
     gain.gain.value = volume;
-    gain.connect(ctx.destination);
+    if (this.speakerOn) gain.connect(ctx.destination);
     if (this.tapDest) gain.connect(this.tapDest);
     const src = ctx.createBufferSource();
     src.buffer = buffer;
@@ -183,7 +187,7 @@ export class AudioMixer {
 
       const gain = ctx.createGain();
       gain.gain.value = Math.min(1, Math.max(0, volume / 100));
-      gain.connect(ctx.destination);
+      if (this.speakerOn) gain.connect(ctx.destination);
       if (this.tapDest) gain.connect(this.tapDest);
 
       const source = ctx.createBufferSource();
