@@ -52,3 +52,30 @@ test("applyGlossary：初出ですでに「〜とは」で説明していれば�
   const g2 = [{ term: "スター", gloss: "人気者" }];
   assert.equal(applyGlossary([sc("スターリンクです。")] as any, g2)[0].narration, "スターリンクです。");
 });
+
+test("applyGlossary：「〜する」「〜である」で終わる説明は「の」を付けずに用語の直前へ", () => {
+  const g = [
+    { term: "非GAAP", termReading: "ひぎゃっぷ", gloss: "企業が独自に本来の稼ぎを開示する", glossReading: "きぎょうがどくじにほんらいのかせぎをかいじする" },
+    { term: "IFRS", termReading: "あいふぁーす", gloss: "国際的な共通の会計基準である", glossReading: "こくさいてきなきょうつうのかいけいきじゅんである" },
+  ];
+  const out = applyGlossary([
+    sc("非GAAPの利益は増えました。", "ひぎゃっぷのりえきはふえました。"),
+    sc("同社はIFRSで決算を出しています。IFRSでは…", "どうしゃはあいふぁーすでけっさんをだしています。あいふぁーすでは"),
+  ] as any, g);
+  assert.equal(out[0].narration, "企業が独自に本来の稼ぎを開示する非GAAPの利益は増えました。");
+  assert.equal(out[0].reading, "きぎょうがどくじにほんらいのかせぎをかいじするひぎゃっぷのりえきはふえました。");
+  assert.equal(out[1].narration, "同社は国際的な共通の会計基準であるIFRSで決算を出しています。IFRSでは…");
+});
+
+test("applyGlossary：複合語の中（非GAAPの中のGAAP）は飛ばして、単独で出てくる箇所を初出にする", () => {
+  const g = [{ term: "GAAP", gloss: "米国の会計基準である" }];
+  const out = applyGlossary([sc("非GAAPで見ると黒字です。"), sc("GAAPでは赤字でした。")] as any, g);
+  assert.equal(out[0].narration, "非GAAPで見ると黒字です。");
+  assert.equal(out[1].narration, "米国の会計基準であるGAAPでは赤字でした。");
+});
+
+test("applyGlossary：AIが自分の言葉で「…であるSSD」と説明済みなら足さない", () => {
+  const g = [{ term: "SSD", gloss: "半導体メモリーにデータを保存する記憶装置の" }];
+  const out = applyGlossary([sc("高速な記憶装置であるSSDの需要が伸びています。")] as any, g);
+  assert.equal(out[0].narration, "高速な記憶装置であるSSDの需要が伸びています。");
+});

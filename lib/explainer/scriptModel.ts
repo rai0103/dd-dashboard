@@ -393,41 +393,60 @@ function findTerm(text: string, term: string, from = 0): number {
   }
   return -1;
 }
-/** 用語の近くですでに説明しているか（「〇〇とは」「〇〇（…）」「〇〇という」「〇〇は、…のこと」） */
+/**
+ * 説明を用語の直前に付ける形にそろえる。説明が「〜する」「〜である」「〜な」などで終わっていればそのまま
+ * （例：「企業が独自に本来の稼ぎを開示する」＋「非GAAP」）、名詞で終わっていれば「の」を足す
+ * （例：「低軌道衛星を使ったインターネット通信サービス」＋「の」＋「スターリンク」）。
+ */
+export function glossPrefix(gloss: string): string {
+  const g = (gloss || '').trim();
+  if (!g) return g;
+  return /[るたいなのうくすつぬむぶぐ]$/.test(g) ? g : `${g}の`;
+}
+/** 用語の近くですでに説明しているか（説明の文言がある・「〇〇とは」「〇〇（…）」「…であるIFRS」「…というIFRS」など） */
 function explainedNear(text: string, i: number, term: string, gloss: string): boolean {
-  if (gloss && text.includes(gloss)) return true;
+  if (gloss && (text.includes(gloss) || text.includes(gloss.replace(/の$/, '')))) return true;
   const after = text.slice(i + term.length, i + term.length + 30);
-  return /^(?:とは|って|（|\(|という|、つまり|は、?[^。]{2,28}(?:のこと|を指し|を意味))/.test(after);
+  const before = text.slice(Math.max(0, i - 12), i);
+  return /^(?:とは|って|（|\(|という|、つまり|は、?[^。]{2,28}(?:のこと|を指し|を意味))/.test(after)
+    || /(?:である|という|と呼ばれる|と呼ばれている|といわれる|と言われる)[「『]?$/.test(before);
 }
 
 /**
- * 動画全体で、用語が初めて出てくるナレーションにだけ説明を添え（無ければ「説明＋の＋用語」を差し込む）、
- * 2回目以降に同じ説明が繰り返されていたら取り除く。章の扉・参考資料・固定のデータ場面は対象外。
- * 読み上げ文は、用語の読み（termReading）が見つかればそこに説明の読みを差し込み、見つからなければ「要確認」にする。
+ * 動画全体で、用語が初めて出てくるナレーションにだけ説明を添え（無ければ用語の直前に説明を差し込む。例：
+ * 「企業が独自に本来の稼ぎを開示する非GAAP」「国際的な共通の会計基準であるIFRS」）、2回目以降に同じ説明が
+ * 繰り返されていたら取り除く。章の扉・参考資料・固定のデータ場面は対象外。複合語の一部（「非GAAP」の中の「GAAP」等）
+ * には差し込まず、次に単独で出てくる箇所を初出とみなす。読み上げ文は、用語の読み（termReading）が見つかれば
+ * そこに説明の読みを差し込み、見つからなければ「要確認」（ナレーションで読み上げ）にする。
  */
 export function applyGlossary<T extends ExplainerScene>(scenes: T[], glossary: GlossTerm[] | undefined): T[] {
   if (!glossary?.length) return scenes;
   const out = scenes.map((s) => ({ ...s }));
   for (const g of glossary) {
-    const term = (g.term || '').trim(), gloss = (g.gloss || '').trim().replace(/の$/, '');
-    if (term.length < 2 || !gloss || gloss.includes(term)) continue;
-    const dup = `${gloss}の${term}`;
-    const dupR = g.glossReading && g.termReading ? `${g.glossReading.replace(/の$/, '')}の${g.termReading}` : '';
-    let seen = false;
+    const term = (g.term || '').trim();
+    const pre = glossPrefix(g.gloss);
+    if (term.length < 2 || !pre || pre.includes(term)) continue;
+    // 読みは、ナレーション側で「の」を足したかどうかに合わせる（ひらがなの読みだけでは語尾の品詞が判断できないため）
+    const preR = g.glossReading ? `${g.glossReading.trim()}${pre !== (g.gloss || '').trim() ? 'の' : ''}` : '';
+    const dup = `${pre}${term}`;
+    const dupR = preR && g.termReading ? `${preR}${g.termReading}` : '';
+    let done = false;
     for (const sc of out) {
       if (sc.fixedKey || sc.visual.kind === 'chapter' || sc.visual.kind === 'sources') continue;
-      const i = findTerm(sc.narration, term);
-      if (i < 0) continue;
-      if (!seen) {
-        seen = true;
-        if (!explainedNear(sc.narration, i, term, gloss)) {
+      if (!done) {
+        let i = findTerm(sc.narration, term);
+        while (i >= 0) {
+          if (explainedNear(sc.narration, i, term, g.gloss)) { done = true; break; }
           const prev = sc.narration[i - 1] || '';
-          if (prev && WORDISH.test(prev) && !/[・]/.test(prev)) continue; // 複合語の途中（例：新〇〇）には差し込まない
-          sc.narration = `${sc.narration.slice(0, i)}${gloss}の${sc.narration.slice(i)}`;
+          if (prev && WORDISH.test(prev) && prev !== '・') { i = findTerm(sc.narration, term, i + 1); continue; } // 複合語の途中
+          sc.narration = `${sc.narration.slice(0, i)}${pre}${sc.narration.slice(i)}`;
           const ri = g.termReading ? sc.reading.indexOf(g.termReading) : -1;
-          if (ri >= 0 && g.glossReading) sc.reading = `${sc.reading.slice(0, ri)}${g.glossReading.replace(/の$/, '')}の${sc.reading.slice(ri)}`;
+          if (ri >= 0 && preR) sc.reading = `${sc.reading.slice(0, ri)}${preR}${sc.reading.slice(ri)}`;
           else sc.readingStale = true;
+          done = true;
+          break;
         }
+        if (!done) continue;
         // 同じ場面の2回目以降の説明は取り除く
         const first = sc.narration.indexOf(dup);
         if (first >= 0) sc.narration = sc.narration.slice(0, first + dup.length) + sc.narration.slice(first + dup.length).split(dup).join(term);

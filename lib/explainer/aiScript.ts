@@ -4,7 +4,7 @@
 import { callTool } from './aiClient';
 import { ICON_NAMES, VISUAL_KINDS, FIXED_ONLY_KINDS } from './types';
 import type { ChapterPlan, ExplainerProject, ExplainerScene, GlossTerm, SourceNote, StockCatalog, YoutubeMeta } from './types';
-import { assembleLong, normalizeScene, sanitizeReading, fixBannedWording, stripRefMarks, stripRefMarksReading, applyGlossary } from './scriptModel';
+import { assembleLong, normalizeScene, sanitizeReading, fixBannedWording, stripRefMarks, stripRefMarksReading, applyGlossary, glossPrefix } from './scriptModel';
 import { resolveYearCompareItems, resolveCatalogKey } from './stockCatalog';
 
 export interface GenerateInput {
@@ -109,7 +109,7 @@ const SYSTEM_RULES = [
   '- 同じ種類の図解（visual.kind）を連続させない。数値の図解・流れ図・比較・年表・イメージ図などを織り交ぜる。',
   '- 冒頭で視聴者の疑問や驚きを引き出し、各章の終わりは次への興味をつなぐ一言で締める。',
   '- 話し言葉の「です・ます」調。1文は短く。',
-  '- 用語（専門用語・略語・サービス名・企業名・制度名・組織名など、視聴者が知らない可能性のある言葉）は、動画の中で初めて出てくるナレーションで、短い説明を名前の前に添える（例：「低軌道衛星を使ったインターネット通信サービスのスターリンク」）。2回目以降は説明を付けず、名前だけ（例：「スターリンク」）にする。',
+  '- 用語（経済・投資・会計の用語〈非GAAP・IFRS・EPS・PER・ガイダンス 等〉、業界の専門用語・略語〈SSD・HBM 等〉、サービス名・企業名・制度名・組織名など、視聴者が知らない可能性のある言葉）は、動画の中で初めて出てくるナレーションで、短い説明を用語の直前に添える（例：「企業が独自に本来の稼ぎを開示する非GAAP」「国際的な共通の会計基準であるIFRS」「低軌道衛星を使ったインターネット通信サービスのスターリンク」）。2回目以降は説明を付けず、用語だけ（例：「IFRS」）にする。',
   '',
   '【読み上げ文（reading）】',
   '- narration と同じ内容を、ひらがなだけで書く（漢字・カタカナ・英数字は使わない。長音「ー」は可）。句読点は「、」「。」のみ。',
@@ -424,6 +424,13 @@ export async function generateOutline(inp: GenerateInput, signal?: AbortSignal):
   };
 }
 
+const GLOSS_RULES = [
+  '対象：経済・投資・会計の用語（例：非GAAP、IFRS、EPS、PER、ガイダンス、自社株買い、フリーキャッシュフロー）、業界の専門用語・略語（例：SSD、HBM、ハイパースケーラー、AIデータセンター）、サービス名・企業名・制度名・組織名など。視聴者のレベルに関係なく、経済・投資・会計の用語と業界の専門用語・略語は必ず含める（ごく一般的な語〈株価・売上・利益 等〉は除く）。',
+  '- term=用語（ナレーションでの表記と完全に同じ文字列）、termReading=そのひらがな読み',
+  '- gloss=初めて出てきたときに用語の直前に付ける短い説明（12〜28字）。「gloss＋term」でそのまま自然な日本語になる形にする（連体修飾。例：gloss=企業が独自に本来の稼ぎを開示する → 「企業が独自に本来の稼ぎを開示する非GAAP」、gloss=国際的な共通の会計基準である → 「国際的な共通の会計基準であるIFRS」、gloss=データを高速に読み書きする記憶装置の → 「データを高速に読み書きする記憶装置のSSD」）。説明に用語そのものを含めない。',
+  '- glossReading=glossのひらがな読み',
+].join('\n');
+
 /**
  * 用語集（用語・読み・初出で添える短い説明・初めて出てくる章）。目次とは別の小さな呼び出しにする
  * （目次と一緒に作らせると出力が長くなり、参考資料が多いときに途中で切れるため）。失敗しても台本づくりは止めない。
@@ -436,9 +443,8 @@ export async function generateGlossary(inp: GenerateInput, o: Outline, signal?: 
     '【全体の目次】',
     outlineText(o),
     '',
-    'この動画に出てくる用語のうち、上記の視聴者が知らない可能性のあるもの（専門用語・略語・サービス名・企業名・制度名・組織名など）を最大10個挙げてください。',
-    '- term=用語（ナレーションで使う表記そのまま）、termReading=そのひらがな読み',
-    '- gloss=初めて出てきたときに名前の前に添える短い説明（12〜28字。名詞で終わり、「gloss＋の＋term」で自然な日本語になる形。例：term=スターリンク、gloss=低軌道衛星を使ったインターネット通信サービス）、glossReading=glossのひらがな読み',
+    'この動画に出てくる、説明が必要な用語を最大15個挙げてください。',
+    GLOSS_RULES,
     '- chapter=その用語が初めて出てくる章の番号（目次の番号。1始まり）',
   ].join('\n');
   try {
@@ -468,7 +474,57 @@ export async function generateGlossary(inp: GenerateInput, o: Outline, signal?: 
       term: String(g?.term || '').trim(), termReading: String(g?.termReading || '').trim(),
       gloss: String(g?.gloss || '').trim().replace(/の$/, ''), glossReading: String(g?.glossReading || '').trim().replace(/の$/, ''),
       chapter: Math.max(1, Math.min(o.chapters.length, Math.round(Number(g?.chapter) || 1))),
-    })).filter((g: GlossTerm) => g.term.length >= 2 && g.gloss && !g.gloss.includes(g.term)).slice(0, 10);
+    })).filter((g: GlossTerm) => g.term.length >= 2 && g.gloss && !g.gloss.includes(g.term)).slice(0, 15);
+  } catch (e: any) {
+    if (e?.code === 'ABORTED') throw e;
+    return [];
+  }
+}
+
+/**
+ * 出来上がったナレーションを読み、まだ用語集に無い「説明が必要な用語」を拾う（目次の段階では出てこなかった用語のため）。
+ * 返した用語は applyGlossary で、初めて出てくる箇所に説明を差し込む。失敗しても台本づくりは止めない。
+ */
+export async function glossaryFromScenes(inp: GenerateInput, scenes: ExplainerScene[], known: GlossTerm[], signal?: AbortSignal): Promise<GlossTerm[]> {
+  const text = scenes.filter((s) => !s.fixedKey && s.visual.kind !== 'chapter' && s.visual.kind !== 'sources').map((s) => `・${s.narration}`).join('\n').slice(0, 14000);
+  if (!text) return [];
+  const task = [
+    `動画のテーマ：${inp.topic}`,
+    '【動画のナレーション（順番どおり）】',
+    text,
+    '',
+    known.length ? `【すでに説明を用意した用語（挙げない）】${known.map((g) => g.term).join('、')}` : '',
+    'このナレーションに出てくる用語のうち、初めて出てくる箇所に説明が付いていないものを最大15個挙げてください（すでに「〜とは」「〜である○○」のように説明している用語は挙げない）。',
+    GLOSS_RULES,
+  ].filter(Boolean).join('\n');
+  try {
+    const r = await callTool<any>({
+      system: system(),
+      content: [{ type: 'text', text: task }],
+      toolName: 'list_unexplained_terms',
+      toolDescription: 'ナレーションの中で、説明が付いていない用語と、初出で添える短い説明をまとめる。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          glossary: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: { term: { type: 'string' }, termReading: { type: 'string' }, gloss: { type: 'string' }, glossReading: { type: 'string' } },
+              required: ['term', 'termReading', 'gloss', 'glossReading'],
+            },
+          },
+        },
+        required: ['glossary'],
+      },
+      maxTokens: 4000,
+      signal,
+    });
+    const have = new Set(known.map((g) => g.term));
+    return (Array.isArray(r?.glossary) ? r.glossary : []).map((g: any) => ({
+      term: String(g?.term || '').trim(), termReading: String(g?.termReading || '').trim(),
+      gloss: String(g?.gloss || '').trim().replace(/の$/, ''), glossReading: String(g?.glossReading || '').trim().replace(/の$/, ''),
+    })).filter((g: GlossTerm) => g.term.length >= 2 && g.gloss && !g.gloss.includes(g.term) && !have.has(g.term) && text.includes(g.term)).slice(0, 15);
   } catch (e: any) {
     if (e?.code === 'ABORTED') throw e;
     return [];
@@ -479,7 +535,7 @@ export async function generateGlossary(inp: GenerateInput, o: Outline, signal?: 
 function glossaryNote(o: Outline, idx: number | null): string {
   const g = o.glossary || [];
   if (!g.length) return '';
-  const line = (t: GlossTerm) => `・${t.term}：「${t.gloss}の${t.term}」`;
+  const line = (t: GlossTerm) => `・${t.term}：「${glossPrefix(t.gloss)}${t.term}」`;
   if (idx === null) {
     return `【用語の説明】ショートは単独でも見られるので、ショートの中で初めて出す用語には、名前の前に短い説明を添える（ショート内の2回目以降は名前だけ）。説明の文言は次のとおり：\n${g.map(line).join('\n')}`;
   }
@@ -841,8 +897,12 @@ export async function generateProject(inp: GenerateInput, onProgress: (p: Genera
   const rest = Array.from({ length: n - 1 }, (_, k) => k + 1);
   const workers = Array.from({ length: Math.min(3, rest.length) }, async () => { while (rest.length) { const i = rest.shift()!; await runOne(i); } });
   await Promise.all(workers);
-  // 用語の説明：動画全体で初めて出てくるナレーションにだけ説明を添え、2回目以降の重複した説明は取り除く
-  const longScenes = applyGlossary(assembleLong(o.chapters, per, o.sources, true, withSourcesScene), o.glossary);
+  // 用語の説明：出来上がったナレーションから、まだ説明の無い用語（経済・投資・会計の用語、業界の専門用語など）を拾って
+  // 用語集に足し、動画全体で初めて出てくるナレーションにだけ説明を添える（2回目以降の重複した説明は取り除く）
+  const assembled = assembleLong(o.chapters, per, o.sources, true, withSourcesScene);
+  onProgress({ step: '用語の説明を確認中…', done, total });
+  o.glossary = [...(o.glossary || []), ...await glossaryFromScenes(inp, assembled, o.glossary || [], signal)];
+  const longScenes = applyGlossary(assembled, o.glossary);
   let shortScenes: ExplainerScene[] = [];
   if (withShort) {
     onProgress({ step: '宣伝用ショートを作成中…', done, total });
