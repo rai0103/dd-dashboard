@@ -7,6 +7,7 @@
 // 違い：台本は「テーマ＋参考情報（テキスト・URL・PDF）」からAIが作る。図解はすべて自作の図形・アイコンで描く（著作権・肖像権への配慮）。
 import { useEffect, useMemo, useRef, useState } from "react";
 import NarrMixedBox from "@/components/NarrMixedBox";
+import FreeImagePicker from "@/components/FreeImagePicker";
 import { Play, Pause, Square, Camera, Download, Upload, X, GripVertical, MessageSquare, ChevronRight, Lock, Unlock, Link2, FileText, Type, Sparkles, Copy, AlertTriangle, Check, Image as ImageIcon, RefreshCw, Plus, ArrowLeft, Search, ExternalLink, Eye, EyeOff, Pin, PinOff } from "lucide-react";
 import { voiceGender } from "@/lib/videoAnalysts";
 import { AudioMixer, getTtsBaseUrl } from "@/lib/videoAudioMixer";
@@ -1994,33 +1995,8 @@ export default function ExplainerStudio() {
                                 </div>
                               )}
                               {!sc.imageId && freeOpenId === sc.id && (
-                                <div className="p-1.5 rounded flex flex-col gap-1" style={{ background: C.panel, border: `1px solid ${C.borderSoft}` }}>
-                                  <form className="flex gap-1" onSubmit={(e) => { e.preventDefault(); runFreeSearch(sc); }}>
-                                    <input value={freeQuery} onChange={(e) => setFreeQuery(e.target.value)} placeholder="例：日本銀行、ニューヨーク証券取引所、半導体、原油" className="flex-1 text-[10px] px-1 py-0.5 rounded" style={inputStyle} />
-                                    <button type="submit" disabled={freeBusy || !freeQuery.trim()} className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={{ ...btn("primary"), opacity: freeBusy ? 0.5 : 1 }}><Search size={10} />{freeBusy ? "検索中…" : "検索"}</button>
-                                    <button type="button" onClick={() => setFreeOpenId(null)} className="text-[10px] px-1" style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer" }}><X size={10} /></button>
-                                  </form>
-                                  <div className="text-[10px] leading-snug" style={{ color: C.textDim }}>
-                                    美術館（CC0）・Wikimedia Commons・Wikipedia・Openverse など、日本文化チャンネルと同じ検索先から、パブリックドメイン・CC0・商用可のCCライセンス・無料素材だけを表示します。{freeTerms.length > 0 && `英語でも検索：${freeTerms.join(" / ")}`}
-                                  </div>
-                                  {freeError && <div className="text-[10px]" style={{ color: "#ff6b6b" }}>{freeError}</div>}
-                                  {freeResults.length > 0 && (
-                                    <div className="grid gap-1" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(96px, 1fr))", maxHeight: 300, overflowY: "auto" }}>
-                                      {freeResults.map((c) => (
-                                        <div key={c.id} className="flex flex-col rounded overflow-hidden" style={{ border: `1px solid ${C.borderSoft}`, background: C.panel2, opacity: freePickId && freePickId !== c.id ? 0.5 : 1 }}>
-                                          <button onClick={() => pickFreeImage(sc, c)} disabled={!!freePickId} title={`${c.caption || ""}\n${c.credit || ""}\n${c.source}\nクリックでこの場面に添付`} style={{ padding: 0, border: "none", background: "none", cursor: freePickId ? "wait" : "pointer", aspectRatio: "16 / 10", position: "relative" }}>
-                                            <img src={c.thumbnailUrl} alt="" loading="lazy" referrerPolicy="no-referrer" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
-                                            {freePickId === c.id && <span className="text-[10px]" style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,.55)", color: "#fff" }}>取り込み中…</span>}
-                                          </button>
-                                          <div className="px-1 py-0.5 text-[9px] leading-tight flex items-start gap-0.5" style={{ color: C.textDim }}>
-                                            <span className="flex-1 min-w-0" style={{ overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{c.source}</span>
-                                            {c.pageUrl && <a href={c.pageUrl} target="_blank" rel="noreferrer" title="元のページ（ライセンスを確認）" style={{ color: C.textDim }}><ExternalLink size={9} /></a>}
-                                          </div>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  )}
-                                </div>
+                                <FreeImagePicker title={sc.visual?.heading || sc.caption || ""} query={freeQuery} setQuery={setFreeQuery} busy={freeBusy} items={freeResults} terms={freeTerms} error={freeError} pickId={freePickId}
+                                  onSearch={() => runFreeSearch(sc)} onPick={(c) => pickFreeImage(sc, c)} onClose={() => { if (!freePickId) setFreeOpenId(null); }} />
                               )}
                               {imgGenError && imgGenBusyId === null && <div className="text-[10px]" style={{ color: "#ff6b6b" }}>{imgGenError}</div>}
                             </div>
