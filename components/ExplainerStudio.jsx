@@ -8,6 +8,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import NarrMixedBox from "@/components/NarrMixedBox";
 import FreeImagePicker from "@/components/FreeImagePicker";
+import LowPolyModal from "@/components/LowPolyModal";
 import { Play, Pause, Square, Camera, Download, Upload, X, GripVertical, MessageSquare, ChevronRight, Lock, Unlock, Link2, FileText, Type, Sparkles, Copy, AlertTriangle, Check, Image as ImageIcon, RefreshCw, Plus, ArrowLeft, Search, ExternalLink, Eye, EyeOff, Pin, PinOff } from "lucide-react";
 import { voiceGender } from "@/lib/videoAnalysts";
 import { AudioMixer, getTtsBaseUrl } from "@/lib/videoAudioMixer";
@@ -1023,6 +1024,20 @@ export default function ExplainerStudio() {
     } finally {
       setFreePickId(null);
     }
+  };
+  // [ポリゴン風に加工] 場面の画像をポリゴン風にした画像を新しく保存して付け替える（元の画像はライブラリに残す）。
+  // フリー素材の出典は引き継ぎ、概要欄のクレジットに「ポリゴン風に加工」と書く
+  const [polyOpenId, setPolyOpenId] = useState(null);
+  const applyPolygon = async (sc, blob) => {
+    const old = images.find((im) => im.id === sc.imageId);
+    const credit = old?.credit ? { ...old.credit, modified: "ポリゴン風に加工" } : undefined;
+    const file = new File([blob], `poly-${sc.id}-${Date.now()}.png`, { type: blob.type || "image/png" });
+    const im = await saveImage(file, old?.caption, credit);
+    await refreshImages();
+    setScenes((list) => list.map((s) => (s.id === sc.id ? { ...s, imageId: im.id, visual: { ...s.visual, kind: "image" } } : s)));
+    setPolyOpenId(null);
+    const idx = scenes.findIndex((s) => s.id === sc.id);
+    if (idx >= 0) previewSceneAt(idx);
   };
   // 場面ごとに「AIで生成」：既存のimagePrompt（台本生成時にAIが用意した英語のプロンプト案）で1枚生成し、そのまま添付する
   const [imgGenBusyId, setImgGenBusyId] = useState(null);
@@ -2138,7 +2153,14 @@ export default function ExplainerStudio() {
                               <div className="text-[10px] leading-snug" style={{ color: C.textDim }}>使えるのは、自分で撮影・作成した画像、利用条件を確認したフリー素材、画像生成AIで自作したもの（実在の人物・ロゴ・既存作品を含まない）です。</div>
                               <div className="flex items-center gap-1.5 flex-wrap">
                                 {sc.imageId ? (
-                                  <button onClick={() => detachImage(sc)} className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={btn()}><X size={10} />画像を外す（図解表示に戻す）</button>
+                                  <>
+                                    <button onClick={() => detachImage(sc)} className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={btn()}><X size={10} />画像を外す（図解表示に戻す）</button>
+                                    <button onClick={() => setPolyOpenId(sc.id)} disabled={!images.find((im) => im.id === sc.imageId)} title="実在の人物などを、三角形の面で塗り分けたポリゴン風の絵にします" className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={btn()}><Sparkles size={10} />ポリゴン風に加工</button>
+                                    {polyOpenId === sc.id && images.find((im) => im.id === sc.imageId) && (
+                                      <LowPolyModal image={images.find((im) => im.id === sc.imageId).blob} credit={imageCreditOf(sc.imageId)} aspect={format === "short" ? "9:16" : "16:9"}
+                                        onApply={(blob) => applyPolygon(sc, blob)} onClose={() => setPolyOpenId(null)} />
+                                    )}
+                                  </>
                                 ) : (
                                   <>
                                     <label className="text-[10px] px-1.5 py-0.5 rounded cursor-pointer" style={btn()}>ファイル選択

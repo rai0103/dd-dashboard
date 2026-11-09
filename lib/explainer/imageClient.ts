@@ -12,13 +12,13 @@ export { AiClientError };
  * （長尺=16:9、ショート=9:16）。サーバー未起動・APIキー未設定・生成失敗（セーフティフィルタ等）は、
  * それぞれ分かりやすいコード付きの例外として投げる（呼び出し側のUIでそのままエラー文として表示できる想定）。
  */
-export async function generateImage(prompt: string, aspectRatio: '16:9' | '9:16', signal?: AbortSignal): Promise<Blob> {
+export async function generateImage(prompt: string, aspectRatio: '16:9' | '9:16', signal?: AbortSignal, source?: { mimeType: string; data: string }): Promise<Blob> {
   let resp: Response;
   try {
     resp = await fetch(`${getTtsBaseUrl()}/api/image`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ prompt, aspectRatio }),
+      body: JSON.stringify({ prompt, aspectRatio, ...(source ? { image: source } : {}) }),
       signal,
     });
   } catch (e: any) {

@@ -321,8 +321,11 @@ async function handlePostImage(req, res) {
   // 2026年8月にImagen 4系（predictエンドポイント）が廃止されたため、Gemini画像生成（generateContent、
   // responseModalities: ['TEXT','IMAGE']）に切り替え。既定モデルはGoogle公式ドキュメントの現行例に合わせる。
   const model = (process.env.GEMINI_IMAGE_MODEL || 'gemini-nano-banana-2.1');
+  // 画像の加工（例：ポリゴン風）：元の画像（body.image = {mimeType, data(base64)}）を一緒に渡すと、その画像を指示どおりに描き直す
+  const src = body && body.image && typeof body.image.data === 'string' && body.image.data ? body.image : null;
+  const parts = src ? [{ inlineData: { mimeType: String(src.mimeType || 'image/jpeg'), data: src.data } }, { text: prompt }] : [{ text: prompt }];
   const payload = {
-    contents: [{ parts: [{ text: prompt }] }],
+    contents: [{ parts }],
     generationConfig: { responseModalities: ['TEXT', 'IMAGE'], imageConfig: { aspectRatio } },
   };
   try {

@@ -268,10 +268,12 @@ export function imageCreditLines(credits: ImageCredit[]): string[] {
   if (!uniq.length) return [];
   const lines: string[] = ['', '■ 画像クレジット'];
   for (const c of uniq.filter((x) => NEEDS_ATTRIBUTION.test(`${x.source} ${x.credit || ''}`))) {
-    lines.push(`・${c.caption ? `${c.caption.slice(0, 60)} — ` : ''}${c.credit || c.source}${c.pageUrl ? ` ${c.pageUrl}` : ''}`);
+    lines.push(`・${c.caption ? `${c.caption.slice(0, 60)} — ` : ''}${c.credit || c.source}${c.modified ? `（${c.modified}）` : ''}${c.pageUrl ? ` ${c.pageUrl}` : ''}`);
   }
   const free = Array.from(new Set(uniq.filter((x) => !NEEDS_ATTRIBUTION.test(`${x.source} ${x.credit || ''}`)).map((x) => x.source.replace(/\s*\((?:CC0|Free|Public domain|PD[^)]*)\)\s*$/i, '').replace(/^Openverse \/ /, ''))));
   if (free.length) lines.push(`・パブリックドメイン／CC0・フリー素材：${free.join('、')}`);
+  const mods = Array.from(new Set(uniq.filter((x) => x.modified && !NEEDS_ATTRIBUTION.test(`${x.source} ${x.credit || ''}`)).map((x) => x.modified)));
+  if (mods.length) lines.push(`※一部の画像は${mods.join('・')}しています。`);
   return lines;
 }
 

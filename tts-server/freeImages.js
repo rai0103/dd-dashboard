@@ -203,7 +203,7 @@ function searchWikipedia(q, lang, max = 4) {
 // ---- Openverse（Flickr等のCC画像の横断検索。商用利用できるライセンスのみ） ----
 function searchOpenverse(q, max = 8) {
   return cached(`ov:${q}`, async () => {
-    const d = await getJson(`https://api.openverse.org/v1/images/?q=${encodeURIComponent(q)}&license_type=commercial&mature=false&page_size=${max + 4}`);
+    const d = await getJson(`https://api.openverse.org/v1/images/?q=${encodeURIComponent(q)}&license_type=commercial,modification&mature=false&page_size=${max + 4}`);
     const out = [];
     for (const r of d.results || []) {
       if (!r.url || (r.width && r.width < 1000)) continue;
