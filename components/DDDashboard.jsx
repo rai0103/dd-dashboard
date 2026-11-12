@@ -6,6 +6,8 @@ import {
   ReferenceLine, ReferenceDot, ReferenceArea, ResponsiveContainer, PieChart, Pie, Cell, Brush, Customized,
 } from "recharts";
 import { computeRsi } from "@/lib/rsi";
+import { DEFAULT_RSI_TRIGGER_SETTINGS, normalizeRsiTriggerSettings, statusFor, ymd as rsiYmd } from "@/lib/rsiTrigger";
+import RsiTriggerPanel, { rsiBadge } from "@/components/RsiTriggerPanel";
 import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Download, RefreshCw, Database, Trash2, Zap, Copy, FileText, Activity, Layers, ListChecks, Smartphone, Monitor, Wallet, Gauge, Clapperboard, BarChart3, Play, Pause, Square, GripVertical, Camera, MessageSquare, Lock, Unlock, Pencil } from "lucide-react";
 import { storage } from "@/lib/storage";
 import { pullSyncAndApply, pushSyncNow, scheduleSyncPush, getLastSyncedAt, onSyncMergedFromRemote } from "@/lib/sync";
@@ -3107,14 +3109,30 @@ function rsiSignal(rsi) {
   if (rsi >= 60) return { label: "売却", color: C.rust, strong: false };
   return null;
 }
-function RsiStatusRow({ label, rsi }) {
+const todayUtcDate = () => { const t = new Date(); return new Date(Date.UTC(t.getFullYear(), t.getMonth(), t.getDate())); };
+// RSI(14)トリガー列の1行：RSIの値（40以下＝緑・60以上＝赤、30以下・70以上は塗りつぶし）と、RSIトリガーの状態
+// （待機中・買いサイン・保有中のカウントダウン・利確サイン・期限撤退）を2段で表示する
+function RsiStatusRow({ rsi, st, s }) {
   const sig = rsiSignal(rsi);
+  const b = rsiBadge(st, s);
   return (
-    <div className="mono whitespace-nowrap flex items-center text-[13px] rounded" title={sig ? `RSI ${rsi.toFixed(1)}：${sig.strong ? (rsi <= 30 ? "30以下（売られすぎ）の強いシグナル" : "70以上（買われすぎ）の強いシグナル") : (rsi <= 40 ? "40以下" : "60以上")}` : "RSI 40〜60：中立"} style={{ height: 26, padding: "0 5px", marginLeft: -6, border: `1px solid ${sig ? sig.color : "transparent"}`, background: sig ? (sig.strong ? `${sig.color}33` : `${sig.color}14`) : "transparent" }}>
-      {rsi == null ? <span style={{ color: C.textDim }}>—</span> : (<>
-        <span className="font-bold" style={{ display: "inline-block", width: 36, textAlign: "right", color: sig ? sig.color : C.text }}>{rsi.toFixed(1)}</span>
-        <span className="text-[11px]" style={{ marginLeft: 8, color: sig ? sig.color : C.textDim, fontWeight: sig ? 700 : 400 }}>{sig ? sig.label : "中立"}</span>
-      </>)}
+    <div className="mono whitespace-nowrap flex flex-col min-w-0 w-full" style={{ lineHeight: 1.2 }}>
+      <div className="flex items-center gap-2 min-w-0">
+        <span className="font-bold text-[13px] rounded px-1" title={sig ? `RSI ${rsi.toFixed(1)}：${rsi <= 40 ? "40以下（ナンピン買いの目安）" : "60以上（売却の目安）"}` : "RSI 40〜60：中立"}
+          style={{ color: sig ? (sig.strong ? C.bg : sig.color) : C.text, background: sig?.strong ? sig.color : sig ? `${sig.color}22` : "transparent", border: `1px solid ${sig ? sig.color : "transparent"}` }}>{rsi == null ? "—" : rsi.toFixed(1)}</span>
+        <span className="text-[11px] font-bold rounded px-1.5 truncate" style={{ color: b.filled ? C.bg : b.color, background: b.filled ? b.color : "transparent", border: `1px solid ${b.color}${b.filled ? "" : "88"}` }}>{b.short}</span>
+      </div>
+      {st && (st.kind === "hold" || st.kind === "take" || st.kind === "timeout") ? (
+        <div className="flex items-center gap-1.5 text-[10px] min-w-0" style={{ color: C.textDim }}>
+          <span className="rounded-full overflow-hidden shrink-0" style={{ width: 46, height: 5, background: C.panel2, border: `1px solid ${C.borderSoft}` }}><span style={{ display: "block", width: `${Math.round(st.progress * 100)}%`, height: "100%", background: st.progress > 0.85 ? C.amber : C.blue }} /></span>
+          <span>期限{rsiYmd(st.deadline).slice(2)}</span>
+          <span style={{ color: st.pnlPct >= 0 ? C.teal : C.rust }}>{st.pnlPct >= 0 ? "+" : ""}{st.pnlPct.toFixed(1)}%</span>
+        </div>
+      ) : st?.kind === "wait" ? (
+        <div className="text-[10px] truncate" style={{ color: C.textDim }}>買い目標≦{s.buy}（あと{st.toBuy?.toFixed(1)}）・利確≧{s.sell}</div>
+      ) : st?.kind === "buy" ? (
+        <div className="text-[10px] truncate" style={{ color: C.teal }}>RSI≦{s.buy}到達。買付したら登録（クリック）</div>
+      ) : null}
     </div>
   );
 }
@@ -3129,7 +3147,7 @@ function StatusTwoRows({ top, bottom }) {
     </div>
   );
 }
-function StatusPanel({ d, dVoo, dQqq, onOpenSpeedAlert }) {
+function StatusPanel({ d, dVoo, dQqq, rsiTrigger, onOpenRsiTrigger, onOpenSpeedAlert }) {
   const tickers = [{ label: "VOO", data: dVoo }, { label: "QQQ", data: dQqq }]; // SP500はVOO換算に統合済みのため行を廃止
   // 見出し横に出す最新データの日付（米国時間の取引日。VOO・QQQのうち新しい方）。系列の日付はUTC0時基準のためUTCの年月日がそのまま米国の取引日
   const latestDate = [dVoo?.last.date, dQqq?.last.date].filter(Boolean).sort((a, b) => b - a)[0];
@@ -3137,7 +3155,7 @@ function StatusPanel({ d, dVoo, dQqq, onOpenSpeedAlert }) {
     <Panel title="現在のステータス" hideHeader className="h-full">
       {/* 列幅：評価額/ATH・最高値比は内容の幅ちょうど（auto）に詰め、残りをVOO/QQQ2段＋平常期間の指標を出す「経過日数」（広め）と
           DD加速度アラートで分け合う（画面幅が狭くても前2列の数値が重ならないようにする） */}
-      <div className="grid h-full" style={{ gridTemplateColumns: "auto auto auto minmax(0, 1.7fr) minmax(0, 1fr)" }}>
+      <div className="grid h-full" style={{ gridTemplateColumns: "auto auto minmax(250px, 1.25fr) minmax(0, 1.5fr) minmax(0, 1fr)" }}>
         <div className="px-3 py-1 flex flex-col min-w-0" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
           <div className="text-[10px] mb-0.5 whitespace-nowrap" style={{ color: C.textDim }}>
             評価額 / ATH
@@ -3149,16 +3167,18 @@ function StatusPanel({ d, dVoo, dQqq, onOpenSpeedAlert }) {
             const updated = isUpdatedToday(data); // 翌取引日の開場（9:30 ET）を過ぎても次の終値が無ければ未更新（文字をグレーアウトして示す）
             const atAth = data ? data.currentDD >= 0 : false; // 最新値がATH（ATH更新中）
             return (
-              <div key={label} className="text-[13px] mono whitespace-nowrap flex items-center rounded" style={{ height: 26, padding: "0 5px", marginLeft: -6, border: `1px solid ${atAth ? C.rust : "transparent"}`, background: atAth ? "rgba(192,101,75,0.08)" : "transparent" }}>
-                <span className="font-bold" style={{ color: atAth ? C.text : C.textMuted, display: "inline-block", width: 38 }}>{label}</span>
-                {data ? (<>
-                  <span style={{ display: "inline-block", width: 68, textAlign: "right", color: updated ? C.text : C.textDim }}>${data.currentPrice.toFixed(2)}</span>
-                  {chg !== null && (<span style={{ display: "inline-block", width: 54, textAlign: "right", marginLeft: 4, color: updated ? (chg >= 0 ? C.teal : C.rust) : C.textDim }}>（{chg >= 0 ? "+" : ""}{chg.toFixed(1)}%）</span>)}
-                  <span style={{ color: C.textDim, marginLeft: 8 }}>ATH</span>
-                  {/* ATH更新中は行全体を赤枠で囲み、ATHの金額・日付をtealで強調する（当日未更新ならやや薄く） */}
-                  <span style={{ display: "inline-block", width: 68, textAlign: "right", marginLeft: 4, color: atAth ? C.teal : C.textDim, fontWeight: atAth ? 700 : 400, opacity: atAth && !updated ? 0.6 : 1 }}>${data.currentATH.toFixed(2)}</span>
-                  <span className="text-[10px]" style={{ marginLeft: 4, color: atAth ? C.teal : C.textDim, fontWeight: atAth ? 700 : 400, opacity: atAth && !updated ? 0.6 : 1 }}>（{fmtYMD(data.athDate)}）</span>
-                </>) : (<span style={{ color: C.textDim }}>データ未取り込み</span>)}
+              <div key={label} className="mono whitespace-nowrap flex items-center rounded" style={{ padding: "1px 5px", marginLeft: -6, border: `1px solid ${atAth ? C.rust : "transparent"}`, background: atAth ? "rgba(192,101,75,0.08)" : "transparent" }}>
+                <span className="font-bold text-[13px]" style={{ color: atAth ? C.text : C.textMuted, display: "inline-block", width: 38 }}>{label}</span>
+                {data ? (
+                  <div className="flex flex-col" style={{ lineHeight: 1.15 }}>
+                    {/* ATHは値の上に小さく表示して横幅を詰める。ATH更新中は枠を赤にし、ATHの金額・日付をtealで強調する（当日未更新ならやや薄く） */}
+                    <span className="text-[10px]" style={{ color: atAth ? C.teal : C.textDim, fontWeight: atAth ? 700 : 400, opacity: atAth && !updated ? 0.6 : 1 }}>ATH ${data.currentATH.toFixed(2)}（{fmtYMD(data.athDate)}）</span>
+                    <span className="text-[13px]">
+                      <span style={{ color: updated ? C.text : C.textDim }}>${data.currentPrice.toFixed(2)}</span>
+                      {chg !== null && (<span style={{ marginLeft: 2, color: updated ? (chg >= 0 ? C.teal : C.rust) : C.textDim }}>（{chg >= 0 ? "+" : ""}{chg.toFixed(1)}%）</span>)}
+                    </span>
+                  </div>
+                ) : (<span className="text-[13px]" style={{ color: C.textDim }}>データ未取り込み</span>)}
               </div>
             );
           }); return <StatusTwoRows top={vooRow} bottom={qqqRow} />; })()}
@@ -3173,17 +3193,17 @@ function StatusPanel({ d, dVoo, dQqq, onOpenSpeedAlert }) {
                 {data.nextMilestone !== null && (<>
                   <span className="" style={{ marginLeft: 8, color: C.textMuted }}>DD{data.nextMilestone}%</span>
                   <span className="font-bold" style={{ color: C.text }}>（${(data.nextMilestone === -3 ? data.currentATH * 0.97 : data.nextMilestonePrice).toFixed(2)}）</span>
-                  <span className="font-bold" style={{ marginLeft: 2, color: C.text }}>{data.distanceToNextMilestone.toFixed(1)}%</span>
                 </>)}
               </>) : (<span style={{ color: C.textDim }}>—</span>)}
             </div>
           )); return <StatusTwoRows top={vooRow} bottom={qqqRow} />; })()}
         </div>
         {/* RSI(14)：40以下＝ナンピン買い（緑）、60以上＝売却（赤）。30以下・70以上（売られすぎ・買われすぎ）は塗りつぶして強調する */}
-        <div className="px-3 py-1 flex flex-col min-w-0" style={{ borderRight: `1px solid ${C.borderSoft}` }} title="RSI(14)：40以下でナンピン買い、60以上で売却のアラート（30以下・70以上は強いシグナル）">
-          <div className="flex items-center gap-1.5 mb-0.5"><Activity size={11} style={{ color: C.violet }} /><span className="text-[10px] font-bold" style={{ color: C.violet }}>RSI(14)</span></div>
-          <StatusTwoRows top={<RsiStatusRow label="VOO" rsi={dVoo?.last?.rsi ?? null} />} bottom={<RsiStatusRow label="QQQ" rsi={dQqq?.last?.rsi ?? null} />} />
-        </div>
+        <button onClick={onOpenRsiTrigger} className="px-3 py-1 flex flex-col min-w-0 text-left" style={{ borderRight: `1px solid ${C.borderSoft}`, background: "transparent", border: "none", borderRightStyle: "solid", borderRightWidth: 1, borderRightColor: C.borderSoft, cursor: "pointer" }} title="クリックでRSIトリガーの設定・バックテスト・履歴">
+          <div className="flex items-center gap-1.5 mb-0.5 min-w-0"><Activity size={11} style={{ color: C.violet }} /><span className="text-[10px] font-bold whitespace-nowrap" style={{ color: C.violet }}>RSI(14)トリガー</span><span className="text-[9px] truncate" style={{ color: C.textDim }}>（クリックで設定・バックテスト）</span></div>
+          <StatusTwoRows top={<RsiStatusRow rsi={dVoo?.last?.rsi ?? null} st={statusFor(dVoo?.FULL, rsiTrigger.voo, rsiTrigger.base, todayUtcDate())} s={rsiTrigger.voo} />}
+            bottom={<RsiStatusRow rsi={dQqq?.last?.rsi ?? null} st={statusFor(dQqq?.FULL, rsiTrigger.qqq, rsiTrigger.base, todayUtcDate())} s={rsiTrigger.qqq} />} />
+        </button>
         <div className="px-3 py-1 flex flex-col min-w-0" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
           <div className="flex items-center gap-1.5 mb-0.5"><Clock size={11} style={{ color: C.textDim }} /><span className="text-[10px]" style={{ color: C.textDim }}>経過日数</span></div>
           <StatusTwoRows top={<ElapsedDaysRow label="VOO" dInstrument={dVoo} />} bottom={<ElapsedDaysRow label="QQQ" dInstrument={dQqq} />} />
@@ -8384,6 +8404,8 @@ export default function DDDashboard() {
   const [mobilePage, setMobilePage] = useState(0);
   const [hydrated, setHydrated] = useState(false);
   const [lifecycle, setLifecycle] = useState(LIFECYCLE_DEFAULT);
+  // VOO・QQQ専用 RSIトリガー＆撤退実日数管理の設定（買い・売りRSI、撤退実日数、保有ポジション、基準投入額）。端末間で同期する
+  const [rsiTrigger, setRsiTrigger] = useState(DEFAULT_RSI_TRIGGER_SETTINGS);
   const [fixedPositions, setFixedPositions] = useState({}); // { [銘柄名]: 理由(空文字可) }
   const [prevSnapshot, setPrevSnapshot] = useState(null); // 詳細サマリー出力の前回スナップショット（差分表示用）
   const [vooQqqSeries, setVooQqqSeries] = useState([]); // 「データ更新」で取得したVOO/QQQ終値（S&P500のDD計算には使わない、CSV出力専用の補助データ）
@@ -8492,6 +8514,10 @@ export default function DDDashboard() {
         const res5 = await storage.get("portfolio_checkpoints");
         if (res5 && res5.value) setCheckpoints(JSON.parse(res5.value));
       } catch (e) { /* no saved checkpoints yet — keep built-in default */ }
+      try {
+        const resRsi = await storage.get("rsi_trigger_settings");
+        if (resRsi && resRsi.value) setRsiTrigger(normalizeRsiTriggerSettings(JSON.parse(resRsi.value)));
+      } catch (e) { /* no saved RSI trigger settings yet — keep defaults */ }
       try {
         const res6 = await storage.get("lifecycle_settings");
         if (res6 && res6.value) setLifecycle((prev) => ({ ...prev, ...JSON.parse(res6.value) }));
@@ -8639,6 +8665,10 @@ export default function DDDashboard() {
       persistCheckpoints(next);
       return next;
     });
+  }
+  function handleRsiTriggerChange(next) {
+    setRsiTrigger(next);
+    storage.set("rsi_trigger_settings", JSON.stringify(next)).then(() => scheduleSyncPush(setSyncOk)).catch(() => { /* storage unavailable */ });
   }
   async function persistLifecycle(next) {
     try { await storage.set("lifecycle_settings", JSON.stringify(next)); scheduleSyncPush(setSyncOk); } catch (e) { /* storage unavailable */ }
@@ -9124,6 +9154,7 @@ export default function DDDashboard() {
         @media (orientation: landscape) { .force-landscape-inner { width: 100vw; height: 100vh; transform: translate(-50%, -50%); } }
       `}</style>
 
+      {modal?.type === "rsiTrigger" && <FullScreenModal title="RSIトリガー＆撤退実日数管理（VOO・QQQ）" onClose={() => setModal(null)}><RsiTriggerPanel settings={rsiTrigger} onChange={handleRsiTriggerChange} dVoo={dVoo} dQqq={dQqq} /></FullScreenModal>}
       {modal?.type === "speedAlert" && (speedAlertInstrument === "qqq" ? dQqq : dVoo) && <FullScreenModal title={`DD加速度アラート（速度・経過日数の法則・${speedAlertInstrument.toUpperCase()}基準）`} onClose={() => setModal(null)}><SpeedAlertModalContent d={speedAlertInstrument === "qqq" ? dQqq : dVoo} instrumentLabel={speedAlertInstrument.toUpperCase()} vooSeries={vooCalcSeries} qqqSeries={qqqCalcSeries} isMobile={isMobile} /></FullScreenModal>}
       {modal?.type === "portfolio" && <FullScreenModal title={<>ポートフォリオ構成表{holdingsDateSuffix}</>} onClose={() => setModal(null)}><PortfolioTableContent view={pieView} holdings={holdings} brokerSummaries={brokerSummaries} ownerDates={ownerUpdatedDates} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
       {modal?.type === "ddTable" && <FullScreenModal title="DD毎のA〜E配分表" onClose={() => setModal(null)}><DDTableContent modelRow={d.modelRow} modelRows={d.trackRecord.dynamicModelRows} holdings={holdings} actualHoldings={combinedHoldings} currentDD={d.currentDD} asOfLabel={holdingsDateLabel} lastSyncedLabel={lastSyncedLabel} /></FullScreenModal>}
@@ -9218,7 +9249,7 @@ export default function DDDashboard() {
         <DepthGauge dd={d.currentDD} />
 
         <div className="flex-1 flex flex-col gap-0 p-2 min-w-0">
-          <div style={{ height: 100, flexShrink: 0 }}><StatusPanel d={d} dVoo={dVoo} dQqq={dQqq} onOpenSpeedAlert={(inst) => { setSpeedAlertInstrument(inst); setModal({ type: "speedAlert" }); }} /></div>
+          <div style={{ height: 100, flexShrink: 0 }}><StatusPanel d={d} dVoo={dVoo} dQqq={dQqq} rsiTrigger={rsiTrigger} onOpenRsiTrigger={() => setModal({ type: "rsiTrigger" })} onOpenSpeedAlert={(inst) => { setSpeedAlertInstrument(inst); setModal({ type: "speedAlert" }); }} /></div>
 
           <div className="flex-1 flex flex-col" style={{ gap: 0, minHeight: 0 }}>
           {/* 上段（評価額/DDチャート・現状分析）を下段より大きく取る（2:1）。下段はA〜E配分乖離が収まる最小の高さを確保する */}

@@ -22,6 +22,7 @@ export const SYNC_KEYS = [
   "summary_prev_snapshot",
   "investment_performance_data",
   "trade_history",
+  "rsi_trigger_settings",
 ] as const;
 
 const SYNC_API_URL = "https://stock-prices.shinichiogasawara0103.workers.dev/sync";
