@@ -66,3 +66,12 @@ test("status：保有中の残り実日数・期限日、利確・期限撤退�
   assert.equal(w.kind, "wait");
   assert.ok(Math.abs((w.toBuy ?? 0) - 19.8) < 1e-9);
 });
+
+test("backtest：startDate より前のサインは使わず、始期以降から検証する", () => {
+  const rows = pts([["2024-01-01", 100, 20], ["2024-01-05", 120, 75], ["2024-02-01", 90, 25], ["2024-02-10", 99, 72]]);
+  const all = backtestRsiTrigger(rows, P);
+  const late = backtestRsiTrigger(rows, { ...P, startDate: D("2024-01-10") });
+  assert.equal(all.trades.length, 2);
+  assert.equal(late.trades.length, 1);
+  assert.equal(late.summary.from?.toISOString().slice(0, 10), "2024-02-01");
+});

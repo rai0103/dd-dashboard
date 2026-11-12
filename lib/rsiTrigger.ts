@@ -7,7 +7,7 @@
 // 待機期間はMMF（年利3.5%）で運用したとみなし、資金を1つにまとめて回した場合の通算年率（CAGR）も出す。
 
 export interface RsiPoint { date: Date; price: number; rsi: number | null }
-export interface RsiTriggerParams { buy: number; sell: number; exitDays: number; base: number; mmfRate?: number }
+export interface RsiTriggerParams { buy: number; sell: number; exitDays: number; base: number; mmfRate?: number; /** バックテストの始期（この日以降でRSIがある最初の日から）。RSI自体は始期より前のデータも使って計算済みのものを使う */ startDate?: Date }
 export interface RsiTrade {
   buyDate: Date; buyPrice: number;
   sellDate: Date | null; sellPrice: number; // 未決済は最新値で評価（sellDate=null）
@@ -50,7 +50,7 @@ export function xirr(flows: { date: Date; amount: number }[]): number | null {
 export function backtestRsiTrigger(points: RsiPoint[], p: RsiTriggerParams): { trades: RsiTrade[]; summary: RsiBacktestSummary } {
   const mmf = p.mmfRate ?? 0.035;
   const trades: RsiTrade[] = [];
-  const start = points.findIndex((x) => x.rsi != null);
+  const start = points.findIndex((x) => x.rsi != null && (!p.startDate || x.date.getTime() >= p.startDate.getTime()));
   const empty: RsiBacktestSummary = { closed: 0, winRate: null, avgDays: null, avgValue: null, minValue: null, irr: null, cagrWithMmf: null, heldCagr: null, buyHoldCagr: null, from: null, to: null, open: null };
   if (start < 0) return { trades, summary: empty };
   let entry = -1, lastExit = -1, minPrice = Infinity;

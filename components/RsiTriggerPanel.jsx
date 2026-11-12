@@ -95,20 +95,23 @@ function StatusCard({ label, d, s, base, onSetPosition, autoPosition, today }) {
   );
 }
 
-export default function RsiTriggerPanel({ settings, onChange, dVoo, dQqq }) {
+// dVooLong：VOOのバックテストに使う長期系列（上場前はS&P500指数をVOO換算した本系列）。始期はQQQ（上場前はNasdaq-100指数を
+// 換算）と同じ日にそろえ、同じ期間でVOOとQQQを比べる。現在の状態（ステータス）はVOO自身の系列（dVoo）を使う。
+export default function RsiTriggerPanel({ settings, onChange, dVoo, dVooLong, dQqq }) {
   const [histTab, setHistTab] = useState("voo");
   const today = todayUtc();
   const ds = { voo: dVoo, qqq: dQqq };
   const setInst = (key, patch) => onChange({ ...settings, [key]: { ...settings[key], ...patch } });
   const bt = useMemo(() => {
     const out = {};
-    for (const { key } of INSTRUMENTS) {
-      const d = ds[key], s = settings[key];
-      out[key] = d?.FULL?.length ? backtestRsiTrigger(d.FULL, { buy: s.buy, sell: s.sell, exitDays: s.exitDays, base: settings.base * 10000, mmfRate: MMF_RATE }) : null;
-    }
+    const q = dQqq?.FULL?.length ? backtestRsiTrigger(dQqq.FULL, { buy: settings.qqq.buy, sell: settings.qqq.sell, exitDays: settings.qqq.exitDays, base: settings.base * 10000, mmfRate: MMF_RATE }) : null;
+    const vSrc = dVooLong?.FULL?.length ? dVooLong : dVoo;
+    const s = settings.voo;
+    out.voo = vSrc?.FULL?.length ? backtestRsiTrigger(vSrc.FULL, { buy: s.buy, sell: s.sell, exitDays: s.exitDays, base: settings.base * 10000, mmfRate: MMF_RATE, startDate: q?.summary.from ?? undefined }) : null;
+    out.qqq = q;
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dVoo, dQqq, settings.base, settings.voo.buy, settings.voo.sell, settings.voo.exitDays, settings.qqq.buy, settings.qqq.sell, settings.qqq.exitDays]);
+  }, [dVoo, dVooLong, dQqq, settings.base, settings.voo.buy, settings.voo.sell, settings.voo.exitDays, settings.qqq.buy, settings.qqq.sell, settings.qqq.exitDays]);
 
   const rows = [
     ["検証期間", (r) => (r?.summary.from ? `${ymd(r.summary.from)}〜${ymd(r.summary.to)}` : "—")],
@@ -164,7 +167,7 @@ export default function RsiTriggerPanel({ settings, onChange, dVoo, dQqq }) {
           </tbody>
         </table>
         <div className="text-[10px] leading-relaxed" style={{ color: C.textDim }}>
-          RSIトリガーに達した日の終値で売買した場合の検証です（1銘柄につき1ポジション・同じ日の買い直しなし）。評価額は1回あたり基準投入額{settings.base}万円を投じた場合。
+          RSIトリガーに達した日の終値で売買した場合の検証です（1銘柄につき1ポジション・同じ日の買い直しなし）。「平均評価額」「最低評価額」と履歴の「売却時の資金」は1回あたり基準投入額{settings.base}万円を投じた場合の金額、履歴の「評価額」はその日の終値（$）です。VOOの検証はQQQと同じ始期にそろえています（VOO上場前はS&P500指数をVOO換算した値）。
           IRRは決済したトレードの買付・売却の金額（日付付き）から計算した内部収益率です（検証期間が長いと古いトレードの比重が大きくなります）。保有期間中の年率は、各トレードの騰落を複利でつなぎ保有実日数の合計で年率にした値、通算年率は資金をまとめて回し、待機中はMMFで運用した場合の年率です。過去のデータ（VOO・QQQの上場前は指数を換算した値）にもとづく参考値で、将来を保証するものではありません。
         </div>
       </Card>
@@ -174,20 +177,22 @@ export default function RsiTriggerPanel({ settings, onChange, dVoo, dQqq }) {
         <div style={{ maxHeight: 360, overflowY: "auto" }}>
           <table className="mono w-full text-[12px]" style={{ borderCollapse: "collapse" }}>
             <thead style={{ position: "sticky", top: 0, background: C.panel }}><tr style={{ color: C.textDim }}>
-              {["買付日", "売却日", "保有実日数", "売却理由", "売却時評価額", "騰落率"].map((h) => <th key={h} className="font-normal py-1 text-right first:text-left">{h}</th>)}
+              {["買付日", "評価額", "売却日", "評価額", "保有実日数", "売却理由", "売却時の資金", "騰落率"].map((h, k) => <th key={k} className="font-normal py-1 text-right first:text-left">{h}</th>)}
             </tr></thead>
             <tbody>
               {hist.map((t, i) => (
                 <tr key={i} style={{ borderTop: `1px solid ${C.borderSoft}`, color: C.text }}>
                   <td className="py-1">{ymd(t.buyDate)}</td>
+                  <td className="py-1 text-right" style={{ color: C.textMuted }}>${t.buyPrice.toFixed(2)}</td>
                   <td className="py-1 text-right" style={{ color: t.sellDate ? C.text : C.blue }}>{t.sellDate ? ymd(t.sellDate) : "保有中"}</td>
+                  <td className="py-1 text-right" style={{ color: C.textMuted }}>${t.sellPrice.toFixed(2)}{t.sellDate ? "" : "（現在）"}</td>
                   <td className="py-1 text-right">{t.days}日</td>
                   <td className="py-1 text-right" style={{ color: t.reason === "RSI利確" ? C.teal : t.reason === "期限撤退" ? C.amber : C.blue }}>{t.reason}</td>
                   <td className="py-1 text-right">{man(t.value)}</td>
                   <td className="py-1 text-right" style={{ color: t.ret >= 0 ? C.teal : C.rust }}>{pct(t.ret)}</td>
                 </tr>
               ))}
-              {!hist.length && <tr><td colSpan={6} className="py-3 text-center" style={{ color: C.textDim }}>この設定ではトレードがありません。</td></tr>}
+              {!hist.length && <tr><td colSpan={8} className="py-3 text-center" style={{ color: C.textDim }}>この設定ではトレードがありません。</td></tr>}
             </tbody>
           </table>
         </div>
