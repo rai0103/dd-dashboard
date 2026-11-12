@@ -127,6 +127,21 @@ export default function RsiTriggerPanel({ settings, onChange, dVoo, dVooLong, dQ
     ["現在のポジション（バックテスト上）", (r) => (r?.summary.open ? `保有中（${ymd(r.summary.open.buyDate)}〜・${pct(r.summary.open.ret)}）` : "待機中")],
   ];
   const hist = (bt[histTab]?.trades || []).slice().reverse();
+  // 履歴の先頭に出す集計（決済したトレードのみ。保有中は含めない）
+  const stats = useMemo(() => {
+    const closed = (bt[histTab]?.trades || []).filter((t) => t.sellDate);
+    if (!closed.length) return null;
+    const med = (arr) => { const a = arr.slice().sort((x, y) => x - y); const m = a.length >> 1; return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2; };
+    const avg = (arr) => arr.reduce((x, y) => x + y, 0) / arr.length;
+    const wins = closed.filter((t) => t.ret > 0).length, losses = closed.filter((t) => t.ret < 0).length;
+    return {
+      n: closed.length, wins, losses, draws: closed.length - wins - losses, winRate: (wins / closed.length) * 100,
+      take: closed.filter((t) => t.reason === "RSI利確").length, timeout: closed.filter((t) => t.reason === "期限撤退").length,
+      avgDays: avg(closed.map((t) => t.days)), medDays: med(closed.map((t) => t.days)),
+      avgValue: avg(closed.map((t) => t.value)), medValue: med(closed.map((t) => t.value)),
+      avgRet: avg(closed.map((t) => t.ret)), medRet: med(closed.map((t) => t.ret)),
+    };
+  }, [bt, histTab]);
 
   return (
     <div className="flex flex-col gap-3 text-[12px]" style={{ color: C.text }}>
@@ -172,13 +187,45 @@ export default function RsiTriggerPanel({ settings, onChange, dVoo, dVooLong, dQ
         </div>
       </Card>
 
-      {/* 4. 全ターム履歴 */}
+      {/* 4. 全ターム履歴（先頭に、決済したトレードの平均・中央値・勝率をまとめる） */}
       <Card title="全ターム履歴" right={<div className="flex gap-0.5">{INSTRUMENTS.map(({ key, label }) => (<button key={key} onClick={() => setHistTab(key)} className="text-[11px] px-2 py-0.5 rounded" style={{ color: histTab === key ? C.bg : C.textMuted, background: histTab === key ? C.violet : "transparent", fontWeight: histTab === key ? 700 : 400, border: `1px solid ${histTab === key ? C.violet : C.borderSoft}`, cursor: "pointer" }}>{label}（{bt[key]?.trades.length ?? 0}）</button>))}</div>}>
-        <div style={{ maxHeight: 360, overflowY: "auto" }}>
-          <table className="mono w-full text-[12px]" style={{ borderCollapse: "collapse" }}>
-            <thead style={{ position: "sticky", top: 0, background: C.panel }}><tr style={{ color: C.textDim }}>
-              {["買付日", "評価額", "売却日", "評価額", "保有実日数", "売却理由", "売却時の資金", "騰落率"].map((h, k) => <th key={k} className="font-normal py-1 text-right first:text-left">{h}</th>)}
-            </tr></thead>
+        {/* 右端の騰落率がスクロールバーに接しないよう、表の右に余白を取り、列は均等に配置する */}
+        <div style={{ maxHeight: 420, overflowY: "auto", paddingRight: 28 }}>
+          <table className="mono w-full text-[12px]" style={{ borderCollapse: "collapse", tableLayout: "fixed" }}>
+            <colgroup><col style={{ width: "12%" }} /><col style={{ width: "10%" }} /><col style={{ width: "12%" }} /><col style={{ width: "12%" }} /><col style={{ width: "11%" }} /><col style={{ width: "14%" }} /><col style={{ width: "15%" }} /><col style={{ width: "14%" }} /></colgroup>
+            <thead style={{ position: "sticky", top: 0, background: C.panel, zIndex: 1 }}>
+              <tr style={{ color: C.textDim }}>
+                {["買付日", "評価額", "売却日", "評価額", "保有実日数", "売却理由", "売却時の資金", "騰落率"].map((h, k) => <th key={k} className="font-normal py-1 text-right first:text-left">{h}</th>)}
+              </tr>
+              {stats && (<>
+                <tr style={{ borderTop: `1px solid ${C.border}`, color: C.text, background: C.panel2 }}>
+                  <td className="py-1 font-bold" style={{ color: C.violet }}>平均</td>
+                  <td colSpan={3} className="py-1 text-right text-[11px]" style={{ color: C.textDim }}>決済{stats.n}回（保有中を除く）</td>
+                  <td className="py-1 text-right">{stats.avgDays.toFixed(0)}日</td>
+                  <td className="py-1 text-right text-[11px]"><span style={{ color: C.teal }}>利確{stats.take}</span>・<span style={{ color: C.amber }}>撤退{stats.timeout}</span></td>
+                  <td className="py-1 text-right">{man(stats.avgValue)}</td>
+                  <td className="py-1 text-right" style={{ color: stats.avgRet >= 0 ? C.teal : C.rust }}>{pct(stats.avgRet, 2)}</td>
+                </tr>
+                <tr style={{ color: C.text, background: C.panel2 }}>
+                  <td className="py-1 font-bold" style={{ color: C.violet }}>中央値</td>
+                  <td colSpan={3} />
+                  <td className="py-1 text-right">{stats.medDays.toFixed(0)}日</td>
+                  <td />
+                  <td className="py-1 text-right">{man(stats.medValue)}</td>
+                  <td className="py-1 text-right" style={{ color: stats.medRet >= 0 ? C.teal : C.rust }}>{pct(stats.medRet, 2)}</td>
+                </tr>
+                <tr style={{ color: C.text, background: C.panel2, borderBottom: `1px solid ${C.border}` }}>
+                  <td className="py-1 font-bold" style={{ color: C.violet }}>勝率</td>
+                  <td colSpan={7} className="py-1 text-right">
+                    <b style={{ color: C.text }}>{stats.winRate.toFixed(1)}%</b>
+                    <span className="ml-2" style={{ color: C.teal }}>{stats.wins}勝</span>
+                    <span className="ml-1" style={{ color: C.rust }}>{stats.losses}敗</span>
+                    {stats.draws > 0 && <span className="ml-1" style={{ color: C.textDim }}>{stats.draws}分</span>}
+                    <span className="ml-2 text-[11px]" style={{ color: C.textDim }}>（騰落率がプラスなら勝ち・マイナスなら負け）</span>
+                  </td>
+                </tr>
+              </>)}
+            </thead>
             <tbody>
               {hist.map((t, i) => (
                 <tr key={i} style={{ borderTop: `1px solid ${C.borderSoft}`, color: C.text }}>
