@@ -4707,14 +4707,23 @@ function DataInputModal({ onClose, synthetic = null, qqqSynthetic = null, rawSer
   // 補正した合成系列。lib/sp500Synthetic.ts・lib/qqqSynthetic.ts）から出力し、上場前の補正値には
   // 「VOO備考」「QQQ備考」列で注釈を付ける（騰落率・DD率はスケール変換の影響を受けないため、補正値もそのまま使える）。
   // GOLDはvooQqqSeries（実際に取得できた日のみ値が入る。上場前換算の対象外）から出力する。
+  // RSI（14日・ワイルダー方式。評価額/DDチャートのRSIと同じ計算）は、各銘柄の終値の並びから計算して末尾の列に出す
+  // （既存の列の位置は変えない。取り込み時は列名で読むため、RSI列は無視される）。
   const handleExportCSV = () => {
-    const header = "Date,VOO,QQQ,GOLD,VOO備考,QQQ備考";
+    const header = "Date,VOO,QQQ,GOLD,VOO備考,QQQ備考,VOO_RSI14,QQQ_RSI14,GOLD_RSI14";
     const vooRows = synthetic ? synthetic.series : [];
     const qqqRows = qqqSynthetic ? qqqSynthetic.series : [];
     const vooByDate = new Map(vooRows.map((p) => [p.date.toISOString().slice(0, 10), p.price]));
     const qqqByDate = new Map(qqqRows.map((p) => [p.date.toISOString().slice(0, 10), p.price]));
     const goldByDate = new Map(vooQqqSeries.filter((p) => p.gold != null).map((p) => [p.date.toISOString().slice(0, 10), p.gold]));
     const allDates = new Set([...vooByDate.keys(), ...qqqByDate.keys(), ...goldByDate.keys()]);
+    const rsiByDate = (byDate) => {
+      const ds = [...byDate.keys()].sort();
+      const r = computeRsi(ds.map((k) => Number(byDate.get(k))), 14);
+      return new Map(ds.map((k, i) => [k, r[i]]));
+    };
+    const vooRsi = rsiByDate(vooByDate), qqqRsi = rsiByDate(qqqByDate), goldRsi = rsiByDate(goldByDate);
+    const rsiCell = (m, k) => { const v = m.get(k); return v != null ? v.toFixed(1) : ""; };
     const vooJunction = synthetic?.junctionDate || null; // この日より前＝SP500指数を補正した値
     const qqqJunction = qqqSynthetic?.junctionDate || null; // この日より前＝Nasdaq-100指数を補正した値
     const rows = [...allDates].sort().map((dateStr) => {
@@ -4728,6 +4737,9 @@ function DataInputModal({ onClose, synthetic = null, qqqSynthetic = null, rawSer
         gold != null ? gold : "",
         vooNote,
         qqqNote,
+        rsiCell(vooRsi, dateStr),
+        rsiCell(qqqRsi, dateStr),
+        rsiCell(goldRsi, dateStr),
       ].join(",");
     });
     const csv = [header, ...rows].join("\n");
