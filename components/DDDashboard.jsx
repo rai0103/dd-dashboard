@@ -2285,8 +2285,8 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBru
         {/* 70以上＝買われすぎ・30以下＝売られすぎの帯と線 */}
         <ReferenceArea yAxisId="rsi" y1={70} y2={100} fill={C.rust} fillOpacity={0.07} />
         <ReferenceArea yAxisId="rsi" y1={0} y2={30} fill={C.teal} fillOpacity={0.07} />
-        <ReferenceLine yAxisId="rsi" y={70} stroke={C.rust} strokeDasharray="4 3" strokeWidth={1.2} label={{ value: "70 買われすぎ", position: "insideTopRight", fill: C.rust, fontSize: small }} />
-        <ReferenceLine yAxisId="rsi" y={30} stroke={C.teal} strokeDasharray="4 3" strokeWidth={1.2} label={{ value: "30 売られすぎ", position: "insideBottomRight", fill: C.teal, fontSize: small }} />
+        <ReferenceLine yAxisId="rsi" y={70} stroke={C.rust} strokeDasharray="4 3" strokeWidth={1.2} label={{ value: "70 買われすぎ", position: "insideBottomRight", fill: C.rust, fontSize: small }} />
+        <ReferenceLine yAxisId="rsi" y={30} stroke={C.teal} strokeDasharray="4 3" strokeWidth={1.2} label={{ value: "30 売られすぎ", position: "insideTopRight", fill: C.teal, fontSize: small }} />
         <Line yAxisId="rsi" type="linear" dataKey="rsi" stroke={C.violet} strokeWidth={1.3} dot={false} isAnimationActive={false} connectNulls />
         {withBrush && <Brush dataKey="date" height={26} stroke={priceColor} fill={C.panel2} tickFormatter={(dt) => fmtAxisDate(new Date(dt), rangeDays)} travellerWidth={8} />}
       </ComposedChart>
