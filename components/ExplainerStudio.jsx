@@ -536,7 +536,7 @@ export default function ExplainerStudio() {
         const blob = await generateImage(withStyleHint(s.visual.imagePrompt, styleHint), "16:9", signal);
         const file = new File([blob], `ai-${s.id}.png`, { type: blob.type || "image/png" });
         const im = await saveImage(file);
-        out[i] = { ...out[i], imageId: im.id };
+        out[i] = { ...out[i], imageId: im.id, visual: { ...out[i].visual, emphasis: "" } }; // 画像には「強調のひとこと」（AIが付けた情景の説明）を重ねない
       } catch (e) {
         if (e?.code === "ABORTED") throw e;
         if (e?.code === "NO_API_KEY") noKey = true;
@@ -563,7 +563,7 @@ export default function ExplainerStudio() {
     const out = list.slice();
     let done = 0;
     const step = () => onStep?.(`スライドの画像を用意中…（${++done}/${idx.length}）`);
-    const setImg = (i, imageId, prompt) => { out[i] = { ...out[i], imageId, visual: { ...out[i].visual, kind: "image", imagePrompt: out[i].visual.imagePrompt || prompt || "" } }; };
+    const setImg = (i, imageId, prompt) => { out[i] = { ...out[i], imageId, visual: { ...out[i].visual, kind: "image", emphasis: "", imagePrompt: out[i].visual.imagePrompt || prompt || "" } }; };
     const genAi = async (i) => {
       const prompt = out[i].visual.imagePrompt || plans.get(String(i))?.imagePrompt;
       if (!prompt || res.noKey) { res.failed++; return; }
@@ -637,7 +637,7 @@ export default function ExplainerStudio() {
         ...p,
         longScenes: p.longScenes.map((sc) => {
           const n = byId.get(sc.id);
-          return n && n.imageId && !sc.imageId ? { ...sc, imageId: n.imageId, visual: { ...sc.visual, kind: "image", imagePrompt: n.visual.imagePrompt } } : sc;
+          return n && n.imageId && !sc.imageId ? { ...sc, imageId: n.imageId, visual: { ...sc.visual, kind: "image", emphasis: "", imagePrompt: n.visual.imagePrompt } } : sc;
         }),
       }));
       const added = r.free + r.ai;
@@ -669,7 +669,7 @@ export default function ExplainerStudio() {
         let poolIdx = 0;
         longScenes = longScenes.map((s) => {
           if (s.visual.kind === "image" && s.visual.imagePrompt && poolIdx < prevImagePool.length) {
-            return { ...s, imageId: prevImagePool[poolIdx++] };
+            return { ...s, imageId: prevImagePool[poolIdx++], visual: { ...s.visual, emphasis: "" } };
           }
           return s;
         });
@@ -960,7 +960,7 @@ export default function ExplainerStudio() {
     if (!file || !file.type.startsWith("image/")) { alert("画像ファイルを選んでください"); return; }
     const im = await saveImage(file, credit?.caption, credit);
     await refreshImages();
-    setScenes((list) => list.map((s) => (s.id === sceneId ? { ...s, imageId: im.id, visual: { ...s.visual, kind: "image" } } : s)));
+    setScenes((list) => list.map((s) => (s.id === sceneId ? { ...s, imageId: im.id, visual: { ...s.visual, kind: "image", emphasis: "" } } : s)));
     setRightsPendingId(null);
     // [Stage E-11] 画像を添付したら、まず変更後のスライドをプレビューに表示する
     const idx = scenes.findIndex((s) => s.id === sceneId);
@@ -978,7 +978,7 @@ export default function ExplainerStudio() {
   // グラフ作成ページ（/chart-studio/）のスクリーンショットや、他の場面で使った画像・以前の手動アップロード／AI生成画像を
   // 選べるようにするためのもの（attachImageと違い、saveImageは呼ばない＝ライブラリには何も追加しない）。
   const attachExistingImage = (sceneId, imageId) => {
-    setScenes((list) => list.map((s) => (s.id === sceneId ? { ...s, imageId, visual: { ...s.visual, kind: "image" } } : s)));
+    setScenes((list) => list.map((s) => (s.id === sceneId ? { ...s, imageId, visual: { ...s.visual, kind: "image", emphasis: "" } } : s)));
     setRightsPendingId(null);
     const idx = scenes.findIndex((s) => s.id === sceneId);
     if (idx >= 0) previewSceneAt(idx);

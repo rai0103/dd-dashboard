@@ -790,7 +790,8 @@ const drawImage: Draw = (c, sc, e) => {
   c.fillStyle = g; c.fillRect(0, 0, e.W, e.H);
   c.restore();
   if (v.heading) text(c, v.heading, 20, 36, 22, WHITE, { bold: true, shadow: true, maxW: e.W - 40, alpha: k });
-  const msg = v.emphasis || sc.caption;
+  // 画像の下部に重ねる文字は「強調のひとこと」を入れた場合だけ（空ならテロップで代用せず、何も重ねない）
+  const msg = v.emphasis;
   if (msg) textBlock(c, msg, 20, e.H - (e.portrait ? 70 : 50), e.W - 40, e.portrait ? 22 : 24, WHITE, { bold: true, maxLines: 2, shadow: true, alpha: ease(sub(e.p, 0.15, 0.35)) });
   text(c, '※イメージ', e.W - 12, 20, 11, WHITE, { align: 'right', alpha: 0.7 });
 };
