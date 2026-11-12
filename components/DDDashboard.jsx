@@ -1,10 +1,11 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   ComposedChart, LineChart, Area, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
-  ReferenceLine, ReferenceDot, ResponsiveContainer, PieChart, Pie, Cell, Brush, Customized,
+  ReferenceLine, ReferenceDot, ReferenceArea, ResponsiveContainer, PieChart, Pie, Cell, Brush, Customized,
 } from "recharts";
+import { computeRsi } from "@/lib/rsi";
 import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Download, RefreshCw, Database, Trash2, Zap, Copy, FileText, Activity, Layers, ListChecks, Smartphone, Monitor, Wallet, Gauge, Clapperboard, BarChart3, Play, Pause, Square, GripVertical, Camera, MessageSquare, Lock, Unlock, Pencil } from "lucide-react";
 import { storage } from "@/lib/storage";
 import { pullSyncAndApply, pushSyncNow, scheduleSyncPush, getLastSyncedAt, onSyncMergedFromRemote } from "@/lib/sync";
@@ -393,6 +394,9 @@ function buildAnalysis(d, currentHoldingPct, totalValue, dQqq, qqqAmplification)
 function computeAll(rawSeries, trackRecordOverride) {
   let ath = 0;
   const FULL = rawSeries.map((p, i) => { ath = Math.max(ath, p.price); return { i, date: p.date, price: p.price, ath, dd: Number((((p.price / ath) - 1) * 100).toFixed(2)) }; });
+  // 評価額/DDチャートのRSI（14日・ワイルダー方式）。日次終値の全期間から計算し、各日の点に持たせる（表示期間で間引いても値は正確）
+  const rsi = computeRsi(FULL.map((p) => p.price), 14);
+  FULL.forEach((p, i) => { p.rsi = rsi[i]; });
   const last = FULL[FULL.length - 1];
   const currentDD = last.dd, currentPrice = last.price, currentATH = last.ath;
   const isDrawdown = currentDD <= -3;
@@ -2107,7 +2111,7 @@ function ChartMarkers({ xAxisMap, yAxisMap, points, activeDate }) {
 // カーソル追従ツールチップの中身。標準の日付・DD%・評価額・ATHに加え、ホバー中の日付がマーカー点（大底・高値更新等）と
 // 一致する場合はその注釈をこの同じ吹き出しの中に追記する。吹き出しを1つに統合することで、
 // マーカー用の別の吹き出しとカーソル追従ツールチップが別々の位置に出て重なる、という問題が構造的に起きなくなる。
-function EvalTooltipContent({ active, payload, label, markerByTime }) {
+function EvalTooltipContent({ active, payload, label, markerByTime, showRsi = false }) {
   if (!active || !payload || !payload.length || !label) return null;
   const marker = markerByTime.get(label.getTime());
   return (
@@ -2119,6 +2123,7 @@ function EvalTooltipContent({ active, payload, label, markerByTime }) {
           const value = entry.dataKey === "dd" ? `${entry.value}%` : `$${entry.value}`;
           return (<li key={i} style={{ display: "block", paddingTop: 4, paddingBottom: 4, color: entry.color }}>{name} : {value}</li>);
         })}
+        {showRsi && payload[0]?.payload?.rsi != null && (() => { const v = payload[0].payload.rsi; return (<li style={{ display: "block", paddingTop: 4, paddingBottom: 4, color: C.violet }}>RSI(14) : {v.toFixed(1)}{v >= 70 ? "（買われすぎ）" : v <= 30 ? "（売られすぎ）" : ""}</li>); })()}
       </ul>
       {marker && (
         <div className="mono" style={{ marginTop: 4, paddingTop: 4, borderTop: `1px solid ${C.borderSoft}`, color: marker.color, fontWeight: 700 }}>{marker.label}</div>
@@ -2228,9 +2233,17 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBru
   const episodeMarkers = hidden.price ? [] : buildEpisodeMarkers({ chartData, d, periodStats, fontSize: markerFontSize });
   const markerPoints = hidden.markers ? episodeMarkers.filter((m) => m.isCurrent) : episodeMarkers; // 「DD印」オフ時は現在値の■だけ残す
   const markerByTime = new Map(markerPoints.map((m) => [m.date.getTime(), m]));
-  return (
+  // RSI：凡例の「RSI(14)」で表示したときだけ、評価額/DDチャートの下に別の枠（高さの約28%）で表示する。
+  // 2つのチャートは syncId でカーソル位置をそろえ、左右の軸の幅・余白も同じにして日付の位置を合わせる。
+  const syncId = useId();
+  const showRsi = !hidden.rsi && chartData.some((p) => p.rsi != null);
+  const margin = compact ? { top: 10, right: 2, left: 0, bottom: 0 } : { top: 12, right: 44, left: 0, bottom: 0 };
+  const leftW = compact ? 40 : 48, rightW = compact ? 38 : 46;
+  const mainH = showRsi && height ? Math.round(height * 0.72) : height;
+  const main = (
     <ComposedChart
-      width={width} height={height} data={chartData} margin={compact ? { top: 10, right: 2, left: 0, bottom: 0 } : { top: 12, right: 44, left: 0, bottom: withBrush ? 0 : 0 }}
+      syncId={showRsi ? syncId : undefined}
+      width={width} height={mainH} data={chartData} margin={margin}
       onMouseMove={(state) => setActiveDate(state && state.isTooltipActive && state.activeLabel ? state.activeLabel : null)}
       onMouseLeave={() => setActiveDate(null)}
     >
@@ -2242,7 +2255,7 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBru
       <XAxis dataKey="date" tickFormatter={(dt) => fmtAxisDate(dt, rangeDays)} tick={{ fill: C.textDim, fontSize }} axisLine={{ stroke: C.border }} tickLine={false} minTickGap={40} />
       <YAxis yAxisId="price" domain={["auto", "auto"]} tick={{ fill: priceColor, fontSize }} axisLine={false} tickLine={false} width={compact ? 40 : 48} label={{ value: "評価額", angle: -90, position: "insideLeft", fill: priceColor, fontSize }} />
       <YAxis yAxisId="dd" orientation="right" domain={[ddTicks[ddTicks.length - 1], 0]} ticks={ddTicks} interval={0} tick={{ fill: C.rust, fontSize }} axisLine={false} tickLine={false} width={compact ? 38 : 46} label={{ value: "DD%", angle: 90, position: "insideRight", fill: C.rust, fontSize }} />
-      <Tooltip content={(props) => <EvalTooltipContent {...props} markerByTime={markerByTime} />} />
+      <Tooltip content={(props) => <EvalTooltipContent {...props} markerByTime={markerByTime} showRsi={showRsi} />} />
       {MILESTONES.filter((t) => t !== -3).map((t) => (<ReferenceLine key={t} yAxisId="dd" y={t} stroke={C.borderSoft} strokeDasharray="2 3" label={{ value: `${t}%`, position: "insideBottomRight", fill: C.textDim, fontSize: Math.max(8, fontSize - 2) }} />))}
       {/* DD-3%の目安ライン。値はDD%軸の目盛（常に-3を含む）で示すため、チャート内のラベルは付けない */}
       <ReferenceLine yAxisId="dd" y={-3} stroke={C.rust} strokeDasharray="4 3" strokeWidth={1.3} />
@@ -2253,6 +2266,27 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBru
       {markerPoints.length > 0 && <Customized component={<ChartMarkers points={markerPoints} activeDate={activeDate} />} />}
       {withBrush && <Brush dataKey="date" height={26} stroke={priceColor} fill={C.panel2} tickFormatter={(dt) => fmtAxisDate(new Date(dt), rangeDays)} travellerWidth={8} />}
     </ComposedChart>
+  );
+  if (!showRsi) return main;
+  const rsiH = Math.max(60, (height || 0) - mainH);
+  const small = Math.max(8, fontSize - 1);
+  return (
+    <div style={{ width, height }}>
+      {main}
+      <ComposedChart syncId={syncId} width={width} height={rsiH} data={chartData} margin={{ ...margin, top: 4, bottom: 0 }}>
+        <CartesianGrid stroke={C.borderSoft} vertical={false} />
+        <XAxis dataKey="date" hide />
+        <YAxis yAxisId="rsi" domain={[0, 100]} ticks={[30, 70]} interval={0} tick={{ fill: C.violet, fontSize: small }} axisLine={false} tickLine={false} width={leftW} label={{ value: "RSI", angle: -90, position: "insideLeft", fill: C.violet, fontSize }} />
+        <YAxis yAxisId="rsiR" orientation="right" domain={[0, 100]} tick={false} axisLine={false} tickLine={false} width={rightW} />
+        <Tooltip content={() => null} cursor={{ stroke: C.textDim, strokeDasharray: "3 3" }} />
+        {/* 70以上＝買われすぎ・30以下＝売られすぎの帯と線 */}
+        <ReferenceArea yAxisId="rsi" y1={70} y2={100} fill={C.rust} fillOpacity={0.07} />
+        <ReferenceArea yAxisId="rsi" y1={0} y2={30} fill={C.teal} fillOpacity={0.07} />
+        <ReferenceLine yAxisId="rsi" y={70} stroke={C.rust} strokeDasharray="4 3" strokeWidth={1.2} label={{ value: "70 買われすぎ", position: "insideTopRight", fill: C.rust, fontSize: small }} />
+        <ReferenceLine yAxisId="rsi" y={30} stroke={C.teal} strokeDasharray="4 3" strokeWidth={1.2} label={{ value: "30 売られすぎ", position: "insideBottomRight", fill: C.teal, fontSize: small }} />
+        <Line yAxisId="rsi" type="linear" dataKey="rsi" stroke={C.violet} strokeWidth={1.3} dot={false} isAnimationActive={false} connectNulls />
+      </ComposedChart>
+    </div>
   );
 }
 // 評価額/DDチャートのタイトル文言（選択中のchartSourceに応じて切り替える）。
@@ -2664,7 +2698,7 @@ function DDChartModalContent({ chartData, rangeDays, d, hidden, toggle, period, 
             {isMultiSource ? (
               <ClickLegend items={multiLegendItems(chartSources, sourceViews)} hidden={hidden} onToggle={toggle} />
             ) : (
-              <ClickLegend items={[{ key: "price", label: "評価額", color: SERIES_COLORS[chartSource] ?? SERIES_COLORS.sp500 }, { key: "dd", label: "DD%", color: C.rust }]} hidden={hidden} onToggle={toggle} />
+              <ClickLegend items={[{ key: "price", label: "評価額", color: SERIES_COLORS[chartSource] ?? SERIES_COLORS.sp500 }, { key: "dd", label: "DD%", color: C.rust }, { key: "rsi", label: "RSI(14)", color: C.violet }]} hidden={hidden} onToggle={toggle} />
             )}
             <DDMarkerToggle hidden={hidden} toggle={toggle} size="md" />
             <PeriodSelect value={period} onChange={setPeriod} size="md" />
@@ -6413,7 +6447,7 @@ function MobileChartPage({ chartTab, setChartTab, chartSources, onToggleChartSou
           <>
             <div className="flex items-center gap-1.5 flex-wrap shrink-0 mb-1">
               {isMulti ? <ClickLegend items={multiLegendItems(chartSources, sourceViews)} hidden={hidden} onToggle={toggle} />
-                : <ClickLegend items={[{ key: "price", label: "評価額", color: SERIES_COLORS[chartSource] ?? SERIES_COLORS.sp500 }, { key: "dd", label: "DD%", color: C.rust }]} hidden={hidden} onToggle={toggle} />}
+                : <ClickLegend items={[{ key: "price", label: "評価額", color: SERIES_COLORS[chartSource] ?? SERIES_COLORS.sp500 }, { key: "dd", label: "DD%", color: C.rust }, { key: "rsi", label: "RSI(14)", color: C.violet }]} hidden={hidden} onToggle={toggle} />}
               <DDMarkerToggle hidden={hidden} toggle={toggle} size="md" />
               <PeriodSelect value={period} onChange={setPeriod} size="md" />
               <button onClick={() => setStatsOpen((v) => !v)} className="text-[10px] ml-auto flex items-center gap-0.5" style={{ color: C.textDim, background: "transparent", border: "none", cursor: "pointer" }}>期間統計<ChevronRight size={11} style={{ transform: statsOpen ? "rotate(90deg)" : "none" }} /></button>
@@ -8281,7 +8315,7 @@ export default function DDDashboard() {
   const [categoryDefaultRanks, setCategoryDefaultRanks] = useState(CATEGORY_DEFAULT_RANK);
   const [checkpoints, setCheckpoints] = useState(DEFAULT_CHECKPOINTS);
   const [period, setPeriod] = useState("1Y");
-  const [hidden, setHidden] = useState({});
+  const [hidden, setHidden] = useState({ rsi: true }); // RSIは凡例の「RSI(14)」を押したときだけ表示する（既定は非表示）
   const [hiddenCrash, setHiddenCrash] = useState({});
   const [pieView, setPieView] = useState("rank");
   const [bottomPanelTab, setBottomPanelTab] = useState("score"); // 底値判定パネルの表示切替："score"=VOO底値判定 / "forecast"=年騰落率予測（PC・スマホ共通）
@@ -9165,7 +9199,7 @@ export default function DDDashboard() {
                         {chartSource === "multi" ? (
                           <ClickLegend items={multiLegendItems(chartSources, sourceViews)} hidden={hidden} onToggle={toggle} />
                         ) : (
-                          <ClickLegend items={[{ key: "price", label: "評価額", color: SERIES_COLORS[chartSource] ?? SERIES_COLORS.sp500 }, { key: "dd", label: "DD%", color: C.rust }]} hidden={hidden} onToggle={toggle} />
+                          <ClickLegend items={[{ key: "price", label: "評価額", color: SERIES_COLORS[chartSource] ?? SERIES_COLORS.sp500 }, { key: "dd", label: "DD%", color: C.rust }, { key: "rsi", label: "RSI(14)", color: C.violet }]} hidden={hidden} onToggle={toggle} />
                         )}
                         <DDMarkerToggle hidden={hidden} toggle={toggle} />
                         <PeriodSelect value={period} onChange={setPeriod} />
