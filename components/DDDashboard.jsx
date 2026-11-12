@@ -3073,20 +3073,20 @@ function ElapsedDaysRow({ label, dInstrument }) {
   );
 }
 // 上部パネル「DD加速度アラート」の1銘柄分（VOO/QQQを上下2段で常時表示。クリックでその銘柄の詳細ページを開く）。
-function SpeedAlertRow({ label, dInstrument, onOpen }) {
+function SpeedAlertRow({ label, dInstrument, onOpen, hideLabel = false }) {
   const sa = dInstrument?.speedAlert;
   const accent = sa ? speedAlertAccent(sa) : C.textDim;
   return (
     <button onClick={sa ? onOpen : undefined} disabled={!sa} className="text-left w-full min-w-0" style={{ background: "transparent", border: "none", padding: 0, cursor: sa ? "pointer" : "default" }}>
       <div className="flex items-baseline gap-2 text-xs whitespace-nowrap">
-        <b className="mono" style={{ color: C.textMuted, width: 30, display: "inline-block" }}>{label}</b>
+        {!hideLabel && <b className="mono" style={{ color: C.textMuted, width: 30, display: "inline-block" }}>{label}</b>}
         {!sa && <span style={{ color: C.textDim }}>データ未取り込み</span>}
         {sa?.level === "normal" && <span style={{ color: C.textMuted }}>待機中（DD{sa.currentDD.toFixed(1)}%）</span>}
         {sa?.level === "pending5" && <span style={{ color: C.textMuted }}>DD3%到達後{sa.daysSinceDD3}営業日・DD5%未達</span>}
         {(sa?.level === "confirmed5" || sa?.level === "deep8") && <span className="font-bold" style={{ color: accent }}>{sa.warnLabel}</span>}
         {sa && <ChevronRight size={11} style={{ color: C.textDim, alignSelf: "center" }} />}
       </div>
-      <div className="text-[10px] whitespace-nowrap truncate mono" style={{ color: sa?.level === "pending5" ? C.amber : C.textDim, paddingLeft: 38 }}>
+      <div className="text-[10px] whitespace-nowrap truncate mono" style={{ color: sa?.level === "pending5" ? C.amber : C.textDim, paddingLeft: hideLabel ? 0 : 38 }}>
         {sa?.level === "normal" && "DD3%到達で速度を自動計測"}
         {sa?.level === "pending5" && (sa.hint ?? "速度計測中")}
         {sa?.level === "confirmed5" && `3→5%の速度：${sa.speed35}営業日`}
@@ -3111,11 +3111,21 @@ function RsiStatusRow({ label, rsi }) {
   const sig = rsiSignal(rsi);
   return (
     <div className="mono whitespace-nowrap flex items-center text-[13px] rounded" title={sig ? `RSI ${rsi.toFixed(1)}：${sig.strong ? (rsi <= 30 ? "30以下（売られすぎ）の強いシグナル" : "70以上（買われすぎ）の強いシグナル") : (rsi <= 40 ? "40以下" : "60以上")}` : "RSI 40〜60：中立"} style={{ height: 26, padding: "0 5px", marginLeft: -6, border: `1px solid ${sig ? sig.color : "transparent"}`, background: sig ? (sig.strong ? `${sig.color}33` : `${sig.color}14`) : "transparent" }}>
-      <span className="font-bold" style={{ color: C.textMuted, display: "inline-block", width: 38 }}>{label}</span>
       {rsi == null ? <span style={{ color: C.textDim }}>—</span> : (<>
         <span className="font-bold" style={{ display: "inline-block", width: 36, textAlign: "right", color: sig ? sig.color : C.text }}>{rsi.toFixed(1)}</span>
         <span className="text-[11px]" style={{ marginLeft: 8, color: sig ? sig.color : C.textDim, fontWeight: sig ? 700 : 400 }}>{sig ? sig.label : "中立"}</span>
       </>)}
+    </div>
+  );
+}
+// 「現在のステータス」の各列：上段＝VOO・下段＝QQQを同じ高さで並べ、間に横線を引く（全列で線の位置がそろう）。
+// 銘柄名は左端の「評価額 / ATH」列と「経過日数」列にだけ出し、他の列（最高値比・RSI・DD加速度アラート）は省いて幅を詰める。
+function StatusTwoRows({ top, bottom }) {
+  return (
+    <div className="flex-1 flex flex-col min-h-0">
+      <div className="flex-1 flex items-center min-h-0 min-w-0">{top}</div>
+      <div className="-mx-3" style={{ borderTop: `1px solid ${C.border}` }} />
+      <div className="flex-1 flex items-center min-h-0 min-w-0">{bottom}</div>
     </div>
   );
 }
@@ -3133,9 +3143,8 @@ function StatusPanel({ d, dVoo, dQqq, onOpenSpeedAlert }) {
             評価額 / ATH
             {latestDate && <span className="ml-2" title="最新データの日付（米国時間）">{dateYMD_UTC(latestDate)}</span>}
           </div>
-          {/* VOO・QQQの2行を、経過日数・DD加速度アラートの2段表示と同じく上下に均等配置する */}
-          <div className="flex-1 flex flex-col justify-around min-h-0">
-          {tickers.map(({ label, data }) => {
+          {/* VOO（上段）・QQQ（下段）を横線で区切って表示する */}
+          {(() => { const [vooRow, qqqRow] = tickers.map(({ label, data }) => {
             const chg = dayChangePct(data);
             const updated = isUpdatedToday(data); // 翌取引日の開場（9:30 ET）を過ぎても次の終値が無ければ未更新（文字をグレーアウトして示す）
             const atAth = data ? data.currentDD >= 0 : false; // 最新値がATH（ATH更新中）
@@ -3152,15 +3161,12 @@ function StatusPanel({ d, dVoo, dQqq, onOpenSpeedAlert }) {
                 </>) : (<span style={{ color: C.textDim }}>データ未取り込み</span>)}
               </div>
             );
-          })}
-          </div>
+          }); return <StatusTwoRows top={vooRow} bottom={qqqRow} />; })()}
         </div>
         <div className="px-3 py-1 flex flex-col min-w-0 overflow-hidden" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
           <div className="flex items-center gap-1.5 mb-0.5"><TrendingDown size={11} style={{ color: C.rust }} /><span className="text-[10px] font-bold" style={{ color: C.rust }}>最高値比</span></div>
-          <div className="flex-1 flex flex-col justify-around min-h-0">
-          {tickers.map(({ label, data }) => (
+          {(() => { const [vooRow, qqqRow] = tickers.map(({ label, data }) => (
             <div key={label} className="mono whitespace-nowrap flex items-center text-[13px]" style={{ height: 26 }}>
-              <span className="font-bold" style={{ color: C.textMuted, display: "inline-block", width: 38 }}>{label}</span>
               {data ? (<>
                 <span className="font-bold" style={{ display: "inline-block", width: 50, textAlign: "right", color: data.currentDD >= 0 ? C.teal : C.rust }}>{data.currentDD.toFixed(1)}%</span>
                 {/* 次の節目：「DD-3%（$評価額） 残り%」の短い表記（横幅を経過日数パネルに回すため「評価額」「まで」は省く） */}
@@ -3171,31 +3177,20 @@ function StatusPanel({ d, dVoo, dQqq, onOpenSpeedAlert }) {
                 </>)}
               </>) : (<span style={{ color: C.textDim }}>—</span>)}
             </div>
-          ))}
-          </div>
+          )); return <StatusTwoRows top={vooRow} bottom={qqqRow} />; })()}
         </div>
         {/* RSI(14)：40以下＝ナンピン買い（緑）、60以上＝売却（赤）。30以下・70以上（売られすぎ・買われすぎ）は塗りつぶして強調する */}
         <div className="px-3 py-1 flex flex-col min-w-0" style={{ borderRight: `1px solid ${C.borderSoft}` }} title="RSI(14)：40以下でナンピン買い、60以上で売却のアラート（30以下・70以上は強いシグナル）">
           <div className="flex items-center gap-1.5 mb-0.5"><Activity size={11} style={{ color: C.violet }} /><span className="text-[10px] font-bold" style={{ color: C.violet }}>RSI(14)</span></div>
-          <div className="flex-1 flex flex-col justify-around min-h-0">
-          {tickers.map(({ label, data }) => <RsiStatusRow key={label} label={label} rsi={data?.last?.rsi ?? null} />)}
-          </div>
+          <StatusTwoRows top={<RsiStatusRow label="VOO" rsi={dVoo?.last?.rsi ?? null} />} bottom={<RsiStatusRow label="QQQ" rsi={dQqq?.last?.rsi ?? null} />} />
         </div>
         <div className="px-3 py-1 flex flex-col min-w-0" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
           <div className="flex items-center gap-1.5 mb-0.5"><Clock size={11} style={{ color: C.textDim }} /><span className="text-[10px]" style={{ color: C.textDim }}>経過日数</span></div>
-          <div className="flex-1 flex flex-col justify-around min-h-0">
-            <ElapsedDaysRow label="VOO" dInstrument={dVoo} />
-            <div style={{ borderTop: `1px dashed ${C.borderSoft}` }} />
-            <ElapsedDaysRow label="QQQ" dInstrument={dQqq} />
-          </div>
+          <StatusTwoRows top={<ElapsedDaysRow label="VOO" dInstrument={dVoo} />} bottom={<ElapsedDaysRow label="QQQ" dInstrument={dQqq} />} />
         </div>
         <div className="px-3 py-1 flex flex-col min-w-0">
           <div className="flex items-center gap-1.5 mb-0.5 min-w-0"><Zap size={11} style={{ color: C.textDim, flexShrink: 0 }} /><span className="text-[10px] whitespace-nowrap" style={{ color: C.textDim }}>DD加速度アラート</span><span className="text-[9px] truncate" style={{ color: C.textDim }}>（クリックで詳細・加速度センサー）</span></div>
-          <div className="flex-1 flex flex-col justify-around min-h-0">
-            <SpeedAlertRow label="VOO" dInstrument={dVoo} onOpen={() => onOpenSpeedAlert("voo")} />
-            <div style={{ borderTop: `1px dashed ${C.borderSoft}` }} />
-            <SpeedAlertRow label="QQQ" dInstrument={dQqq} onOpen={() => onOpenSpeedAlert("qqq")} />
-          </div>
+          <StatusTwoRows top={<SpeedAlertRow label="VOO" hideLabel dInstrument={dVoo} onOpen={() => onOpenSpeedAlert("voo")} />} bottom={<SpeedAlertRow label="QQQ" hideLabel dInstrument={dQqq} onOpen={() => onOpenSpeedAlert("qqq")} />} />
         </div>
       </div>
     </Panel>
