@@ -2239,7 +2239,8 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBru
   const showRsi = !hidden.rsi && chartData.some((p) => p.rsi != null);
   const margin = compact ? { top: 10, right: 2, left: 0, bottom: 0 } : { top: 12, right: 44, left: 0, bottom: 0 };
   const leftW = compact ? 40 : 48, rightW = compact ? 38 : 46;
-  const mainH = showRsi && height ? Math.round(height * 0.72) : height;
+  // スクロールバー（Brush）は一番下に置く：RSI表示時はRSIの枠の下に付け、syncIdで上のチャートも同じ期間に絞り込む
+  const mainH = showRsi && height ? Math.round((height - (withBrush ? 30 : 0)) * 0.72) : height;
   const main = (
     <ComposedChart
       syncId={showRsi ? syncId : undefined}
@@ -2264,7 +2265,7 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBru
       <Area yAxisId="price" type="linear" dataKey="price" stroke={priceColor} fill={`url(#${priceFillId})`} strokeWidth={1.8} dot={false} isAnimationActive={false} fillOpacity={hidden.price ? 0 : 1} strokeOpacity={hidden.price ? 0 : 1} />
       <Line yAxisId="price" type="linear" dataKey="ath" stroke={C.textDim} strokeDasharray="3 4" strokeWidth={1} dot={false} isAnimationActive={false} strokeOpacity={hidden.price || hidden.markers ? 0 : 1} />
       {markerPoints.length > 0 && <Customized component={<ChartMarkers points={markerPoints} activeDate={activeDate} />} />}
-      {withBrush && <Brush dataKey="date" height={26} stroke={priceColor} fill={C.panel2} tickFormatter={(dt) => fmtAxisDate(new Date(dt), rangeDays)} travellerWidth={8} />}
+      {withBrush && !showRsi && <Brush dataKey="date" height={26} stroke={priceColor} fill={C.panel2} tickFormatter={(dt) => fmtAxisDate(new Date(dt), rangeDays)} travellerWidth={8} />}
     </ComposedChart>
   );
   if (!showRsi) return main;
@@ -2285,6 +2286,7 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBru
         <ReferenceLine yAxisId="rsi" y={70} stroke={C.rust} strokeDasharray="4 3" strokeWidth={1.2} label={{ value: "70 買われすぎ", position: "insideTopRight", fill: C.rust, fontSize: small }} />
         <ReferenceLine yAxisId="rsi" y={30} stroke={C.teal} strokeDasharray="4 3" strokeWidth={1.2} label={{ value: "30 売られすぎ", position: "insideBottomRight", fill: C.teal, fontSize: small }} />
         <Line yAxisId="rsi" type="linear" dataKey="rsi" stroke={C.violet} strokeWidth={1.3} dot={false} isAnimationActive={false} connectNulls />
+        {withBrush && <Brush dataKey="date" height={26} stroke={priceColor} fill={C.panel2} tickFormatter={(dt) => fmtAxisDate(new Date(dt), rangeDays)} travellerWidth={8} />}
       </ComposedChart>
     </div>
   );
@@ -3096,6 +3098,27 @@ function SpeedAlertRow({ label, dInstrument, onOpen }) {
 
 /* ---------------- status panel ---------------- */
 // 経過日数・DD加速度アラートはVOO/QQQを上下2段で常時表示する（切替トグルは使わない）。onOpenSpeedAlert(instrument)でその銘柄の詳細ページを開く。
+// RSIの値からアラートを決める（40以下＝ナンピン買い・60以上＝売却。30以下・70以上は強いシグナル）
+function rsiSignal(rsi) {
+  if (rsi == null) return null;
+  if (rsi <= 30) return { label: "ナンピン買い", color: C.teal, strong: true };
+  if (rsi <= 40) return { label: "ナンピン買い", color: C.teal, strong: false };
+  if (rsi >= 70) return { label: "売却", color: C.rust, strong: true };
+  if (rsi >= 60) return { label: "売却", color: C.rust, strong: false };
+  return null;
+}
+function RsiStatusRow({ label, rsi }) {
+  const sig = rsiSignal(rsi);
+  return (
+    <div className="mono whitespace-nowrap flex items-center text-[13px] rounded" title={sig ? `RSI ${rsi.toFixed(1)}：${sig.strong ? (rsi <= 30 ? "30以下（売られすぎ）の強いシグナル" : "70以上（買われすぎ）の強いシグナル") : (rsi <= 40 ? "40以下" : "60以上")}` : "RSI 40〜60：中立"} style={{ height: 26, padding: "0 5px", marginLeft: -6, border: `1px solid ${sig ? sig.color : "transparent"}`, background: sig ? (sig.strong ? `${sig.color}33` : `${sig.color}14`) : "transparent" }}>
+      <span className="font-bold" style={{ color: C.textMuted, display: "inline-block", width: 38 }}>{label}</span>
+      {rsi == null ? <span style={{ color: C.textDim }}>—</span> : (<>
+        <span className="font-bold" style={{ display: "inline-block", width: 36, textAlign: "right", color: sig ? sig.color : C.text }}>{rsi.toFixed(1)}</span>
+        <span className="text-[11px]" style={{ marginLeft: 8, color: sig ? sig.color : C.textDim, fontWeight: sig ? 700 : 400 }}>{sig ? sig.label : "中立"}</span>
+      </>)}
+    </div>
+  );
+}
 function StatusPanel({ d, dVoo, dQqq, onOpenSpeedAlert }) {
   const tickers = [{ label: "VOO", data: dVoo }, { label: "QQQ", data: dQqq }]; // SP500はVOO換算に統合済みのため行を廃止
   // 見出し横に出す最新データの日付（米国時間の取引日。VOO・QQQのうち新しい方）。系列の日付はUTC0時基準のためUTCの年月日がそのまま米国の取引日
@@ -3104,7 +3127,7 @@ function StatusPanel({ d, dVoo, dQqq, onOpenSpeedAlert }) {
     <Panel title="現在のステータス" hideHeader className="h-full">
       {/* 列幅：評価額/ATH・最高値比は内容の幅ちょうど（auto）に詰め、残りをVOO/QQQ2段＋平常期間の指標を出す「経過日数」（広め）と
           DD加速度アラートで分け合う（画面幅が狭くても前2列の数値が重ならないようにする） */}
-      <div className="grid h-full" style={{ gridTemplateColumns: "auto auto minmax(0, 1.7fr) minmax(0, 1fr)" }}>
+      <div className="grid h-full" style={{ gridTemplateColumns: "auto auto auto minmax(0, 1.7fr) minmax(0, 1fr)" }}>
         <div className="px-3 py-1 flex flex-col min-w-0" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
           <div className="text-[10px] mb-0.5 whitespace-nowrap" style={{ color: C.textDim }}>
             評価額 / ATH
@@ -3149,6 +3172,13 @@ function StatusPanel({ d, dVoo, dQqq, onOpenSpeedAlert }) {
               </>) : (<span style={{ color: C.textDim }}>—</span>)}
             </div>
           ))}
+          </div>
+        </div>
+        {/* RSI(14)：40以下＝ナンピン買い（緑）、60以上＝売却（赤）。30以下・70以上（売られすぎ・買われすぎ）は塗りつぶして強調する */}
+        <div className="px-3 py-1 flex flex-col min-w-0" style={{ borderRight: `1px solid ${C.borderSoft}` }} title="RSI(14)：40以下でナンピン買い、60以上で売却のアラート（30以下・70以上は強いシグナル）">
+          <div className="flex items-center gap-1.5 mb-0.5"><Activity size={11} style={{ color: C.violet }} /><span className="text-[10px] font-bold" style={{ color: C.violet }}>RSI(14)</span></div>
+          <div className="flex-1 flex flex-col justify-around min-h-0">
+          {tickers.map(({ label, data }) => <RsiStatusRow key={label} label={label} rsi={data?.last?.rsi ?? null} />)}
           </div>
         </div>
         <div className="px-3 py-1 flex flex-col min-w-0" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
