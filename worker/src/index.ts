@@ -147,6 +147,39 @@ export default {
       }
     }
 
+    // GET /api/nikkei-history?start_date=YYYY-MM-DD
+    // 日経平均株価（^NKX）の日次終値（Stooqの日足CSV、日付昇順）。start_date省略時は直近30日分。
+    // ダッシュボードはバンドル済みデータ（1949/5/16〜）の最終日の翌日から呼ぶ（起動時に1回・抜けがあるときだけ）。
+    // 応答: { values: [{ date: "YYYY-MM-DD", close: number }] }（Stooqにまだ無い日は空配列）
+    if (url.pathname === "/api/nikkei-history") {
+      const startDate = url.searchParams.get("start_date");
+      if (startDate && !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) return jsonResponse({ error: "start_date は YYYY-MM-DD で指定してください" }, 400);
+      try {
+        const today = new Date();
+        const from = startDate ? new Date(startDate + "T00:00:00Z") : new Date(today.getTime() - 30 * 86400000);
+        const ymd = (d: Date) => d.toISOString().slice(0, 10).replace(/-/g, "");
+        const stooqUrl = `https://stooq.com/q/d/l/?s=%5Enkx&i=d&d1=${ymd(from)}&d2=${ymd(new Date(today.getTime() + 86400000))}`;
+        const res = await fetch(stooqUrl, { headers: { "User-Agent": "Mozilla/5.0 (compatible; dd-dashboard/1.0)" } });
+        if (!res.ok) throw new Error(`stooq responded ${res.status}`);
+        const text = (await res.text()).trim();
+        if (/^no data/i.test(text)) return jsonResponse({ values: [] });
+        const lines = text.split(/\r?\n/);
+        const head = lines[0].split(",").map((h) => h.trim().toLowerCase());
+        const di = head.indexOf("date"), ci = head.indexOf("close");
+        if (di < 0 || ci < 0) throw new Error("unexpected csv: " + lines[0].slice(0, 80));
+        const byDate = new Map<string, number>();
+        for (const line of lines.slice(1)) {
+          const c = line.split(",");
+          const date = (c[di] || "").trim(), close = parseFloat(c[ci]);
+          if (/^\d{4}-\d{2}-\d{2}$/.test(date) && !Number.isNaN(close) && close > 0 && date >= "1949-05-16") byDate.set(date, close);
+        }
+        const values = [...byDate].map(([date, close]) => ({ date, close })).sort((a, b) => a.date.localeCompare(b.date));
+        return jsonResponse({ values });
+      } catch (e) {
+        return jsonResponse({ error: "日経平均の価格履歴の取得に失敗しました", detail: e instanceof Error ? e.message : String(e) }, 502);
+      }
+    }
+
     // GET /api/market-summary
     // VOO・QQQ・ゴールド（XAU/USD）の最新終値と、前日・前週・前月・前年比（%）を返す。
     // 1日1回の呼び出しを想定（Twelve Data time_series を3銘柄分呼ぶ＝約3クレジット）。

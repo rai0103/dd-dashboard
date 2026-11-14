@@ -6,6 +6,7 @@ import {
   ReferenceLine, ReferenceDot, ReferenceArea, ResponsiveContainer, PieChart, Pie, Cell, Brush, Customized,
 } from "recharts";
 import { computeRsi } from "@/lib/rsi";
+import { parseNkxBundle, parseStooqDaily, mergeNkx, nkxStoredRows, nkxNextStart, isStaleSinceTokyo } from "@/lib/nkxSeries";
 import { DEFAULT_RSI_TRIGGER_SETTINGS, normalizeRsiTriggerSettings, statusFor, ymd as rsiYmd } from "@/lib/rsiTrigger";
 import RsiTriggerPanel, { rsiBadge } from "@/components/RsiTriggerPanel";
 import { TrendingDown, TrendingUp, AlertTriangle, Info, ChevronRight, Clock, X, Upload, Download, RefreshCw, Database, Trash2, Zap, Copy, FileText, Activity, Layers, ListChecks, Smartphone, Monitor, Wallet, Gauge, Clapperboard, BarChart3, Play, Pause, Square, GripVertical, Camera, MessageSquare, Lock, Unlock, Pencil } from "lucide-react";
@@ -45,6 +46,8 @@ import { DEFAULT_CONTENT_SECTIONS } from "@/lib/videoLongMd";
 const STOCK_PRICES_API_URL = "https://stock-prices.shinichiogasawara0103.workers.dev/api/stock-prices";
 // ゴールド（XAU/USD）の日次終値の履歴（同じWorker経由でTwelve Data time_seriesを取得。?start_date=YYYY-MM-DD で差分取得）。
 const GOLD_HISTORY_API_URL = "https://stock-prices.shinichiogasawara0103.workers.dev/api/gold-history";
+// 日経平均株価（^NKX）の日次終値（Worker経由でStooqから取得。?start_date=YYYY-MM-DD 以降の分）。
+const NIKKEI_HISTORY_API_URL = "https://stock-prices.shinichiogasawara0103.workers.dev/api/nikkei-history";
 
 /* ---------------- design tokens ---------------- */
 const C = {
@@ -54,6 +57,7 @@ const C = {
   teal: "#45C4B0", amber: "#D9A24B", rust: "#C0654B", rustSoft: "rgba(192,101,75,0.16)",
   violet: "#8B7FC7", blue: "#5B90C7",
   gray: "#7A8499", white: "#FFFFFF",
+  nikkei: "#E2708F", // 日経平均（日本の赤を少し明るくしたピンク寄りの赤。DDのrust・暴落の赤と見分けやすい色）
   gold: "#F2D35B", // ゴールド（XAUUSD）系列。SP500（teal）・Nasdaq（violet）・DD節目線（amber）と見分けやすい明るい黄色
 };
 function depthColor(v) { if (v >= -3) return C.teal; if (v >= -18) return C.amber; return C.rust; }
@@ -98,6 +102,8 @@ const SEED_SERIES = buildSeedSeries();
 const NDX_PRE_QQQ_SERIES = parseNdxPreQqqCsv();
 // SOXL ETF上場（2010年3月11日）より前の合成データ（lib/soxlPreListingData.ts、SOXXから3倍＋補正値で換算・出所：Stooq）。
 const SOXL_PRE_LISTING_SERIES = parseSoxlPreListingCsv();
+// 日経平均株価の日次終値（lib/nkxData.ts、1949年5月16日〜バンドル作成日。出所：Stooq）。以降の日は起動時にWorkerから追加取得する。
+const NKX_BUNDLE_SERIES = parseNkxBundle();
 
 /* ---------------- CSV parsing (Stooq: Date,Open,High,Low,Close,Volume) ---------------- */
 // parseCSVLine・findCol・parseDateOnly・BOM_RE・parseStooqCSV は lib/csvPrice.ts に切り出し済み（Stage E-1。挙動は変更していない）。
@@ -393,7 +399,8 @@ function buildAnalysis(d, currentHoldingPct, totalValue, dQqq, qqqAmplification)
 
 // trackRecordOverride を渡すと、この系列自身の実績ではなく渡された統計（節目間の進行確率・最終到達確率・速度別確率など）を使う。
 // VOO/QQQは track record として使うには期間が短いため、最も長い実績があるSP500（本系列）の統計をVOO/QQQの速度アラートにも流用するために使用する。
-function computeAll(rawSeries, trackRecordOverride) {
+// opts.currency："USD"（既定・$表記）か "JPY"（円表記。日経平均）。opts.market："US"（既定）か "JP"（未更新の判定を東京市場の時間で行う）。
+function computeAll(rawSeries, trackRecordOverride, opts = {}) {
   let ath = 0;
   const FULL = rawSeries.map((p, i) => { ath = Math.max(ath, p.price); return { i, date: p.date, price: p.price, ath, dd: Number((((p.price / ath) - 1) * 100).toFixed(2)) }; });
   // 評価額/DDチャートのRSI（14日・ワイルダー方式）。日次終値の全期間から計算し、各日の点に持たせる（表示期間で間引いても値は正確）
@@ -427,7 +434,7 @@ function computeAll(rawSeries, trackRecordOverride) {
   const distanceToNextMilestone = nextMilestone !== null ? Number((nextMilestone - currentDD).toFixed(1)) : null;
   const nextMilestonePrice = nextMilestone !== null ? currentATH * (1 + nextMilestone / 100) : null;
   const speedAlert = computeSpeedAlert(FULL, last, episode, currentDD, trackRecord);
-  return { FULL, last, currentDD, currentPrice, currentATH, isDrawdown, mode, episode, ddStartIdx, daysSinceDDStart, daysSinceCurrentThreshold, legDays, isEntryLeg, currentTLabel, currentEpisodeCurve, speedCategory, nextProg, modelRow, currentLevelP, currentFreqLabel, athDate, daysSinceATH, trough, episodes, trackRecord, nextMilestone, distanceToNextMilestone, nextMilestonePrice, speedAlert };
+  return { currency: opts.currency || "USD", market: opts.market || "US", FULL, last, currentDD, currentPrice, currentATH, isDrawdown, mode, episode, ddStartIdx, daysSinceDDStart, daysSinceCurrentThreshold, legDays, isEntryLeg, currentTLabel, currentEpisodeCurve, speedCategory, nextProg, modelRow, currentLevelP, currentFreqLabel, athDate, daysSinceATH, trough, episodes, trackRecord, nextMilestone, distanceToNextMilestone, nextMilestonePrice, speedAlert };
 }
 // vooQqqSeries（{date, voo?, qqq?}の配列。IndexedDBキー名は歴史的経緯で"spy_voo_price_history"のまま）から
 // 指定フィールドのみを抽出し、computeAllにそのまま渡せる{date,price}系列に変換する。
@@ -2052,7 +2059,9 @@ function usEasternYMD(date = new Date()) {
 // UTC基準の年月日がそのまま米国の取引日になる。最新データの日付の「翌取引日の開場（9:30 ET、NYSE休場日は飛ばす）」を過ぎても
 // 次の終値が入っていなければ未更新とみなす（開場前は前取引日の終値が最新なので、グレーアウトしない）。
 function dateYMD_UTC(d) { return `${d.getUTCFullYear()}/${d.getUTCMonth() + 1}/${d.getUTCDate()}`; }
-function isUpdatedToday(dObj) { return !!dObj && !isStaleSince(dObj.last.date.toISOString().slice(0, 10)); }
+function isUpdatedToday(dObj) { return !!dObj && !(dObj.market === "JP" ? isStaleSinceTokyo : isStaleSince)(dObj.last.date.toISOString().slice(0, 10)); }
+// 価格の表記：米国の銘柄は "$123.45"、日経平均は "61,142円"（currency は computeAll の d.currency）
+function money(v, currency = "USD") { if (v == null || !isFinite(v)) return "—"; return currency === "JPY" ? `${Math.round(v).toLocaleString()}円` : `$${Number(v).toFixed(2)}`; }
 // チャートのX軸はcategory軸のため、ReferenceDotのxはchartData内の実際の点と一致している必要がある。
 // 間引き表示で厳密な日付が省略されている場合があるため、表示中の点のうち最も日付が近いものにスナップする。
 function nearestChartPoint(chartData, targetDate) {
@@ -2096,6 +2105,8 @@ function ChartMarkers({ xAxisMap, yAxisMap, points, activeDate }) {
               <rect x={pt.cx - 4} y={pt.cy - 4} width={8} height={8} fill={pt.currentFill || "#fff"} stroke={C.bg} strokeWidth={1.5} />
             ) : pt.shape === "up" ? (
               <path d={`M${pt.cx},${pt.cy - 5.5} L${pt.cx + 5},${pt.cy + 3.5} L${pt.cx - 5},${pt.cy + 3.5} Z`} fill={pt.color} stroke={C.bg} strokeWidth={1.2} />
+            ) : pt.shape === "diamond" ? (
+              <path d={`M${pt.cx},${pt.cy - 5.5} L${pt.cx + 5},${pt.cy} L${pt.cx},${pt.cy + 5.5} L${pt.cx - 5},${pt.cy} Z`} fill={pt.color} stroke={C.bg} strokeWidth={1.2} />
             ) : pt.shape === "down" ? (
               <path d={`M${pt.cx},${pt.cy + 5.5} L${pt.cx + 5},${pt.cy - 3.5} L${pt.cx - 5},${pt.cy - 3.5} Z`} fill={pt.color} stroke={C.bg} strokeWidth={1.2} />
             ) : (
@@ -2113,7 +2124,7 @@ function ChartMarkers({ xAxisMap, yAxisMap, points, activeDate }) {
 // カーソル追従ツールチップの中身。標準の日付・DD%・評価額・ATHに加え、ホバー中の日付がマーカー点（大底・高値更新等）と
 // 一致する場合はその注釈をこの同じ吹き出しの中に追記する。吹き出しを1つに統合することで、
 // マーカー用の別の吹き出しとカーソル追従ツールチップが別々の位置に出て重なる、という問題が構造的に起きなくなる。
-function EvalTooltipContent({ active, payload, label, markerByTime, showRsi = false }) {
+function EvalTooltipContent({ active, payload, label, markerByTime, showRsi = false, currency = "USD" }) {
   if (!active || !payload || !payload.length || !label) return null;
   const marker = markerByTime.get(label.getTime());
   return (
@@ -2122,7 +2133,7 @@ function EvalTooltipContent({ active, payload, label, markerByTime, showRsi = fa
       <ul style={{ margin: 0, padding: 0, listStyle: "none" }}>
         {payload.map((entry, i) => {
           const name = entry.dataKey === "dd" ? "DD" : entry.dataKey === "ath" ? "ATH" : "評価額";
-          const value = entry.dataKey === "dd" ? `${entry.value}%` : `$${entry.value}`;
+          const value = entry.dataKey === "dd" ? `${entry.value}%` : money(entry.value, currency);
           return (<li key={i} style={{ display: "block", paddingTop: 4, paddingBottom: 4, color: entry.color }}>{name} : {value}</li>);
         })}
         {showRsi && payload[0]?.payload?.rsi != null && (() => { const v = payload[0].payload.rsi; return (<li style={{ display: "block", paddingTop: 4, paddingBottom: 4, color: C.violet }}>RSI(14) : {v.toFixed(1)}{v >= 70 ? "（買われすぎ）" : v <= 30 ? "（売られすぎ）" : ""}</li>); })()}
@@ -2137,8 +2148,8 @@ function EvalTooltipContent({ active, payload, label, markerByTime, showRsi = fa
 // 局面の底値マーカー用ラベルを組み立てる。「DD開始～大底」「大底～回復」の経過営業日数は全ての底値マーカーに共通で付記し、
 // 選択期間内で最も深い局面（大底）の場合のみ、末尾に「（大底）」を追加で付記する。
 // あわせてDD-3%→-5%の通過営業日数（DD加速度アラートの「3→5%の速度」と同じ定義）も付記する。
-function troughLabel(FULL, athIdx, troughIdx, troughDate, troughPrice, troughDD, recoveryIdx, isWorst) {
-  const base = `$${troughPrice.toFixed(2)}（${fmtYMD(troughDate)}）DD${troughDD.toFixed(1)}%${isWorst ? "（大底）" : ""}`;
+function troughLabel(FULL, athIdx, troughIdx, troughDate, troughPrice, troughDD, recoveryIdx, isWorst, currency = "USD") {
+  const base = `${money(troughPrice, currency)}（${fmtYMD(troughDate)}）DD${troughDD.toFixed(1)}%${isWorst ? "（大底）" : ""}`;
   const daysToTrough = troughIdx - athIdx;
   const daysToRecovery = recoveryIdx != null ? recoveryIdx - troughIdx : null;
   let idx3 = -1, idx5 = -1;
@@ -2198,21 +2209,21 @@ function buildEpisodeMarkers({ chartData, d, periodStats, fontSize, series = nul
   // 過去の各DD局面（ATH→底値→回復）
   for (const ep of d.episodes) {
     if (ep.isOngoing) continue;
-    addPt(ep.athIdx, ep.athDate, ep.athPrice, "ath", `$${ep.athPrice.toFixed(2)}（${fmtYMD(ep.athDate)}）`);
+    addPt(ep.athIdx, ep.athDate, ep.athPrice, "ath", `${money(ep.athPrice, d.currency)}（${fmtYMD(ep.athDate)}）`);
     if (ep.troughIdx !== ep.athIdx) {
       const isWorst = periodStats?.worstEpisode?.troughIdx === ep.troughIdx;
-      addPt(ep.troughIdx, ep.troughDate, ep.troughPrice, "trough", troughLabel(d.FULL, ep.athIdx, ep.troughIdx, ep.troughDate, ep.troughPrice, ep.troughDD, ep.recoveryIdx, isWorst));
+      addPt(ep.troughIdx, ep.troughDate, ep.troughPrice, "trough", troughLabel(d.FULL, ep.athIdx, ep.troughIdx, ep.troughDate, ep.troughPrice, ep.troughDD, ep.recoveryIdx, isWorst, d.currency));
     }
-    if (ep.recoveryIdx !== ep.troughIdx) addPt(ep.recoveryIdx, ep.recoveryDate, ep.recoveryPrice, "recovery", `$${ep.recoveryPrice.toFixed(2)}（${fmtYMD(ep.recoveryDate)}）`);
+    if (ep.recoveryIdx !== ep.troughIdx) addPt(ep.recoveryIdx, ep.recoveryDate, ep.recoveryPrice, "recovery", `${money(ep.recoveryPrice, d.currency)}（${fmtYMD(ep.recoveryDate)}）`);
   }
   // 現在進行中の局面（ATH→底値→現在）
-  addPt(d.episode.athIdx, d.athDate, d.currentATH, "ath", `$${d.currentATH.toFixed(2)}（${fmtYMD(d.athDate)}）`);
+  addPt(d.episode.athIdx, d.athDate, d.currentATH, "ath", `${money(d.currentATH, d.currency)}（${fmtYMD(d.athDate)}）`);
   const troughIsToday = d.trough.i === d.last.i; // 底値がまだ今日（未回復）の場合は現在値マーカーと重なるため統合する
   const troughIsWorst = periodStats?.worstEpisode?.troughIdx === d.trough.i;
-  if (!troughIsToday && d.trough.i !== d.episode.athIdx) addPt(d.trough.i, d.trough.date, d.trough.price, "trough", troughLabel(d.FULL, d.episode.athIdx, d.trough.i, d.trough.date, d.trough.price, d.trough.dd, null, troughIsWorst));
+  if (!troughIsToday && d.trough.i !== d.episode.athIdx) addPt(d.trough.i, d.trough.date, d.trough.price, "trough", troughLabel(d.FULL, d.episode.athIdx, d.trough.i, d.trough.date, d.trough.price, d.trough.dd, null, troughIsWorst, d.currency));
   const currentLabel = troughIsToday
-    ? troughLabel(d.FULL, d.episode.athIdx, d.trough.i, d.trough.date, d.trough.price, d.currentDD, null, troughIsWorst)
-    : `$${d.currentPrice.toFixed(2)}（${fmtYMD(d.last.date)}）`;
+    ? troughLabel(d.FULL, d.episode.athIdx, d.trough.i, d.trough.date, d.trough.price, d.currentDD, null, troughIsWorst, d.currency)
+    : `${money(d.currentPrice, d.currency)}（${fmtYMD(d.last.date)}）`;
   markerPoints.push({
     date: chartLast, price: d.currentPrice, color: series ? series.color : depthColor(d.currentDD), currentFill: series?.color,
     yAxisId: series?.yAxisId, anchor: "end", fontSize, label: tag(troughIsToday ? "trough" : null, currentLabel), dotOnly: true, isCurrent: true,
@@ -2258,7 +2269,7 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBru
       <XAxis dataKey="date" tickFormatter={(dt) => fmtAxisDate(dt, rangeDays)} tick={{ fill: C.textDim, fontSize }} axisLine={{ stroke: C.border }} tickLine={false} minTickGap={40} />
       <YAxis yAxisId="price" domain={["auto", "auto"]} tick={{ fill: priceColor, fontSize }} axisLine={false} tickLine={false} width={compact ? 40 : 48} label={{ value: "評価額", angle: -90, position: "insideLeft", fill: priceColor, fontSize }} />
       <YAxis yAxisId="dd" orientation="right" domain={[ddTicks[ddTicks.length - 1], 0]} ticks={ddTicks} interval={0} tick={{ fill: C.rust, fontSize }} axisLine={false} tickLine={false} width={compact ? 38 : 46} label={{ value: "DD%", angle: 90, position: "insideRight", fill: C.rust, fontSize }} />
-      <Tooltip content={(props) => <EvalTooltipContent {...props} markerByTime={markerByTime} showRsi={showRsi} />} />
+      <Tooltip content={(props) => <EvalTooltipContent {...props} markerByTime={markerByTime} showRsi={showRsi} currency={d?.currency} />} />
       {MILESTONES.filter((t) => t !== -3).map((t) => (<ReferenceLine key={t} yAxisId="dd" y={t} stroke={C.borderSoft} strokeDasharray="2 3" label={{ value: `${t}%`, position: "insideBottomRight", fill: C.textDim, fontSize: Math.max(8, fontSize - 2) }} />))}
       {/* DD-3%の目安ライン。値はDD%軸の目盛（常に-3を含む）で示すため、チャート内のラベルは付けない */}
       <ReferenceLine yAxisId="dd" y={-3} stroke={C.rust} strokeDasharray="4 3" strokeWidth={1.3} />
@@ -2300,7 +2311,7 @@ function chartSourceTitle(chartSource) {
   return "評価額/DD";
 }
 // 評価額/DDチャートの対象（VOO＝SP500本系列・QQQ・GOLD）の並び順。複数選択時もこの順に並べる（1つ目が左軸）。
-const CHART_SOURCE_ORDER = ["sp500", "qqq", "gold"];
+const CHART_SOURCE_ORDER = ["sp500", "qqq", "gold", "nkx"];
 // 選択中の対象一覧から表示モードを決める：1つならその対象のキー（評価額/DD%チャート）、2つ以上なら"multi"（評価額のみの比較チャート）。
 function chartSourceMode(chartSources) { return chartSources.length === 1 ? chartSources[0] : "multi"; }
 // ボタンのクリックで対象を追加/解除する（最低1つは選択された状態を保つ）。
@@ -2331,17 +2342,17 @@ function PeriodSelect({ value, onChange, size = "sm" }) {
 // VOO（SP500本系列）・QQQ・GOLDのどれを表示するかを選ぶボタン（複数選択可）。1つなら評価額/DD%チャート、
 // 2つ以上なら評価額のみの比較チャートになる。valueは選択中のキーの配列、onToggleはクリックしたキーを受け取る。
 // qqqAvailable/goldAvailableがfalseの間（未取り込み時）は該当ボタンを無効化する。
-function ChartSourceToggle({ value, onToggle, qqqAvailable, goldAvailable = false, size = "sm" }) {
-  const options = [{ key: "sp500", label: "VOO" }, { key: "qqq", label: "QQQ" }, { key: "gold", label: "GOLD" }];
+function ChartSourceToggle({ value, onToggle, qqqAvailable, goldAvailable = false, nkxAvailable = false, size = "sm" }) {
+  const options = [{ key: "sp500", label: "VOO" }, { key: "qqq", label: "QQQ" }, { key: "gold", label: "GOLD" }, { key: "nkx", label: "日経" }];
   const pad = size === "sm" ? "1.5px 6px" : "2px 8px";
   const fontSize = size === "sm" ? 10 : 11;
   return (
     <div className="flex gap-0.5">
       {options.map((o) => {
-        const disabled = o.key === "gold" ? !goldAvailable : o.key === "qqq" && !qqqAvailable;
+        const disabled = o.key === "gold" ? !goldAvailable : o.key === "nkx" ? !nkxAvailable : o.key === "qqq" && !qqqAvailable;
         const active = value.includes(o.key);
         return (
-          <button key={o.key} disabled={disabled} onClick={(e) => { e.stopPropagation(); onToggle(o.key); }} title={disabled ? `${o.key === "gold" ? "GOLD" : "QQQ"}のトラックレコードが未取り込みです` : undefined}
+          <button key={o.key} disabled={disabled} onClick={(e) => { e.stopPropagation(); onToggle(o.key); }} title={disabled ? `${o.label}のトラックレコードが未取り込みです` : undefined}
             className="rounded" style={{ fontSize, padding: pad, color: active ? C.bg : C.textMuted, background: active ? MULTI_SERIES[o.key].color : "transparent", fontWeight: active ? 700 : 400, border: "none", opacity: disabled ? 0.35 : 1, cursor: disabled ? "default" : "pointer" }}>
             {o.label}
           </button>
@@ -2355,11 +2366,12 @@ function ChartSourceToggle({ value, onToggle, qqqAvailable, goldAvailable = fals
 // 単体表示と同じDD開始・大底・DD回復マーカーを銘柄ごとの形（●VOO／▲QQQ／▼GOLD）で重ねて描画し、
 // ツールチップには各銘柄の評価額・DD%・ATHと、ホバー日付に該当するマーカー注釈（銘柄名付き）をまとめて表示する。
 // 銘柄ごとの線の色（単独表示の評価額チャート・複数選択の比較チャート・切替ボタンの共通の正本）。
-const SERIES_COLORS = { sp500: C.teal, qqq: C.violet, gold: C.gold };
+const SERIES_COLORS = { sp500: C.teal, qqq: C.violet, gold: C.gold, nkx: C.nikkei };
 const MULTI_SERIES = {
   sp500: { name: "VOO", title: "VOO", color: SERIES_COLORS.sp500, shape: "circle", yAxisId: "sp500", hiddenKey: "sp500Line", priceKey: "sp500Price", ddKey: "sp500DD", athKey: "sp500Ath" },
   qqq: { name: "QQQ", title: "QQQ", color: SERIES_COLORS.qqq, shape: "up", yAxisId: "qqq", hiddenKey: "qqqLine", priceKey: "qqqPrice", ddKey: "qqqDD", athKey: "qqqAth" },
   gold: { name: "GOLD", title: "GOLD", color: SERIES_COLORS.gold, shape: "down", yAxisId: "gold", hiddenKey: "goldLine", priceKey: "goldPrice", ddKey: "goldDD", athKey: "goldAth" },
+  nkx: { name: "日経", title: "日経平均", color: SERIES_COLORS.nkx, shape: "diamond", yAxisId: "nkx", hiddenKey: "nkxLine", priceKey: "nkxPrice", ddKey: "nkxDD", athKey: "nkxAth", currency: "JPY" },
 };
 // 選択した銘柄の期間データを日付キーでマージする（{ date, sp500Price, sp500DD, sp500Ath, qqqPrice, … }。無い日はそのフィールドがundefined）。
 function mergeMultiChartData(keys, views) {
@@ -2383,7 +2395,7 @@ function MultiTooltipContent({ active, payload, label, markersByTime, hidden, ke
       <p style={{ margin: 0, color: C.textMuted }}>{label.toLocaleDateString("ja-JP")}</p>
       {keys.map((k) => MULTI_SERIES[k]).filter((sr) => !hidden[sr.hiddenKey] && row[sr.priceKey] != null).map((sr) => (
         <div key={sr.name} style={{ paddingTop: 4, color: sr.color }}>
-          <b>{sr.title}</b>　評価額 : ${Number(row[sr.priceKey]).toFixed(2)}　<span style={{ color: C.rust }}>DD : {row[sr.ddKey]}%</span>　<span style={{ color: C.textDim }}>ATH : ${Number(row[sr.athKey]).toFixed(2)}</span>
+          <b>{sr.title}</b>　評価額 : {money(Number(row[sr.priceKey]), sr.currency)}　<span style={{ color: C.rust }}>DD : {row[sr.ddKey]}%</span>　<span style={{ color: C.textDim }}>ATH : {money(Number(row[sr.athKey]), sr.currency)}</span>
         </div>
       ))}
       {markers.map((m, i) => (
@@ -2435,7 +2447,7 @@ const doyLabel = (doy) => { const d = new Date(Date.UTC(2025, 0, doy)); return `
 // 親（ダッシュボード本体）が持つ状態を渡す。渡されない場合はこのパネル内だけの状態で動く。
 const YEAR_COMPARE_INITIAL = { metric: "index", preset: "recent10", inputYear: "", hidden: { key: "", years: [] }, source: "voo" };
 // onChartTap：指定時（スマホ縦画面のチャートタブ）はチャート本体のタップで拡大表示を開く。年の強調固定は下の年ボタンで行う。
-function YearComparePanel({ FULL, qqqFULL = [], fontSize = 10, showTable = false, state: sharedState = null, setState: setSharedState = null, onChartTap = null }) {
+function YearComparePanel({ FULL, qqqFULL = [], nkxFULL = [], fontSize = 10, showTable = false, state: sharedState = null, setState: setSharedState = null, onChartTap = null }) {
   const [localState, setLocalState] = useState(YEAR_COMPARE_INITIAL);
   const state = sharedState ?? localState;
   const setState = setSharedState ?? setLocalState;
@@ -2444,9 +2456,10 @@ function YearComparePanel({ FULL, qqqFULL = [], fontSize = 10, showTable = false
   const setPreset = (v) => setState((st) => ({ ...st, preset: v }));
   const setInputYear = (v) => setState((st) => ({ ...st, inputYear: v }));
   const hasQqq = Array.isArray(qqqFULL) && qqqFULL.length > 0;
-  const activeSource = source === "qqq" && hasQqq ? "qqq" : "voo"; // QQQ未取込ならVOOに自動フォールバック
+  const hasNkx = Array.isArray(nkxFULL) && nkxFULL.length > 0;
+  const activeSource = source === "qqq" && hasQqq ? "qqq" : source === "nkx" && hasNkx ? "nkx" : "voo"; // 未取込ならVOOに自動フォールバック
   const setSource = (v) => setState((st) => ({ ...st, source: v }));
-  const activeFULL = activeSource === "qqq" ? qqqFULL : FULL;
+  const activeFULL = activeSource === "qqq" ? qqqFULL : activeSource === "nkx" ? nkxFULL : FULL;
   const [hoverYearRaw, setHoverYear] = useState(null); // マウスが乗っている年（一時的）
   const [pinnedYear, setPinnedYear] = useState(null); // クリック／タップで固定した年（もう一度押すと解除）
   const hoverYear = hoverYearRaw ?? pinnedYear;
@@ -2511,10 +2524,10 @@ function YearComparePanel({ FULL, qqqFULL = [], fontSize = 10, showTable = false
     <div className={showTable ? "flex flex-col" : "h-full flex flex-col min-h-0"} onClick={(e) => e.stopPropagation()}>
       <div className="flex items-center gap-2 flex-wrap px-2 pt-1 pb-1 shrink-0 text-[11px]" style={{ color: C.textMuted }}>
         <div className="flex gap-0.5">{[{ k: "index", l: "評価額" }, { k: "dd", l: "DD" }].map((t) => (<button key={t.k} onClick={() => setMetric(t.k)} className="px-2 py-0.5 rounded" style={{ color: metric === t.k ? C.bg : C.textMuted, background: metric === t.k ? C.teal : "transparent", fontWeight: metric === t.k ? 700 : 400, border: `1px solid ${metric === t.k ? C.teal : C.borderSoft}`, cursor: "pointer" }}>{t.l}</button>))}</div>
-        <div className="flex gap-0.5">{[{ k: "voo", l: "VOO" }, { k: "qqq", l: "QQQ" }].map((t) => { const disabled = t.k === "qqq" && !hasQqq; return (<button key={t.k} onClick={() => !disabled && setSource(t.k)} disabled={disabled} title={disabled ? "QQQのトラックレコードが未取り込みです" : undefined} className="px-2 py-0.5 rounded" style={{ color: activeSource === t.k ? C.bg : disabled ? C.textDim : C.textMuted, background: activeSource === t.k ? C.violet : "transparent", fontWeight: activeSource === t.k ? 700 : 400, border: `1px solid ${activeSource === t.k ? C.violet : C.borderSoft}`, cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.5 : 1 }}>{t.l}</button>); })}</div>
+        <div className="flex gap-0.5">{[{ k: "voo", l: "VOO" }, { k: "qqq", l: "QQQ" }, { k: "nkx", l: "日経" }].map((t) => { const disabled = (t.k === "qqq" && !hasQqq) || (t.k === "nkx" && !hasNkx); return (<button key={t.k} onClick={() => !disabled && setSource(t.k)} disabled={disabled} title={disabled ? `${t.l}のトラックレコードが未取り込みです` : undefined} className="px-2 py-0.5 rounded" style={{ color: activeSource === t.k ? C.bg : disabled ? C.textDim : C.textMuted, background: activeSource === t.k ? C.violet : "transparent", fontWeight: activeSource === t.k ? 700 : 400, border: `1px solid ${activeSource === t.k ? C.violet : C.borderSoft}`, cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.5 : 1 }}>{t.l}</button>); })}</div>
         <select value={preset} onChange={(e) => setPreset(e.target.value)} className="rounded" style={sel}>{YEAR_PRESETS.map((x) => <option key={x.key} value={x.key}>{x.label}</option>)}</select>
         {presetDef?.needsYear && <input type="number" value={inputYear} onChange={(e) => setInputYear(e.target.value)} placeholder={`${allYears[0] ?? ""}〜${allYears.at(-1) ?? ""}`} min={allYears[0]} max={allYears.at(-1)} className="mono rounded" style={{ ...sel, width: 92 }} />}
-        <span className="text-[10px]" style={{ color: C.textDim }}>{activeSource === "qqq" ? "QQQ基準" : "VOO基準"}・{metric === "index" ? "年初=100の指数" : "年初来高値からの下落率"}・比較{years.length}年{curLast ? `・今年 ${curLast[metric].toFixed(metric === "index" ? 1 : 1)}${unit}（${fmtDateSlash(curLast.date)}）` : ""}</span>
+        <span className="text-[10px]" style={{ color: C.textDim }}>{activeSource === "qqq" ? "QQQ基準" : activeSource === "nkx" ? "日経平均基準" : "VOO基準"}・{metric === "index" ? "年初=100の指数" : "年初来高値からの下落率"}・比較{years.length}年{curLast ? `・今年 ${curLast[metric].toFixed(metric === "index" ? 1 : 1)}${unit}（${fmtDateSlash(curLast.date)}）` : ""}</span>
         {note && <span className="text-[10px]" style={{ color: C.amber }}>{note}</span>}
       </div>
       <div className={showTable ? "relative" : `flex-1 min-h-0 relative${onChartTap ? " cursor-zoom-in" : ""}`} style={showTable ? { height: "min(56vh, 520px)" } : undefined} onClick={onChartTap ?? undefined}>
@@ -2683,14 +2696,17 @@ function DDChartModalContent({ chartData, rangeDays, d, hidden, toggle, period, 
   const chartSource = chartSourceMode(chartSources); // "sp500" | "qqq" | "gold" | "multi"（複数選択）
   const hasCrashCompare = !!(historicalCrashes && onSelectCrash); // 通常/暴落/年比較はVOO・QQQ・GOLDのどれを選んでいても表示する（暴落・年比較はVOO基準）
   const isQqqSource = chartSource === "qqq";
-  const isGoldSource = chartSource === "gold";
+  // GOLD・日経は同じ形の view（{ d, chartData, rangeDays, periodStats }）で扱う
+  const isGoldSource = chartSource === "gold" || chartSource === "nkx";
+  const altView = chartSource === "nkx" ? sourceViews?.nkx ?? null : goldView;
+  const altLabel = chartSource === "nkx" ? "日経平均" : "GOLD";
   const isMultiSource = chartSource === "multi";
   // goldView：GOLD（XAUUSD）ソース用の { d, chartData, rangeDays, periodStats }（未取り込み時はnull）
-  const activeChartData = isQqqSource ? qqqChartData : isGoldSource ? goldView?.chartData : chartData;
-  const activeRangeDays = isQqqSource ? qqqRangeDays : isGoldSource ? goldView?.rangeDays : rangeDays;
-  const activeD = isQqqSource ? dQqq : isGoldSource ? goldView?.d : d;
-  const activePeriodStats = isQqqSource ? qqqPeriodStats : isGoldSource ? goldView?.periodStats : periodStats;
-  const sourceUnavailable = (isQqqSource && !dQqq) || (isGoldSource && !goldView);
+  const activeChartData = isQqqSource ? qqqChartData : isGoldSource ? altView?.chartData : chartData;
+  const activeRangeDays = isQqqSource ? qqqRangeDays : isGoldSource ? altView?.rangeDays : rangeDays;
+  const activeD = isQqqSource ? dQqq : isGoldSource ? altView?.d : d;
+  const activePeriodStats = isQqqSource ? qqqPeriodStats : isGoldSource ? altView?.periodStats : periodStats;
+  const sourceUnavailable = (isQqqSource && !dQqq) || (isGoldSource && !altView);
   return (
     <div className="h-full flex flex-col">
       <div className="flex items-center gap-2 mb-1.5 flex-wrap">
@@ -2706,7 +2722,7 @@ function DDChartModalContent({ chartData, rangeDays, d, hidden, toggle, period, 
             )}
             <DDMarkerToggle hidden={hidden} toggle={toggle} size="md" />
             <PeriodSelect value={period} onChange={setPeriod} size="md" />
-            <ChartSourceToggle value={chartSources} onToggle={onToggleChartSource} qqqAvailable={!!dQqq} goldAvailable={!!goldView} />
+            <ChartSourceToggle value={chartSources} onToggle={onToggleChartSource} qqqAvailable={!!dQqq} goldAvailable={!!goldView} nkxAvailable={!!sourceViews?.nkx} />
           </>
         ) : chartTab === "year" ? null : (
           <>
@@ -2724,7 +2740,7 @@ function DDChartModalContent({ chartData, rangeDays, d, hidden, toggle, period, 
           {isMultiSource ? <MultiPeriodStatsBar keys={chartSources} views={sourceViews} /> : <PeriodStatsBar periodStats={activePeriodStats} />}
           <div style={{ height: "min(70vh, 640px)" }}>
             {sourceUnavailable ? (
-              <div className="h-full flex items-center justify-center text-sm" style={{ color: C.textDim }}>{isGoldSource ? "GOLD" : "QQQ"}のトラックレコードが未取り込みです。データ入力・出力画面から{isGoldSource ? "GOLD" : "QQQ"}のCSVを取り込んでください。</div>
+              <div className="h-full flex items-center justify-center text-sm" style={{ color: C.textDim }}>{isGoldSource ? altLabel : "QQQ"}のトラックレコードが未取り込みです。データ入力・出力画面から{isGoldSource ? altLabel : "QQQ"}のCSVを取り込んでください。</div>
             ) : (
               <ResponsiveContainer width="100%" height="100%" key={`${period}-${chartSources.join("+")}`}>
                 {isMultiSource
@@ -2736,7 +2752,7 @@ function DDChartModalContent({ chartData, rangeDays, d, hidden, toggle, period, 
           <div className="mt-3 text-[10px]" style={{ color: C.textDim }}>{isMultiSource ? MULTI_CHART_NOTE : "下部のスクロールバーをドラッグして期間を絞り込み（ズーム）できます。グラフ上にカーソルを合わせるとツールチップが表示されます。"}</div>
         </>
       ) : chartTab === "year" ? (
-        <YearComparePanel FULL={d.FULL} qqqFULL={dQqq?.FULL ?? []} fontSize={fontSize} showTable state={yearCompare} setState={setYearCompare} />
+        <YearComparePanel FULL={d.FULL} qqqFULL={dQqq?.FULL ?? []} nkxFULL={sourceViews?.nkx?.d?.FULL ?? []} fontSize={fontSize} showTable state={yearCompare} setState={setYearCompare} />
       ) : (
         <div style={{ height: "min(70vh, 640px)" }}>
           <ResponsiveContainer width="100%" height="100%">
@@ -3021,7 +3037,7 @@ function ATHProgressBlock({ dInstrument }) {
     return (
       <div>
         <div className="text-xs font-bold" style={{ color: C.teal }}>最高値更新</div>
-        <div className="text-[10px] mono" style={{ color: C.textDim }}>{fmtYMD(athDate)}　${currentPrice.toFixed(2)}</div>
+        <div className="text-[10px] mono" style={{ color: C.textDim }}>{fmtYMD(athDate)}　{money(currentPrice, dInstrument.currency)}</div>
       </div>
     );
   }
@@ -3067,7 +3083,7 @@ function ElapsedDaysRow({ label, dInstrument }) {
       <div className="flex items-baseline gap-2 text-xs whitespace-nowrap">
         <b style={{ color: C.textMuted, width: 26, display: "inline-block" }}>{label}</b>
         {daysSinceATH === 0
-          ? <><span className="font-bold" style={{ color: C.teal }}>最高値更新</span><span className="text-[10px]" style={{ color: C.textDim }}>{fmtYMD(athDate)} ${currentPrice.toFixed(2)}</span></>
+          ? <><span className="font-bold" style={{ color: C.teal }}>最高値更新</span><span className="text-[10px]" style={{ color: C.textDim }}>{fmtYMD(athDate)} {money(currentPrice, dInstrument.currency)}</span></>
           : <><span style={{ color: C.textMuted }}>DD開始から</span><span className="font-semibold">{daysSinceATH}日</span><span className="text-[10px]" style={{ color: C.textDim }}>ATH {fmtYMD(athDate)}{isDrawdown ? `・DD${currentDD.toFixed(1)}%` : ""}</span></>}
       </div>
       <div className="text-[10px] whitespace-nowrap truncate" style={{ color: C.textDim, paddingLeft: 32 }}><CalmStretchText calm={calm} /></div>
@@ -3138,17 +3154,21 @@ function RsiStatusRow({ rsi, st, s }) {
 }
 // 「現在のステータス」の各列：上段＝VOO・下段＝QQQを同じ高さで並べ、間に横線を引く（全列で線の位置がそろう）。
 // 銘柄名は左端の「評価額 / ATH」列と「経過日数」列にだけ出し、他の列（最高値比・RSI・DD加速度アラート）は省いて幅を詰める。
-function StatusTwoRows({ top, bottom }) {
+function StatusRows({ rows }) {
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      <div className="flex-1 flex items-center min-h-0 min-w-0">{top}</div>
-      <div className="-mx-3" style={{ borderTop: `1px solid ${C.border}` }} />
-      <div className="flex-1 flex items-center min-h-0 min-w-0">{bottom}</div>
+      {rows.map((r, i) => (
+        <Fragment key={i}>
+          {i > 0 && <div className="-mx-3" style={{ borderTop: `1px solid ${C.border}` }} />}
+          <div className="flex-1 flex items-center min-h-0 min-w-0">{r}</div>
+        </Fragment>
+      ))}
     </div>
   );
 }
-function StatusPanel({ d, dVoo, dQqq, rsiTrigger, onOpenRsiTrigger, onOpenSpeedAlert }) {
-  const tickers = [{ label: "VOO", data: dVoo }, { label: "QQQ", data: dQqq }]; // SP500はVOO換算に統合済みのため行を廃止
+function StatusPanel({ d, dVoo, dQqq, dNkx = null, rsiTrigger, onOpenRsiTrigger, onOpenSpeedAlert }) {
+  // 上からVOO・QQQ・日経平均（日経は取り込み済みのときだけ）。SP500はVOO換算に統合済みのため行を廃止
+  const tickers = [{ key: "voo", label: "VOO", data: dVoo }, { key: "qqq", label: "QQQ", data: dQqq }, ...(dNkx ? [{ key: "nkx", label: "日経", data: dNkx }] : [])];
   // 見出し横に出す最新データの日付（米国時間の取引日。VOO・QQQのうち新しい方）。系列の日付はUTC0時基準のためUTCの年月日がそのまま米国の取引日
   const latestDate = [dVoo?.last.date, dQqq?.last.date].filter(Boolean).sort((a, b) => b - a)[0];
   return (
@@ -3162,7 +3182,7 @@ function StatusPanel({ d, dVoo, dQqq, rsiTrigger, onOpenRsiTrigger, onOpenSpeedA
             {latestDate && <span className="ml-2" title="最新データの日付（米国時間）">{dateYMD_UTC(latestDate)}</span>}
           </div>
           {/* VOO（上段）・QQQ（下段）を横線で区切って表示する */}
-          {(() => { const [vooRow, qqqRow] = tickers.map(({ label, data }) => {
+          {(() => { const rowsEls = tickers.map(({ label, data }) => {
             const chg = dayChangePct(data);
             const updated = isUpdatedToday(data); // 翌取引日の開場（9:30 ET）を過ぎても次の終値が無ければ未更新（文字をグレーアウトして示す）
             const atAth = data ? data.currentDD >= 0 : false; // 最新値がATH（ATH更新中）
@@ -3172,45 +3192,44 @@ function StatusPanel({ d, dVoo, dQqq, rsiTrigger, onOpenRsiTrigger, onOpenSpeedA
                 {data ? (
                   <div className="flex flex-col" style={{ lineHeight: 1.15 }}>
                     {/* ATHは値の上に小さく表示して横幅を詰める。ATH更新中は枠を赤にし、ATHの金額・日付をtealで強調する（当日未更新ならやや薄く） */}
-                    <span className="text-[10px]" style={{ color: atAth ? C.teal : C.textDim, fontWeight: atAth ? 700 : 400, opacity: atAth && !updated ? 0.6 : 1 }}>ATH ${data.currentATH.toFixed(2)}（{fmtYMD(data.athDate)}）</span>
+                    <span className="text-[10px]" style={{ color: atAth ? C.teal : C.textDim, fontWeight: atAth ? 700 : 400, opacity: atAth && !updated ? 0.6 : 1 }}>ATH {money(data.currentATH, data.currency)}（{fmtYMD(data.athDate)}）</span>
                     <span className="text-[13px]">
-                      <span style={{ color: updated ? C.text : C.textDim }}>${data.currentPrice.toFixed(2)}</span>
+                      <span style={{ color: updated ? C.text : C.textDim }}>{money(data.currentPrice, data.currency)}</span>
                       {chg !== null && (<span style={{ marginLeft: 2, color: updated ? (chg >= 0 ? C.teal : C.rust) : C.textDim }}>（{chg >= 0 ? "+" : ""}{chg.toFixed(1)}%）</span>)}
                     </span>
                   </div>
                 ) : (<span className="text-[13px]" style={{ color: C.textDim }}>データ未取り込み</span>)}
               </div>
             );
-          }); return <StatusTwoRows top={vooRow} bottom={qqqRow} />; })()}
+          }); return <StatusRows rows={rowsEls} />; })()}
         </div>
         <div className="px-3 py-1 flex flex-col min-w-0 overflow-hidden" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
           <div className="flex items-center gap-1.5 mb-0.5"><TrendingDown size={11} style={{ color: C.rust }} /><span className="text-[10px] font-bold" style={{ color: C.rust }}>最高値比</span></div>
-          {(() => { const [vooRow, qqqRow] = tickers.map(({ label, data }) => (
+          {(() => { const rowsEls = tickers.map(({ label, data }) => (
             <div key={label} className="mono whitespace-nowrap flex items-center text-[13px]" style={{ height: 26 }}>
               {data ? (<>
                 <span className="font-bold" style={{ display: "inline-block", width: 50, textAlign: "right", color: data.currentDD >= 0 ? C.teal : C.rust }}>{data.currentDD.toFixed(1)}%</span>
                 {/* 次の節目：「DD-3%（$評価額） 残り%」の短い表記（横幅を経過日数パネルに回すため「評価額」「まで」は省く） */}
                 {data.nextMilestone !== null && (<>
                   <span className="" style={{ marginLeft: 8, color: C.textMuted }}>DD{data.nextMilestone}%</span>
-                  <span className="font-bold" style={{ color: C.text }}>（${(data.nextMilestone === -3 ? data.currentATH * 0.97 : data.nextMilestonePrice).toFixed(2)}）</span>
+                  <span className="font-bold" style={{ color: C.text }}>（{money(data.nextMilestone === -3 ? data.currentATH * 0.97 : data.nextMilestonePrice, data.currency)}）</span>
                 </>)}
               </>) : (<span style={{ color: C.textDim }}>—</span>)}
             </div>
-          )); return <StatusTwoRows top={vooRow} bottom={qqqRow} />; })()}
+          )); return <StatusRows rows={rowsEls} />; })()}
         </div>
         {/* RSI(14)：40以下＝ナンピン買い（緑）、60以上＝売却（赤）。30以下・70以上（売られすぎ・買われすぎ）は塗りつぶして強調する */}
         <button onClick={onOpenRsiTrigger} className="px-3 py-1 flex flex-col min-w-0 text-left" style={{ borderRight: `1px solid ${C.borderSoft}`, background: "transparent", border: "none", borderRightStyle: "solid", borderRightWidth: 1, borderRightColor: C.borderSoft, cursor: "pointer" }} title="クリックでRSIトリガーの設定・バックテスト・履歴">
           <div className="flex items-center gap-1.5 mb-0.5 min-w-0"><Activity size={11} style={{ color: C.violet }} /><span className="text-[10px] font-bold whitespace-nowrap" style={{ color: C.violet }}>RSI(14)トリガー</span><span className="text-[9px] truncate" style={{ color: C.textDim }}>（クリックで設定・バックテスト）</span></div>
-          <StatusTwoRows top={<RsiStatusRow rsi={dVoo?.last?.rsi ?? null} st={statusFor(dVoo?.FULL, rsiTrigger.voo, rsiTrigger.base, todayUtcDate())} s={rsiTrigger.voo} />}
-            bottom={<RsiStatusRow rsi={dQqq?.last?.rsi ?? null} st={statusFor(dQqq?.FULL, rsiTrigger.qqq, rsiTrigger.base, todayUtcDate())} s={rsiTrigger.qqq} />} />
+          <StatusRows rows={tickers.map(({ key, data }) => <RsiStatusRow key={key} rsi={data?.last?.rsi ?? null} st={statusFor(data?.FULL, rsiTrigger[key], rsiTrigger.base, todayUtcDate())} s={rsiTrigger[key]} />)} />
         </button>
         <div className="px-3 py-1 flex flex-col min-w-0" style={{ borderRight: `1px solid ${C.borderSoft}` }}>
           <div className="flex items-center gap-1.5 mb-0.5"><Clock size={11} style={{ color: C.textDim }} /><span className="text-[10px]" style={{ color: C.textDim }}>経過日数</span></div>
-          <StatusTwoRows top={<ElapsedDaysRow label="VOO" dInstrument={dVoo} />} bottom={<ElapsedDaysRow label="QQQ" dInstrument={dQqq} />} />
+          <StatusRows rows={tickers.map(({ key, label, data }) => <ElapsedDaysRow key={key} label={label} dInstrument={data} />)} />
         </div>
         <div className="px-3 py-1 flex flex-col min-w-0">
           <div className="flex items-center gap-1.5 mb-0.5 min-w-0"><Zap size={11} style={{ color: C.textDim, flexShrink: 0 }} /><span className="text-[10px] whitespace-nowrap" style={{ color: C.textDim }}>DD加速度アラート</span><span className="text-[9px] truncate" style={{ color: C.textDim }}>（クリックで詳細・加速度センサー）</span></div>
-          <StatusTwoRows top={<SpeedAlertRow label="VOO" hideLabel dInstrument={dVoo} onOpen={() => onOpenSpeedAlert("voo")} />} bottom={<SpeedAlertRow label="QQQ" hideLabel dInstrument={dQqq} onOpen={() => onOpenSpeedAlert("qqq")} />} />
+          <StatusRows rows={tickers.map(({ key, label, data }) => <SpeedAlertRow key={key} label={label} hideLabel dInstrument={data} onOpen={() => onOpenSpeedAlert(key)} />)} />
         </div>
       </div>
     </Panel>
@@ -3329,7 +3348,7 @@ function TrackRecordContent({ currentT, trackRecord, instrumentLabel = "VOO", st
           </tbody>
         </table>
       </div>
-      <div className="col-span-full text-[11px] leading-relaxed" style={{ color: C.textDim }}>これらは{instrumentLabel}（上場前は{instrumentLabel === "QQQ" ? "NDX指数をQQQ" : "SP500指数をVOO"}換算した長期履歴）のトラックレコード（約{tr.totalYears.toFixed(0)}年・DD3%到達{tr.n}局面）から都度算出した実績値です。データをアップロード・更新すると自動的に再計算されます。過去確率は将来を保証しません。</div>
+      <div className="col-span-full text-[11px] leading-relaxed" style={{ color: C.textDim }}>これらは{instrumentLabel}{instrumentLabel === "日経平均" ? "（1949年5月からの日次の長期履歴）" : `（上場前は${instrumentLabel === "QQQ" ? "NDX指数をQQQ" : "SP500指数をVOO"}換算した長期履歴）`}のトラックレコード（約{tr.totalYears.toFixed(0)}年・DD3%到達{tr.n}局面）から都度算出した実績値です。データをアップロード・更新すると自動的に再計算されます。過去確率は将来を保証しません。</div>
     </div>
   );
 }
@@ -3592,7 +3611,7 @@ function SpeedAlertModalContent({ d, instrumentLabel = "VOO", vooSeries = null, 
       )}
 
       <div>
-        <div className="text-xs mb-2" style={{ color: C.textDim }}>バックテスト：DD3→5%の速度別・大暴落率（最終DD到達水準別）（{instrumentLabel}（上場前は{instrumentLabel === "QQQ" ? "NDX指数をQQQ" : "SP500指数をVOO"}換算した長期履歴）のデータ 約{d.trackRecord.totalYears.toFixed(0)}年・DD5%到達{d.trackRecord.reachedD5Count}局面）</div>
+        <div className="text-xs mb-2" style={{ color: C.textDim }}>バックテスト：DD3→5%の速度別・大暴落率（最終DD到達水準別）（{instrumentLabel}{instrumentLabel === "日経平均" ? "（1949年5月からの日次の長期履歴）" : `（上場前は${instrumentLabel === "QQQ" ? "NDX指数をQQQ" : "SP500指数をVOO"}換算した長期履歴）`}のデータ 約{d.trackRecord.totalYears.toFixed(0)}年・DD5%到達{d.trackRecord.reachedD5Count}局面）</div>
         <div className="overflow-x-auto">
           <table className="w-full text-xs mono" style={{ minWidth: 560 }}>
             <thead><tr style={{ color: C.textDim }}>
@@ -3629,7 +3648,7 @@ function SpeedAlertModalContent({ d, instrumentLabel = "VOO", vooSeries = null, 
         ・急落警報（5日以内）は{d.trackRecord.fastMissRate !== null ? `${d.trackRecord.fastMissRate}%` : "多くの場合"}が空振り（浅く終わる）です。「確信」ではなく「警戒レベルを上げる」材料として使ってください。<br />
         ・緩やかに始まる大暴落もあります（2007年金融危機はspeed_3to5=13日で最終DD-57%でした）。緩慢でも油断しないでください。<br />
         ・DD8%突破後は速度の予測力が落ち、節目の進行確率（上表）が判断の主役になります。<br />
-        ・現在のDD%・速度計測は{instrumentLabel}の評価額、確率・バックテストは{instrumentLabel}（上場前は{instrumentLabel === "QQQ" ? "NDX指数をQQQ" : "SP500指数をVOO"}換算した長期履歴）のトラックレコード（約{d.trackRecord.totalYears.toFixed(0)}年・DD3%到達{d.trackRecord.n}局面）から都度算出した傾向であり、確定予測ではありません。データをアップロード・更新すると自動的に再計算されます。DD深度・金の動き・自己の判断と併用する補助指標です。本ツールは投資助言ではなく判断補助です。
+        ・現在のDD%・速度計測は{instrumentLabel}の評価額、確率・バックテストは{instrumentLabel}{instrumentLabel === "日経平均" ? "（1949年5月からの日次の長期履歴）" : `（上場前は${instrumentLabel === "QQQ" ? "NDX指数をQQQ" : "SP500指数をVOO"}換算した長期履歴）`}のトラックレコード（約{d.trackRecord.totalYears.toFixed(0)}年・DD3%到達{d.trackRecord.n}局面）から都度算出した傾向であり、確定予測ではありません。データをアップロード・更新すると自動的に再計算されます。DD深度・金の動き・自己の判断と併用する補助指標です。本ツールは投資助言ではなく判断補助です。
       </div>
     </div>
   );
@@ -4631,7 +4650,7 @@ function BrokerScreenshotImport({ holdings, virtualAggregateLabels, onRegister, 
   );
 }
 
-function DataInputModal({ onClose, synthetic = null, qqqSynthetic = null, rawSeries, onReplace, onAppend, onReset, source, holdings, onUpdateHoldings, onResetAndImportHoldings, onResetHoldings, holdingsSource, overrides, categoryDefaultRanks, onCategoryDefaultRankChange, vooQqqSeries, onAppendVooQqq, onImportVooQqq, onApplyApiGold, onApplyApiSoxl, onResetVooQqqField, virtualAggregateLabels, onRegisterBrokerHoldings, brokerSummaries }) {
+function DataInputModal({ onClose, synthetic = null, qqqSynthetic = null, nkxSeries = [], onImportNkx = null, rawSeries, onReplace, onAppend, onReset, source, holdings, onUpdateHoldings, onResetAndImportHoldings, onResetHoldings, holdingsSource, overrides, categoryDefaultRanks, onCategoryDefaultRankChange, vooQqqSeries, onAppendVooQqq, onImportVooQqq, onApplyApiGold, onApplyApiSoxl, onResetVooQqqField, virtualAggregateLabels, onRegisterBrokerHoldings, brokerSummaries }) {
   const [dataset, setDataset] = useState("voo"); // "voo" | "holdings" | "broker"
   const [instrument, setInstrument] = useState("sp500"); // "sp500" | "voo" | "qqq" | "gold"（voo/qqq/goldのCSV/手動入力/削除の対象切り替え）
   const [tab, setTab] = useState("csv");
@@ -4755,19 +4774,21 @@ function DataInputModal({ onClose, synthetic = null, qqqSynthetic = null, rawSer
   // RSI（14日・ワイルダー方式。評価額/DDチャートのRSIと同じ計算）は、各銘柄の終値の並びから計算して末尾の列に出す
   // （既存の列の位置は変えない。取り込み時は列名で読むため、RSI列は無視される）。
   const handleExportCSV = () => {
-    const header = "Date,VOO,QQQ,GOLD,VOO備考,QQQ備考,VOO_RSI14,QQQ_RSI14,GOLD_RSI14";
+    const header = "Date,VOO,QQQ,GOLD,VOO備考,QQQ備考,VOO_RSI14,QQQ_RSI14,GOLD_RSI14,NKX,NKX_RSI14";
     const vooRows = synthetic ? synthetic.series : [];
     const qqqRows = qqqSynthetic ? qqqSynthetic.series : [];
     const vooByDate = new Map(vooRows.map((p) => [p.date.toISOString().slice(0, 10), p.price]));
     const qqqByDate = new Map(qqqRows.map((p) => [p.date.toISOString().slice(0, 10), p.price]));
     const goldByDate = new Map(vooQqqSeries.filter((p) => p.gold != null).map((p) => [p.date.toISOString().slice(0, 10), p.gold]));
-    const allDates = new Set([...vooByDate.keys(), ...qqqByDate.keys(), ...goldByDate.keys()]);
+    // 日経平均（円・1949/5/16〜）。東京市場の営業日は米国と異なるため、日経だけの行もある（その行のVOO等は空欄）
+    const nkxByDate = new Map(nkxSeries.map((p) => [p.date.toISOString().slice(0, 10), p.price]));
+    const allDates = new Set([...vooByDate.keys(), ...qqqByDate.keys(), ...goldByDate.keys(), ...nkxByDate.keys()]);
     const rsiByDate = (byDate) => {
       const ds = [...byDate.keys()].sort();
       const r = computeRsi(ds.map((k) => Number(byDate.get(k))), 14);
       return new Map(ds.map((k, i) => [k, r[i]]));
     };
-    const vooRsi = rsiByDate(vooByDate), qqqRsi = rsiByDate(qqqByDate), goldRsi = rsiByDate(goldByDate);
+    const vooRsi = rsiByDate(vooByDate), qqqRsi = rsiByDate(qqqByDate), goldRsi = rsiByDate(goldByDate), nkxRsi = rsiByDate(nkxByDate);
     const rsiCell = (m, k) => { const v = m.get(k); return v != null ? v.toFixed(1) : ""; };
     const vooJunction = synthetic?.junctionDate || null; // この日より前＝SP500指数を補正した値
     const qqqJunction = qqqSynthetic?.junctionDate || null; // この日より前＝Nasdaq-100指数を補正した値
@@ -4785,6 +4806,8 @@ function DataInputModal({ onClose, synthetic = null, qqqSynthetic = null, rawSer
         rsiCell(vooRsi, dateStr),
         rsiCell(qqqRsi, dateStr),
         rsiCell(goldRsi, dateStr),
+        nkxByDate.has(dateStr) ? nkxByDate.get(dateStr).toFixed(2) : "",
+        rsiCell(nkxRsi, dateStr),
       ].join(",");
     });
     const csv = [header, ...rows].join("\n");
@@ -4905,6 +4928,24 @@ function DataInputModal({ onClose, synthetic = null, qqqSynthetic = null, rawSer
           </div>
           <div className="text-[10px] mb-2" style={{ color: C.textDim }}>※「データ更新」はVOO/QQQ・GOLD・SOXLの最新値を自動取得します（GOLD・SOXLはCSV/直接入力で登録済みの日は上書きしません）。本系列（DD計算に使用）はVOOの終値で自動更新されるため、手動入力は不要です。</div>
           {updateMsg && <div className="text-xs mb-4" style={{ color: updateError ? C.rust : C.teal }}>{updateMsg}</div>}
+          {/* 日経平均：起動時にWorker経由でStooqから自動取得する。取得できないとき用に、StooqのCSV（^nkx の日次）も取り込めるようにする */}
+          <div className="text-[11px] mb-4 px-2 py-1.5 rounded flex items-center gap-2 flex-wrap" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.textMuted }}>
+            <b style={{ color: C.nikkei }}>日経平均</b>
+            <span>{nkxSeries.length.toLocaleString()}件（{nkxSeries.length ? `${nkxSeries[0].date.toISOString().slice(0, 10)}〜${nkxSeries[nkxSeries.length - 1].date.toISOString().slice(0, 10)}` : "未取り込み"}）・起動時にStooqから自動取得</span>
+            {onImportNkx && (
+              <label className="inline-flex items-center gap-1 px-2 py-0.5 rounded cursor-pointer" style={{ border: `1px solid ${C.borderSoft}`, color: C.textMuted }} title="Stooqでダウンロードした日経平均（^nkx）の日次CSVを取り込みます（1949年5月16日より前の行は使いません）">
+                <Upload size={11} /> StooqのCSVを取り込む
+                <input type="file" accept=".csv,text/csv,text/plain" style={{ display: "none" }} onChange={async (e) => {
+                  const f = e.target.files?.[0]; e.target.value = "";
+                  if (!f) return;
+                  const rows = parseStooqDaily(await f.text());
+                  if (!rows.length) { setUpdateError(true); setUpdateMsg("日経平均のCSVを読み取れませんでした（Date・Close列のあるStooqの日次CSVを選んでください）"); return; }
+                  onImportNkx(rows);
+                  setUpdateError(false); setUpdateMsg(`日経平均：${rows.length.toLocaleString()}件を読み込みました（最終日 ${rows[rows.length - 1].date.toISOString().slice(0, 10)}）`);
+                }} />
+              </label>
+            )}
+          </div>
 
           <div className="flex gap-2 mb-5">
             {tabBtn(instrument, setInstrument, "sp500", "本系列（VOO換算・自動）")}
@@ -6361,8 +6402,8 @@ function SummaryModalContent({ d, dVoo, dQqq, holdings, currentHoldingPct, effec
 // 各カードは上段に「評価額（金額・大きく強調）」と「最高値比DD%（金額同様に大きく強調）」を横並びで、
 // 下段に「ATH金額」と「次の節目までの残り%・その節目の評価額」を1行にまとめて、金額と%の両方を一目で読み取れるようにする。
 // VOO・QQQの2枚構成（SP500はVOO換算に統合済み）。1枚あたりの高さに余裕があるため、数値を大きめに表示する。
-function MobileAthPage({ d, dVoo, dQqq }) {
-  const tickers = [{ label: "VOO", data: dVoo }, { label: "QQQ", data: dQqq }]; // SP500はVOO換算に統合済みのため行を廃止
+function MobileAthPage({ d, dVoo, dQqq, dNkx = null }) {
+  const tickers = [{ label: "VOO", data: dVoo }, { label: "QQQ", data: dQqq }, ...(dNkx ? [{ label: "日経平均", data: dNkx }] : [])]; // SP500はVOO換算に統合済みのため行を廃止
   return (
     <div className="p-2 flex flex-col gap-2 h-full">
       {tickers.map(({ label, data }) => {
@@ -6380,7 +6421,7 @@ function MobileAthPage({ d, dVoo, dQqq }) {
                 <div className="grid grid-cols-2 gap-x-2 items-end mono">
                   <div className="min-w-0">
                     <div className="text-[11px] truncate" style={{ color: C.textDim }}>評価額{chg !== null && <span className="ml-1" style={{ color: updated ? (chg >= 0 ? C.teal : C.rust) : C.textDim }}>{chg >= 0 ? "+" : ""}{chg.toFixed(1)}%</span>}</div>
-                    <div className="text-3xl font-bold leading-tight truncate" style={{ color: updated ? C.text : C.textDim }}>${data.currentPrice.toFixed(2)}</div>
+                    <div className="text-3xl font-bold leading-tight truncate" style={{ color: updated ? C.text : C.textDim }}>{money(data.currentPrice, data.currency)}</div>
                   </div>
                   <div className="text-right min-w-0">
                     <div className="text-[11px]" style={{ color: C.textDim }}>最高値比</div>
@@ -6388,11 +6429,11 @@ function MobileAthPage({ d, dVoo, dQqq }) {
                   </div>
                 </div>
                 <div className="mono mt-3 pt-2" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
-                  <div className="text-[11px]" style={{ color: atAth ? C.teal : C.textDim, fontWeight: atAth ? 700 : 400, opacity: athDim }}>ATH ${data.currentATH.toFixed(2)}（{fmtYMD(data.athDate)}）</div>
+                  <div className="text-[11px]" style={{ color: atAth ? C.teal : C.textDim, fontWeight: atAth ? 700 : 400, opacity: athDim }}>ATH {money(data.currentATH, data.currency)}（{fmtYMD(data.athDate)}）</div>
                   {data.nextMilestone !== null && (
                     <>
                       <div className="text-[11px] mt-1" style={{ color: C.textDim }}>DD{data.nextMilestone}%まで {data.distanceToNextMilestone.toFixed(1)}%</div>
-                      <div className="text-3xl font-bold leading-tight truncate" style={{ color: C.rust }}>${data.nextMilestonePrice.toFixed(2)}</div>
+                      <div className="text-3xl font-bold leading-tight truncate" style={{ color: C.rust }}>{money(data.nextMilestonePrice, data.currency)}</div>
                     </>
                   )}
                 </div>
@@ -6407,8 +6448,8 @@ function MobileAthPage({ d, dVoo, dQqq }) {
 // 加速度センサー（VOO・QQQ）を下に追加したため、ページ全体を縦スクロールにする。
 // 経過日数・DD加速度アラートはPC上部パネルと同じくVOO/QQQを上下2段で常時表示する（切替トグルは使わない）。
 // onOpenSpeedAlert(instrument)でタップした銘柄の詳細ページを開く。
-function MobileSpeedPage({ dVoo, dQqq, onOpenSpeedAlert, vooSeries = null, qqqSeries = null }) {
-  const tickers = [{ key: "voo", label: "VOO", data: dVoo }, { key: "qqq", label: "QQQ", data: dQqq }];
+function MobileSpeedPage({ dVoo, dQqq, dNkx = null, onOpenSpeedAlert, vooSeries = null, qqqSeries = null }) {
+  const tickers = [{ key: "voo", label: "VOO", data: dVoo }, { key: "qqq", label: "QQQ", data: dQqq }, ...(dNkx ? [{ key: "nkx", label: "日経", data: dNkx }] : [])];
   const divider = <div style={{ borderTop: `1px dashed ${C.borderSoft}` }} />;
   return (
     <div className="p-3 flex flex-col gap-2.5 h-full overflow-y-auto">
@@ -6488,17 +6529,19 @@ function MobileChartPage({ chartTab, setChartTab, chartSources, onToggleChartSou
   const [statsOpen, setStatsOpen] = useState(true);
   const chartSource = chartSourceMode(chartSources);
   const tab = chartTab; // 通常/暴落/年比較は選択銘柄によらず切り替えられる（暴落・年比較はVOO基準。銘柄の選択は通常表示に戻ったときに使う）
-  const isQqq = chartSource === "qqq", isGold = chartSource === "gold", isMulti = chartSource === "multi";
-  const activeD = isQqq ? dQqq : isGold ? goldView?.d : d;
-  const activeStats = isQqq ? qqqPeriodStats : isGold ? goldView?.periodStats : periodStats;
-  const unavailable = (isQqq && !dQqq) || (isGold && !goldView);
+  const isQqq = chartSource === "qqq", isGold = chartSource === "gold" || chartSource === "nkx", isMulti = chartSource === "multi";
+  const altView = chartSource === "nkx" ? sourceViews?.nkx ?? null : goldView; // GOLD・日経は同じ形の view で扱う
+  const altLabel = chartSource === "nkx" ? "日経平均" : "GOLD";
+  const activeD = isQqq ? dQqq : isGold ? altView?.d : d;
+  const activeStats = isQqq ? qqqPeriodStats : isGold ? altView?.periodStats : periodStats;
+  const unavailable = (isQqq && !dQqq) || (isGold && !altView);
   const zoomHint = <div className="text-[9px] text-center shrink-0 pt-1" style={{ color: C.textDim }}>チャートをタップで拡大表示（横向き）</div>;
   return (
     <div className="p-2 h-full flex flex-col min-h-0">
       <div className="rounded-lg flex-1 min-h-0 flex flex-col px-2 pt-2 pb-1.5" style={{ background: C.panel, border: `1px solid ${C.border}` }}>
         <div className="flex items-center justify-between gap-2 shrink-0 mb-1.5">
           <div className="flex gap-0.5">{[{ k: "normal", l: "通常" }, { k: "crash", l: "暴落" }, { k: "year", l: "年比較" }].map((t) => (<button key={t.k} onClick={() => setChartTab(t.k)} className="text-[11px] px-2 py-1 rounded" style={{ color: tab === t.k ? C.bg : C.textMuted, background: tab === t.k ? C.amber : "transparent", fontWeight: tab === t.k ? 700 : 400, border: `1px solid ${tab === t.k ? C.amber : C.borderSoft}`, cursor: "pointer" }}>{t.l}</button>))}</div>
-          {tab === "normal" && <ChartSourceToggle value={chartSources} onToggle={onToggleChartSource} qqqAvailable={!!dQqq} goldAvailable={!!goldView} size="md" />}
+          {tab === "normal" && <ChartSourceToggle value={chartSources} onToggle={onToggleChartSource} qqqAvailable={!!dQqq} goldAvailable={!!goldView} nkxAvailable={!!sourceViews?.nkx} size="md" />}
         </div>
         {tab === "normal" ? (
           <>
@@ -6512,12 +6555,12 @@ function MobileChartPage({ chartTab, setChartTab, chartSources, onToggleChartSou
             {statsOpen && !unavailable && (isMulti ? <MultiPeriodStatsBar keys={chartSources} views={sourceViews} wrap /> : <PeriodStatsBar periodStats={activeStats} wrap />)}
             <div className="flex-1 min-h-0 cursor-zoom-in -mx-1.5" onClick={onZoom}>
               {unavailable ? (
-                <div className="h-full flex items-center justify-center text-xs text-center px-4" style={{ color: C.textDim }}>{isGold ? "GOLD" : "QQQ"}のトラックレコードが未取り込みです。データ入力・出力画面から{isGold ? "GOLD" : "QQQ"}のCSVを取り込んでください。</div>
+                <div className="h-full flex items-center justify-center text-xs text-center px-4" style={{ color: C.textDim }}>{isGold ? altLabel : "QQQ"}のトラックレコードが未取り込みです。データ入力・出力画面から{isGold ? altLabel : "QQQ"}のCSVを取り込んでください。</div>
               ) : (
                 <ResponsiveContainer width="100%" height="100%" key={`${period}-${chartSources.join("+")}`}>
                   {isMulti
                     ? <MultiPriceChartBody keys={chartSources} views={sourceViews} hidden={hidden} fontSize={9} compact />
-                    : <EvalDDChartBody chartData={isQqq ? qqqChartData : isGold ? goldView.chartData : chartData} rangeDays={isQqq ? qqqRangeDays : isGold ? goldView.rangeDays : rangeDays} d={activeD} hidden={hidden} periodStats={activeStats} showSpyListing={!isGold} fontSize={9} compact seriesKey={chartSource} />}
+                    : <EvalDDChartBody chartData={isQqq ? qqqChartData : isGold ? altView.chartData : chartData} rangeDays={isQqq ? qqqRangeDays : isGold ? altView.rangeDays : rangeDays} d={activeD} hidden={hidden} periodStats={activeStats} showSpyListing={!isGold} fontSize={9} compact seriesKey={chartSource} />}
                 </ResponsiveContainer>
               )}
             </div>
@@ -6544,7 +6587,7 @@ function MobileChartPage({ chartTab, setChartTab, chartSources, onToggleChartSou
         ) : (
           <>
             <div className="flex-1 min-h-0 flex flex-col -mx-2">
-              <YearComparePanel FULL={d.FULL} qqqFULL={dQqq?.FULL ?? []} fontSize={9} state={yearCompare} setState={setYearCompare} onChartTap={onZoom} />
+              <YearComparePanel FULL={d.FULL} qqqFULL={dQqq?.FULL ?? []} nkxFULL={sourceViews?.nkx?.d?.FULL ?? []} fontSize={9} state={yearCompare} setState={setYearCompare} onChartTap={onZoom} />
             </div>
             <div className="text-[9px] text-center shrink-0 pt-1" style={{ color: C.textDim }}>チャートをタップで拡大表示（パフォーマンス一覧つき）</div>
           </>
@@ -8406,6 +8449,8 @@ export default function DDDashboard() {
   const [lifecycle, setLifecycle] = useState(LIFECYCLE_DEFAULT);
   // VOO・QQQ専用 RSIトリガー＆撤退実日数管理の設定（買い・売りRSI、撤退実日数、保有ポジション、基準投入額）。端末間で同期する
   const [rsiTrigger, setRsiTrigger] = useState(DEFAULT_RSI_TRIGGER_SETTINGS);
+  // 日経平均：バンドル（1949/5/16〜）より後に追加取得した日次終値（IndexedDB "nikkei_price_history"、端末間で同期）
+  const [nkxStored, setNkxStored] = useState([]);
   const [fixedPositions, setFixedPositions] = useState({}); // { [銘柄名]: 理由(空文字可) }
   const [prevSnapshot, setPrevSnapshot] = useState(null); // 詳細サマリー出力の前回スナップショット（差分表示用）
   const [vooQqqSeries, setVooQqqSeries] = useState([]); // 「データ更新」で取得したVOO/QQQ終値（S&P500のDD計算には使わない、CSV出力専用の補助データ）
@@ -8472,6 +8517,21 @@ export default function DDDashboard() {
           if (resGold.ok) {
             const j = await resGold.json();
             if (Array.isArray(j.values) && j.values.length) handleApplyApiGold(j.values.map((v) => ({ date: parseDateOnly(v.date), price: v.close })));
+          }
+        }
+      } catch (e) { /* 取得失敗時は保存済みデータのまま（次回起動時に再試行） */ }
+      // 日経平均：保存済みの追加分を読み込み、最終日の翌日以降をWorker（Stooq）から取得して足す（毎朝起動時に最新の終値まで）
+      try {
+        let stored = [];
+        const resNkx = await storage.get("nikkei_price_history");
+        if (resNkx && resNkx.value) stored = JSON.parse(resNkx.value).map((p) => ({ date: parseDateOnly(p.date), price: p.price }));
+        if (stored.length) setNkxStored(stored);
+        const start = nkxNextStart(mergeNkx(NKX_BUNDLE_SERIES.slice(-5), stored));
+        if (start <= new Date().toISOString().slice(0, 10)) {
+          const resN = await fetch(`${NIKKEI_HISTORY_API_URL}?start_date=${start}`);
+          if (resN.ok) {
+            const j = await resN.json();
+            if (Array.isArray(j.values) && j.values.length) handleApplyNkx(j.values.map((v) => ({ date: parseDateOnly(v.date), price: v.close })), stored);
           }
         }
       } catch (e) { /* 取得失敗時は保存済みデータのまま（次回起動時に再試行） */ }
@@ -8665,6 +8725,16 @@ export default function DDDashboard() {
       persistCheckpoints(next);
       return next;
     });
+  }
+  // 日経平均の終値（[{date, price}]）を追加・上書きして保存する（API取得・CSV取り込みの共通処理）。base を渡すと、その保存済み分に足す
+  function handleApplyNkx(rows, base = null) {
+    const apply = (prev) => {
+      const merged = mergeNkx(NKX_BUNDLE_SERIES.slice(-1), [...(base ?? prev), ...rows]);
+      const next = nkxStoredRows(merged).map((r) => ({ date: parseDateOnly(r.date), price: r.price }));
+      storage.set("nikkei_price_history", JSON.stringify(next.map((p) => ({ date: p.date.toISOString().slice(0, 10), price: p.price })))).then(() => scheduleSyncPush(setSyncOk)).catch(() => { /* storage unavailable */ });
+      return next;
+    };
+    setNkxStored((prev) => apply(prev));
   }
   function handleRsiTriggerChange(next) {
     setRsiTrigger(next);
@@ -9027,6 +9097,14 @@ export default function DDDashboard() {
   const qqqPeriodStats = useMemo(() => (qqqPeriodRange ? computePeriodStats(qqqPeriodRange, dQqq.episodes) : null), [qqqPeriodRange, dQqq]);
   // 評価額/DDチャートのGOLD（XAUUSD）ソース用（SP500・QQQと同じロジックをゴールドの終値に適用）。GOLD未取り込み時はnull。
   const dGold = useMemo(() => (goldSeries.length ? computeAll(goldSeries, d.trackRecord) : null), [goldSeries, d.trackRecord]);
+  // 日経平均（1949/5/16〜の日次）。トラックレコード（節目間の進行確率等）は日経自身の長期履歴から算出する。表記は円・東京市場の時間で未更新判定
+  const nkxSeries = useMemo(() => mergeNkx(NKX_BUNDLE_SERIES, nkxStored), [nkxStored]);
+  const dNkx = useMemo(() => (nkxSeries.length ? computeAll(nkxSeries, undefined, { currency: "JPY", market: "JP" }) : null), [nkxSeries]);
+  const nkxView = useMemo(() => {
+    if (!dNkx) return null;
+    const cd = sliceForPeriod(dNkx.FULL, dNkx.last, period);
+    return { d: dNkx, chartData: cd, rangeDays: Math.round((cd[cd.length - 1].date - cd[0].date) / 86400000), periodStats: computePeriodStats(periodDateRange(dNkx.FULL, dNkx.last, period), dNkx.episodes) };
+  }, [dNkx, period]);
   const goldView = useMemo(() => {
     if (!dGold) return null;
     const goldChartData = sliceForPeriod(dGold.FULL, dGold.last, period);
@@ -9042,7 +9120,8 @@ export default function DDDashboard() {
     sp500: { d, chartData, periodStats },
     qqq: dQqq ? { d: dQqq, chartData: qqqChartData, periodStats: qqqPeriodStats } : null,
     gold: goldView,
-  }), [d, chartData, periodStats, dQqq, qqqChartData, qqqPeriodStats, goldView]);
+    nkx: nkxView,
+  }), [d, chartData, periodStats, dQqq, qqqChartData, qqqPeriodStats, goldView, nkxView]);
   // 類似度判定の候補：SP500の全期間データ（d.FULL）からATH比-3%以上の下落局面をすべて検出する。
   // 進行中（ATH未回復）の局面も含めて検出する。類似度判定（rankCrashesBySimilarity）では進行中を除外する。
   const crashPool = useMemo(() => buildHistoricalCrashes(d.FULL, SIMILARITY_MIN_DD, { includeOngoing: true }), [d.FULL]);
@@ -9154,8 +9233,8 @@ export default function DDDashboard() {
         @media (orientation: landscape) { .force-landscape-inner { width: 100vw; height: 100vh; transform: translate(-50%, -50%); } }
       `}</style>
 
-      {modal?.type === "rsiTrigger" && <FullScreenModal title="RSIトリガー＆撤退実日数管理（VOO・QQQ）" onClose={() => setModal(null)}><RsiTriggerPanel settings={rsiTrigger} onChange={handleRsiTriggerChange} dVoo={dVoo} dVooLong={d} dQqq={dQqq} /></FullScreenModal>}
-      {modal?.type === "speedAlert" && (speedAlertInstrument === "qqq" ? dQqq : dVoo) && <FullScreenModal title={`DD加速度アラート（速度・経過日数の法則・${speedAlertInstrument.toUpperCase()}基準）`} onClose={() => setModal(null)}><SpeedAlertModalContent d={speedAlertInstrument === "qqq" ? dQqq : dVoo} instrumentLabel={speedAlertInstrument.toUpperCase()} vooSeries={vooCalcSeries} qqqSeries={qqqCalcSeries} isMobile={isMobile} /></FullScreenModal>}
+      {modal?.type === "rsiTrigger" && <FullScreenModal title="RSIトリガー＆撤退実日数管理（VOO・QQQ・日経平均）" onClose={() => setModal(null)}><RsiTriggerPanel settings={rsiTrigger} onChange={handleRsiTriggerChange} dVoo={dVoo} dVooLong={d} dQqq={dQqq} dNkx={dNkx} /></FullScreenModal>}
+      {modal?.type === "speedAlert" && (speedAlertInstrument === "qqq" ? dQqq : speedAlertInstrument === "nkx" ? dNkx : dVoo) && <FullScreenModal title={`DD加速度アラート（速度・経過日数の法則・${speedAlertInstrument === "nkx" ? "日経平均" : speedAlertInstrument.toUpperCase()}基準）`} onClose={() => setModal(null)}><SpeedAlertModalContent d={speedAlertInstrument === "qqq" ? dQqq : speedAlertInstrument === "nkx" ? dNkx : dVoo} instrumentLabel={speedAlertInstrument === "nkx" ? "日経平均" : speedAlertInstrument.toUpperCase()} vooSeries={vooCalcSeries} qqqSeries={qqqCalcSeries} isMobile={isMobile} /></FullScreenModal>}
       {modal?.type === "portfolio" && <FullScreenModal title={<>ポートフォリオ構成表{holdingsDateSuffix}</>} onClose={() => setModal(null)}><PortfolioTableContent view={pieView} holdings={holdings} brokerSummaries={brokerSummaries} ownerDates={ownerUpdatedDates} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
       {modal?.type === "ddTable" && <FullScreenModal title="DD毎のA〜E配分表" onClose={() => setModal(null)}><DDTableContent modelRow={d.modelRow} modelRows={d.trackRecord.dynamicModelRows} holdings={holdings} actualHoldings={combinedHoldings} currentDD={d.currentDD} asOfLabel={holdingsDateLabel} lastSyncedLabel={lastSyncedLabel} /></FullScreenModal>}
       {modal?.type === "modelDebug" && <FullScreenModal title="動的配分モデル デバッグビュー" onClose={() => setModal(null)}><ModelDebugContent d={d} dQqq={dQqq} qqqAmplification={qqqAmplification} /></FullScreenModal>}
@@ -9164,7 +9243,7 @@ export default function DDDashboard() {
       {modal?.type === "rank" && <FullScreenModal title={`${modal.rank}ランクの保有銘柄`} onClose={() => setModal(null)}><RankHoldingsContent rank={modal.rank} holdings={holdings} onEditHolding={handleHoldingFieldEdit} onDeleteHolding={handleDeleteHolding} /></FullScreenModal>}
       {modal?.type === "crash" && <FullScreenModal title={`${crashDisplayName(modal.crash)}（${modal.crash.start} 〜）と現状の比較`} onClose={() => setModal(null)}><CrashModalContent crash={modal.crash} daysSinceATH={d.daysSinceATH} currentDD={d.currentDD} currentEpisodeCurve={d.currentEpisodeCurve} qqqFull={dQqq?.FULL ?? null} goldFull={goldSeries} allCrashes={historicalCrashes} onJump={(c) => setModal({ type: "crash", crash: c })} /></FullScreenModal>}
       {modal?.type === "ddChart" && <FullScreenModal title={chartSourceTitle(chartSource)} onClose={() => setModal(null)}><DDChartModalContent initialTab={chartTab} chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} sourceViews={sourceViews} chartSources={chartSources} onToggleChartSource={toggleChartSource} yearCompare={yearCompare} setYearCompare={setYearCompare} /></FullScreenModal>}
-      {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} synthetic={sp500Synthetic} qqqSynthetic={qqqSynthetic} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} vooQqqSeries={vooQqqSeries} onAppendVooQqq={handleAppendVooQqq} onImportVooQqq={handleImportVooQqq} onApplyApiGold={handleApplyApiGold} onApplyApiSoxl={handleApplyApiSoxl} onResetVooQqqField={handleResetVooQqqField} virtualAggregateLabels={virtualAggregateLabels} onRegisterBrokerHoldings={handleRegisterBrokerHoldings} brokerSummaries={brokerSummaries} />}
+      {modal?.type === "dataInput" && <DataInputModal onClose={() => setModal(null)} synthetic={sp500Synthetic} qqqSynthetic={qqqSynthetic} nkxSeries={nkxSeries} onImportNkx={(rows) => handleApplyNkx(rows)} rawSeries={rawSeries} onReplace={handleReplace} onAppend={handleAppend} onReset={handleReset} source={dataSource} holdings={holdings} onUpdateHoldings={handleUpdateHoldings} onResetAndImportHoldings={handleResetAndImportHoldings} onResetHoldings={handleResetHoldings} holdingsSource={holdingsSource} overrides={overrides} categoryDefaultRanks={categoryDefaultRanks} onCategoryDefaultRankChange={handleCategoryDefaultRankChange} vooQqqSeries={vooQqqSeries} onAppendVooQqq={handleAppendVooQqq} onImportVooQqq={handleImportVooQqq} onApplyApiGold={handleApplyApiGold} onApplyApiSoxl={handleApplyApiSoxl} onResetVooQqqField={handleResetVooQqqField} virtualAggregateLabels={virtualAggregateLabels} onRegisterBrokerHoldings={handleRegisterBrokerHoldings} brokerSummaries={brokerSummaries} />}
       {modal?.type === "checkpointSettings" && <FullScreenModal title="チェックポイント設定" onClose={() => setModal(null)}><CheckpointSettingsContent checkpoints={checkpoints} onCheckpointChange={handleCheckpointChange} holdings={holdings} /></FullScreenModal>}
       {modal?.type === "analogFinder" && <FullScreenModal title="類似局面サーチ（過去の似た値動きとその後）" onClose={() => setModal(null)}><AnalogFinderPanel result={analogResult} instrumentLabel="S&P500" /></FullScreenModal>}
       {modal?.type === "bottomScore" && <FullScreenModal title={activeBottom.hold.applicable ? `${activeBottomLabel}底値判定：${bottomLabel(activeBottomFull, activeBottom.hold.state)} が底値として確定する確率（${activeBottomLabel}実績から都度算出）` : `${activeBottomLabel}底値判定（${activeBottomLabel}実績から都度算出）`} onClose={() => setModal(null)}><BottomScoreModalContent bottom={activeBottom} FULL={activeBottomFull} instrumentLabel={activeBottomLabel} qqqGapStats={qqqGapStats} currentQqqDD={dQqq?.currentDD ?? null} /></FullScreenModal>}
@@ -9234,8 +9313,8 @@ export default function DDDashboard() {
             activeIndex={mobilePage}
             onChange={setMobilePage}
             pages={[
-              { key: "ath", label: "評価額/ATH", icon: TrendingUp, content: <MobileAthPage d={d} dVoo={dVoo} dQqq={dQqq} /> },
-              { key: "speed", label: "経過日数", icon: Clock, content: <MobileSpeedPage dVoo={dVoo} dQqq={dQqq} vooSeries={vooCalcSeries} qqqSeries={qqqCalcSeries} onOpenSpeedAlert={(inst) => { setSpeedAlertInstrument(inst); setModal({ type: "speedAlert" }); }} /> },
+              { key: "ath", label: "評価額/ATH", icon: TrendingUp, content: <MobileAthPage d={d} dVoo={dVoo} dQqq={dQqq} dNkx={dNkx} /> },
+              { key: "speed", label: "経過日数", icon: Clock, content: <MobileSpeedPage dVoo={dVoo} dQqq={dQqq} dNkx={dNkx} vooSeries={vooCalcSeries} qqqSeries={qqqCalcSeries} onOpenSpeedAlert={(inst) => { setSpeedAlertInstrument(inst); setModal({ type: "speedAlert" }); }} /> },
               { key: "chart", label: "チャート", icon: Activity, content: <MobileChartPage chartTab={chartTab} setChartTab={setChartTab} chartSources={chartSources} onToggleChartSource={toggleChartSource} sourceViews={sourceViews} chartData={chartData} rangeDays={rangeDays} d={d} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} yearCompare={yearCompare} setYearCompare={setYearCompare} onZoom={() => setModal({ type: "mobileChartZoom" })} onOpenCrash={(c) => setModal({ type: "crash", crash: c })} /> },
               { key: "portfolio", label: "構成", icon: Layers, content: <MobilePortfolioPage pieView={pieView} setPieView={setPieView} holdings={combinedHoldings} ownerDates={ownerUpdatedDates} fxRates={fxRates} onOpen={() => setModal({ type: "portfolio" })} onOpenRealHoldingsRanking={() => setModal({ type: "realHoldingsRanking" })} dateLabel={holdingsDateLabel} /> },
               { key: "diff", label: "配分乖離", icon: ListChecks, content: <MobileDiffPage modelOverride={modelOverride} setModelOverride={setModelOverride} d={d} currentHoldingPct={currentHoldingPct} currentHoldingAmount={currentHoldingAmount} effectiveModelRow={effectiveModelRow} rankLabels={rankLabels} blocks={blocks} onOpenRank={(rank) => setModal({ type: "rank", rank })} onOpenDDTable={() => setModal({ type: "ddTable" })} dateLabel={holdingsDateLabel} /> },
@@ -9249,7 +9328,7 @@ export default function DDDashboard() {
         <DepthGauge dd={d.currentDD} />
 
         <div className="flex-1 flex flex-col gap-0 p-2 min-w-0">
-          <div style={{ height: 100, flexShrink: 0 }}><StatusPanel d={d} dVoo={dVoo} dQqq={dQqq} rsiTrigger={rsiTrigger} onOpenRsiTrigger={() => setModal({ type: "rsiTrigger" })} onOpenSpeedAlert={(inst) => { setSpeedAlertInstrument(inst); setModal({ type: "speedAlert" }); }} /></div>
+          <div style={{ height: dNkx ? 132 : 100, flexShrink: 0 }}><StatusPanel d={d} dVoo={dVoo} dQqq={dQqq} dNkx={dNkx} rsiTrigger={rsiTrigger} onOpenRsiTrigger={() => setModal({ type: "rsiTrigger" })} onOpenSpeedAlert={(inst) => { setSpeedAlertInstrument(inst); setModal({ type: "speedAlert" }); }} /></div>
 
           <div className="flex-1 flex flex-col" style={{ gap: 0, minHeight: 0 }}>
           {/* 上段（評価額/DDチャート・現状分析）を下段より大きく取る（2:1）。下段はA〜E配分乖離が収まる最小の高さを確保する */}
@@ -9257,7 +9336,7 @@ export default function DDDashboard() {
             {/* top-left: chart */}
             <div style={{ minHeight: 0 }}>
               <Panel
-                title={chartTab === "normal" ? chartSourceTitle(chartSource) : chartTab === "year" ? `年比較（${yearCompare?.source === "qqq" ? "QQQ" : "VOO"}）` : "過去の暴落との比較（経過日数ベース）"}
+                title={chartTab === "normal" ? chartSourceTitle(chartSource) : chartTab === "year" ? `年比較（${yearCompare?.source === "qqq" ? "QQQ" : yearCompare?.source === "nkx" ? "日経平均" : "VOO"}）` : "過去の暴落との比較（経過日数ベース）"}
                 compactHeader
                 action={
                   <div className="flex items-center gap-2">
@@ -9271,7 +9350,7 @@ export default function DDDashboard() {
                         )}
                         <DDMarkerToggle hidden={hidden} toggle={toggle} />
                         <PeriodSelect value={period} onChange={setPeriod} />
-                        <ChartSourceToggle value={chartSources} onToggle={toggleChartSource} qqqAvailable={!!dQqq} goldAvailable={!!goldView} />
+                        <ChartSourceToggle value={chartSources} onToggle={toggleChartSource} qqqAvailable={!!dQqq} goldAvailable={!!goldView} nkxAvailable={!!sourceViews?.nkx} />
                       </>
                     ) : chartTab === "crash" ? (<ClickLegend items={crashLegendItems} hidden={hiddenCrash} onToggle={toggleCrash} />) : (<button onClick={() => setModal({ type: "ddChart" })} className="text-[10px] underline" style={{ color: C.textDim, background: "transparent", border: "none", cursor: "pointer" }}>拡大表示</button>)}
                   </div>
@@ -9280,9 +9359,9 @@ export default function DDDashboard() {
               >
                 {chartTab === "normal" ? (
                   <div className="h-full flex flex-col cursor-zoom-in" title="クリックで拡大表示" onClick={() => setModal({ type: "ddChart" })}>
-                    {chartSource === "multi" ? <MultiPeriodStatsBar keys={chartSources} views={sourceViews} /> : <PeriodStatsBar periodStats={chartSource === "qqq" ? qqqPeriodStats : chartSource === "gold" ? goldView?.periodStats : periodStats} />}
+                    {chartSource === "multi" ? <MultiPeriodStatsBar keys={chartSources} views={sourceViews} /> : <PeriodStatsBar periodStats={chartSource === "qqq" ? qqqPeriodStats : chartSource === "gold" ? goldView?.periodStats : chartSource === "nkx" ? nkxView?.periodStats : periodStats} />}
                     <div className="flex-1 min-h-0">
-                      {(chartSource === "qqq" && !dQqq) || (chartSource === "gold" && !goldView) ? (
+                      {(chartSource === "qqq" && !dQqq) || (chartSource === "gold" && !goldView) || (chartSource === "nkx" && !nkxView) ? (
                         <div className="h-full flex items-center justify-center text-xs text-center px-4" style={{ color: C.textDim }}>{chartSource === "gold" ? "GOLD" : "QQQ"}のトラックレコードが未取り込みです。データ入力・出力画面から{chartSource === "gold" ? "GOLD" : "QQQ"}のCSVを取り込んでください。</div>
                       ) : (
                         <ResponsiveContainer width="100%" height="100%" key={`${period}-${chartSources.join("+")}`}>
@@ -9290,6 +9369,8 @@ export default function DDDashboard() {
                             ? <MultiPriceChartBody keys={chartSources} views={sourceViews} hidden={hidden} />
                             : chartSource === "qqq"
                               ? <EvalDDChartBody chartData={qqqChartData} rangeDays={qqqRangeDays} d={dQqq} hidden={hidden} periodStats={qqqPeriodStats} seriesKey="qqq" />
+                              : chartSource === "nkx"
+                              ? <EvalDDChartBody chartData={nkxView.chartData} rangeDays={nkxView.rangeDays} d={dNkx} hidden={hidden} periodStats={nkxView.periodStats} showSpyListing={false} seriesKey="nkx" />
                               : chartSource === "gold"
                               ? <EvalDDChartBody chartData={goldView.chartData} rangeDays={goldView.rangeDays} d={dGold} hidden={hidden} periodStats={goldView.periodStats} showSpyListing={false} seriesKey="gold" />
                               : <EvalDDChartBody chartData={chartData} rangeDays={rangeDays} d={d} hidden={hidden} periodStats={periodStats} />}
@@ -9298,7 +9379,7 @@ export default function DDDashboard() {
                     </div>
                   </div>
                 ) : chartTab === "year" ? (
-                  <YearComparePanel FULL={d.FULL} qqqFULL={dQqq?.FULL ?? []} state={yearCompare} setState={setYearCompare} />
+                  <YearComparePanel FULL={d.FULL} qqqFULL={dQqq?.FULL ?? []} nkxFULL={sourceViews?.nkx?.d?.FULL ?? []} state={yearCompare} setState={setYearCompare} />
                 ) : (
                   <div className="h-full flex flex-col">
                     <div className="flex items-center gap-2 px-2 pt-1 pb-1.5 flex-wrap shrink-0">

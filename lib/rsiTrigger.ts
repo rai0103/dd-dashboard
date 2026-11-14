@@ -136,11 +136,12 @@ export function rsiTriggerStatus(last: { price: number; rsi: number | null }, p:
 
 // ---- 設定（VOO・QQQ個別。基準投入額は共通・万円） ----
 export interface RsiTriggerInstrumentSettings { buy: number; sell: number; exitDays: number; position: { date: string; price: number } | null }
-export interface RsiTriggerSettings { base: number; voo: RsiTriggerInstrumentSettings; qqq: RsiTriggerInstrumentSettings }
+export interface RsiTriggerSettings { base: number; voo: RsiTriggerInstrumentSettings; qqq: RsiTriggerInstrumentSettings; nkx: RsiTriggerInstrumentSettings }
 export const DEFAULT_RSI_TRIGGER_SETTINGS: RsiTriggerSettings = {
   base: 100,
   voo: { buy: 30, sell: 70, exitDays: 130, position: null },
   qqq: { buy: 30, sell: 70, exitDays: 190, position: null },
+  nkx: { buy: 30, sell: 70, exitDays: 130, position: null },
 };
 export const MMF_RATE = 0.035;
 /** 保存値を読み込むときに、欠けた項目を既定値で補う */
@@ -149,7 +150,7 @@ export function normalizeRsiTriggerSettings(v: any): RsiTriggerSettings {
   const num = (x: any, def: number) => (typeof x === 'number' && isFinite(x) ? x : def);
   const pos = (x: any) => (x && typeof x.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(x.date) && typeof x.price === 'number' && x.price > 0 ? { date: x.date, price: x.price } : null);
   const inst = (x: any, def: RsiTriggerInstrumentSettings): RsiTriggerInstrumentSettings => ({ buy: num(x?.buy, def.buy), sell: num(x?.sell, def.sell), exitDays: num(x?.exitDays, def.exitDays), position: pos(x?.position) });
-  return { base: num(v?.base, d.base), voo: inst(v?.voo, d.voo), qqq: inst(v?.qqq, d.qqq) };
+  return { base: num(v?.base, d.base), voo: inst(v?.voo, d.voo), qqq: inst(v?.qqq, d.qqq), nkx: inst(v?.nkx, d.nkx) };
 }
 /** 設定と系列から、ある銘柄の現在の状態を求める（DDDashboardのステータス欄・パネル共通） */
 export function statusFor(FULL: RsiPoint[] | null | undefined, s: RsiTriggerInstrumentSettings, baseMan: number, today: Date): RsiTriggerStatus | null {
