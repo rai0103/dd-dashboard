@@ -222,6 +222,9 @@ function copyText(t) { try { navigator.clipboard.writeText(t); } catch (e) { /* 
 const itemsToText = (items) => items.map((it) => [it.label, it.value, it.text.replace(/\n/g, "／"), it.icon].join("｜")).join("\n");
 const textToItems = (s) => s.split("\n").map((ln) => ln.trim()).filter(Boolean).map((ln) => { const [label = "", value = "", text = "", icon = "bulb"] = ln.split(/[｜|]/); return { label: label.trim(), value: value.trim(), text: text.trim().replace(/／/g, "\n"), icon: icon.trim() }; });
 
+// 自動ドラフトをこのページ読み込みの中で動かしているか（開発時のReact StrictModeで効果が2回呼ばれても、二重に動かさない）
+let autoDraftLoopStarted = false;
+
 export default function ExplainerStudio() {
   // ---------------- 入力（テーマ・参考情報） ----------------
   const saved0 = useMemo(() => { try { return JSON.parse(localStorage.getItem(INPUT_KEY) || "null"); } catch (e) { return null; } }, []);
@@ -1725,7 +1728,7 @@ export default function ExplainerStudio() {
   // 予約テーマ（なければ前日の話題のニュース）で、リサーチ→台本→画像まで作り、drafts/pending に保存する。
   // 動画の書き出し・アップロードはしない（画像の確認から先は、ユーザーが普段の画面で行う）。
   const latestRef = useRef({});
-  latestRef.current = { handleGenerate, runResearch, project, refs };
+  latestRef.current = { handleGenerate, runResearch, project, refs, genProgress };
   useEffect(() => {
     const qs = new URLSearchParams(window.location.search);
     if (qs.get("autodraft") !== "1") return;
@@ -1747,40 +1750,63 @@ export default function ExplainerStudio() {
         return;
       }
     } catch (e) { /* sessionStorageが使えないときはそのまま進める */ }
-    try { if (localStorage.getItem("autodraft-last") === run) return; localStorage.setItem("autodraft-last", run); } catch (e) { /* 無視 */ }
+    // 同じページ読み込みの中では1回だけ動かす。途中でページが読み込み直されたとき（開発サーバーの再読み込みなど）は、
+    // 終わったテーマを飛ばして続きから再開する（以前は読み込み直されると止まったまま「実行中」になっていた）。ただし4回目以降は打ち切る。
+    if (autoDraftLoopStarted) return;
+    autoDraftLoopStarted = true;
+    let starts = 0;
+    try { starts = Number(sessionStorage.getItem(`autodraft-starts-${run}`) || "0"); sessionStorage.setItem(`autodraft-starts-${run}`, String(starts + 1)); } catch (e) { /* 無視 */ }
+    if (starts >= 4) return;
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     (async () => {
-      const status = { state: "running", startedAt: Date.now(), run, results: [] };
+      let status = { state: "running", startedAt: Date.now(), run, results: [] };
       try {
-        await saveDraftStatus(status);
         const st = await getDraftState();
+        if (starts > 0 && st.status?.run === run && st.status.state === "running") status = { ...st.status, results: st.status.results || [], resumed: starts };
+        await saveDraftStatus(status);
         const sch = st.schedule;
         const urgentOnly = qs.get("urgent") === "1"; // 「すぐ」の予約だけを作る（話題のニュースからの自動選択はしない）
         if (!urgentOnly && (!sch.enabled || sch.count < 1)) { await saveDraftStatus({ ...status, state: "done", finishedAt: Date.now(), message: "自動生成はオフです" }); return; }
         if (sch.minutes) setTargetMinutes(Math.min(8, Math.max(3, sch.minutes)));
-        const queue = (urgentOnly ? sch.keywords.filter((k) => k.urgent).slice(0, 10) : sch.keywords.slice(0, sch.count)).map((k) => ({ ...k, source: "reserved" }));
-        if (!urgentOnly && queue.length < sch.count) {
+        const doneThemes = new Set(status.results.map((r) => r.theme));
+        const want = urgentOnly ? 10 : Math.max(0, sch.count - status.results.length);
+        const queue = sch.keywords.filter((k) => (!urgentOnly || k.urgent) && !doneThemes.has(k.theme)).slice(0, want).map((k) => ({ ...k, source: "reserved" }));
+        if (!urgentOnly && queue.length < want) {
           try {
-            const { themes } = await trendingThemes(sch.count - queue.length, st.history);
-            const used = new Set(st.history);
-            for (const t of themes) { if (queue.length >= sch.count) break; if (!used.has(t) && !queue.some((q) => q.theme === t)) queue.push({ theme: t, mode: "news", source: "auto" }); }
+            const { themes } = await trendingThemes(want - queue.length, st.history);
+            const used = new Set([...st.history, ...doneThemes]);
+            for (const t of themes) { if (queue.length >= want) break; if (!used.has(t) && !queue.some((q) => q.theme === t)) queue.push({ theme: t, mode: "news", source: "auto" }); }
           } catch (e) { status.message = `話題のニュースを取得できませんでした：${e?.message || e}`; }
         }
+        // 進み具合を status.step に書き出す（scripts/auto-draft.mjs がログに残し、止まった場所が分かるようにする）
+        let curTheme = "", lastStep = "";
+        const report = async (step) => { lastStep = step; status.step = `${curTheme.slice(0, 30)}：${step}`; status.stepAt = Date.now(); await saveDraftStatus(status).catch(() => {}); };
+        const ticker = setInterval(() => { const g = latestRef.current.genProgress?.step; if (g && g !== lastStep) report(g); }, 15000);
+        // 1つの段階が終わらないまま止まり続けないように、時間を区切る（区切ったら中止してその予約は失敗として次へ進む）
+        const withTimeout = (pr, min, label, onTimeout) => new Promise((resolve, reject) => {
+          const t = setTimeout(() => { try { onTimeout?.(); } catch (e) { /* 無視 */ } reject(new Error(`${label}が${min}分以内に終わりませんでした（止まった段階：${lastStep || "不明"}）`)); }, min * 60000);
+          pr.then((v) => { clearTimeout(t); resolve(v); }, (e) => { clearTimeout(t); reject(e); });
+        });
         for (const q of queue) {
+          curTheme = q.theme;
           try {
             setProject(null); setRefs([]); setExtraInstruction(""); setMode(q.mode === "keyword" ? "keyword" : "news"); setTopic(q.theme);
             await sleep(800);
             // 参考情報をWebで集めて、URLの読み込みが終わるのを待つ（最大90秒）
-            await latestRef.current.runResearch();
+            await report("参考情報をWebで集めています");
+            await withTimeout(latestRef.current.runResearch(), 8, "参考情報の収集", () => researchAbortRef.current?.abort());
+            await report("参考URLを読み込んでいます");
             for (let i = 0; i < 90 && latestRef.current.refs.some((r) => r.kind === "url" && r.status === "pending"); i++) await sleep(1000);
             setRefs((rs) => rs.filter((r) => !(r.kind === "url" && r.status !== "ok" && r.status !== "done" && !r.text)));
             await sleep(500);
             lastGenErrorRef.current = null;
-            await latestRef.current.handleGenerate();
+            await report("台本を作っています");
+            await withTimeout(latestRef.current.handleGenerate(), 40, "台本・画像の作成", () => abortRef.current?.abort());
             await sleep(800);
             if (lastGenErrorRef.current) throw new Error(lastGenErrorRef.current);
             const p = latestRef.current.project;
             if (!p) throw new Error("台本を作れませんでした");
+            await report("ドラフトを保存しています");
             await exportDraft(p, { theme: q.theme, mode: q.mode, source: q.source }, latestRef.current.refs);
             await addDraftHistory([q.theme]).catch(() => {});
             if (q.source === "reserved") {
@@ -1798,6 +1824,7 @@ export default function ExplainerStudio() {
           }
           await saveDraftStatus(status).catch(() => {});
         }
+        clearInterval(ticker);
         await saveDraftStatus({ ...status, state: "done", finishedAt: Date.now() });
       } catch (e) {
         await saveDraftStatus({ ...status, state: "error", finishedAt: Date.now(), message: e?.message || String(e) }).catch(() => {});
