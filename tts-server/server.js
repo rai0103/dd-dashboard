@@ -18,6 +18,7 @@ const fs = require('fs').promises;
 const fsSync = require('fs');
 const os = require('os');
 const path = require('path');
+const { handleDrafts } = require('./drafts');
 
 const PORT = Number(process.env.TTS_PORT) || 4100;
 
@@ -808,6 +809,7 @@ const server = http.createServer((req, res) => {
   const url = req.url || '';
   const pathname = url.split('?')[0];
   if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+  if (pathname.startsWith('/api/drafts')) { handleDrafts(req, res, pathname, { isLocal, researchWithGemini }); return; }
   if (pathname === '/api/tts' && req.method === 'GET') { handleGetVoices(req, res); return; }
   if (pathname === '/api/tts' && req.method === 'POST') { handlePostSpeak(req, res); return; }
   if (pathname === '/api/chat' && req.method === 'POST') { handlePostChat(req, res); return; }

@@ -30,6 +30,8 @@ import { saveImage, listImages, deleteImage } from "@/lib/explainer/imageStore";
 import { generateImage } from "@/lib/explainer/imageClient";
 import { searchFreeImages, fetchFreeImage, rankFreeImages } from "@/lib/explainer/freeImageClient";
 import { researchTopic } from "@/lib/explainer/researchClient";
+import DraftPanel from "@/components/DraftPanel";
+import { addDraftHistory, exportDraft, getDraftState, saveDraftSchedule, saveDraftStatus, trendingThemes } from "@/lib/explainer/autoDraft";
 import { safeFileName, canPickFolder, getSavedFolder, pickFolder, ensureWritable, saveBundle, descriptionText } from "@/lib/explainer/exportBundle";
 import { exportVideoProfile, importVideoProfile } from "@/lib/videoProfileSnapshot";
 import AutoScheduleStudio from "@/components/AutoScheduleStudio";
@@ -1719,6 +1721,108 @@ export default function ExplainerStudio() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ---------------- 自動ドラフト（毎朝の予約実行。scripts/auto-draft.mjs が ?autodraft=1&run=<id> で開く） ----------------
+  // 予約テーマ（なければ前日の話題のニュース）で、リサーチ→台本→画像まで作り、drafts/pending に保存する。
+  // 動画の書き出し・アップロードはしない（画像の確認から先は、ユーザーが普段の画面で行う）。
+  const latestRef = useRef({});
+  latestRef.current = { handleGenerate, runResearch, project, refs };
+  useEffect(() => {
+    const qs = new URLSearchParams(window.location.search);
+    if (qs.get("autodraft") !== "1") return;
+    const run = qs.get("run") || "";
+    if (!run) return;
+    // 普段のブラウザの設定（声・画像の割合など）を取り込んでから、1回だけ読み込み直す
+    // （画面の設定は起動時に読むため、取り込んだだけでは今回の実行に反映されない）
+    try {
+      if (sessionStorage.getItem("autodraft-profile") !== run) {
+        sessionStorage.setItem("autodraft-profile", run);
+        (async () => {
+          try {
+            const r = await fetch(`${getTtsBaseUrl()}/api/profile-snapshot`);
+            const text = await r.text();
+            if (text && text !== "null") await importVideoProfile(text);
+          } catch (e) { /* 既定の設定のまま進める */ }
+          window.location.reload();
+        })();
+        return;
+      }
+    } catch (e) { /* sessionStorageが使えないときはそのまま進める */ }
+    try { if (localStorage.getItem("autodraft-last") === run) return; localStorage.setItem("autodraft-last", run); } catch (e) { /* 無視 */ }
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    (async () => {
+      const status = { state: "running", startedAt: Date.now(), run, results: [] };
+      try {
+        await saveDraftStatus(status);
+        const st = await getDraftState();
+        const sch = st.schedule;
+        const urgentOnly = qs.get("urgent") === "1"; // 「すぐ」の予約だけを作る（話題のニュースからの自動選択はしない）
+        if (!urgentOnly && (!sch.enabled || sch.count < 1)) { await saveDraftStatus({ ...status, state: "done", finishedAt: Date.now(), message: "自動生成はオフです" }); return; }
+        if (sch.minutes) setTargetMinutes(Math.min(8, Math.max(3, sch.minutes)));
+        const queue = (urgentOnly ? sch.keywords.filter((k) => k.urgent).slice(0, 10) : sch.keywords.slice(0, sch.count)).map((k) => ({ ...k, source: "reserved" }));
+        if (!urgentOnly && queue.length < sch.count) {
+          try {
+            const { themes } = await trendingThemes(sch.count - queue.length, st.history);
+            const used = new Set(st.history);
+            for (const t of themes) { if (queue.length >= sch.count) break; if (!used.has(t) && !queue.some((q) => q.theme === t)) queue.push({ theme: t, mode: "news", source: "auto" }); }
+          } catch (e) { status.message = `話題のニュースを取得できませんでした：${e?.message || e}`; }
+        }
+        for (const q of queue) {
+          try {
+            setProject(null); setRefs([]); setExtraInstruction(""); setMode(q.mode === "keyword" ? "keyword" : "news"); setTopic(q.theme);
+            await sleep(800);
+            // 参考情報をWebで集めて、URLの読み込みが終わるのを待つ（最大90秒）
+            await latestRef.current.runResearch();
+            for (let i = 0; i < 90 && latestRef.current.refs.some((r) => r.kind === "url" && r.status === "pending"); i++) await sleep(1000);
+            setRefs((rs) => rs.filter((r) => !(r.kind === "url" && r.status !== "ok" && r.status !== "done" && !r.text)));
+            await sleep(500);
+            lastGenErrorRef.current = null;
+            await latestRef.current.handleGenerate();
+            await sleep(800);
+            if (lastGenErrorRef.current) throw new Error(lastGenErrorRef.current);
+            const p = latestRef.current.project;
+            if (!p) throw new Error("台本を作れませんでした");
+            await exportDraft(p, { theme: q.theme, mode: q.mode, source: q.source }, latestRef.current.refs);
+            await addDraftHistory([q.theme]).catch(() => {});
+            if (q.source === "reserved") {
+              const cur = await getDraftState();
+              await saveDraftSchedule({ ...cur.schedule, keywords: cur.schedule.keywords.filter((k) => k.theme !== q.theme) }, false);
+            }
+            status.results.push({ theme: q.theme, ok: true });
+          } catch (e) {
+            status.results.push({ theme: q.theme, ok: false, error: e?.message || String(e) });
+            // 「すぐ」の予約は失敗しても外す（10分ごとに作り直し続けないように）
+            if (q.urgent) {
+              const cur = await getDraftState().catch(() => null);
+              if (cur) await saveDraftSchedule({ ...cur.schedule, keywords: cur.schedule.keywords.filter((k) => k.theme !== q.theme) }, false).catch(() => {});
+            }
+          }
+          await saveDraftStatus(status).catch(() => {});
+        }
+        await saveDraftStatus({ ...status, state: "done", finishedAt: Date.now() });
+      } catch (e) {
+        await saveDraftStatus({ ...status, state: "error", finishedAt: Date.now(), message: e?.message || String(e) }).catch(() => {});
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /** 自動ドラフトを取り込んで、編集画面に開く */
+  const openDraft = async (p, meta) => {
+    const { __draftRefs, ...proj } = p || {};
+    setMode(meta.mode === "keyword" ? "keyword" : "news");
+    setTopic(meta.theme);
+    setRefs(Array.isArray(__draftRefs) ? __draftRefs : []);
+    setFormat("long"); setSeekPos(0); setCurrentSceneIdx(0);
+    setProject(proj);
+    setInputOpen(false);
+    await refreshImages();
+  };
+  // 予約を保存するとき、今の設定を自動生成用に渡す（「自動実行用に設定を保存」と同じ）
+  const saveProfileForDrafts = async () => {
+    const json = await exportVideoProfile();
+    await fetch(`${getTtsBaseUrl()}/api/profile-snapshot`, { method: "POST", headers: { "Content-Type": "application/json" }, body: json });
+  };
+
   // ---------------- 公開前チェック・YouTube情報 ----------------
   const refTexts = useMemo(() => referenceTexts(refs), [refs]);
   const issues = useMemo(() => lintScenes(scenes, refTexts, sceneDurs), [scenes, refTexts, sceneDurs]);
@@ -1815,6 +1919,7 @@ export default function ExplainerStudio() {
             </label>
           </div>
         </header>
+        <DraftPanel C={C} disabled={genBusy || isExporting} minutes={targetMinutes} onOpen={openDraft} hasProject={!!project} onSaveProfile={saveProfileForDrafts} />
 
         {/* ---------- 入力 ---------- */}
         <div className="rounded-lg p-3" style={{ background: C.panel, border: `1px solid ${C.border}` }}>

@@ -33,6 +33,8 @@ export async function saveImage(file: File, caption?: string, credit?: ImageCred
   await run('readwrite', (s) => s.put(item));
   return item;
 }
+/** IDを保ったまま画像を保存する（自動ドラフトの取り込み用） */
+export async function putImage(item: ImageAsset): Promise<void> { await run('readwrite', (s) => s.put(item)); }
 export async function listImages(): Promise<ImageAsset[]> { return run<ImageAsset[]>('readonly', (s) => s.getAll()); }
 export async function deleteImage(id: string): Promise<void> { await run('readwrite', (s) => s.delete(id)); }
 
