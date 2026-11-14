@@ -97,7 +97,7 @@ async function handleDrafts(req, res, pathname, deps) {
           enabled: !!s.enabled,
           count: Math.max(1, Math.min(10, Math.round(Number(s.count) || 3))),
           time: /^\d{1,2}:\d{2}$/.test(String(s.time || '')) ? String(s.time).padStart(5, '0') : DEFAULT_SCHEDULE.time,
-          keywords: (Array.isArray(s.keywords) ? s.keywords : []).map((k) => ({ theme: String(k && k.theme || '').trim(), mode: k && k.mode === 'keyword' ? 'keyword' : 'news', ...(k && k.urgent ? { urgent: true } : {}) })).filter((k) => k.theme),
+          keywords: (Array.isArray(s.keywords) ? s.keywords : []).map((k) => ({ theme: String(k && k.theme || '').trim(), mode: k && k.mode === 'keyword' ? 'keyword' : 'news', ...(k && k.urgent ? { urgent: true } : {}), ...(k && k.note && String(k.note).trim() ? { note: String(k.note).trim().slice(0, 500) } : {}) })).filter((k) => k.theme),
           minutes: Number(s.minutes) || undefined,
         };
         await writeJson(path.join(ROOT, 'schedule.json'), next);

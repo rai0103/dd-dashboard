@@ -18,7 +18,7 @@ export default function DraftPanel({ C, disabled, minutes, onOpen, hasProject = 
     try {
       const st = await getDraftState();
       setSch(st.schedule);
-      setText(st.schedule.keywords.map((k) => (k.mode === "keyword" ? `用語：${k.theme}` : k.theme)).join("\n"));
+      setText(st.schedule.keywords.map((k) => `${k.mode === "keyword" ? `用語：${k.theme}` : k.theme}${k.note ? ` ｜ ${k.note}` : ""}`).join("\n"));
       setStatus(st.status);
       setDrafts(st.drafts || []);
       if ((st.drafts || []).length) setOpen(true);
@@ -31,11 +31,14 @@ export default function DraftPanel({ C, disabled, minutes, onOpen, hasProject = 
   const save = async () => {
     // 遠隔予約（「すぐ」）で付いた urgent の印は、同じテーマなら残す
     const urgentThemes = new Set((sch.keywords || []).filter((k) => k.urgent).map((k) => k.theme));
-    const keywords = text.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => {
+    // 「テーマ ｜ 説明」と書くと、説明は台本作成の追加の指示として渡す（テーマ欄は短い見出しのままにする）
+    const keywords = text.split("\n").map((l) => l.trim()).filter(Boolean).map((line) => {
+      const [l, ...rest] = line.split(/\s*[|｜]\s*/);
+      const note = rest.join(" ").trim();
       const m = l.match(/^(用語|キーワード)[:：]\s*(.+)$/);
-      const k = m ? { theme: m[2].trim(), mode: "keyword" } : { theme: l, mode: "news" };
+      const k = { ...(m ? { theme: m[2].trim(), mode: "keyword" } : { theme: l.trim(), mode: "news" }), ...(note ? { note } : {}) };
       return urgentThemes.has(k.theme) ? { ...k, urgent: true } : k;
-    });
+    }).filter((k) => k.theme);
     try {
       // 自動生成のChromeは普段のブラウザと設定が別なので、今の設定（声・画像の割合など）も一緒に渡しておく
       if (onSaveProfile) await onSaveProfile().catch(() => {});
@@ -99,8 +102,8 @@ export default function DraftPanel({ C, disabled, minutes, onOpen, hasProject = 
                 <label className="flex items-center gap-1">本数 <input type="number" min={1} max={10} value={sch.count} onChange={(e) => setSch({ ...sch, count: Math.max(1, Math.min(10, Number(e.target.value) || 1)) })} className="w-14 px-1 py-0.5 text-xs" style={field} /></label>
                 <label className="flex items-center gap-1">開始時刻 <input type="time" value={sch.time} onChange={(e) => setSch({ ...sch, time: e.target.value })} className="px-1 py-0.5 text-xs" style={field} /></label>
               </div>
-              <div className="text-[11px]" style={{ color: C.textMuted }}>予約テーマ（1行に1つ。先に使います。用語解説にしたいときは「用語：NISA」のように書きます）。足りない分は、前日の話題のニュースから自動で選びます。</div>
-              <textarea value={text} onChange={(e) => setText(e.target.value)} rows={3} className="px-2 py-1 text-xs" style={field} placeholder={"例：日銀の金融政策決定会合\n用語：インフレ"} />
+              <div className="text-[11px]" style={{ color: C.textMuted }}>予約テーマ（1行に1つ。先に使います。用語解説にしたいときは「用語：NISA」のように書きます。扱ってほしい点は「 ｜ 」の後ろに書けます）。足りない分は、前日の話題のニュースから自動で選びます。</div>
+              <textarea value={text} onChange={(e) => setText(e.target.value)} rows={3} className="px-2 py-1 text-xs" style={field} placeholder={"例：日銀の金融政策決定会合\n用語：インフレ ｜ 物価と金利の関係を中心に"} />
               <div className="flex items-center gap-2">
                 <button onClick={save} disabled={busy} className="text-[11px] px-3 py-1 rounded" style={btn}>予約を保存</button>
                 {msg && <span className="text-[11px]" style={{ color: C.textMuted }}>{msg}</span>}

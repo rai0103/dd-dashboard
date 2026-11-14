@@ -2,7 +2,7 @@
 import { getTtsBaseUrl } from '../videoAudioMixer';
 import { listImages, putImage } from './imageStore';
 
-export interface DraftKeyword { theme: string; mode: 'news' | 'keyword'; urgent?: boolean }
+export interface DraftKeyword { theme: string; mode: 'news' | 'keyword'; urgent?: boolean; note?: string }
 export interface DraftSchedule { enabled: boolean; count: number; time: string; keywords: DraftKeyword[]; minutes?: number }
 export interface DraftMeta { id: string; theme: string; mode: string; title: string; scenes: number; createdAt: number; source: 'reserved' | 'auto'; images?: { id: string; name: string; caption?: string; credit?: unknown; createdAt: number; type: string }[] }
 export interface DraftStatus { state: 'idle' | 'running' | 'done' | 'error'; startedAt?: number; finishedAt?: number; message?: string; step?: string; stepAt?: number; run?: string; results?: { theme: string; ok: boolean; error?: string }[] }

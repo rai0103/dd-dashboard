@@ -1790,7 +1790,7 @@ export default function ExplainerStudio() {
         for (const q of queue) {
           curTheme = q.theme;
           try {
-            setProject(null); setRefs([]); setExtraInstruction(""); setMode(q.mode === "keyword" ? "keyword" : "news"); setTopic(q.theme);
+            setProject(null); setRefs([]); setExtraInstruction(q.note || ""); setMode(q.mode === "keyword" ? "keyword" : "news"); setTopic(q.theme);
             await sleep(800);
             // 参考情報をWebで集めて、URLの読み込みが終わるのを待つ（最大90秒）
             await report("参考情報をWebで集めています");
