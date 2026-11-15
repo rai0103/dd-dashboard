@@ -7,7 +7,7 @@
 // そちらの画面が開いてしまう）ため、動的検出が必須。
 // 通常のターミナルからの `npm run dev:video`（scripts/dev-video.js）はこのファイルと無関係で、
 // 今まで通りの挙動のまま変更していない。
-const { spawn, exec } = require('child_process');
+const { spawn, spawnSync, exec, execSync } = require('child_process');
 const path = require('path');
 
 const procs = [];
@@ -30,6 +30,29 @@ function shutdown() {
 }
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
+
+// 前回の tts-server が残っていて 4100番が使われていると、新しい tts-server が起動できず全体が終了してしまう。
+// 残っているのがこのプロジェクトの tts-server なら止めてから起動し直す（別のアプリなら止めずに知らせる）。
+function freeTtsPort() {
+  if (process.platform !== 'win32') return;
+  const port = Number(process.env.TTS_PORT) || 4100;
+  try {
+    const ps = `Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | ForEach-Object { $p = Get-CimInstance Win32_Process -Filter "ProcessId=$($_.OwningProcess)"; "$($p.ProcessId)\t$($p.CommandLine)" }`;
+    // 引用符・パイプを cmd に解釈させないよう、-EncodedCommand（UTF-16LEのBase64）で渡す
+    const r = spawnSync('powershell', ['-NoProfile', '-EncodedCommand', Buffer.from(ps, 'utf16le').toString('base64')], { encoding: 'utf8', windowsHide: true });
+    const out = String(r.stdout || '').trim();
+    for (const line of out.split(/\r?\n/).filter(Boolean)) {
+      const [pid, cmd = ''] = line.split('\t');
+      if (/dd-dashboard[\\/]tts-server[\\/]server\.js/i.test(cmd)) {
+        console.log(`[launch] 前回の tts-server（PID ${pid}）が残っているので止めます…`);
+        try { execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore' }); } catch {}
+      } else {
+        console.log(`[launch] ${port}番を別のプログラムが使っています（PID ${pid}：${cmd.slice(0, 120)}）。このままでは tts-server を起動できません。`);
+      }
+    }
+  } catch { /* 確認できないときはそのまま起動を試す */ }
+}
+freeTtsPort();
 
 console.log('[launch] next dev と tts-server を起動します（Ctrl+Cで両方終了）…');
 // tts-serverはNode実行ファイル（process.execPath）を直接起動するのでshellは使わない（scripts/dev-video.jsと同じ理由）。
