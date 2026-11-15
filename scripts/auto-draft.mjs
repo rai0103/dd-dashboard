@@ -56,7 +56,9 @@ try {
   for (let port = 3000; port <= 3010 && !origin; port++) {
     try {
       const r = await fetch(`http://localhost:${port}/explainer/`, { signal: AbortSignal.timeout(120000) });
-      if (r.ok && (await r.text()).includes('DD戦略ダッシュボード')) origin = `http://localhost:${port}`;
+      const html = r.ok ? await r.text() : '';
+      // 動画作成の画面（タイトル「動画作成」）で、このプロジェクトのマニフェストを読んでいるもの
+      if (html.includes('<title>動画作成</title>') && html.includes('dd-dashboard/manifest.json')) origin = `http://localhost:${port}`;
     } catch { /* そのポートには無い */ }
   }
   if (origin) log(`動いている next dev を使います：${origin}`);
@@ -85,7 +87,14 @@ try {
   const page = ctx.pages()[0] ?? (await ctx.newPage());
   // 画面側のエラーもログに残す（止まった原因を後から追えるように）
   page.on('pageerror', (e) => log(`画面のエラー：${String(e?.message || e).split('\n')[0].slice(0, 300)}`));
-  page.on('console', (m) => { if (m.type() === 'error') log(`画面のコンソール：${m.text().split('\n')[0].slice(0, 300)}`); });
+  // 同じメッセージは3回までにする（繰り返し出るエラーでログが膨らまないように）
+  const consoleSeen = new Map();
+  page.on('console', (m) => {
+    if (m.type() !== 'error') return;
+    const t = m.text().split('\n')[0].slice(0, 300);
+    const n = (consoleSeen.get(t) || 0) + 1; consoleSeen.set(t, n);
+    if (n <= 3) log(`画面のコンソール：${t}${n === 3 ? '（以降は省略）' : ''}`);
+  });
   page.on('crash', () => log('画面（タブ）がクラッシュしました'));
   page.on('framenavigated', (f) => { if (f === page.mainFrame()) log(`画面を読み込みました：${f.url().replace(/^https?:\/\/[^/]+/, '')}`); });
   await page.goto(`${origin}/explainer/?autodraft=1&run=${run}${urgentMode ? '&urgent=1' : ''}`, { waitUntil: 'domcontentloaded', timeout: 180000 }).catch(() => {});

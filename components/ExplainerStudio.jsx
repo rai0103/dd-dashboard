@@ -222,6 +222,10 @@ function copyText(t) { try { navigator.clipboard.writeText(t); } catch (e) { /* 
 const itemsToText = (items) => items.map((it) => [it.label, it.value, it.text.replace(/\n/g, "／"), it.icon].join("｜")).join("\n");
 const textToItems = (s) => s.split("\n").map((ln) => ln.trim()).filter(Boolean).map((ln) => { const [label = "", value = "", text = "", icon = "bulb"] = ln.split(/[｜|]/); return { label: label.trim(), value: value.trim(), text: text.trim().replace(/／/g, "\n"), icon: icon.trim() }; });
 
+// 台本が無いときの場面一覧。毎回 [] を作ると、場面一覧に依存する効果（長さのリセット等）が描画のたびに動き、
+// 「Maximum update depth exceeded」の無限ループになるため、同じ配列を使い回す
+const NO_SCENES = [];
+
 // 自動ドラフトをこのページ読み込みの中で動かしているか（開発時のReact StrictModeで効果が2回呼ばれても、二重に動かさない）
 let autoDraftLoopStarted = false;
 
@@ -450,7 +454,7 @@ export default function ExplainerStudio() {
   useEffect(() => { if (project) { try { localStorage.setItem(PROJECT_KEY, JSON.stringify(project)); } catch (e) { /* ignore */ } } }, [project]);
   useEffect(() => { if (project) setInputOpen(false); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
   const [format, setFormat] = useState("long");
-  const scenes = project ? (format === "long" ? project.longScenes : project.shortScenes) : [];
+  const scenes = project ? (format === "long" ? project.longScenes : project.shortScenes) : NO_SCENES;
   const setScenes = (fn) => setProject((p) => {
     if (!p) return p;
     const key = format === "long" ? "longScenes" : "shortScenes";
