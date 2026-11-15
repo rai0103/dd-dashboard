@@ -982,7 +982,9 @@ export default function ExplainerStudio() {
     finally { setNarrAiBusy(false); }
   };
   const [editVisualId, setEditVisualId] = useState(null);
-  const [readingOpenId, setReadingOpenId] = useState(null);
+  // 読み上げ文は最初から表示する（閉じた場面だけを覚える）
+  const [readingClosedIds, setReadingClosedIds] = useState(() => new Set());
+  const toggleReading = (id) => setReadingClosedIds((p) => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n; });
 
   // ---------------- 画像（権利を確認したものだけ・場面ごと） ----------------
   const [images, setImages] = useState([]);
@@ -1342,17 +1344,26 @@ export default function ExplainerStudio() {
   const scenesRef = useRef([]);
   useEffect(() => { scenesRef.current = scenes; }, [scenes]);
   const sceneRefs = useRef([]);
+  const settingsPanelRef = useRef(null);
   const listRef = useRef(null);
   // 台本・形式が変わったら、実測した長さは使えないので概算に戻す
   useEffect(() => { setTotalSec(0); setSceneDurs([]); setNarrMeasure(null); }, [scenes, format]);
   // 速さを変えたら、実測した全体の長さは使えないので見込みに戻す（ナレーションの実測値は残して比で計算する）
   useEffect(() => { setTotalSec(0); setSceneDurs([]); }, [rate]);
   useEffect(() => {
-    const el = sceneRefs.current[currentSceneIdx];
-    if (!el) return;
-    // 場面一覧（listRef）だけでなく、ページ全体のスクロールも必要な分だけ連動させ、
-    // 再生中は常にこのカードが画面に見えるようにする（block:"nearest"なので、既に見えているときは動かさない）
-    el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    const el = sceneRefs.current[currentSceneIdx], list = listRef.current;
+    if (!el || !list) return;
+    // 再生中の場面のカードを、左のプレビュー画面と同じ高さ（上端をそろえる）に表示する。
+    // ①右の設定パネルを、場面一覧の上端がプレビュー画面の上端に来るところまでスクロール（一覧の上の見出しは隠れる）
+    // ②場面一覧の中を、そのカードが一覧の上端に来るまでスクロールする
+    const cvTop = canvasRef.current?.getBoundingClientRect().top;
+    const panel = settingsPanelRef.current;
+    if (panel && cvTop != null) {
+      const d1 = list.getBoundingClientRect().top - Math.max(cvTop, panel.getBoundingClientRect().top);
+      if (Math.abs(d1) > 2) panel.scrollTop += d1;
+    }
+    const delta = el.getBoundingClientRect().top - list.getBoundingClientRect().top;
+    if (Math.abs(delta) > 2) list.scrollTo({ top: list.scrollTop + delta, behavior: "smooth" });
   }, [currentSceneIdx]);
   // 読み上げ中の場面の、どの文字まで読み終えたか（ナレーション枠のハイライト用）。音声の長さは prepareAudio で確定する
   const narrDursRef = useRef([]);
@@ -1517,7 +1528,7 @@ export default function ExplainerStudio() {
     try { localStorage.removeItem(PROJECT_KEY); } catch (e) { /* ignore */ }
     setTopic(""); setExtraInstruction(""); setRefs([]); setSelectedRefIds(new Set());
     setUrlInput(""); setRefTextBody(""); setRefTextTitle(""); setRefTextOpen(false);
-    setGenError(""); setAiError(""); setAiOpenId(null); setEditVisualId(null); setReadingOpenId(null); setRightsPendingId(null);
+    setGenError(""); setAiError(""); setAiOpenId(null); setEditVisualId(null); setReadingClosedIds(new Set()); setRightsPendingId(null);
     setExportNote(""); setFormat("long"); setSeekPos(0); setCurrentSceneIdx(0); setTotalSec(0); setSceneDurs([]); setNarrMeasure(null);
     setInputOpen(true);
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -2252,7 +2263,7 @@ export default function ExplainerStudio() {
               </div>
 
               {/* ---------- 設定パネル（常にプレビューの右横に枠として表示し、内側のスクロールバーで移動する） ---------- */}
-              <div className="flex flex-col gap-4 text-xs flex-1 min-w-0 rounded-lg p-3 overflow-y-auto" style={{ border: `1px solid ${C.border}`, background: C.panel, maxHeight: "min(85vh, 900px)" }}>
+              <div ref={settingsPanelRef} className="flex flex-col gap-4 text-xs flex-1 min-w-0 rounded-lg p-3 overflow-y-auto" style={{ border: `1px solid ${C.border}`, background: C.panel, maxHeight: "min(85vh, 900px)" }}>
                 {/* 公開前チェック */}
                 <Section collapsible defaultOpen={false} title={`公開前チェック（${issues.filter((x) => x.level === "warn").length}件の注意・${issues.filter((x) => x.level === "info").length}件の確認）`} right={issues.some((x) => x.message.startsWith("参考資料の文章")) ? <button onClick={paraphraseAll} disabled={!!paraAllBusy} className="text-[10px] px-1.5 py-0.5 rounded" style={{ ...btn("primary"), opacity: paraAllBusy ? 0.5 : 1 }}>{paraAllBusy || "参考資料と同じ言い回しをまとめて言い換える"}</button> : null}>
                   {issues.length === 0 ? (
@@ -2301,7 +2312,7 @@ export default function ExplainerStudio() {
                     </div>
                   )}
                   {aiError && <div className="text-[10px] mb-1" style={{ color: "#ff6b6b" }}>{aiError}</div>}
-                  <div ref={listRef} className="flex flex-col gap-1.5 overflow-y-auto pr-1" style={{ maxHeight: 560 }}>
+                  <div ref={listRef} className="flex flex-col gap-1.5 overflow-y-auto pr-1" style={{ maxHeight: 560, paddingBottom: 460 }}>
                     {scenes.map((sc, i) => {
                       const cur = i === currentSceneIdx;
                       const est = sceneDurs[i] ?? estDurs[i];
@@ -2396,8 +2407,8 @@ export default function ExplainerStudio() {
                               readUpTo={cur && isPlaying ? readCharIdx : null} />
                           </div>
                           <div className="flex items-center gap-2 mt-1 flex-wrap">
-                            <button onClick={() => setReadingOpenId((v) => (v === sc.id ? null : sc.id))} className="text-[10px] flex items-center gap-0.5" style={{ color: isKanaReading(sc.reading) && !sc.readingStale ? C.textDim : C.amber, background: "none", border: "none", cursor: "pointer", padding: 0 }}>
-                              読み上げ文{readingBusyIds.has(sc.id) ? "（直した部分を更新中…）" : sc.readingStale ? "（ナレーションと要確認）" : ""}<ChevronRight size={10} style={{ transform: readingOpenId === sc.id ? "rotate(90deg)" : "none" }} />
+                            <button onClick={() => toggleReading(sc.id)} className="text-[10px] flex items-center gap-0.5" style={{ color: isKanaReading(sc.reading) && !sc.readingStale ? C.textDim : C.amber, background: "none", border: "none", cursor: "pointer", padding: 0 }}>
+                              読み上げ文{readingBusyIds.has(sc.id) ? "（直した部分を更新中…）" : sc.readingStale ? "（ナレーションと要確認）" : ""}<ChevronRight size={10} style={{ transform: !readingClosedIds.has(sc.id) ? "rotate(90deg)" : "none" }} />
                             </button>
                             {learnedOf(sc) && (
                               <span className="text-[10px] flex items-center gap-1" style={{ color: C.teal }} title="この場面のナレーションの直しを記憶しています。次回以降の台本でも同じ直し方を当てはめます。">
@@ -2411,7 +2422,7 @@ export default function ExplainerStudio() {
                             <span className="text-[10px] ml-auto" style={{ color: C.textDim }}>テロップ</span>
                             <input value={sc.caption} onChange={(e) => patchScene(sc.id, { caption: e.target.value })} className="text-[10px] px-1 py-0.5 rounded w-40" style={inputStyle} />
                           </div>
-                          {readingOpenId === sc.id && (
+                          {!readingClosedIds.has(sc.id) && (
                             <div className="mt-1">
                               {/* 読み上げ文は全文を表示する（スクロールバーを出さず、文の長さに合わせて高さを自動で伸ばす） */}
                               <textarea value={sc.reading} rows={1} ref={(el) => fitTextarea(el)} onInput={(e) => fitTextarea(e.currentTarget)} onChange={(e) => { if (isPlayingRef.current) handlePause(); patchScene(sc.id, { reading: e.target.value.replace(/\n/g, ""), readingStale: false }); }} className="w-full rounded px-1.5 py-1 text-[11px]" style={{ ...inputStyle, background: C.panel, resize: "none", overflow: "hidden", fieldSizing: "content" }} />
