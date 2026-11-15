@@ -1403,7 +1403,9 @@ export default function ExplainerStudio() {
   const stopLoop = () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); rafRef.current = 0; isPlayingRef.current = false; };
   // list：音声を用意する場面（省略時は表示中の形式の場面）。表示中でない形式（長尺＋ショートのセット書き出しで
   // ショートを書き出すとき等）は、画面の実測値（長さ表示・読み上げ位置）を上書きしない
-  const prepareAudio = async (list = scenes) => {
+  // onStep(k, n)：k場面目の音声ができたら呼ぶ（書き出し画面の進み具合の表示用）。
+  // timeoutSec：1場面の音声が、この秒数を過ぎてもできなければ止めてエラーにする（書き出しで止まったままにならないように）
+  const prepareAudio = async (list = scenes, { onStep, timeoutSec } = {}) => {
     const own = list === scenes;
     if (own) setTtsError(false);
     let failed = false;
@@ -1412,10 +1414,14 @@ export default function ExplainerStudio() {
     let voice = voiceIndex;
     for (let i = 0; i < list.length; i++) {
       try {
-        const { buffer, usedFallback } = await mixer().fetchNarrationBufferSmart(ttsText(list[i]), rate, voice, pitch, fb);
+        const job = mixer().fetchNarrationBufferSmart(ttsText(list[i]), rate, voice, pitch, fb);
+        const { buffer, usedFallback } = timeoutSec
+          ? await Promise.race([job, new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error(`場面${i + 1}のナレーション音声が${timeoutSec}秒たってもできません。AivisSpeech（使っている場合）と、dd-dashboard serverの画面にエラーが出ていないか確認してください。`), { code: "TTS_TIMEOUT" })), timeoutSec * 1000))])
+          : await job;
         bufs.push(buffer);
+        onStep?.(i + 1, list.length);
         if (usedFallback && voice !== fb) { voice = fb; setVoiceIndex(fb); setVoiceNote("AivisSpeechに接続できなかったため、既存の声に切り替えました。"); }
-      } catch (e) { console.error("TTS error:", e); failed = true; bufs.push(null); }
+      } catch (e) { if (e?.code === "TTS_TIMEOUT") throw e; console.error("TTS error:", e); failed = true; bufs.push(null); onStep?.(i + 1, list.length); }
     }
     const durs = list.map((s, i) => Math.max(s.minSec || 3, bufs[i] ? 0.3 + bufs[i].duration + 0.8 : 0));
     const starts = []; durs.reduce((acc, d) => { starts.push(acc); return acc + d; }, 0);
@@ -1572,7 +1578,7 @@ export default function ExplainerStudio() {
     return buildDescription(project, urlList, fmt === "short", credits);
   };
   // 1本分（長尺またはショート）を録画して、保存するファイル（動画・サムネ・概要欄）を返す。onProgress(0〜1)
-  const recordOne = async (fmt, onProgress) => {
+  const recordOne = async (fmt, onProgress, stageLabel = "") => {
     const list = (fmt === "short" ? project.shortScenes : project.longScenes) || [];
     if (!list.length) throw new Error(fmt === "short" ? "ショートの台本がありません" : "台本がありません");
     const names = exportNames(fmt);
@@ -1592,12 +1598,14 @@ export default function ExplainerStudio() {
         images: imageEls, showSubtitles, showSourceNotes: sourcesInVideo,
       });
       const audioStream = mixer().startRecordingTap();
-      const pr = await prepareAudio(list);
+      const pr = await prepareAudio(list, { timeoutSec: 120, onStep: (k, n) => setExportStage(`${stageLabel ? `${stageLabel}・` : ""}ナレーション音声を準備中（${k}/${n}）`) });
+      setExportStage(stageLabel ? `${stageLabel}・録画中` : "録画中");
       r.setDurations(pr.durs); r.setNarration(pr.bufs);
       const animMs = Math.round(pr.total * 1000), totalMs = animMs + 300;
       const thumbAtMs = thumbTimeSec(pr.durs, list) * 1000;
       let thumbBlob = null, thumbPending = null;
-      await r.prepare(0); // 人物の動画を先頭にそろえてから録画を始める（出だしで人物が消えないように）
+      // 人物の動画を先頭にそろえてから録画を始める（出だしで人物が消えないように）。そろわなくても20秒で先に進む
+      await Promise.race([r.prepare(0), new Promise((res) => setTimeout(res, 20000))]);
       if (bgmUrl) await mixer().playBGM(bgmUrl, bgmVolume, true);
       handle = exporter.startRecording(canvas, audioStream, 30);
       // MediaRecorder開始直後の数フレームはエンコーダーが安定せず、ファイルの先頭が壊れることがごくまれにあるため、
@@ -1670,8 +1678,9 @@ export default function ExplainerStudio() {
     try {
       for (let k = 0; k < fmts.length; k++) {
         const fmt = fmts[k];
-        setExportStage(fmts.length > 1 ? `${fmt === "short" ? "ショート" : "長尺"}（${k + 1}/${fmts.length}本目）` : "");
-        const res = await recordOne(fmt, (p) => setExportProgress(Math.round(((k + p * 0.97) / fmts.length) * 100)));
+        const label = fmts.length > 1 ? `${fmt === "short" ? "ショート" : "長尺"}（${k + 1}/${fmts.length}本目）` : "";
+        setExportStage(label);
+        const res = await recordOne(fmt, (p) => setExportProgress(Math.round(((k + p * 0.97) / fmts.length) * 100)), label);
         let where;
         if (autorun) {
           if (!autorun.outDir) throw new Error("保存先フォルダが設定されていません（配信設定でフォルダを指定してください）");
