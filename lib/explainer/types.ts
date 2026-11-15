@@ -131,6 +131,8 @@ export interface ExplainerScene {
   minSec: number;
   /** ユーザーが追加した画像（ImageAssetのid） */
   imageId?: string | null;
+  /** 画像の見せ方（サイズ・位置）。無ければ自動（縦横比が大きく違えば全体表示、そうでなければ画面いっぱいでゆっくり寄る） */
+  imageFit?: ImageFit;
   /** ナレーションを手で直したあと、読み上げ文がまだ合わせられていない（このあいだは通常の文で読み上げる） */
   readingStale?: boolean;
   /** [Stage E-17] 台本生成の時点で自動生成されたナレーション（制作者の直しを記憶するときの「直す前」） */
@@ -183,6 +185,12 @@ export interface GlossTerm { term: string; termReading?: string; gloss: string; 
 // ---- 参考情報 ----
 // [Stage E-7] どの参考情報にも共通で持たせる「必ず動画に含める」フラグ。trueのものは、AIへの指示
 // （lib/explainer/aiScript.tsのheader()）で名指しして、省略せず実際に扱うよう強制する。
+/**
+ * 画像の見せ方。mode：contain＝全体を表示（余白はぼかした画像で埋める）／cover＝画面いっぱい（はみ出た分は切れる）。
+ * zoom：基準の大きさに対する倍率。x・y：中心のずれ（画面の幅・高さの半分を1とする）。motion：ゆっくり寄る動きを付ける
+ */
+export interface ImageFit { mode: 'contain' | 'cover'; zoom: number; x: number; y: number; motion?: boolean }
+
 interface ReferenceItemBase { id: string; required?: boolean }
 export type ReferenceItem =
   | (ReferenceItemBase & { kind: 'text'; title: string; text: string })
@@ -191,7 +199,7 @@ export type ReferenceItem =
   // [Stage E-3] 株式情報モード：株価CSV（Date/Close列。lib/csvPrice.tsのparseStooqCSVと同じ形式）をそのまま原文で保持する
   | (ReferenceItemBase & { kind: 'csv'; title: string; text: string; sizeBytes: number })
   // [Stage E-3] ニュース・株式情報どちらのモードでも使えるスクリーンショット参照（画像としてAIに渡す）
-  | (ReferenceItemBase & { kind: 'image'; title: string; base64: string; mediaType: string; sizeBytes: number });
+  | (ReferenceItemBase & { kind: 'image'; title: string; base64: string; mediaType: string; sizeBytes: number; /** 画像ライブラリの同じ画像のid（「必ず使用」でスライドに入れるときに使う） */ libraryId?: string });
 
 /** フリー素材（「フリー素材を検索」で取り込んだ画像）の出典。概要欄のクレジット表記に使う */
 export interface ImageCredit { source: string; caption?: string; credit?: string; pageUrl?: string; /** 加工した場合の内容（例：ポリゴン風に加工）。概要欄のクレジットに書く */ modified?: string }

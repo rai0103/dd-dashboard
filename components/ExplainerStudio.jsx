@@ -9,8 +9,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import NarrMixedBox from "@/components/NarrMixedBox";
 import FreeImagePicker from "@/components/FreeImagePicker";
 import LowPolyModal from "@/components/LowPolyModal";
+import ImageFitModal, { FitThumb } from "@/components/ImageFitModal";
 import SceneImagePicker from "@/components/SceneImagePicker";
-import { Play, Pause, Square, Camera, Download, Upload, X, GripVertical, MessageSquare, ChevronRight, Lock, Unlock, Link2, FileText, Type, Sparkles, Copy, AlertTriangle, Check, Image as ImageIcon, RefreshCw, Plus, ArrowLeft, Search, ExternalLink, Eye, EyeOff, Pin, PinOff } from "lucide-react";
+import { Play, Pause, Square, Camera, Download, Upload, X, GripVertical, MessageSquare, ChevronRight, Lock, Unlock, Link2, FileText, Type, Sparkles, Copy, AlertTriangle, Check, Image as ImageIcon, RefreshCw, Plus, ArrowLeft, Search, ExternalLink, Eye, EyeOff, Pin, PinOff, Maximize2 } from "lucide-react";
 import { voiceGender } from "@/lib/videoAnalysts";
 import { AudioMixer, getTtsBaseUrl } from "@/lib/videoAudioMixer";
 import { listAivisVoices, isAivisVoice, getAivisUrl } from "@/lib/videoAivisClient";
@@ -21,8 +22,8 @@ import { listBackgrounds, saveBackground, deleteBackground } from "@/lib/videoBa
 import { listAvatars, saveAvatar, deleteAvatar, newAvatar, MAX_CLIPS } from "@/lib/videoAvatarLibrary";
 import { VideoAvatar } from "@/lib/videoAvatarRender";
 import { ExplainerRenderer, RENDER_SIZE } from "@/lib/explainer/renderer";
-import { generateProject, generateShort, rewriteScene, rewriteNarration, applyLearnedEdit, updateReadingForEdit, planSceneImages, CHARS_PER_MIN } from "@/lib/explainer/aiScript";
-import { pickImageScenes, splitFreeAi } from "@/lib/explainer/autoImages";
+import { generateProject, generateShort, rewriteScene, rewriteNarration, applyLearnedEdit, updateReadingForEdit, planSceneImages, matchRequiredImages, CHARS_PER_MIN } from "@/lib/explainer/aiScript";
+import { pickImageScenes, splitFreeAi, canHaveImage, spreadPick } from "@/lib/explainer/autoImages";
 import { AiClientError } from "@/lib/explainer/aiClient";
 import { referenceBlocks, referenceTexts, fetchUrlReference, fileToBase64, newRefId, refLabel, requiredRefNotes, MAX_PDF_BYTES } from "@/lib/explainer/references";
 import { lintScenes, buildDescription, sourcesScene, assembleLong, applyTermReadings, findVerbatimOverlaps, predictTotalSec, suggestRate, COMFORT_RATE, normalizeVisual, minSecFor, sanitizeReading, isKanaReading } from "@/lib/explainer/scriptModel";
@@ -390,7 +391,7 @@ export default function ExplainerStudio() {
       if (im.blob.size > MAX_IMAGE_BYTES) { tooBig.push(im.name); continue; }
       try {
         const base64 = await fileToBase64(im.blob);
-        added.push({ id: newRefId(), kind: "image", title: im.caption || im.name, base64, mediaType: im.blob.type || "image/png", sizeBytes: im.blob.size });
+        added.push({ id: newRefId(), kind: "image", title: im.caption || im.name, base64, mediaType: im.blob.type || "image/png", sizeBytes: im.blob.size, libraryId: im.id });
       } catch (e) { tooBig.push(im.name); }
     }
     if (added.length) setRefs((p) => [...p, ...added]);
@@ -558,6 +559,43 @@ export default function ExplainerStudio() {
   // 写真素材で見つかりやすい場面はフリー素材を検索 → AI（Gemini）が画像を見て場面に合うかを採点 → 一番合うものを挿入
   // （日本文化動画アプリと同じ流れ）。残りの場面はAIで画像を生成する。合う素材が見つからなかった場面は、AI生成の割合が
   // 0%でなければAIで生成し、0%なら図解のまま残す。
+  // [必ず使用の画像] 参考情報で「必須」にした画像は、台本を作ったあと必ずどこかのスライドに入れる。
+  // AIに画像を見せて内容が合う場面を選ばせ、選べなかった分は空いている場面に散らして入れる。
+  // 画像は画像ライブラリの同じもの（ライブラリから追加した画像）を使い、ファイルから追加した画像は初回だけライブラリに保存する。
+  const placeRequiredImages = async (list, inp, signal) => {
+    const req = refs.filter((r) => r.kind === "image" && r.required).slice(0, 12);
+    if (!req.length) return { scenes: list, placed: 0 };
+    const out = list.slice();
+    const free = out.map((s, i) => i).filter((i) => canHaveImage(out[i]) && !out[i].imageId);
+    if (!free.length) return { scenes: list, placed: 0 };
+    let match = new Map();
+    try {
+      match = await matchRequiredImages(inp, req.map((r, k) => ({ key: String(k), title: r.title, mediaType: r.mediaType, base64: r.base64 })),
+        free.map((i) => ({ key: String(i), title: out[i].title, caption: out[i].caption, narration: out[i].narration, heading: out[i].visual.heading })), signal);
+    } catch (e) { if (e?.code === "ABORTED") throw e; /* 決められなければ散らして入れる */ }
+    const target = new Map(); // 参考画像の番号 → 場面の番号
+    const taken = new Set();
+    match.forEach((sk, ik) => { const i = Number(sk); if (free.includes(i) && !taken.has(i)) { target.set(Number(ik), i); taken.add(i); } });
+    const rest = req.map((_, k) => k).filter((k) => !target.has(k));
+    spreadPick(free.filter((i) => !taken.has(i)), rest.length).forEach((i, j) => target.set(rest[j], i));
+    const lib = await listImages().catch(() => []);
+    const libIds = new Set(lib.map((im) => im.id));
+    const newLibIds = new Map(); // 参考画像のid → 保存した画像のid
+    let placed = 0;
+    for (const [k, i] of target) {
+      const r = req[k];
+      let imageId = r.libraryId && libIds.has(r.libraryId) ? r.libraryId : null;
+      if (!imageId) {
+        const blob = await (await fetch(`data:${r.mediaType};base64,${r.base64}`)).blob();
+        const im = await saveImage(new File([blob], r.title || `参考画像${k + 1}`, { type: r.mediaType }), r.title);
+        imageId = im.id; newLibIds.set(r.id, im.id);
+      }
+      out[i] = { ...out[i], imageId, imageFit: undefined, visual: { ...out[i].visual, kind: "image", emphasis: "" } };
+      placed++;
+    }
+    if (newLibIds.size) setRefs((p) => p.map((x) => (newLibIds.has(x.id) ? { ...x, libraryId: newLibIds.get(x.id) } : x)));
+    return { scenes: out, placed };
+  };
   const autoFillImages = async (list, signal, onStep) => {
     const idx = pickImageScenes(list, imgShare);
     const res = { scenes: list, free: 0, ai: 0, notFound: 0, failed: 0, noKey: false, serverDown: false };
@@ -673,12 +711,20 @@ export default function ExplainerStudio() {
       const L = await paraphraseScenes(p.longScenes, inp, p.videoTitle, "long", ac.signal, (k, n) => setGenProgress({ step: `参考資料と同じ言い回しを言い換え中…（長尺 ${k}/${n}）`, done: 1, total: 1 }));
       const S = await paraphraseScenes(p.shortScenes, inp, p.videoTitle, "short", ac.signal, (k, n) => setGenProgress({ step: `参考資料と同じ言い回しを言い換え中…（ショート ${k}/${n}）`, done: 1, total: 1 }));
       let longScenes = L.scenes;
-      let imgFailed = 0, imgNoKey = false, reusedCount = 0, imgReport = null;
-      if (prevImagePool.length) {
+      let imgFailed = 0, imgNoKey = false, reusedCount = 0, imgReport = null, requiredPlaced = 0;
+      // 「必ず使用」の参考画像を、先にスライドへ入れる（自動の画像は残りの場面に入る）
+      if (refs.some((r) => r.kind === "image" && r.required)) {
+        setGenProgress({ step: "必ず使用する画像をスライドに入れています…", done: 1, total: 1 });
+        const rq = await placeRequiredImages(longScenes, inp, ac.signal);
+        longScenes = rq.scenes; requiredPlaced = rq.placed;
+      }
+      const requiredIds = new Set(longScenes.filter((s) => s.imageId).map((s) => s.imageId));
+      const reusePool = prevImagePool.filter((id) => !requiredIds.has(id));
+      if (reusePool.length) {
         let poolIdx = 0;
         longScenes = longScenes.map((s) => {
-          if (s.visual.kind === "image" && s.visual.imagePrompt && poolIdx < prevImagePool.length) {
-            return { ...s, imageId: prevImagePool[poolIdx++], visual: { ...s.visual, emphasis: "" } };
+          if (s.visual.kind === "image" && s.visual.imagePrompt && !s.imageId && poolIdx < reusePool.length) {
+            return { ...s, imageId: reusePool[poolIdx++], visual: { ...s.visual, emphasis: "" } };
           }
           return s;
         });
@@ -688,7 +734,7 @@ export default function ExplainerStudio() {
         const r = await autoFillImages(longScenes, ac.signal, (msg) => setGenProgress({ step: msg, done: 1, total: 1 }));
         longScenes = r.scenes; imgFailed = r.failed; imgNoKey = r.noKey; imgReport = r;
         await refreshImages(); // 保存した画像をプレビュー/書き出し側の一覧に反映する（手動の「画像を追加」と同じ扱いにする）
-      } else if (reusedCount > 0) {
+      } else if (reusedCount > 0 || requiredPlaced > 0) {
         await refreshImages(); // 新規生成が無くても、再利用した画像をプレビュー側の一覧に反映する
       }
       // [Stage G-3→E-15] 「株式情報」「S&P500」モードでは、ダッシュボードの実データから作る固定場面（前提条件・DD速度センサー・
@@ -965,19 +1011,21 @@ export default function ExplainerStudio() {
     return () => urls.forEach((u) => URL.revokeObjectURL(u));
   }, [images]);
   const [rightsPendingId, setRightsPendingId] = useState(null);
-  const attachImage = async (sceneId, file, credit) => {
+  // adjust：添付したあと、サイズ・位置の調整画面を開く（ファイル選択・ライブラリ・フリー素材。AIで生成した画像は枠に合わせて作るので開かない）
+  const attachImage = async (sceneId, file, credit, { adjust = true } = {}) => {
     if (!file || !file.type.startsWith("image/")) { alert("画像ファイルを選んでください"); return; }
     const im = await saveImage(file, credit?.caption, credit);
     await refreshImages();
-    setScenes((list) => list.map((s) => (s.id === sceneId ? { ...s, imageId: im.id, visual: { ...s.visual, kind: "image", emphasis: "" } } : s)));
+    setScenes((list) => list.map((s) => (s.id === sceneId ? { ...s, imageId: im.id, imageFit: undefined, visual: { ...s.visual, kind: "image", emphasis: "" } } : s)));
     setRightsPendingId(null);
+    if (adjust) setFitOpenId(sceneId);
     // [Stage E-11] 画像を添付したら、まず変更後のスライドをプレビューに表示する
     const idx = scenes.findIndex((s) => s.id === sceneId);
     if (idx >= 0) previewSceneAt(idx);
   };
   const detachImage = async (sc) => {
     const id = sc.imageId;
-    patchScene(sc.id, { imageId: null });
+    patchScene(sc.id, { imageId: null, imageFit: undefined });
     const usedElsewhere = project && [...project.longScenes, ...project.shortScenes].some((s) => s.imageId === id && s.id !== sc.id);
     if (id && !usedElsewhere) { await deleteImage(id).catch(() => {}); refreshImages(); }
     const idx = scenes.findIndex((s) => s.id === sc.id);
@@ -987,8 +1035,9 @@ export default function ExplainerStudio() {
   // グラフ作成ページ（/chart-studio/）のスクリーンショットや、他の場面で使った画像・以前の手動アップロード／AI生成画像を
   // 選べるようにするためのもの（attachImageと違い、saveImageは呼ばない＝ライブラリには何も追加しない）。
   const attachExistingImage = (sceneId, imageId) => {
-    setScenes((list) => list.map((s) => (s.id === sceneId ? { ...s, imageId, visual: { ...s.visual, kind: "image", emphasis: "" } } : s)));
+    setScenes((list) => list.map((s) => (s.id === sceneId ? { ...s, imageId, imageFit: undefined, visual: { ...s.visual, kind: "image", emphasis: "" } } : s)));
     setRightsPendingId(null);
+    setFitOpenId(sceneId);
     const idx = scenes.findIndex((s) => s.id === sceneId);
     if (idx >= 0) previewSceneAt(idx);
   };
@@ -1038,6 +1087,8 @@ export default function ExplainerStudio() {
   // [ポリゴン風に加工] 場面の画像をポリゴン風にした画像を新しく保存して付け替える（元の画像はライブラリに残す）。
   // フリー素材の出典は引き継ぎ、概要欄のクレジットに「ポリゴン風に加工」と書く
   const [polyOpenId, setPolyOpenId] = useState(null);
+  // [画像のサイズ・位置を調整] 開いている場面のid
+  const [fitOpenId, setFitOpenId] = useState(null);
   const applyPolygon = async (sc, blob) => {
     const old = images.find((im) => im.id === sc.imageId);
     const credit = old?.credit ? { ...old.credit, modified: "ポリゴン風に加工" } : undefined;
@@ -1058,7 +1109,7 @@ export default function ExplainerStudio() {
     try {
       const blob = await generateImage(withStyleHint(sc.visual.imagePrompt, imageStyleHint), format === "short" ? "9:16" : "16:9");
       const file = new File([blob], `ai-${sc.id}-${Date.now()}.png`, { type: blob.type || "image/png" });
-      await attachImage(sc.id, file);
+      await attachImage(sc.id, file, undefined, { adjust: false });
     } catch (e) { setImgGenError(errMsg(e)); }
     finally { setImgGenBusyId(null); }
   };
@@ -2035,7 +2086,7 @@ export default function ExplainerStudio() {
                         {r.kind === "url" && <a href={r.url} target="_blank" rel="noopener noreferrer" title="サイトを新しいタブで開く（採用するか確認）" style={{ color: C.textMuted, flexShrink: 0, display: "flex" }}><ExternalLink size={11} /></a>}
                         {r.kind === "text" && <button onClick={() => setExpandedRefId((id) => (id === r.id ? null : r.id))} title="本文を確認" style={{ color: C.textMuted, background: "none", border: "none", cursor: "pointer" }}>{expandedRefId === r.id ? <EyeOff size={12} /> : <Eye size={12} />}</button>}
                         {r.kind === "url" && r.status === "error" && <button onClick={() => loadUrl(r.id, r.url)} title="もう一度読み込む" style={{ color: C.textMuted, background: "none", border: "none", cursor: "pointer" }}><RefreshCw size={11} /></button>}
-                        <button onClick={() => setRefs((p) => p.map((x) => (x.id === r.id ? { ...x, required: !x.required } : x)))} title={r.required ? "「必ず動画に含める」を解除" : "必ず動画に含める（AIに省略させない）"} style={{ color: r.required ? C.teal : C.textDim, background: "none", border: "none", cursor: "pointer" }}>{r.required ? <Pin size={12} /> : <PinOff size={12} />}</button>
+                        <button onClick={() => setRefs((p) => p.map((x) => (x.id === r.id ? { ...x, required: !x.required } : x)))} title={r.required ? "「必ず動画に含める」を解除" : r.kind === "image" ? "必ず動画に含める（台本を作るとき、この画像を必ずどこかのスライドに入れます）" : "必ず動画に含める（AIに省略させない）"} style={{ color: r.required ? C.teal : C.textDim, background: "none", border: "none", cursor: "pointer" }}>{r.required ? <Pin size={12} /> : <PinOff size={12} />}</button>
                         <button onClick={() => { setRefs((p) => p.filter((x) => x.id !== r.id)); setSelectedRefIds((prev) => { if (!prev.has(r.id)) return prev; const next = new Set(prev); next.delete(r.id); return next; }); }} title="削除" style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer" }}><X size={12} /></button>
                       </div>
                       {r.kind === "text" && expandedRefId === r.id && (
@@ -2281,7 +2332,7 @@ export default function ExplainerStudio() {
                           <div className="flex gap-2 mb-1.5">
                             <div className="shrink-0 rounded overflow-hidden" style={{ width: format === "short" ? 92 : 150, height: format === "short" ? 158 : 94, background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
                               {sc.imageId && imageEls[sc.imageId] ? (
-                                <img src={imageEls[sc.imageId].src} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                                <FitThumb img={imageEls[sc.imageId]} fit={sc.imageFit} portrait={format === "short"} />
                               ) : (
                                 <SceneThumbCanvas sc={sc} portrait={format === "short"} />
                               )}
@@ -2292,6 +2343,12 @@ export default function ExplainerStudio() {
                                 {sc.imageId ? (
                                   <>
                                     <button onClick={() => detachImage(sc)} className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={btn()}><X size={10} />画像を外す（図解表示に戻す）</button>
+                                    <button onClick={() => setFitOpenId(sc.id)} disabled={!imageEls[sc.imageId]} title="スライドの枠に合わせて、画像の大きさ・位置を調整します（全体を表示／画面いっぱい）" className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={{ ...btn(), color: sc.imageFit ? C.teal : undefined }}><Maximize2 size={10} />サイズ・位置を調整{sc.imageFit ? "（調整済み）" : ""}</button>
+                                    {fitOpenId === sc.id && imageEls[sc.imageId] && (
+                                      <ImageFitModal img={imageEls[sc.imageId]} fit={sc.imageFit} heading={sc.visual?.heading || ""} portrait={format === "short"}
+                                        onApply={(fit) => { patchScene(sc.id, { imageFit: fit }); setFitOpenId(null); const idx = scenes.findIndex((s) => s.id === sc.id); if (idx >= 0) previewSceneAt(idx); }}
+                                        onClose={() => setFitOpenId(null)} />
+                                    )}
                                     <button onClick={() => setPolyOpenId(sc.id)} disabled={!images.find((im) => im.id === sc.imageId)} title="実在の人物などを、三角形の面で塗り分けたポリゴン風の絵にします" className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={btn()}><Sparkles size={10} />ポリゴン風に加工</button>
                                     {polyOpenId === sc.id && images.find((im) => im.id === sc.imageId) && (
                                       <LowPolyModal image={images.find((im) => im.id === sc.imageId).blob} credit={imageCreditOf(sc.imageId)} aspect={format === "short" ? "9:16" : "16:9"}

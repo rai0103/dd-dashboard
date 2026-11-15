@@ -3,7 +3,7 @@
 // 外部の画像は使わず（ユーザーが追加した画像を除く）、すべて自作の図形・アイコンで構成する。
 import { drawIcon } from './icons';
 import { parseValue } from './scriptModel';
-import type { ExplainerScene, VisualItem, FanRole } from './types';
+import type { ExplainerScene, VisualItem, FanRole, ImageFit } from './types';
 
 type Ctx = CanvasRenderingContext2D;
 
@@ -753,6 +753,49 @@ const drawIllustration: Draw = (c, sc, e) => {
   }
 };
 
+/**
+ * 画像を枠（W×H）に描く。fit（場面のimageFit）が無ければ自動：
+ * [Stage E-12] ダッシュボードのスクショ等、枠と縦横比が大きく異なる画像をcoverで敷き詰めると端（凡例・軸ラベル・最新の日付など）が
+ * 大きく切れてしまうため、coverに必要なクロップ量が大きい場合だけ全体が収まるcontain表示にし、そうでなければcoverでゆっくり寄る（Ken Burns）。
+ * fitがあれば、その倍率・位置どおりに描く（画像が枠を覆いきらないときは、ぼかした拡大画像で余白を埋める）。
+ * 画像の大きさ調整の画面（components/ImageFitModal.jsx）のプレビューも、同じこの関数で描く。
+ */
+export function drawFittedImage(c: CanvasRenderingContext2D, img: CanvasImageSource & { naturalWidth?: number; naturalHeight?: number; width?: any; height?: any }, W: number, H: number, fit: ImageFit | undefined, p: number, seed = '') {
+  const iw = Number(img.naturalWidth || img.width), ih = Number(img.naturalHeight || img.height);
+  if (!iw || !ih) return;
+  const coverScale = Math.max(W / iw, H / ih);
+  const containScale = Math.min(W / iw, H / ih);
+  const blurBg = () => {
+    c.save();
+    if ('filter' in c) (c as any).filter = 'blur(18px) brightness(0.5)';
+    const bw = iw * coverScale * 1.08, bh = ih * coverScale * 1.08;
+    c.drawImage(img, (W - bw) / 2, (H - bh) / 2, bw, bh);
+    if ('filter' in c) (c as any).filter = 'none';
+    c.restore();
+  };
+  if (!fit) {
+    if (coverScale > containScale * 1.3) {
+      blurBg();
+      const dw = iw * containScale, dh = ih * containScale;
+      c.drawImage(img, (W - dw) / 2, (H - dh) / 2, dw, dh);
+    } else {
+      // ゆっくり寄りながら少し動く（Ken Burns）
+      const z = 1.06 + 0.08 * p, s0 = coverScale * z;
+      const dw = iw * s0, dh = ih * s0;
+      const dir = (seed.charCodeAt(seed.length - 1) % 2) ? 1 : -1;
+      c.drawImage(img, (W - dw) / 2 + dir * (p - 0.5) * 30, (H - dh) / 2 - (p - 0.5) * 16, dw, dh);
+    }
+    return;
+  }
+  const zoom = Math.max(0.2, Math.min(5, Number(fit.zoom) || 1));
+  const s0 = (fit.mode === 'cover' ? coverScale : containScale) * zoom * (fit.motion ? 1 + 0.06 * p : 1);
+  const dw = iw * s0, dh = ih * s0;
+  const cx = W / 2 + (Number(fit.x) || 0) * W / 2, cy = H / 2 + (Number(fit.y) || 0) * H / 2;
+  const x0 = cx - dw / 2, y0 = cy - dh / 2;
+  if (x0 > 0.5 || y0 > 0.5 || x0 + dw < W - 0.5 || y0 + dh < H - 0.5) blurBg();
+  c.drawImage(img, x0, y0, dw, dh);
+}
+
 const drawImage: Draw = (c, sc, e) => {
   const img = e.image;
   if (!img || !img.complete || !img.naturalWidth) { drawIllustration(c, sc, e); return; }
@@ -760,31 +803,7 @@ const drawImage: Draw = (c, sc, e) => {
   const k = ease(sub(e.p, 0, 0.15));
   c.save(); c.globalAlpha *= k;
   rr(c, 0, 0, e.W, e.H, 16); c.clip();
-  // [Stage E-12] ダッシュボードのスクショ等、枠（16:10相当）と縦横比が大きく異なる画像をcoverで
-  // 敷き詰めると、端（グラフの凡例・軸ラベル・最新の日付など）が大きく切れてしまう
-  // （ユーザー報告：「まだ見切れていますね」）。coverに必要なクロップ量が大きい場合だけ、
-  // 画像全体が収まるcontain表示に切り替える（背景はぼかし拡大したcoverコピーで余白を埋める）。
-  const coverScale = Math.max(e.W / img.naturalWidth, e.H / img.naturalHeight);
-  const containScale = Math.min(e.W / img.naturalWidth, e.H / img.naturalHeight);
-  const needsContain = coverScale > containScale * 1.3;
-  if (needsContain) {
-    c.save();
-    // @ts-ignore: CanvasRenderingContext2D.filterはTS libには含まれるが、念のため存在確認してから使う
-    if ('filter' in c) (c as any).filter = 'blur(18px) brightness(0.5)';
-    const bw = img.naturalWidth * coverScale * 1.08, bh = img.naturalHeight * coverScale * 1.08;
-    c.drawImage(img, (e.W - bw) / 2, (e.H - bh) / 2, bw, bh);
-    // @ts-ignore
-    if ('filter' in c) (c as any).filter = 'none';
-    c.restore();
-    const dw = img.naturalWidth * containScale, dh = img.naturalHeight * containScale;
-    c.drawImage(img, (e.W - dw) / 2, (e.H - dh) / 2, dw, dh);
-  } else {
-    // ゆっくり寄りながら少し動く（Ken Burns）
-    const z = 1.06 + 0.08 * e.p, sc0 = coverScale * z;
-    const dw = img.naturalWidth * sc0, dh = img.naturalHeight * sc0;
-    const dir = (sc.id.charCodeAt(sc.id.length - 1) % 2) ? 1 : -1;
-    c.drawImage(img, (e.W - dw) / 2 + dir * (e.p - 0.5) * 30, (e.H - dh) / 2 - (e.p - 0.5) * 16, dw, dh);
-  }
+  drawFittedImage(c, img, e.W, e.H, sc.imageFit, e.p, sc.id);
   const g = c.createLinearGradient(0, e.H * 0.45, 0, e.H);
   g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,0.75)');
   c.fillStyle = g; c.fillRect(0, 0, e.W, e.H);

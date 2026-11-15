@@ -638,6 +638,54 @@ export async function planSceneImages(inp: GenerateInput, items: { key: string; 
   return out;
 }
 
+/**
+ * 「必ず使用」にした参考画像を、どのスライドに入れるかをAIに決めさせる（画像そのものを見せて、内容が一番合う場面を選ぶ）。
+ * 戻り値は 画像のkey → 場面のkey。1つの場面には1枚まで。合う場面が無ければその画像は返さない（呼び出し側で散らして入れる）。
+ */
+export async function matchRequiredImages(
+  inp: GenerateInput,
+  images: { key: string; title: string; mediaType: string; base64: string }[],
+  scenes: { key: string; title: string; caption: string; narration: string; heading: string }[],
+  signal?: AbortSignal,
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (!images.length || !scenes.length) return out;
+  const content: any[] = [];
+  images.forEach((im) => {
+    content.push({ type: 'text', text: `画像#${im.key}${im.title ? `（説明：${im.title}）` : ''}` });
+    content.push({ type: 'image', source: { type: 'base64', media_type: im.mediaType, data: im.base64 } });
+  });
+  content.push({ type: 'text', text: [
+    `動画のテーマ：${inp.topic}`,
+    '上の画像は、制作者が「必ず動画に使う」と指定したものです。それぞれの画像を、内容が一番合うスライドに1枚ずつ割り当ててください。',
+    '- 画像に写っているもの・グラフや表の内容と、スライドの見出し・ナレーションが一番合う場面を選ぶ。',
+    '- 1つのスライドには画像1枚まで。同じスライドを複数の画像に選ばない。',
+    '- どうしても合う場面が無い画像は、話の流れとして一番自然な場面を選ぶ（省略しない）。',
+    '',
+    ...scenes.map((b) => `スライド#${b.key}\n見出し：${b.heading || b.title}\nテロップ：${b.caption}\nナレーション：${b.narration}`),
+  ].join('\n') });
+  const r = await callTool<any>({
+    system: system(inp),
+    content,
+    toolName: 'assign_required_images',
+    toolDescription: '指定された画像それぞれを、内容が一番合うスライドに割り当てる。',
+    inputSchema: {
+      type: 'object',
+      properties: { assignments: { type: 'array', items: { type: 'object', properties: { image: { type: 'string' }, slide: { type: 'string' } }, required: ['image', 'slide'] } } },
+      required: ['assignments'],
+    },
+    maxTokens: 2000,
+    signal,
+  });
+  const used = new Set<string>();
+  for (const x of Array.isArray(r?.assignments) ? r.assignments : []) {
+    const ik = String(x?.image || '').replace(/^#|^画像#?/, ''), sk = String(x?.slide || '').replace(/^#|^スライド#?/, '');
+    if (!images.some((im) => im.key === ik) || !scenes.some((b) => b.key === sk) || used.has(sk) || out.has(ik)) continue;
+    used.add(sk); out.set(ik, sk);
+  }
+  return out;
+}
+
 async function generateChapterPart(inp: GenerateInput, o: Outline, idx: number, count: number, partNo: number, partTotal: number, prev: ExplainerScene[], signal?: AbortSignal): Promise<ExplainerScene[]> {
   const ch = o.chapters[idx];
   const first = prev.length === 0;

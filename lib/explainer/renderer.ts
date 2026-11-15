@@ -30,6 +30,8 @@ const SHORT = { W: 540, H: 960 };
 // 図解の仮想サイズと、画面上の枠
 const LONG_VIS = { W: 640, H: 400, x: 16, y: 58, w: 646, h: 404 };
 const SHORT_VIS = { W: 420, H: 361, x: 20, y: 150, w: 500, h: 430 };
+/** スライド（図解・画像）部分の大きさ。画像のサイズ調整画面（components/ImageFitModal.jsx）のプレビューも同じ比率で描く */
+export const VISUAL_SIZE = { long: { W: LONG_VIS.W, H: LONG_VIS.H }, short: { W: SHORT_VIS.W, H: SHORT_VIS.H } };
 
 /** 字幕：ナレーションを句点で区切り、文字数の割合で表示時間を割り当てる */
 export function subtitleAt(narration: string, localT: number, narrDur: number, maxChars: number): string {

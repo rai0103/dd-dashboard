@@ -52,3 +52,16 @@ export function splitFreeAi(indices: number[], freeFit: (i: number) => number, a
   const ai = byFit.slice(freeN).sort((a, b) => a - b);
   return { free, ai };
 }
+
+/**
+ * 「必ず使用」の画像のうち、AIが場面を決められなかったものを、空いている場面へ動画全体に散らして割り当てる。
+ * free：画像を入れられる空き場面の番号（並び順）。count：割り当てる枚数。戻り値は選んだ場面の番号（count個以下）。
+ */
+export function spreadPick(free: number[], count: number): number[] {
+  const k = Math.min(count, free.length);
+  if (k <= 0) return [];
+  const step = free.length / k;
+  const out: number[] = [];
+  for (let j = 0; j < k; j++) out.push(free[Math.min(free.length - 1, Math.floor(step * j + step / 2))]);
+  return out;
+}

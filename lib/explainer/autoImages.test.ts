@@ -1,7 +1,7 @@
 // 実行: node --test lib/explainer/autoImages.test.ts
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { pickImageScenes, splitFreeAi } from "./autoImages.ts";
+import { pickImageScenes, splitFreeAi, spreadPick } from "./autoImages.ts";
 
 const s = (kind: string, extra: any = {}) => ({ visual: { kind }, imageId: null, ...extra });
 
@@ -28,4 +28,10 @@ test("splitFreeAi：写真で見つかりやすい場面からフリー素材に
   assert.deepEqual(r.ai, [3, 7]);
   assert.deepEqual(splitFreeAi([1, 3], (i) => fit[i], 0).ai, []);
   assert.deepEqual(splitFreeAi([1, 3], (i) => fit[i], 1).free, []);
+});
+
+test('spreadPick：空いている場面から、動画全体に散らして選ぶ', () => {
+  assert.deepEqual(spreadPick([2, 4, 6, 8, 10, 12], 2), [4, 10]);
+  assert.deepEqual(spreadPick([3, 5], 5), [3, 5]);
+  assert.deepEqual(spreadPick([], 2), []);
 });
