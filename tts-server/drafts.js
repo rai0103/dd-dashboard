@@ -156,6 +156,12 @@ async function handleDrafts(req, res, pathname, deps) {
         send(res, 200, { ok: true });
         return true;
       }
+      case 'historyDelete': {
+        const cur = await readHistory();
+        await writeJson(HISTORY, cur.filter((x) => x.id !== b.id));
+        send(res, 200, { ok: true });
+        return true;
+      }
       case 'historySequel': {
         // 続編を作る印を付け外しする
         const cur = await readHistory();

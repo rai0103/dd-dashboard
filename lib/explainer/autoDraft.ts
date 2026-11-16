@@ -26,6 +26,7 @@ export const saveDraftSchedule = (schedule: DraftSchedule, register = true) => p
 export const saveDraftStatus = (status: DraftStatus) => post({ action: 'status', status });
 export const addDraftHistory = (entries: Omit<DraftHistory, 'id'>[]) => post({ action: 'history', entries });
 export const setHistorySequel = (id: string, sequel: boolean) => post({ action: 'historySequel', id, sequel });
+export const deleteHistory = (id: string) => post({ action: 'historyDelete', id });
 
 export { isSimilarTheme } from './autoDraftTheme';
 export const trendingThemes = (count: number, exclude: string[]): Promise<{ themes: string[] }> => post({ action: 'trending', count, exclude });
