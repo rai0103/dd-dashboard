@@ -15,21 +15,25 @@ function run(name, cmd, args, { shell = false, pipeStdout = false } = {}) {
   const p = spawn(cmd, args, { stdio: pipeStdout ? ['inherit', 'pipe', 'inherit'] : 'inherit', shell });
   procs.push(p);
   p.on('exit', (code) => {
+    if (shuttingDown) return;
     console.log(`[launch] ${name} exited (code ${code}). 他のプロセスも終了します…`);
-    shutdown();
+    // 起動して1分以内に止まったときは起動の失敗とみなし、終了コード1で終わる（起動用バッチが画面を残してエラーを読めるようにする）。
+    // しばらく動いたあとに止まったとき（新しく起動し直した側が、古いサーバーを止めたときなど）は0で終わり、この黒い画面は自動で閉じる
+    shutdown(Date.now() - startedAt < 60000 ? 1 : 0);
   });
   return p;
 }
 
+const startedAt = Date.now();
 let shuttingDown = false;
-function shutdown() {
+function shutdown(code = 0) {
   if (shuttingDown) return;
   shuttingDown = true;
   for (const p of procs) { try { p.kill(); } catch {} }
-  setTimeout(() => process.exit(0), 200);
+  setTimeout(() => process.exit(code), 200);
 }
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+process.on('SIGINT', () => shutdown(0));
+process.on('SIGTERM', () => shutdown(0));
 
 // 画面（next dev）のポートは 3002 に固定する。ブラウザの保存領域（アバター・画像ライブラリ・声などの設定）は
 // 「localhost:ポート番号」ごとに別になるため、起動のたびにポートが変わると設定が消えたように見えてしまう
