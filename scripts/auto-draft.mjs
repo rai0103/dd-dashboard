@@ -53,7 +53,9 @@ try {
   // すでにこのプロジェクトの next dev が動いていれば（start-dd-dashboard.bat など）、それを使う。
   // 同じフォルダで next dev を2つ動かすと .next を取り合い、画面の読み込み直し・コンパイル待ちで止まることがあるため。
   let origin = null;
-  for (let port = 3000; port <= 3010 && !origin; port++) {
+  const DEV_PORT = Number(process.env.DD_PORT) || 3002; // 起動用バッチと同じ固定ポート
+  for (const port of [DEV_PORT, ...Array.from({ length: 11 }, (_, i) => 3000 + i).filter((p) => p !== DEV_PORT)]) {
+    if (origin) break;
     try {
       const r = await fetch(`http://localhost:${port}/explainer/`, { signal: AbortSignal.timeout(120000) });
       const html = r.ok ? await r.text() : '';
@@ -64,7 +66,7 @@ try {
   if (origin) log(`動いている next dev を使います：${origin}`);
   else {
   log('next devを起動します（ポートを自動検出します）');
-  const nextProc = spawn(process.platform === 'win32' ? 'npx.cmd' : 'npx', ['next', 'dev'], { cwd: root, shell: process.platform === 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
+  const nextProc = spawn(process.platform === 'win32' ? 'npx.cmd' : 'npx', ['next', 'dev', '-p', String(DEV_PORT)], { cwd: root, shell: process.platform === 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
   spawned.push(nextProc);
   origin = await new Promise((resolve) => {
     let done = false;

@@ -33,4 +33,5 @@ console.log('[dev:video] next dev と tts-server を起動します（Ctrl+Cで�
 // cmd.exeが空白で区切って解釈してしまい、'C:\Program' は認識されない、という形で起動に失敗する既存の不具合があった。
 run('tts-server', process.execPath, [path.join(__dirname, '..', 'tts-server', 'server.js')]);
 // next-dev（npx.cmd）はWindowsでは拡張子の都合上shellが必要
-run('next-dev', process.platform === 'win32' ? 'npx.cmd' : 'npx', ['next', 'dev'], { shell: process.platform === 'win32' });
+// ポートは 3002 に固定（起動用バッチと同じ。ポートが変わるとブラウザの保存領域＝設定・アバターが別になるため）
+run('next-dev', process.platform === 'win32' ? 'npx.cmd' : 'npx', ['next', 'dev', '-p', String(Number(process.env.DD_PORT) || 3002)], { shell: process.platform === 'win32' });

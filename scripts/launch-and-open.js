@@ -31,11 +31,16 @@ function shutdown() {
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
-// 前回の tts-server が残っていて 4100番が使われていると、新しい tts-server が起動できず全体が終了してしまう。
-// 残っているのがこのプロジェクトの tts-server なら止めてから起動し直す（別のアプリなら止めずに知らせる）。
-function freeTtsPort() {
+// 画面（next dev）のポートは 3002 に固定する。ブラウザの保存領域（アバター・画像ライブラリ・声などの設定）は
+// 「localhost:ポート番号」ごとに別になるため、起動のたびにポートが変わると設定が消えたように見えてしまう
+// （他のアプリ：investment-shorts＝3001、日本文化動画＝3100）。
+const DEV_PORT = Number(process.env.DD_PORT) || 3002;
+const TTS_PORT = Number(process.env.TTS_PORT) || 4100;
+
+// 前回の tts-server・next dev が残っていてポートが使われていると、新しく起動できず全体が終了してしまう。
+// 残っているのがこのプロジェクトのものなら止めてから起動し直す（別のアプリなら止めずに知らせる）。
+function freePort(port, label, mine) {
   if (process.platform !== 'win32') return;
-  const port = Number(process.env.TTS_PORT) || 4100;
   try {
     const ps = `Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | ForEach-Object { $p = Get-CimInstance Win32_Process -Filter "ProcessId=$($_.OwningProcess)"; "$($p.ProcessId)\t$($p.CommandLine)" }`;
     // 引用符・パイプを cmd に解釈させないよう、-EncodedCommand（UTF-16LEのBase64）で渡す
@@ -43,23 +48,24 @@ function freeTtsPort() {
     const out = String(r.stdout || '').trim();
     for (const line of out.split(/\r?\n/).filter(Boolean)) {
       const [pid, cmd = ''] = line.split('\t');
-      if (/dd-dashboard[\\/]tts-server[\\/]server\.js/i.test(cmd)) {
-        console.log(`[launch] 前回の tts-server（PID ${pid}）が残っているので止めます…`);
+      if (mine.test(cmd)) {
+        console.log(`[launch] 前回の ${label}（PID ${pid}）が残っているので止めます…`);
         try { execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore' }); } catch {}
       } else {
-        console.log(`[launch] ${port}番を別のプログラムが使っています（PID ${pid}：${cmd.slice(0, 120)}）。このままでは tts-server を起動できません。`);
+        console.log(`[launch] ${port}番を別のプログラムが使っています（PID ${pid}：${cmd.slice(0, 120)}）。このままでは ${label} を起動できません。`);
       }
     }
   } catch { /* 確認できないときはそのまま起動を試す */ }
 }
-freeTtsPort();
+freePort(TTS_PORT, 'tts-server', /dd-dashboard[\\/]tts-server[\\/]server\.js/i);
+freePort(DEV_PORT, '画面のサーバー（next dev）', /dd-dashboard[\\/](node_modules|\.next)/i);
 
 console.log('[launch] next dev と tts-server を起動します（Ctrl+Cで両方終了）…');
 // tts-serverはNode実行ファイル（process.execPath）を直接起動するのでshellは使わない（scripts/dev-video.jsと同じ理由）。
 run('tts-server', process.execPath, [path.join(__dirname, '..', 'tts-server', 'server.js')]);
 
 // next-devの標準出力はpipeで受け取り、起動ログを監視しつつ、そのままコンソールにも転送する。
-const nextProc = run('next-dev', process.platform === 'win32' ? 'npx.cmd' : 'npx', ['next', 'dev'], {
+const nextProc = run('next-dev', process.platform === 'win32' ? 'npx.cmd' : 'npx', ['next', 'dev', '-p', String(DEV_PORT)], {
   shell: process.platform === 'win32',
   pipeStdout: true,
 });
