@@ -16,6 +16,36 @@ async function writeJson(f, v) { await fs.mkdir(path.dirname(f), { recursive: tr
 function readRaw(req) { return new Promise((resolve, reject) => { const c = []; req.on('data', (d) => c.push(d)); req.on('end', () => resolve(Buffer.concat(c))); req.on('error', reject); }); }
 const send = (res, status, obj) => { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(obj)); };
 
+const HISTORY = path.join(ROOT, 'history.json');
+const newHistId = () => `h-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+/**
+ * 作ったテーマの記録。1件＝{ id, theme（シリーズのテーマ）, title（動画タイトル）, createdAt, mode, part（第何弾）, source, sequelOf, sequel（続編を作る印）}。
+ * 以前の形式（テーマの文字列だけの配列）は、ドラフトの情報（タイトル・作成日）を補って新しい形式に直して保存し直す。
+ */
+async function readHistory() {
+  const raw = await readJson(HISTORY, []);
+  let changed = false;
+  const metas = [];
+  const out = [];
+  for (const h of Array.isArray(raw) ? raw : []) {
+    if (typeof h === 'string' || !h.id) {
+      changed = true;
+      const e = typeof h === 'string' ? { theme: h } : { ...h };
+      if (!metas.length) {
+        for (const dir of [PENDING, IMPORTED]) {
+          let names = [];
+          try { names = await fs.readdir(dir); } catch { /* 無い */ }
+          for (const n of names) { const m = await readJson(path.join(dir, n, 'meta.json'), null); if (m) metas.push(m); }
+        }
+      }
+      const m = metas.find((x) => x.theme === e.theme);
+      out.push({ id: newHistId(), part: 1, source: 'auto', ...e, ...(m && !e.title ? { title: m.title } : {}), ...(m && !e.createdAt ? { createdAt: m.createdAt } : {}), ...(m && !e.mode ? { mode: m.mode === 'keyword' ? 'keyword' : 'news' } : {}), ...(m && !e.draftId ? { draftId: m.id } : {}) });
+    } else out.push(h);
+  }
+  if (changed) await writeJson(HISTORY, out);
+  return out;
+}
+
 const getSchedule = async () => ({ ...DEFAULT_SCHEDULE, ...(await readJson(path.join(ROOT, 'schedule.json'), {})) });
 
 /** Windowsのタスクスケジューラに、毎日の自動実行を登録（オフなら解除）する。スリープ中でも起こして実行する */
@@ -46,7 +76,7 @@ async function listDrafts() {
 async function trending(researchWithGemini, n, exclude) {
   const y = new Date(Date.now() - 86400000);
   const d = `${y.getFullYear()}年${y.getMonth() + 1}月${y.getDate()}日`;
-  const prompt = `${d}に日本で話題になったニュース（経済・金融・マーケット・ビジネス・テクノロジー・社会）の中から、「ニュース・キーワード解説」のYouTube動画のテーマに向くものを${n + 5}件挙げてください。最新のWeb情報で確認したものだけにしてください。\n出力は1行に1件、テーマだけ（30字以内の日本語。例：日銀が政策金利を0.75%に引き上げ）。番号・記号・説明・前置きは書かないでください。${exclude.length ? `\n次と同じ話題は除いてください：${exclude.slice(-60).join('、')}` : ''}`;
+  const prompt = `${d}に日本で話題になったニュース（経済・金融・マーケット・ビジネス・テクノロジー・社会）の中から、「ニュース・キーワード解説」のYouTube動画のテーマに向くものを${n + 5}件挙げてください。最新のWeb情報で確認したものだけにしてください。\n出力は1行に1件、テーマだけ（30字以内の日本語。例：日銀が政策金利を0.75%に引き上げ）。番号・記号・説明・前置きは書かないでください。${exclude.length ? `\n次の話題は過去に動画にしたので、同じ話題（言い方を変えたものも含む）は除いてください：${exclude.slice(-120).join('、')}` : ''}`;
   const r = await researchWithGemini(prompt);
   if (r.error && !r.text) throw new Error(r.error);
   // 箇条書きの記号・番号（「1.」「2)」「・」「-」「*」）だけを外す（「2026年度予算案…」のように数字で始まるテーマは残す）。
@@ -85,7 +115,7 @@ async function handleDrafts(req, res, pathname, deps) {
         send(res, p ? 200 : 404, p ? { project: p } : { error: 'ドラフトが見つかりません' });
         return true;
       }
-      const [schedule, history, status, drafts] = await Promise.all([getSchedule(), readJson(path.join(ROOT, 'history.json'), []), readJson(path.join(ROOT, 'status.json'), { state: 'idle' }), listDrafts()]);
+      const [schedule, history, status, drafts] = await Promise.all([getSchedule(), readHistory(), readJson(path.join(ROOT, 'status.json'), { state: 'idle' }), listDrafts()]);
       send(res, 200, { schedule, history, status, drafts });
       return true;
     }
@@ -106,10 +136,33 @@ async function handleDrafts(req, res, pathname, deps) {
         return true;
       }
       case 'history': {
-        const cur = await readJson(path.join(ROOT, 'history.json'), []);
-        const set = new Set(cur);
-        for (const t of (Array.isArray(b.themes) ? b.themes : [])) if (t) set.add(String(t).trim());
-        await writeJson(path.join(ROOT, 'history.json'), [...set].slice(-1000));
+        // entries：[{theme, title, createdAt, mode, part, source, sequelOf, draftId}]（以前の themes：文字列の配列 も受け付ける）
+        const cur = await readHistory();
+        const add = [...(Array.isArray(b.entries) ? b.entries : []), ...(Array.isArray(b.themes) ? b.themes.map((t) => ({ theme: t })) : [])];
+        for (const a of add) {
+          const theme = String(a && a.theme || '').trim();
+          if (!theme) continue;
+          const e = {
+            id: newHistId(), theme, title: String(a.title || '').trim(), createdAt: Number(a.createdAt) || Date.now(),
+            mode: a.mode === 'keyword' ? 'keyword' : 'news', part: Math.max(1, Number(a.part) || 1), source: String(a.source || 'auto'),
+            ...(a.sequelOf ? { sequelOf: String(a.sequelOf) } : {}), ...(a.draftId ? { draftId: String(a.draftId) } : {}),
+          };
+          // 同じテーマ・同じ回を12時間以内に作り直した記録は、新しいほうで置き換える（手動で何度も作り直したとき、記録が並ばないように）
+          const i = cur.findIndex((x) => x.theme === theme && (x.part || 1) === e.part && Math.abs((x.createdAt || 0) - e.createdAt) < 12 * 3600000);
+          if (i >= 0) cur[i] = { ...cur[i], ...e, id: cur[i].id, ...(cur[i].sequel ? { sequel: true } : {}) };
+          else cur.push(e);
+        }
+        await writeJson(HISTORY, cur.slice(-1000));
+        send(res, 200, { ok: true });
+        return true;
+      }
+      case 'historySequel': {
+        // 続編を作る印を付け外しする
+        const cur = await readHistory();
+        const h = cur.find((x) => x.id === b.id);
+        if (!h) { send(res, 404, { error: '記録が見つかりません' }); return true; }
+        if (b.sequel) h.sequel = true; else delete h.sequel;
+        await writeJson(HISTORY, cur);
         send(res, 200, { ok: true });
         return true;
       }

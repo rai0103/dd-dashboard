@@ -32,7 +32,7 @@ import { generateImage } from "@/lib/explainer/imageClient";
 import { searchFreeImages, fetchFreeImage, rankFreeImages } from "@/lib/explainer/freeImageClient";
 import { researchTopic } from "@/lib/explainer/researchClient";
 import DraftPanel from "@/components/DraftPanel";
-import { addDraftHistory, exportDraft, getDraftState, saveDraftSchedule, saveDraftStatus, trendingThemes } from "@/lib/explainer/autoDraft";
+import { addDraftHistory, exportDraft, getDraftState, saveDraftSchedule, saveDraftStatus, trendingThemes, setHistorySequel, isSimilarTheme } from "@/lib/explainer/autoDraft";
 import { safeFileName, canPickFolder, getSavedFolder, pickFolder, ensureWritable, saveBundle, descriptionText } from "@/lib/explainer/exportBundle";
 import { exportVideoProfile, importVideoProfile } from "@/lib/videoProfileSnapshot";
 import AutoScheduleStudio from "@/components/AutoScheduleStudio";
@@ -769,6 +769,10 @@ export default function ExplainerStudio() {
       // ラベル（kicker）は、選んだ長尺の長さから自動で入れる（例：5分で解説）。生成後も自由に書き換えられる
       p = { ...p, longScenes, shortScenes: S.scenes, kicker: autoKickerFor(minutes) };
       setProject(p); setFormat("long"); setInputOpen(false); setSeekPos(0);
+      // 手動で作った動画のテーマも記録する（夜間の自動生成で同じ話題を選ばないように。自動ドラフトの実行中は、そちらで記録する）
+      if ((mode === "news" || mode === "keyword") && new URLSearchParams(window.location.search).get("autodraft") !== "1") {
+        addDraftHistory([{ theme: topic.trim(), title: p.videoTitle || "", createdAt: Date.now(), mode, part: 1, source: "manual" }]).catch(() => {});
+      }
       if (imgReport?.serverDown) alert("フリー素材を検索できませんでした：ローカルAIサーバー（tts-server）を起動し直してください（台本は生成できています）。");
       if (imgNoKey) alert("画像の自動生成に失敗しました：tts-server/.env に GEMINI_API_KEY が設定されていません（tts-server/.env.example を参考に設定してください）。台本自体は生成できています。あとから各場面の「画像を追加」→「AIで生成」からやり直せます。");
       else if (imgFailed > 0) alert(`${imgFailed}件の場面で画像の自動生成に失敗しました（台本は生成できています）。あとから各場面の「画像を追加」→「AIで生成」からやり直せます。`);
@@ -1846,11 +1850,33 @@ export default function ExplainerStudio() {
         const doneThemes = new Set(status.results.map((r) => r.theme));
         const want = urgentOnly ? 10 : Math.max(0, sch.count - status.results.length);
         const queue = sch.keywords.filter((k) => (!urgentOnly || k.urgent) && !doneThemes.has(k.theme)).slice(0, want).map((k) => ({ ...k, source: "reserved" }));
+        const history = Array.isArray(st.history) ? st.history : [];
+        // 続編：記録で「続編」に印を付けたテーマは、前回の動画以降の新しい情報で続編を作る（予約テーマの次、話題のニュースより先）
+        if (!urgentOnly) {
+          const seen = new Set();
+          for (const h of history.filter((x) => x.sequel)) {
+            if (queue.length >= want) break;
+            if (seen.has(h.theme)) continue;
+            seen.add(h.theme);
+            const series = history.filter((x) => x.theme === h.theme);
+            const last = series.reduce((a, b) => ((b.createdAt || 0) > (a.createdAt || 0) ? b : a), h);
+            const part = Math.max(...series.map((x) => x.part || 1)) + 1;
+            const d = last.createdAt ? new Date(last.createdAt) : null;
+            const since = d ? `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日` : "前回";
+            const topic = `${h.theme}：${since}以降の続報`;
+            if (doneThemes.has(topic)) continue;
+            queue.push({
+              theme: topic, mode: h.mode || "news", source: "sequel", series: h.theme, part, flagId: h.id,
+              note: `この動画は、${since}に作った動画「${last.title || h.theme}」の続編（第${part}弾）です。${since}以降に出た新しい情報・動き・数字を中心に解説してください。前回の内容のおさらいは冒頭で短くまとめるだけにし、同じ説明を繰り返さないこと。タイトルも続編・続報だと分かるものにしてください。`,
+            });
+          }
+        }
         if (!urgentOnly && queue.length < want) {
           try {
-            const { themes } = await trendingThemes(want - queue.length, st.history);
-            const used = new Set([...st.history, ...doneThemes]);
-            for (const t of themes) { if (queue.length >= want) break; if (!used.has(t) && !queue.some((q) => q.theme === t)) queue.push({ theme: t, mode: "news", source: "auto" }); }
+            // 過去に作ったテーマ・動画タイトルは選ばない（言い方を変えた同じ話題も除く）
+            const past = [...history.map((h) => h.theme), ...history.map((h) => h.title).filter(Boolean), ...doneThemes, ...queue.map((q) => q.theme)];
+            const { themes } = await trendingThemes(want - queue.length + 3, past);
+            for (const t of themes) { if (queue.length >= want) break; if (!isSimilarTheme(t, [...past, ...queue.map((q) => q.theme)])) queue.push({ theme: t, mode: "news", source: "auto" }); }
           } catch (e) { status.message = `話題のニュースを取得できませんでした：${e?.message || e}`; }
         }
         // 進み具合を status.step に書き出す（scripts/auto-draft.mjs がログに残し、止まった場所が分かるようにする）
@@ -1882,8 +1908,10 @@ export default function ExplainerStudio() {
             const p = latestRef.current.project;
             if (!p) throw new Error("台本を作れませんでした");
             await report("ドラフトを保存しています");
-            await exportDraft(p, { theme: q.theme, mode: q.mode, source: q.source }, latestRef.current.refs);
-            await addDraftHistory([q.theme]).catch(() => {});
+            const draftId = await exportDraft(p, { theme: q.theme, mode: q.mode, source: q.source === "sequel" ? "reserved" : q.source }, latestRef.current.refs);
+            // 作ったテーマを記録する（テーマ・動画タイトル・作成日・第何弾か）。続編は最初のテーマのまま記録し、続編の印を外す
+            await addDraftHistory([{ theme: q.series || q.theme, title: p.videoTitle || "", createdAt: Date.now(), mode: q.mode, part: q.part || 1, source: q.source, draftId, ...(q.flagId ? { sequelOf: q.flagId } : {}) }]).catch(() => {});
+            if (q.flagId) for (const h of history.filter((x) => x.theme === q.series && x.sequel)) await setHistorySequel(h.id, false).catch(() => {});
             if (q.source === "reserved") {
               const cur = await getDraftState();
               await saveDraftSchedule({ ...cur.schedule, keywords: cur.schedule.keywords.filter((k) => k.theme !== q.theme) }, false);

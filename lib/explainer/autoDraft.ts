@@ -14,14 +14,20 @@ async function post(body: unknown) {
   if (!r.ok) throw new Error(d?.error || `HTTP ${r.status}`);
   return d;
 }
-export async function getDraftState(): Promise<{ schedule: DraftSchedule; history: string[]; status: DraftStatus; drafts: DraftMeta[] }> {
+/** 作ったテーマの記録（drafts/history.json）。theme はシリーズのテーマ（続編も最初のテーマのまま）、part は第何弾か */
+export interface DraftHistory { id: string; theme: string; title?: string; createdAt?: number; mode?: 'news' | 'keyword'; part?: number; source?: string; sequelOf?: string; draftId?: string; /** 次の自動生成で続編を作る */ sequel?: boolean }
+
+export async function getDraftState(): Promise<{ schedule: DraftSchedule; history: DraftHistory[]; status: DraftStatus; drafts: DraftMeta[] }> {
   const r = await fetch(base(), { cache: 'no-store' });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json();
 }
 export const saveDraftSchedule = (schedule: DraftSchedule, register = true) => post({ action: 'schedule', schedule, register });
 export const saveDraftStatus = (status: DraftStatus) => post({ action: 'status', status });
-export const addDraftHistory = (themes: string[]) => post({ action: 'history', themes });
+export const addDraftHistory = (entries: Omit<DraftHistory, 'id'>[]) => post({ action: 'history', entries });
+export const setHistorySequel = (id: string, sequel: boolean) => post({ action: 'historySequel', id, sequel });
+
+export { isSimilarTheme } from './autoDraftTheme';
 export const trendingThemes = (count: number, exclude: string[]): Promise<{ themes: string[] }> => post({ action: 'trending', count, exclude });
 
 /** 台本で使っている画像のID */

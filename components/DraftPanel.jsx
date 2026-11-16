@@ -1,8 +1,10 @@
 "use client";
 // 自動ドラフト：毎朝の自動生成の設定（本数・時刻・予約テーマ）と、できたドラフトの取り込み
 import { useEffect, useState } from "react";
-import { getDraftState, importDraft, saveDraftSchedule } from "@/lib/explainer/autoDraft";
+import { getDraftState, importDraft, saveDraftSchedule, setHistorySequel } from "@/lib/explainer/autoDraft";
 
+const ymd = (t) => (t ? new Date(t).toLocaleDateString("ja-JP", { year: "numeric", month: "numeric", day: "numeric" }) : "—");
+const SOURCE_LABEL = { auto: "自動", reserved: "予約", sequel: "続編", manual: "手動" };
 const fmt = (t) => (t ? new Date(t).toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "");
 
 export default function DraftPanel({ C, disabled, minutes, onOpen, hasProject = false, onSaveProfile = null }) {
@@ -11,6 +13,8 @@ export default function DraftPanel({ C, disabled, minutes, onOpen, hasProject = 
   const [text, setText] = useState("");
   const [status, setStatus] = useState(null);
   const [drafts, setDrafts] = useState([]);
+  const [history, setHistory] = useState([]);
+  const [histOpen, setHistOpen] = useState(false);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -21,6 +25,7 @@ export default function DraftPanel({ C, disabled, minutes, onOpen, hasProject = 
       setText(st.schedule.keywords.map((k) => `${k.mode === "keyword" ? `用語：${k.theme}` : k.theme}${k.note ? ` ｜ ${k.note}` : ""}`).join("\n"));
       setStatus(st.status);
       setDrafts(st.drafts || []);
+      setHistory(Array.isArray(st.history) ? st.history : []);
       if ((st.drafts || []).length) setOpen(true);
     } catch (e) {
       setMsg("自動ドラフトの情報を読み込めませんでした（tts-serverが起動しているか確認してください）");
@@ -65,6 +70,19 @@ export default function DraftPanel({ C, disabled, minutes, onOpen, hasProject = 
       setBusy(false);
     }
   };
+
+  // 続編の印を付け外しする（次の自動生成で、そのテーマの続編を新しい情報で作る）
+  const toggleSequel = async (h, on) => {
+    // 付けるときはその行に、外すときは同じテーマ（シリーズ）の印をすべて外す
+    const ids = on ? [h.id] : history.filter((x) => x.theme === h.theme && x.sequel).map((x) => x.id);
+    setHistory((list) => list.map((x) => (ids.includes(x.id) ? { ...x, sequel: on || undefined } : x)));
+    try { for (const id of ids) await setHistorySequel(id, on); } catch (e) { setMsg(`続編の設定を保存できませんでした：${e.message}`); load(); }
+  };
+  // シリーズ（同じテーマ）ごとに、いちばん新しい回の行にだけ「続編」のチェックを出す
+  const latestOfSeries = new Map();
+  for (const h of history) { const c = latestOfSeries.get(h.theme); if (!c || (h.createdAt || 0) >= (c.createdAt || 0)) latestOfSeries.set(h.theme, h); }
+  const seriesFlagged = (theme) => history.some((x) => x.theme === theme && x.sequel);
+  const sortedHistory = history.slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 
   const box = { background: C.panel ?? "#111827", border: `1px solid ${C.borderSoft ?? "#334155"}`, borderRadius: 8 };
   const btn = { border: `1px solid ${C.borderSoft ?? "#334155"}`, color: C.text, background: "transparent", cursor: "pointer" };
@@ -111,6 +129,47 @@ export default function DraftPanel({ C, disabled, minutes, onOpen, hasProject = 
             </div>
           )}
           {!sch && msg && <div className="text-[11px]" style={{ color: C.amber }}>{msg}</div>}
+          {history.length > 0 && (
+            <div className="flex flex-col gap-1 pt-1" style={{ borderTop: `1px solid ${C.borderSoft ?? "#334155"}` }}>
+              <button onClick={() => setHistOpen((v) => !v)} className="text-[11px] text-left" style={{ color: C.teal, background: "transparent", border: "none", cursor: "pointer", padding: 0 }}>
+                {histOpen ? "▾" : "▸"} これまでに作ったテーマ（{history.length}件）{history.some((x) => x.sequel) ? `・続編の予定 ${new Set(history.filter((x) => x.sequel).map((x) => x.theme)).size}件` : ""}
+              </button>
+              {histOpen && (
+                <>
+                  <div className="text-[10px]" style={{ color: C.textMuted }}>夜間の自動生成は、ここにあるテーマ・タイトルと同じ話題を選びません。「続編」にチェックすると、次の自動生成で、前回の動画以降の新しい情報を使って続編を作ります（作り終えるとチェックは外れ、続編もここに記録されます）。</div>
+                  <div className="overflow-y-auto" style={{ maxHeight: 260 }}>
+                    <table className="w-full text-[11px]" style={{ borderCollapse: "collapse" }}>
+                      <thead>
+                        <tr style={{ color: C.textMuted, textAlign: "left" }}>
+                          <th className="py-1 pr-2 font-normal" style={{ width: 84 }}>作成日</th>
+                          <th className="py-1 pr-2 font-normal">テーマ</th>
+                          <th className="py-1 pr-2 font-normal">タイトル（サブタイトル）</th>
+                          <th className="py-1 pr-2 font-normal" style={{ width: 44 }}>回</th>
+                          <th className="py-1 font-normal" style={{ width: 44, textAlign: "center" }}>続編</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sortedHistory.map((h) => {
+                          const isLatest = latestOfSeries.get(h.theme)?.id === h.id;
+                          return (
+                            <tr key={h.id} style={{ borderTop: `1px solid ${C.borderSoft ?? "#334155"}`, color: C.text }}>
+                              <td className="py-1 pr-2" style={{ color: C.textMuted }}>{ymd(h.createdAt)}</td>
+                              <td className="py-1 pr-2">{h.mode === "keyword" ? "用語：" : ""}{h.theme}<span className="text-[10px] ml-1" style={{ color: C.textDim ?? C.textMuted }}>{SOURCE_LABEL[h.source] || ""}</span></td>
+                              <td className="py-1 pr-2" style={{ color: C.textMuted }}>{h.title || "—"}</td>
+                              <td className="py-1 pr-2">{(h.part || 1) > 1 ? `第${h.part}弾` : "初回"}</td>
+                              <td className="py-1" style={{ textAlign: "center" }}>
+                                {isLatest && <input type="checkbox" checked={seriesFlagged(h.theme)} onChange={(e) => toggleSequel(h, e.target.checked)} title="次の自動生成で、このテーマの続編を新しい情報で作る" />}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
         </>
       )}
     </section>
