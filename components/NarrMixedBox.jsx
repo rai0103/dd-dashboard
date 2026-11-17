@@ -4,7 +4,8 @@ import { changedMask } from "@/lib/videoNarrText";
 
 // 通常の文章の枠。表示文から変えた（ひらがなにした）箇所を緑の文字で示す
 // readUpTo（文字数。null/undefinedなら無効）を渡すと、そこまでを「読み上げ済み」として背景をハイライトし、まだの部分は少し薄く表示する（再生に合わせて文字を追えるように）
-export default function NarrMixedBox({ value, base, onChange, onBlur, colors, readUpTo = null }) {
+// onFocus：文字の枠にカーソルを置いた（クリックした）とき。プレビューの一時停止に使う
+export default function NarrMixedBox({ value, base, onChange, onBlur, onFocus, colors, readUpTo = null }) {
   const ta = useRef(null);
   const mir = useRef(null);
   useEffect(() => {
@@ -42,6 +43,7 @@ export default function NarrMixedBox({ value, base, onChange, onBlur, colors, re
         rows={2}
         onChange={(e) => onChange(e.target.value.replace(/\n/g, ""))}
         onBlur={onBlur}
+        onFocus={onFocus}
         style={{ ...pad, position: "relative", display: "block", width: "100%", background: "transparent", border: `1px solid ${colors.border}`, borderRadius: 4, color: "transparent", caretColor: colors.text, resize: "none", overflow: "hidden", minHeight: 44 }}
       />
     </div>

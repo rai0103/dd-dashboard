@@ -6,6 +6,7 @@
 //    そのまま共有する（同じサイト内のページなので、長尺動画作成で登録したものがここでも選べる）。
 // 違い：台本は「テーマ＋参考情報（テキスト・URL・PDF）」からAIが作る。図解はすべて自作の図形・アイコンで描く（著作権・肖像権への配慮）。
 import { useEffect, useMemo, useRef, useState } from "react";
+import { fixHaForTts } from "@/lib/explainer/kanaFix";
 import NarrMixedBox from "@/components/NarrMixedBox";
 import FreeImagePicker from "@/components/FreeImagePicker";
 import LowPolyModal from "@/components/LowPolyModal";
@@ -86,7 +87,9 @@ const sliderInitValue = (key, fallback) => { const l = loadSliderLocks(); return
 // 読み上げに使う文：ナレーションを直して読み上げ文が古いあいだは、通常の文をそのまま読ませる
 // [Stage E-18] 読み上げる直前にも用語の読み方（MDD→さいげらくりつ、DD→げらくりつ、ATH→かこさいたかね）をそろえる
 // （以前に作った台本の読み上げ文や、読み上げ文が未更新でナレーションをそのまま読む場合にも効くように）。
-const ttsText = (sc) => applyTermReadings(sc.readingStale || !sc.reading ? sc.narration : sc.reading);
+// 音声合成に渡す文。読み上げ文（ひらがな）は、「推進派は」→「すいしんはは」が「すいしんわわ」と読まれないよう、
+// 漢字の読みの最後の「は」をカタカナにしてから渡す（lib/explainer/kanaFix.ts。画面の読み上げ文は変えない）
+const ttsText = (sc) => applyTermReadings(sc.readingStale || !sc.reading ? sc.narration : fixHaForTts(sc.reading, sc.narration));
 // テキスト欄の高さを中身に合わせる（スクロールバーを出さずに全文を表示する）
 const fitTextarea = (el) => { if (!el) return; el.style.height = "auto"; el.style.height = `${el.scrollHeight + 2}px`; };
 const fmtTime = (sec) => { const s = Math.max(0, Math.round(sec || 0)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
@@ -1371,15 +1374,14 @@ export default function ExplainerStudio() {
   }, [currentSceneIdx]);
   // 読み上げ中の場面の、どの文字まで読み終えたか（ナレーション枠のハイライト用）。音声の長さは prepareAudio で確定する
   const narrDursRef = useRef([]);
-  const [readCharIdx, setReadCharIdx] = useState(0);
+  const [readFrac, setReadFrac] = useState(0); // 読み上げ中の場面の、読み終えた割合（0〜1）
   const updateSceneProgress = (progress) => {
     const r = rendererRef.current; if (!r) return;
     const idx = r.getSceneIndexAt(progress);
     setCurrentSceneIdx(idx);
     const localT = r.getSceneLocalTimeAt(progress);
     const dur = narrDursRef.current[idx] || 0;
-    const len = scenesRef.current[idx]?.narration?.length ?? 0;
-    setReadCharIdx(dur > 0 ? Math.round(Math.min(1, Math.max(0, (localT - 0.3) / dur)) * len) : 0);
+    setReadFrac(dur > 0 ? Math.min(1, Math.max(0, (localT - 0.3) / dur)) : 0);
   };
 
   const estDurs = useMemo(() => scenes.map((s) => Math.max(s.minSec || 0, (s.narration.length / CHARS_PER_MIN) * 60 / rate + 1.1)), [scenes, rate]);
@@ -2441,7 +2443,8 @@ export default function ExplainerStudio() {
                               onChange={(t) => { if (isPlayingRef.current) handlePause(); if (!editBaseRef.current[sc.id]) editBaseRef.current[sc.id] = { narration: sc.narration, reading: sc.reading }; patchScene(sc.id, { narration: t, readingStale: true, ...(sc.genNarration ? {} : { genNarration: sc.narration }) }); }}
                               onBlur={() => handleNarrBlur(sc.id)}
                               colors={{ text: C.text, border: C.borderSoft }}
-                              readUpTo={cur && isPlaying ? readCharIdx : null} />
+                              onFocus={() => { if (isPlayingRef.current) handlePause(); }}
+                              readUpTo={cur && isPlaying ? Math.round(readFrac * sc.narration.length) : null} />
                           </div>
                           <div className="flex items-center gap-2 mt-1 flex-wrap">
                             <button onClick={() => toggleReading(sc.id)} className="text-[10px] flex items-center gap-0.5" style={{ color: isKanaReading(sc.reading) && !sc.readingStale ? C.textDim : C.amber, background: "none", border: "none", cursor: "pointer", padding: 0 }}>
@@ -2462,7 +2465,13 @@ export default function ExplainerStudio() {
                           {!readingClosedIds.has(sc.id) && (
                             <div className="mt-1">
                               {/* 読み上げ文は全文を表示する（スクロールバーを出さず、文の長さに合わせて高さを自動で伸ばす） */}
-                              <textarea value={sc.reading} rows={1} ref={(el) => fitTextarea(el)} onInput={(e) => fitTextarea(e.currentTarget)} onChange={(e) => { if (isPlayingRef.current) handlePause(); patchScene(sc.id, { reading: e.target.value.replace(/\n/g, ""), readingStale: false }); }} className="w-full rounded px-1.5 py-1 text-[11px]" style={{ ...inputStyle, background: C.panel, resize: "none", overflow: "hidden", fieldSizing: "content" }} />
+                              <div className="rounded" style={{ background: C.panel }}>
+                              <NarrMixedBox value={sc.reading} base={sc.reading}
+                                onChange={(t) => { if (isPlayingRef.current) handlePause(); patchScene(sc.id, { reading: t, readingStale: false }); }}
+                                onFocus={() => { if (isPlayingRef.current) handlePause(); }}
+                                colors={{ text: C.text, border: C.borderSoft }}
+                                readUpTo={cur && isPlaying ? Math.round(readFrac * sc.reading.length) : null} />
+                              </div>
                               <div className="text-[10px] flex items-center gap-2" style={{ color: C.textDim }}>
                                 音声はこの文（ひらがな）で読み上げます。ナレーションを直したら、ここも合わせて直すか「AI」で「読み上げ文を今のナレーションに合わせて」と指示してください。
                                 <button onClick={() => patchScene(sc.id, { reading: sanitizeReading(sc.reading, sc.narration).reading })} className="shrink-0" style={{ color: C.teal, background: "none", border: "none", cursor: "pointer" }}>整える</button>
