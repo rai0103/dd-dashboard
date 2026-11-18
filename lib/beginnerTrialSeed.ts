@@ -26,6 +26,23 @@ export const DAIWA_PURCHASES: { date: string; name: string; amount: number; nav?
   { date: '2026-04-02', name: 'iFreeレバレッジ FANG＋', amount: 50000 },
 ];
 
+/**
+ * 口座画面の内訳（ブログの報告）で分かっている時点の評価額。total は投資中の資産の合計（未投資の現金は除く）、
+ * fixed は銘柄が1つに決まる区分の実際の値（株式＝純金信託だけ）。積み上げグラフで、その時点を一部実績にする。
+ */
+export const DAIWA_CHECKPOINTS: { date: string; total: number; fixed: Record<string, number>; note: string }[] = [
+  // 6/1（ボーナス月）：株式(1)107,725円・投資信託(4)652,376円・現金250,000円（入金済み・未投資）
+  { date: '2026-06-01', total: 107725 + 652376, fixed: { '1540 純金上場信託（現物国内保管型）': 107725 }, note: '株式107,725円・投資信託652,376円（現金250,000円は未投資のため除く）' },
+];
+
+/** 内訳の時点の銘柄名を、取り込み済みの名前に合わせる */
+export function checkpointsMatched(snapshots: { items: Record<string, number> }[]): { date: string; value: number; fixed: Record<string, number> }[] {
+  const key = (n: string) => n.normalize('NFKC').replace(/[\s()（）]/g, '').toLowerCase();
+  const known = new Map<string, string>();
+  for (const s of snapshots || []) for (const n of Object.keys(s.items)) if (!known.has(key(n))) known.set(key(n), n);
+  return DAIWA_CHECKPOINTS.map((c) => ({ date: c.date, value: c.total, fixed: Object.fromEntries(Object.entries(c.fixed).map(([n, v]) => [known.get(key(n)) ?? n, v])) }));
+}
+
 /** 指定した月（YYYY-MM）の買い付け */
 export function purchasesInMonth(ym: string) {
   return DAIWA_PURCHASES.filter((p) => p.date.slice(0, 7) === ym);

@@ -99,7 +99,7 @@ export function performanceRows(series: Record<string, Dated[]>, start: string):
  */
 export function stackedHoldingRows(
   snapshots: { date: string; items: Record<string, number> }[],
-  totals: { date: string; value: number | null }[],
+  totals: { date: string; value: number | null; fixed?: Record<string, number> }[],
   priceOf: (name: string) => Dated[] | null,
   start: string,
   purchases: { date: string; name: string; amount: number }[] = [],
@@ -140,9 +140,17 @@ export function stackedHoldingRows(
         est[p.name] = (est[p.name] ?? 0) + v; sum += v;
       }
       if (!(sum > 0)) continue;
-      const k = t.value / sum;
       const row: Record<string, number | string | boolean> = { date: t.date, estimated: true, total: t.value };
-      for (const n of names) row[n] = Math.round(est[n] * k);
+      if (t.fixed && Object.keys(t.fixed).length) {
+        // 一部の銘柄の評価額が分かっている時点（口座画面の内訳など）：その銘柄は実際の値、残りの銘柄で残りの合計を分ける
+        const fixedSum = Object.values(t.fixed).reduce((a, b) => a + b, 0);
+        const restSum = names.filter((n) => !(n in t.fixed!)).reduce((a, n) => a + (est[n] ?? 0), 0);
+        const k = restSum > 0 ? Math.max(0, t.value - fixedSum) / restSum : 0;
+        for (const n of names) row[n] = n in t.fixed ? t.fixed[n] : Math.round((est[n] ?? 0) * k);
+      } else {
+        const k = t.value / sum;
+        for (const n of names) row[n] = Math.round((est[n] ?? 0) * k);
+      }
       rows.push(row);
     }
   }

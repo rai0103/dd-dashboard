@@ -7,7 +7,7 @@ import {
 } from "recharts";
 import { computeRsi } from "@/lib/rsi";
 import { proxyForHolding, buildProxySeries, performanceRows, stackedHoldingRows } from "@/lib/holdingProxies";
-import { withInitialSnapshot, purchasesMatched } from "@/lib/beginnerTrialSeed";
+import { withInitialSnapshot, purchasesMatched, checkpointsMatched } from "@/lib/beginnerTrialSeed";
 import { parseNkxBundle, parseStooqDaily, mergeNkx, nkxStoredRows, nkxNextStart, isStaleSinceTokyo } from "@/lib/nkxSeries";
 import { DEFAULT_RSI_TRIGGER_SETTINGS, normalizeRsiTriggerSettings, statusFor, ymd as rsiYmd } from "@/lib/rsiTrigger";
 import RsiTriggerPanel, { rsiBadge } from "@/components/RsiTriggerPanel";
@@ -7912,6 +7912,11 @@ function BeginnerTrialSection({ data, holdings, holdingsAsOf, brokerHoldingHisto
   // 銘柄別評価額の取り込み履歴＋最初の買い付け（2026/1/10・ブログのスクショから転記。lib/beginnerTrialSeed.ts）
   const daiwaSnapshots = useMemo(() => withInitialSnapshot(brokerHoldingHistory?.[BEGINNER_TRIAL.brokerKey] ?? []), [brokerHoldingHistory]);
   const daiwaPurchases = useMemo(() => purchasesMatched(daiwaSnapshots), [daiwaSnapshots]);
+  // 積み上げグラフの月ごとの合計：投資収支xlsxの評価額＋口座画面の内訳が分かっている時点（同じ日ならそちらを優先）
+  const daiwaTotals = useMemo(() => {
+    const cps = checkpointsMatched(daiwaSnapshots);
+    return [...points.filter((p) => !cps.some((c) => c.date === p.date)).map((p) => ({ date: p.date, value: p.value })), ...cps].sort((a, b) => a.date.localeCompare(b.date));
+  }, [points, daiwaSnapshots]);
   const holdingColorOf = useMemo(() => new Map([...daiwaHoldings].map((h) => h.name).sort().map((n, i) => [n, HOLDING_PALETTE[i % HOLDING_PALETTE.length]])), [daiwaHoldings]);
   const holdingRows = useMemo(() => {
     const changes = holdingChanges(brokerHoldingHistory, BEGINNER_TRIAL.brokerKey, asOf, daiwaHoldings);
@@ -7973,7 +7978,7 @@ function BeginnerTrialSection({ data, holdings, holdingsAsOf, brokerHoldingHisto
           <div className="text-[10px] mt-2" style={{ color: C.textDim }}>※銘柄ごとの前月比は、前の月に取り込んだスクショとの差です（前の月の取り込みが無い場合は「—」）。前年末比は口座開設初年のため2027年から表示します。</div>
         </>
       ) : <div className="text-xs" style={{ color: C.textDim }}>大和コネクト証券の保有銘柄がまだ登録されていません。「データ入力」→「証券会社スクショ取込」で大和コネクト証券のスクショを取り込むと表示されます。</div>}
-      {holdingRows.length > 0 && <HoldingsChartPanel snapshots={daiwaSnapshots} purchases={daiwaPurchases} totals={points.map((p) => ({ date: p.date, value: p.value }))} colorOf={holdingColorOf} currentNames={holdingRows.map((r) => r.label)} yen={yen} />}
+      {holdingRows.length > 0 && <HoldingsChartPanel snapshots={daiwaSnapshots} purchases={daiwaPurchases} totals={daiwaTotals} colorOf={holdingColorOf} currentNames={holdingRows.map((r) => r.label)} yen={yen} />}
     </div>
   );
 }

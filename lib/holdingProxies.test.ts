@@ -55,3 +55,11 @@ test("stackedHoldingRows：スクショの後の買い付けを、買った日�
   // A=100×1.1=110、B=50×1.1=55 → 合計165（口座合計と一致）
   assert.equal(feb.A, 110); assert.equal(feb.B, 55);
 });
+
+test("stackedHoldingRows：一部の銘柄が分かっている時点は、その銘柄を実際の値にして残りで合計を分ける", () => {
+  const snaps = [{ date: "2026-01-10", items: { A: 100, B: 100, G: 100 } }];
+  const totals = [{ date: "2026-06-01", value: 500, fixed: { G: 140 } }];
+  const { rows } = stackedHoldingRows(snaps, totals, () => null, "2026-01-01");
+  const jun = rows.find((r) => r.date === "2026-06-01")!;
+  assert.equal(jun.G, 140); assert.equal(jun.A, 180); assert.equal(jun.B, 180);
+});
