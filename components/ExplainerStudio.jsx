@@ -23,7 +23,7 @@ import { listBackgrounds, saveBackground, deleteBackground } from "@/lib/videoBa
 import { listAvatars, saveAvatar, deleteAvatar, newAvatar, MAX_CLIPS } from "@/lib/videoAvatarLibrary";
 import { VideoAvatar } from "@/lib/videoAvatarRender";
 import { ExplainerRenderer, RENDER_SIZE, VISUAL_SIZE } from "@/lib/explainer/renderer";
-import { generateProject, generateShort, rewriteScene, rewriteNarration, applyLearnedEdit, updateReadingForEdit, planSceneImages, matchRequiredImages, extractPurchasesFromImages, CHARS_PER_MIN } from "@/lib/explainer/aiScript";
+import { generateProject, generateShort, rewriteScene, rewriteNarration, applyLearnedEdit, updateReadingForEdit, planSceneImages, matchRequiredImages, extractPurchasesFromImages, weeklyKindGuard, CHARS_PER_MIN } from "@/lib/explainer/aiScript";
 import { pickImageScenes, splitFreeAi, canHaveImage, spreadPick } from "@/lib/explainer/autoImages";
 import { AiClientError } from "@/lib/explainer/aiClient";
 import { referenceBlocks, referenceTexts, fetchUrlReference, fileToBase64, newRefId, refLabel, requiredRefNotes, MAX_PDF_BYTES } from "@/lib/explainer/references";
@@ -45,10 +45,10 @@ import { buildStockCatalogFromSnapshot, buildStockCatalogFromCsv, mergeStockCata
 import { buildFixedDataChapters, fixedChaptersNote, mergeFixedChapters, dataPeriodOf, dataPeriodNoteOf } from "@/lib/explainer/dataChapters";
 import { DAIWA_PURCHASES } from "@/lib/beginnerTrialSeed";
 import { scheduleSyncPush } from "@/lib/sync";
-import { WEEKLY_CHANNEL, WEEKLY_PERSONA, buildWeeklyData, parsePurchases, yenJp, buildTrialReportChapters, trialFactsText, trialStatus, monthlyReturn, planVsActual, cagrOf, yearsToGoal, requiredRate, TRIAL_RULES } from "@/lib/explainer/weeklyReport";
+import { WEEKLY_CHANNEL, WEEKLY_PERSONA, decorateTrialTitle, buildWeeklyData, parsePurchases, yenJp, buildTrialReportChapters, trialFactsText, trialStatus, monthlyReturn, planVsActual, cagrOf, yearsToGoal, requiredRate, TRIAL_RULES } from "@/lib/explainer/weeklyReport";
 import { decorateTitleScene } from "@/lib/explainer/sp500SheetScenes";
 import { computeSp500Sheets } from "@/lib/sp500Sheets";
-import { drawVisual, PALETTE } from "@/lib/explainer/visuals";
+import { drawVisual, setVisualLight, PALETTE } from "@/lib/explainer/visuals";
 
 const C = {
   bg: "#0A0F1C", panel: "#111A2C", panel2: "#0D1424",
@@ -136,7 +136,9 @@ function GenProgressPanel({ step, done, total, elapsedSec, onAbort }) {
 // drawVisual()を直接呼んで図解（棒グラフ・折れ線・要点カード等）の静止画を小さなcanvasに描く
 // （ExplainerRendererクラス＝アバター・音声込みのフル描画は使わない。図解単体の軽量な描画のみ）。
 // p=1（場面の最後まで進んだ状態）で描くことで、アニメーションの途中状態ではない完成形を見せる。
-function SceneThumbCanvas({ sc, portrait, full = false }) {
+// 表紙（タイトルの場面）に画像を付けたときは、タイトルの文字を残したまま背景画像にする。それ以外は画像の場面にする
+const withImageVisual = (v, extra = { emphasis: "" }) => (v.kind === "title" ? v : { ...v, kind: "image", ...extra });
+function SceneThumbCanvas({ sc, portrait, full = false, light = false, image = null }) {
   const ref = useRef(null);
   useEffect(() => {
     const canvas = ref.current;
@@ -150,11 +152,12 @@ function SceneThumbCanvas({ sc, portrait, full = false }) {
     ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, canvas.width, canvas.height);
     const scale = Math.min(canvas.width / vis.W, canvas.height / vis.H);
     const offX = (canvas.width - vis.W * scale) / 2, offY = (canvas.height - vis.H * scale) / 2;
-    ctx.fillStyle = "#0c1222"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = light ? "#ffffff" : "#0c1222"; ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.setTransform(scale, 0, 0, scale, offX, offY);
-    const accent = PALETTE[(sc.chapter || 0) % PALETTE.length];
-    try { drawVisual(ctx, sc, { W: vis.W, H: vis.H, p: 1, t: 1, portrait, image: null, accent, showSource: false }); } catch (e) { /* 図解の描画に失敗しても一覧全体は壊さない */ }
-  }, [sc.visual, sc.chapter, portrait]);
+    setVisualLight(light);
+    const accent = light ? PALETTE[0] : PALETTE[(sc.chapter || 0) % PALETTE.length];
+    try { drawVisual(ctx, sc, { W: vis.W, H: vis.H, p: 1, t: 1, portrait, image, accent, showSource: false, light }); } catch (e) { /* 図解の描画に失敗しても一覧全体は壊さない */ }
+  }, [sc.visual, sc.chapter, sc.imageFit, portrait, full, light, image]);
   return <canvas ref={ref} style={{ width: "100%", height: "100%", display: "block", borderRadius: 4 }} />;
 }
 // [ライブラリピッカーのポップアップ化] 56px丸グリッドだと見えにくいという指摘を受け、画面中央に大きく
@@ -335,6 +338,7 @@ export default function ExplainerStudio() {
       spx, target,
       monthly: weeklyKind === "monthly" ? monthlyReturn(points, prevYm) : null,
       planRows: weeklyKind === "monthly" ? planVsActual(points, prevYm, target.rate) : null,
+      history: points,
     };
   }, [weeklyData, weeklyPurchases, trialExtra, weeklyKind]);
   // トピックス：1行に1つ。「トピック ｜ コメントの要旨」。URLを書いた行は、そのURLも参考情報に入れる
@@ -586,6 +590,20 @@ export default function ExplainerStudio() {
   const [format, setFormat] = useState("long");
   // 週次レポート（年100万円投資で1億円を目指すチャンネル）は、人物を出さずに画面いっぱいに情報を出し、色も解説動画と変える
   const fullLayout = (project?.mode ?? mode) === "weekly";
+  // 週次レポート：台本（AIの場面）はそのままで、表紙と実データの場面（グラフ）だけを今のデータ・今の作り方で作り直す
+  const refreshWeeklyFixed = () => {
+    if (!project || project.mode !== "weekly") return;
+    const fresh = new Map(buildTrialReportChapters(trialReport).flatMap((c2) => c2.scenes).map((x) => [x.fixedKey, x]));
+    const topicNames = weeklyTopicList().map((t) => t.topic);
+    let titleDone = false;
+    const longScenes = project.longScenes.map((sc) => {
+      if (sc.visual.kind === "title" && !titleDone) { titleDone = true; return decorateTrialTitle(sc, trialReport, topicNames, WEEKLY_CHANNEL); }
+      const n = sc.fixedKey ? fresh.get(sc.fixedKey) : null;
+      if (n) return { ...sc, title: n.title, caption: n.caption, narration: n.narration, reading: n.reading, readingStale: false, visual: n.visual, minSec: n.minSec, genNarration: n.narration };
+      return weeklyKindGuard(sc);
+    }).filter((sc) => !(sc.fixedKey && sc.fixedKey.startsWith("fixed:weekly:") && !fresh.has(sc.fixedKey))); // 今は作らなくなった場面（例：これまでの入金）は外す
+    setProject((p) => ({ ...p, longScenes, shortScenes: p.shortScenes.map(weeklyKindGuard) }));
+  };
   const scenes = project ? (format === "long" ? project.longScenes : project.shortScenes) : NO_SCENES;
   const setScenes = (fn) => setProject((p) => {
     if (!p) return p;
@@ -897,6 +915,10 @@ export default function ExplainerStudio() {
         const merged = mergeFixedChapters(p.chapters, longScenes, fixed);
         longScenes = assembleLong(merged.chapters, merged.perChapter, p.sources, true, sourcesInVideo);
         p = { ...p, chapters: merged.chapters };
+        // 表紙：チャンネル名・「週次報告（日付）」「月次報告（年月）」・トピックス
+        const topicNames = weeklyTopicList().map((t) => t.topic);
+        const ti = longScenes.findIndex((sc) => sc.visual.kind === "title");
+        if (ti >= 0) longScenes = longScenes.map((sc, i) => (i === ti ? decorateTrialTitle(sc, trialReport, topicNames, WEEKLY_CHANNEL) : sc));
       }
       if (mode === "stock" || mode === "sp500") {
         const snap = primaryStockSnapshot();
@@ -1178,7 +1200,7 @@ export default function ExplainerStudio() {
     if (!file || !file.type.startsWith("image/")) { alert("画像ファイルを選んでください"); return; }
     const im = await saveImage(file, credit?.caption, credit);
     await refreshImages();
-    setScenes((list) => list.map((s) => (s.id === sceneId ? { ...s, imageId: im.id, imageFit: undefined, visual: { ...s.visual, kind: "image", emphasis: "" } } : s)));
+    setScenes((list) => list.map((s) => (s.id === sceneId ? { ...s, imageId: im.id, imageFit: undefined, visual: withImageVisual(s.visual) } : s)));
     setRightsPendingId(null);
     if (adjust) setFitOpenId(sceneId);
     // [Stage E-11] 画像を添付したら、まず変更後のスライドをプレビューに表示する
@@ -1197,7 +1219,7 @@ export default function ExplainerStudio() {
   // グラフ作成ページ（/chart-studio/）のスクリーンショットや、他の場面で使った画像・以前の手動アップロード／AI生成画像を
   // 選べるようにするためのもの（attachImageと違い、saveImageは呼ばない＝ライブラリには何も追加しない）。
   const attachExistingImage = (sceneId, imageId) => {
-    setScenes((list) => list.map((s) => (s.id === sceneId ? { ...s, imageId, imageFit: undefined, visual: { ...s.visual, kind: "image", emphasis: "" } } : s)));
+    setScenes((list) => list.map((s) => (s.id === sceneId ? { ...s, imageId, imageFit: undefined, visual: withImageVisual(s.visual) } : s)));
     setRightsPendingId(null);
     setFitOpenId(sceneId);
     const idx = scenes.findIndex((s) => s.id === sceneId);
@@ -1259,7 +1281,7 @@ export default function ExplainerStudio() {
     const file = new File([blob], `poly-${sc.id}-${Date.now()}.png`, { type: blob.type || "image/png" });
     const im = await saveImage(file, old?.caption, credit);
     await refreshImages();
-    setScenes((list) => list.map((s) => (s.id === sc.id ? { ...s, imageId: im.id, visual: { ...s.visual, kind: "image" } } : s)));
+    setScenes((list) => list.map((s) => (s.id === sc.id ? { ...s, imageId: im.id, visual: withImageVisual(s.visual, {}) } : s)));
     setPolyOpenId(null);
     if (polyThenFitRef.current === sc.id) { polyThenFitRef.current = null; setFitOpenId(sc.id); }
     const idx = scenes.findIndex((s) => s.id === sc.id);
@@ -2297,7 +2319,10 @@ export default function ExplainerStudio() {
                   ) : (
                     <div className="text-[11px]" style={{ color: C.amber }}>大和コネクト証券のスクショがまだありません。ダッシュボードの「データ入力」→「証券会社スクショ取込」で、毎週末に大和コネクト証券のスクショを取り込んでください。</div>
                   )}
-                  <button onClick={() => { loadWeeklySnaps(); loadTrialExtra(); }} className="self-start text-[10px] px-2 py-0.5 rounded" style={btn()}>スクショ・投資収支xlsxの取り込みを読み直す</button>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button onClick={() => { loadWeeklySnaps(); loadTrialExtra(); }} className="self-start text-[10px] px-2 py-0.5 rounded" style={btn()}>スクショ・投資収支xlsxの取り込みを読み直す</button>
+                    {project?.mode === "weekly" && <button onClick={refreshWeeklyFixed} className="self-start text-[10px] px-2 py-0.5 rounded" style={btn()} title="AIが書いた場面（トピックス・雑感）はそのままで、表紙と、実データのグラフの場面だけを作り直します。アイコンの図解（要点カード・流れ図など）は、グラフか画像の場面に置き換えます。">表紙とグラフの場面を作り直す（台本はそのまま）</button>}
+                  </div>
                   <div className="flex items-center gap-2 flex-wrap text-[11px]" style={{ color: C.textMuted }}>
                     <span>今週の買い付け{weekWindow ? `（${weekWindow.from.slice(5).replace("-", "/")}の翌日〜${weekWindow.to.slice(5).replace("-", "/")}に約定）` : ""}</span>
                     <label className="px-2 py-0.5 rounded cursor-pointer" style={btn("primary")}>購入画面のスクショから読み取る
@@ -2625,10 +2650,10 @@ export default function ExplainerStudio() {
                           {/* [Stage G-4] スライド（図解・画像）のサムネイル。画像が無ければ図解をそのままcanvasに描く */}
                           <div className="flex gap-2 mb-1.5">
                             <div className="shrink-0 rounded overflow-hidden" style={{ width: format === "short" ? 92 : 150, height: format === "short" ? 158 : 94, background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
-                              {sc.imageId && imageEls[sc.imageId] ? (
+                              {sc.imageId && imageEls[sc.imageId] && sc.visual.kind !== "title" ? (
                                 <FitThumb img={imageEls[sc.imageId]} fit={sc.imageFit} portrait={format === "short"} full={fullLayout} />
                               ) : (
-                                <SceneThumbCanvas sc={sc} portrait={format === "short"} full={fullLayout} />
+                                <SceneThumbCanvas sc={sc} portrait={format === "short"} full={fullLayout} light={fullLayout} image={sc.imageId ? imageEls[sc.imageId] ?? null : null} />
                               )}
                             </div>
                             <div className="flex-1 min-w-0 flex flex-col gap-1">

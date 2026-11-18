@@ -255,6 +255,24 @@ const SCENE_SCHEMA = {
   required: ['title', 'caption', 'narration', 'reading', 'visual'],
 };
 const SCENES_SCHEMA = { type: 'object', properties: { scenes: { type: 'array', items: SCENE_SCHEMA } }, required: ['scenes'] };
+// 週次レポート：アイコンを並べたテンプレの図解（要点カード・流れ図・比較など）は使わず、グラフと写真だけで構成する
+export const WEEKLY_KINDS = ['title', 'bar', 'line', 'donut', 'number', 'image', 'cta'] as const;
+const WEEKLY_SCENES_SCHEMA = {
+  ...SCENES_SCHEMA,
+  properties: { scenes: { type: 'array', items: { ...SCENE_SCHEMA, properties: { ...SCENE_SCHEMA.properties, visual: { ...VISUAL_SCHEMA, properties: { ...VISUAL_SCHEMA.properties, kind: { type: 'string', enum: [...WEEKLY_KINDS] } } } } } } },
+};
+const scenesSchemaFor = (inp: GenerateInput) => (inp.mode === 'weekly' ? WEEKLY_SCENES_SCHEMA : SCENES_SCHEMA);
+const WEEKLY_KIND_NOTE = '- 【週次レポートの図解】visual.kind は title・bar・line・donut・number・image・cta だけを使う（points・flow・compare・timeline・illustration・keyword・summary・qa・point・cycle は使わない）。数値のある場面はグラフ（bar・line・donut・number）、数値の無い場面は image（imagePrompt を必ず書く）にする。';
+/** 週次レポートで使わない図解が返ってきたら、数値が2つ以上あれば棒グラフ、無ければ画像の場面にする */
+export function weeklyKindGuard(sc: ExplainerScene): ExplainerScene {
+  const k = sc.visual.kind;
+  if ((WEEKLY_KINDS as readonly string[]).includes(k) || k === 'chapter' || k === 'sources') return sc;
+  const nums = sc.visual.items.filter((it) => /\d/.test(String(it.value || ''))).length;
+  if (nums >= 2) return { ...sc, visual: { ...sc.visual, kind: 'bar' } };
+  const prompt = sc.visual.imagePrompt || `${sc.visual.heading || sc.title}, editorial photo style, no text, no logos, no real people`;
+  return { ...sc, visual: { ...sc.visual, kind: 'image', imagePrompt: prompt, emphasis: sc.visual.emphasis || sc.caption } };
+}
+const guardFor = (inp: GenerateInput) => (sc: ExplainerScene) => (inp.mode === 'weekly' ? weeklyKindGuard(sc) : sc);
 
 // [Stage E-5] マンネリ防止：モードごとに毎回ランダムで選ぶ「切り口」候補。同じテーマ・同じ日付でも、
 // 生成するたびに違う構成になることを狙う（完全な一致防止ではなく、構成作家への「お題」を変える軽量な対策）。
@@ -732,7 +750,7 @@ async function generateChapterPart(inp: GenerateInput, o: Outline, idx: number, 
   const roleNote = ch.role === 'intro'
     ? (first ? '- これは動画の冒頭です。1場面目は visual.kind=title（動画タイトル）で、視聴者の疑問や驚きを引き出す「つかみ」のナレーションにする。続けて「この動画でわかること」を示す。' : '- 動画の冒頭部分の続きです。')
     : ch.role === 'outro'
-      ? '- これは動画の最後です。summary で要点をまとめ、最後の場面は visual.kind=cta で、チャンネル登録や関連動画への短い呼びかけで締める。'
+      ? (inp.mode === 'weekly' ? '- これは動画の最後です。最後の場面は visual.kind=cta で、チャンネル登録への短い呼びかけで締める。' : '- これは動画の最後です。summary で要点をまとめ、最後の場面は visual.kind=cta で、チャンネル登録や関連動画への短い呼びかけで締める。')
       : (first ? '- 章の扉（章タイトルの場面）は自動で入るので作らない。章の1場面目は、前の章から自然につながる導入にする。' : '- 章の扉は作らない。');
   const task = [
     header(inp),
@@ -751,7 +769,7 @@ async function generateChapterPart(inp: GenerateInput, o: Outline, idx: number, 
     glossaryNote(o, idx),
     prev.length ? `【この章ですでに作った場面（続きから書き、内容を繰り返さない）】\n${prev.map((s) => `・[${s.visual.kind}] ${s.narration}`).join('\n')}` : '',
     partTotal > 1 && partNo < partTotal ? '- 章の途中なので、締めの言葉は入れない。' : '',
-    '- 図解の種類を毎場面変え、数値の図解・流れ図・比較・イメージ図などをバランスよく使う。',
+    inp.mode === 'weekly' ? WEEKLY_KIND_NOTE : '- 図解の種類を毎場面変え、数値の図解・流れ図・比較・イメージ図などをバランスよく使う。',
     `- 動画全体を${inp.targetMinutes}分以内に収めるため、ナレーションは1場面${planBudget(inp.targetMinutes, inp.speechRate ?? 1).minChars}〜${planBudget(inp.targetMinutes, inp.speechRate ?? 1).maxChars}文字にする（超えない）。`,
   ].filter(Boolean).join('\n');
   try {
@@ -760,11 +778,11 @@ async function generateChapterPart(inp: GenerateInput, o: Outline, idx: number, 
       content: [...inp.refBlocks, { type: 'text', text: task }],
       toolName: 'write_chapter_scenes',
       toolDescription: '解説動画の1章分（またはその一部）の場面（ナレーション・読み上げ文・図解の指定）を作る。',
-      inputSchema: SCENES_SCHEMA,
+      inputSchema: scenesSchemaFor(inp),
       maxTokens: 12000,
       signal,
     });
-    return (Array.isArray(r?.scenes) ? r.scenes : []).slice(0, count + 1).map((s: any) => applyStockDataKeysToScene(s, inp.stockCatalog)).map((s: any) => normalizeScene(s, idx)).filter((s: ExplainerScene) => s.narration);
+    return (Array.isArray(r?.scenes) ? r.scenes : []).slice(0, count + 1).map((s: any) => applyStockDataKeysToScene(s, inp.stockCatalog)).map((s: any) => normalizeScene(s, idx)).map(guardFor(inp)).filter((s: ExplainerScene) => s.narration);
   } catch (e: any) {
     // 途中で切れたら、半分ずつに分けて作り直す
     if (e?.code === 'MAX_TOKENS' && count > 1) {
@@ -799,7 +817,8 @@ export async function generateShort(inp: GenerateInput, o: Outline, longScenes: 
     header(inp),
     '',
     `本編（長尺）動画「${o.videoTitle}」を宣伝する、縦型ショート動画（35〜55秒）の場面を5〜7個作ってください。`,
-    '- 1場面目：視聴者が思わず止まる「問いかけ」か「意外な事実」（visual.kind は title・number・qa のいずれか）。最初の一言で引き込む。',
+    `- 1場面目：視聴者が思わず止まる「問いかけ」か「意外な事実」（visual.kind は ${inp.mode === 'weekly' ? 'title・number' : 'title・number・qa'} のいずれか）。最初の一言で引き込む。`,
+    inp.mode === 'weekly' ? WEEKLY_KIND_NOTE : '',
     '- 2〜5場面目：本編の見どころを短く小出しにする（答えを全部言わず、続きが気になるように）。1場面のナレーションは25〜55文字。',
     '- 最後の場面：visual.kind=cta。「くわしくは本編で」と本編動画への誘導（関連動画のリンクから）。',
     '- 縦長の画面なので、図解の項目数は少なめ（2〜4個）。',
@@ -812,11 +831,11 @@ export async function generateShort(inp: GenerateInput, o: Outline, longScenes: 
     content: [...inp.refBlocks, { type: 'text', text: task }],
     toolName: 'write_short_scenes',
     toolDescription: '本編へ誘導する縦型ショート動画の場面を作る。',
-    inputSchema: SCENES_SCHEMA,
+    inputSchema: scenesSchemaFor(inp),
     maxTokens: 12000,
     signal,
   });
-  const scenes = (Array.isArray(r?.scenes) ? r.scenes : []).map((s: any) => applyStockDataKeysToScene(s, inp.stockCatalog)).map((s: any) => normalizeScene(s, 0)).filter((s: ExplainerScene) => s.narration);
+  const scenes = (Array.isArray(r?.scenes) ? r.scenes : []).map((s: any) => applyStockDataKeysToScene(s, inp.stockCatalog)).map((s: any) => normalizeScene(s, 0)).map(guardFor(inp)).filter((s: ExplainerScene) => s.narration);
   if (!scenes.length) throw new Error('ショートの場面を作れませんでした。');
   return applyGlossary(scenes, o.glossary).map((s) => ({ ...s, minSec: Math.min(s.minSec, 4.5) }));
 }
@@ -830,6 +849,7 @@ export async function rewriteScene(inp: GenerateInput, videoTitle: string, instr
     neighbors.length ? `【前後の場面のナレーション】\n${neighbors.map((n) => `・${n}`).join('\n')}` : '',
     current ? `【現在の場面】${JSON.stringify({ title: current.title, caption: current.caption, narration: current.narration, visual: current.visual })}` : '【新しい場面を1つ作る】',
     `【指示】${instruction}`,
+    inp.mode === 'weekly' ? WEEKLY_KIND_NOTE : '',
     '場面を1つだけ返してください（scenes は1要素）。',
   ].filter(Boolean).join('\n');
   const r = await callTool<any>({
@@ -837,13 +857,13 @@ export async function rewriteScene(inp: GenerateInput, videoTitle: string, instr
     content: [...inp.refBlocks, { type: 'text', text: task }],
     toolName: 'write_scene',
     toolDescription: '解説動画の場面を1つ作る（または指示どおりに作り直す）。',
-    inputSchema: SCENES_SCHEMA,
+    inputSchema: scenesSchemaFor(inp),
     maxTokens: 4000,
     signal,
   });
   const raw = Array.isArray(r?.scenes) ? r.scenes[0] : null;
   if (!raw) throw new Error('AIから場面が返りませんでした。');
-  const sc = normalizeScene(applyStockDataKeysToScene(raw, inp.stockCatalog), current?.chapter ?? 0);
+  const sc = guardFor(inp)(normalizeScene(applyStockDataKeysToScene(raw, inp.stockCatalog), current?.chapter ?? 0));
   return current ? { ...sc, id: current.id, chapter: current.chapter, imageId: current.imageId ?? null } : sc;
 }
 

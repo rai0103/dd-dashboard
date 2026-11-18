@@ -4,7 +4,7 @@
 // API（setDurations・getSceneIndexAt・draw(progress)など）は LongAnalysisRenderer と同じ形にしてあり、
 // 再生・書き出しの仕組み（AudioMixer・VideoExporter）をそのまま使える。
 import type { VideoAvatar } from '../videoAvatarRender';
-import { drawVisual, text, textBlock, wrap, font, rr, clamp01, ease, sub, PALETTE, WHITE, INK } from './visuals';
+import { drawVisual, setVisualLight, text, textBlock, wrap, font, rr, clamp01, ease, sub, PALETTE } from './visuals';
 import { drawIcon } from './icons';
 import type { ExplainerScene, IconName } from './types';
 
@@ -25,7 +25,7 @@ export interface ExplainerRenderConfig {
   showSourceNotes?: boolean;
   /** avatar＝右（ショートは下）に人物の領域を取る（既定）／full＝人物を出さず、画面いっぱいに図解を出す */
   layout?: 'avatar' | 'full';
-  /** 画面の色。standard＝解説動画（紺〜黒）／weekly＝週次レポート（深緑） */
+  /** 画面の色。standard＝解説動画（紺〜黒）／weekly＝週次レポート（白い背景・深緑の見出し帯） */
   theme?: 'standard' | 'weekly';
 }
 
@@ -41,9 +41,12 @@ const SHORT_VIS_FULL = { W: 420, H: 548, x: 20, y: 150, w: 500, h: 652 };
 export const VISUAL_SIZE = { long: { W: LONG_VIS.W, H: LONG_VIS.H }, short: { W: SHORT_VIS.W, H: SHORT_VIS.H }, longFull: { W: LONG_VIS_FULL.W, H: LONG_VIS_FULL.H }, shortFull: { W: SHORT_VIS_FULL.W, H: SHORT_VIS_FULL.H } };
 /** 画面の色（背景のグラデーション・見出し帯・人物の領域の地色） */
 const THEMES = {
-  standard: { bg0: '#070c18', bg1: '#0d1830', bar: 'rgba(5,9,20,0.75)', barShort: 'rgba(5,9,20,0.6)', person0: '#0a1630', person1: '#14305a', sub: 'rgba(4,8,18,0.78)', grid: 'rgba(255,255,255,0.035)' },
-  weekly: { bg0: '#06231d', bg1: '#0f3f33', bar: 'rgba(3,22,17,0.82)', barShort: 'rgba(3,22,17,0.7)', person0: '#0b2f26', person1: '#145243', sub: 'rgba(3,20,15,0.8)', grid: 'rgba(214,190,120,0.06)' },
+  standard: { light: false, bg0: '#070c18', bg1: '#0d1830', bar: 'rgba(5,9,20,0.75)', barShort: 'rgba(5,9,20,0.6)', person0: '#0a1630', person1: '#14305a', sub: 'rgba(4,8,18,0.78)', grid: 'rgba(255,255,255,0.035)', track: 'rgba(255,255,255,0.15)', barLine: '' },
+  // 白いスライド（レポート風）。見出し帯だけ深緑にして、解説動画（黒）と見分けがつくようにする
+  weekly: { light: true, bg0: '#f7f9f8', bg1: '#eef3f1', bar: '#0f4d3c', barShort: '#0f4d3c', person0: '#e6eeeb', person1: '#d5e3de', sub: 'rgba(15,30,26,0.82)', grid: 'rgba(15,77,60,0.045)', track: 'rgba(15,40,34,0.12)', barLine: '201,162,74' },
 };
+/** 見出し帯・字幕の文字（帯は暗い色なので、どちらの配色でも白） */
+const BAR_TEXT = '255,255,255', BAR_INK = '11,18,34';
 
 /** 字幕：ナレーションを句点で区切り、文字数の割合で表示時間を割り当てる */
 export function subtitleAt(narration: string, localT: number, narrDur: number, maxChars: number): string {
@@ -131,7 +134,8 @@ export class ExplainerRenderer {
     const th = this.th();
     g.addColorStop(0, th.bg0); g.addColorStop(1, th.bg1);
     c.fillStyle = g; c.fillRect(0, 0, W, H);
-    // ゆっくり動く色のにじみ（章ごとに色味を変える）
+    // ゆっくり動く色のにじみ（章ごとに色味を変える）。白いスライドでは出さない
+    if (!th.light) {
     const base = PALETTE[chapter % PALETTE.length], second = PALETTE[(chapter + 2) % PALETTE.length];
     const blobs = [
       { x: 0.2 + 0.08 * Math.sin(gt * 0.13), y: 0.3 + 0.1 * Math.cos(gt * 0.11), r: 0.55, rgb: base, a: 0.13 },
@@ -141,6 +145,7 @@ export class ExplainerRenderer {
       const rg = c.createRadialGradient(b.x * W, b.y * H, 0, b.x * W, b.y * H, b.r * Math.max(W, H));
       rg.addColorStop(0, `rgba(${b.rgb},${b.a})`); rg.addColorStop(1, `rgba(${b.rgb},0)`);
       c.fillStyle = rg; c.fillRect(0, 0, W, H);
+    }
     }
     // 細かい格子（ゆっくり流れる）
     c.save();
@@ -185,27 +190,28 @@ export class ExplainerRenderer {
     const W = this.mainW();
     if (long) {
       c.fillStyle = this.th().bar; c.fillRect(0, 0, W, 46);
-      const accent = PALETTE[chapterIdx % PALETTE.length];
+      const accent = this.th().barLine || PALETTE[chapterIdx % PALETTE.length];
       c.fillStyle = `rgb(${accent})`; c.fillRect(0, 44, W, 2);
       font(c, 12, true);
       const kick = this.cfg.kicker || '解説';
       const kw = c.measureText(kick).width + 18;
       rr(c, 14, 12, kw, 22, 11); c.fillStyle = `rgb(${accent})`; c.fill();
-      text(c, kick, 14 + kw / 2, 27, 12, INK, { bold: true, align: 'center' });
+      text(c, kick, 14 + kw / 2, 27, 12, BAR_INK, { bold: true, align: 'center' });
       const ch = this.cfg.chapterTitles[chapterIdx] || '';
       font(c, 13);
       const chW = ch ? Math.min(220, c.measureText(ch).width + 10) : 0;
-      text(c, this.cfg.videoTitle, 24 + kw, 29, 17, WHITE, { bold: true, maxW: W - kw - 50 - chW });
-      if (ch) text(c, ch, W - 14, 29, 13, WHITE, { align: 'right', alpha: 0.6, maxW: 220 });
+      text(c, this.cfg.videoTitle, 24 + kw, 29, 17, BAR_TEXT, { bold: true, maxW: W - kw - 50 - chW });
+      if (ch) text(c, ch, W - 14, 29, 13, BAR_TEXT, { align: 'right', alpha: 0.7, maxW: 220 });
     } else {
       c.fillStyle = this.th().barShort; c.fillRect(0, 0, W, 140);
-      const accent = PALETTE[chapterIdx % PALETTE.length];
+      const accent = this.th().barLine || PALETTE[chapterIdx % PALETTE.length];
+      if (this.th().barLine) { c.fillStyle = `rgb(${accent})`; c.fillRect(0, 138, W, 3); }
       const kick = this.cfg.kicker || '解説';
       font(c, 18, true);
       const kw = c.measureText(kick).width + 24;
       rr(c, 20, 20, kw, 32, 16); c.fillStyle = `rgb(${accent})`; c.fill();
-      text(c, kick, 20 + kw / 2, 42, 18, INK, { bold: true, align: 'center' });
-      textBlock(c, this.cfg.videoTitle, 20, 88, W - 40, 30, WHITE, { bold: true, maxLines: 2, lh: 1.2, shadow: true });
+      text(c, kick, 20 + kw / 2, 42, 18, BAR_INK, { bold: true, align: 'center' });
+      textBlock(c, this.cfg.videoTitle, 20, 88, W - 40, 30, BAR_TEXT, { bold: true, maxLines: 2, lh: 1.2 });
     }
   }
 
@@ -226,7 +232,7 @@ export class ExplainerRenderer {
     });
     spans.forEach((sp) => {
       const x0 = (sp.start / total) * W + 1, x1 = (sp.end / total) * W - 1;
-      c.fillStyle = 'rgba(255,255,255,0.15)'; c.fillRect(x0, y, Math.max(0, x1 - x0), h);
+      c.fillStyle = this.th().track; c.fillRect(x0, y, Math.max(0, x1 - x0), h);
       const fillTo = Math.min(x1, (gt / total) * W);
       if (fillTo > x0) { c.fillStyle = `rgb(${PALETTE[sp.ch % PALETTE.length]})`; c.fillRect(x0, y, fillTo - x0, h); }
     });
@@ -265,11 +271,13 @@ export class ExplainerRenderer {
     const { i, t, gt } = this.locate(progress);
     const sc = this.cfg.scenes[i];
     if (!sc) { c.fillStyle = '#000'; c.fillRect(0, 0, this.LW, this.LH); return; }
+    setVisualLight(this.th().light);
     const dur = this.durs[i] || 1;
     const p = clamp01(t / dur);
     const last = i === this.durs.length - 1;
     const fadeIn = clamp01(t / 0.35), fadeOut = last ? 1 : clamp01((dur - t) / 0.3);
-    const accent = PALETTE[(sc.chapter + (sc.visual.kind === 'chapter' ? 0 : 0)) % PALETTE.length];
+    // 白いスライド（レポート）は、グラフの色の意味がぶれないよう強調色を1色（緑）に固定する
+    const accent = this.th().light ? PALETTE[0] : PALETTE[sc.chapter % PALETTE.length];
 
     this.drawBackdrop(gt, sc.chapter);
     const long = this.cfg.format === 'long';
@@ -280,11 +288,18 @@ export class ExplainerRenderer {
 
     // 図解（場面ごとに入り方を変える：右から・下から・拡大）
     const vis = this.vis();
+    if (this.th().light) {
+      // 白いスライドの台紙（うっすら影を付けて、背景から少し浮かせる）
+      c.save();
+      c.shadowColor = 'rgba(15,40,34,0.12)'; c.shadowBlur = 14; c.shadowOffsetY = 3;
+      rr(c, vis.x - 6, vis.y - 4, vis.w + 12, vis.h + 8, 12); c.fillStyle = '#ffffff'; c.fill();
+      c.restore();
+    }
     const oc = this.offCtx;
     oc.setTransform(1, 0, 0, 1, 0, 0);
     oc.clearRect(0, 0, this.off.width, this.off.height);
     oc.setTransform((this.k * vis.w) / vis.W, 0, 0, (this.k * vis.h) / vis.H, 0, 0);
-    drawVisual(oc, sc, { W: vis.W, H: vis.H, p, t, portrait: !long, image: sc.imageId ? this.cfg.images?.[sc.imageId] ?? null : null, accent, showSource: !!this.cfg.showSourceNotes });
+    drawVisual(oc, sc, { W: vis.W, H: vis.H, p, t, portrait: !long, image: sc.imageId ? this.cfg.images?.[sc.imageId] ?? null : null, accent, showSource: !!this.cfg.showSourceNotes, light: this.th().light });
     const mode = i % 3;
     const ein = ease(fadeIn);
     c.save();
@@ -309,6 +324,7 @@ export class ExplainerRenderer {
     c.setTransform(this.k, 0, 0, this.k, 0, 0);
     const gt = clamp01(atProgress) * this.totalSeconds;
     const long = this.cfg.format === 'long';
+    setVisualLight(this.th().light);
     this.drawBackdrop(gt, 0);
     const W = this.LW, H = this.LH;
     const accent = PALETTE[1];
@@ -331,7 +347,7 @@ export class ExplainerRenderer {
     const kick = this.cfg.kicker || '解説';
     const kw = c.measureText(kick).width + 30;
     rr(c, 30, long ? 34 : 180, kw, 40, 20); c.fillStyle = `rgb(${PALETTE[3]})`; c.fill();
-    text(c, kick, 30 + kw / 2, long ? 62 : 208, 22, WHITE, { bold: true, align: 'center' });
+    text(c, kick, 30 + kw / 2, long ? 62 : 208, 22, BAR_TEXT, { bold: true, align: 'center' });
     drawIcon(c, icon, long ? areaW - 70 : W - 90, long ? H - 100 : 470, long ? 120 : 110, accent, 0);
   }
 }

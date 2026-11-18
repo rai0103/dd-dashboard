@@ -9,7 +9,27 @@ type Ctx = CanvasRenderingContext2D;
 
 export const FONT = '"Zen Kaku Gothic New", "Yu Gothic", "Meiryo", "Hiragino Sans", sans-serif';
 export const PALETTE = ['69,196,176', '217,162,75', '91,144,199', '192,101,75', '139,127,199', '242,211,91', '230,120,150'];
-export const TEAL = PALETTE[0], AMBER = PALETTE[1], BLUE = PALETTE[2], RUST = PALETTE[3], WHITE = '255,255,255', INK = '11,18,34';
+// eslint-disable-next-line import/no-mutable-exports
+export let TEAL = PALETTE[0], AMBER = PALETTE[1], BLUE = PALETTE[2], RUST = PALETTE[3], WHITE = '255,255,255', INK = '11,18,34';
+/** 文字・線の上に重ねる札（ラベル）の地色 */
+let PILL = '6,10,19';
+/** 写真の上に重ねる文字は、白い背景の配色でも白のまま */
+const PURE = '255,255,255';
+// 白い背景の配色（週次レポート）：文字・目盛りを濃い色に、アクセントを白地で読める濃さにする
+const DARK_PAL = [...PALETTE];
+const LIGHT_PAL = ['14,146,124', '199,124,20', '37,99,184', '205,74,50', '110,90,190', '170,132,0', '200,66,120'];
+let LIGHT = false;
+/** 図解を白い背景用（true）／暗い背景用（false）の配色で描く。drawVisualが場面ごとに呼ぶ */
+export function setVisualLight(on: boolean) {
+  if (on === LIGHT) return;
+  LIGHT = on;
+  (on ? LIGHT_PAL : DARK_PAL).forEach((v, i) => { PALETTE[i] = v; });
+  TEAL = PALETTE[0]; AMBER = PALETTE[1]; BLUE = PALETTE[2]; RUST = PALETTE[3];
+  WHITE = on ? '30,41,59' : '255,255,255';
+  INK = on ? '255,255,255' : '11,18,34';
+  PILL = on ? '255,255,255' : '6,10,19';
+}
+export const isVisualLight = () => LIGHT;
 
 export const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
 export const sub = (p: number, a: number, b: number) => clamp01((p - a) / Math.max(1e-6, b - a));
@@ -27,6 +47,8 @@ export interface VisualEnv {
   accent: string;
   /** スライド内に「出典：…」を表示するか（既定は表示しない。出典は概要欄に記載） */
   showSource?: boolean;
+  /** 白い背景の配色で描く（週次レポート） */
+  light?: boolean;
 }
 
 // ---------- 文字 ----------
@@ -40,7 +62,7 @@ export function text(c: Ctx, s: string, x: number, y: number, size: number, rgb 
   c.textAlign = o.align ?? 'left';
   c.textBaseline = o.base ?? 'alphabetic';
   c.globalAlpha *= o.alpha ?? 1;
-  if (o.shadow) { c.shadowColor = 'rgba(0,0,0,0.55)'; c.shadowBlur = 8; c.shadowOffsetY = 2; }
+  if (o.shadow && !LIGHT) { c.shadowColor = 'rgba(0,0,0,0.55)'; c.shadowBlur = 8; c.shadowOffsetY = 2; }
   c.fillStyle = `rgb(${rgb})`;
   c.fillText(s, x, y);
   c.restore();
@@ -135,6 +157,8 @@ function sourceNote(c: Ctx, e: VisualEnv, src: string) {
   text(c, `出典：${src}`, 8, e.H - 6, 11, WHITE, { alpha: 0.55 * ease(sub(e.p, 0.15, 0.3)), maxW: e.W - 16 });
 }
 const colorAt = (i: number) => PALETTE[i % PALETTE.length];
+/** マイナスの棒の色（暗い背景は青、白い背景は赤系＝下落） */
+const NEG = () => (LIGHT ? RUST : BLUE);
 /** 単位が長い（「修正版以上」など）ときは各値に付けず、右上に「単位：…」として1回だけ出す */
 function unitOf(c: Ctx, e: VisualEnv, unit: string, top: number): string {
   const u = (unit || '').trim();
@@ -148,25 +172,36 @@ type Draw = (c: Ctx, sc: ExplainerScene, e: VisualEnv) => void;
 
 const drawTitle: Draw = (c, sc, e) => {
   const v = sc.visual, cx = e.W / 2;
+  // 表紙の背景画像（場面に画像を付けたとき）。文字が読めるよう、上に薄い膜をかける
+  const img = e.image && e.image.complete && e.image.naturalWidth ? e.image : null;
+  if (img) {
+    c.save();
+    rr(c, 0, 0, e.W, e.H, 16); c.clip();
+    drawFittedImage(c, img, e.W, e.H, sc.imageFit, e.p, sc.id);
+    c.fillStyle = LIGHT ? 'rgba(255,255,255,0.72)' : 'rgba(4,8,18,0.55)';
+    c.fillRect(0, 0, e.W, e.H);
+    c.restore();
+  }
   // [Stage E-16] 背景の推移（例：全期間の指数）をうっすら描く
-  if (v.background && v.background.length > 1) {
+  if (!img && v.background && v.background.length > 1) {
     const bg = v.background;
     const bxLo = bg[0].x, bxHi = bg[bg.length - 1].x;
     const byLo = Math.min(...bg.map((p) => p.y)), byHi = Math.max(...bg.map((p) => p.y));
     const BX = (x: number) => 10 + ((e.W - 20) * (x - bxLo)) / Math.max(1e-9, bxHi - bxLo);
-    const BY = (y: number) => e.H * 0.92 - ((y - byLo) / Math.max(1e-9, byHi - byLo)) * e.H * 0.6;
+    const BY = (y: number) => e.H * 0.92 - ((y - byLo) / Math.max(1e-9, byHi - byLo)) * e.H * (LIGHT ? 0.4 : 0.6);
     const bk = ease(sub(e.p, 0, 0.5));
     const cut = bxLo + (bxHi - bxLo) * bk;
     const vis = bg.filter((p) => p.x <= cut);
     if (vis.length > 1) {
       const g2 = c.createLinearGradient(0, e.H * 0.3, 0, e.H);
-      g2.addColorStop(0, `rgba(${e.accent},0.16)`); g2.addColorStop(1, `rgba(${e.accent},0)`);
+      g2.addColorStop(0, `rgba(${e.accent},${LIGHT ? 0.07 : 0.16})`); g2.addColorStop(1, `rgba(${e.accent},0)`);
       c.beginPath(); c.moveTo(BX(vis[0].x), e.H); vis.forEach((p) => c.lineTo(BX(p.x), BY(p.y))); c.lineTo(BX(vis[vis.length - 1].x), e.H); c.closePath(); c.fillStyle = g2; c.fill();
       c.beginPath(); c.moveTo(BX(vis[0].x), BY(vis[0].y)); vis.forEach((p) => c.lineTo(BX(p.x), BY(p.y)));
-      c.strokeStyle = `rgba(${e.accent},0.4)`; c.lineWidth = 2; c.stroke();
+      c.strokeStyle = `rgba(${e.accent},${LIGHT ? 0.22 : 0.4})`; c.lineWidth = 2; c.stroke();
     }
   }
-  // 回るリングと浮かぶアイコン
+  // 回るリングと浮かぶアイコン（白い背景の配色＝レポートの表紙では出さない）
+  if (!LIGHT && !img) {
   c.save();
   c.translate(cx, e.H * 0.48);
   for (let i = 0; i < 3; i++) {
@@ -183,6 +218,7 @@ const drawTitle: Draw = (c, sc, e) => {
     glowCircle(c, x, y, 46 * k, colorAt(i), 0.3);
     drawIcon(c, it.icon, x, y, 52 * k, colorAt(i), e.t);
   });
+  }
   const kick = v.emphasis || '';
   const kk = ease(sub(e.p, 0, 0.15));
   if (kick) {
@@ -195,13 +231,14 @@ const drawTitle: Draw = (c, sc, e) => {
   c.save(); c.globalAlpha *= tk; c.translate(0, (1 - tk) * 20);
   const used = textBlock(c, v.heading || sc.title, cx, e.H * 0.4, e.W - 40, e.portrait ? 36 : 44, WHITE, { bold: true, align: 'center', maxLines: 3, lh: 1.25, shadow: true });
   c.restore();
-  if (v.subheading) textBlock(c, v.subheading, cx, e.H * 0.4 + used + 6, e.W - 60, 18, WHITE, { align: 'center', alpha: 0.78 * ease(sub(e.p, 0.2, 0.4)), maxLines: 2 });
+  if (v.subheading) textBlock(c, v.subheading, cx, e.H * 0.4 + used + (LIGHT ? 14 : 6), e.W - 60, LIGHT ? 16 : 18, WHITE, { align: 'center', alpha: (LIGHT ? 0.62 : 0.78) * ease(sub(e.p, 0.2, 0.4)), maxLines: 2 });
   // [Stage E-16] 下部の注意書き（任意）
   if (v.titleNote) textBlock(c, v.titleNote, cx, e.H - 14, e.W - 40, 11, WHITE, { align: 'center', alpha: 0.6 * ease(sub(e.p, 0.25, 0.45)), maxLines: 1 });
   // 光が横切る
+  if (LIGHT) return;
   const sx = ((e.t * 0.35) % 1.6 - 0.3) * e.W;
   const g = c.createLinearGradient(sx - 80, 0, sx + 80, 0);
-  g.addColorStop(0, 'rgba(255,255,255,0)'); g.addColorStop(0.5, 'rgba(255,255,255,0.06)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+  g.addColorStop(0, `rgba(${WHITE},0)`); g.addColorStop(0.5, `rgba(${WHITE},0.06)`); g.addColorStop(1, `rgba(${WHITE},0)`);
   c.fillStyle = g; c.fillRect(0, 0, e.W, e.H);
 };
 
@@ -310,8 +347,9 @@ const drawNumber: Draw = (c, sc, e) => {
   const d = decimalsOf(it?.value || '');
   const cy = top + (e.H - top) * 0.45;
   const icx = e.portrait ? e.W / 2 : e.W * 0.2;
-  if (!e.portrait) { glowCircle(c, icx, cy, 120, e.accent, 0.25 + 0.08 * Math.sin(e.t * 2)); drawIcon(c, it?.icon || 'chartUp', icx, cy, 120 * back(sub(e.p, 0, 0.25)), e.accent, e.t); }
-  const nx = e.portrait ? e.W / 2 : e.W * 0.62, align: CanvasTextAlign = 'center';
+  const noIcon = LIGHT;
+  if (!e.portrait && !noIcon) { glowCircle(c, icx, cy, 120, e.accent, 0.25 + 0.08 * Math.sin(e.t * 2)); drawIcon(c, it?.icon || 'chartUp', icx, cy, 120 * back(sub(e.p, 0, 0.25)), e.accent, e.t); }
+  const nx = e.portrait || noIcon ? e.W / 2 : e.W * 0.62, align: CanvasTextAlign = 'center';
   text(c, it?.label || '', nx, cy - 70, 20, WHITE, { bold: true, align, alpha: 0.85 * ease(sub(e.p, 0.05, 0.2)), maxW: e.portrait ? e.W - 30 : e.W * 0.6 });
   const numStr = fmtNum(val * k, d);
   let sz = e.portrait ? 84 : 96; font(c, sz, true);
@@ -326,7 +364,7 @@ const drawNumber: Draw = (c, sc, e) => {
   text(c, numStr, sx, cy + 10, sz, WHITE, { bold: true, shadow: true });
   text(c, bigUnit, sx + nw + 8, cy + 10, unitSz, e.accent, { bold: true });
   if (it?.text) textBlock(c, it.text, nx, cy + (bigUnit || !v.unit ? 56 : 80), e.portrait ? e.W - 30 : e.W * 0.6, 17, WHITE, { align, alpha: 0.8 * ease(sub(e.p, 0.45, 0.65)), maxLines: 2 });
-  if (e.portrait) drawIcon(c, it?.icon || 'chartUp', e.W / 2, Math.min(cy + 150, e.H - 40), 60 * back(sub(e.p, 0.5, 0.7)), e.accent, e.t, 0.9);
+  if (e.portrait && !noIcon) drawIcon(c, it?.icon || 'chartUp', e.W / 2, Math.min(cy + 150, e.H - 40), 60 * back(sub(e.p, 0.5, 0.7)), e.accent, e.t, 0.9);
   sourceNote(c, e, v.source);
 };
 
@@ -339,8 +377,12 @@ const drawBar: Draw = (c, sc, e) => {
   const valText = (x: { n: number; value: string }, k = 1) => `${fmtNum(x.n * k, decimalsOf(x.value))}${unit}`;
   const maxAbs = Math.max(1e-9, ...items.map((x) => Math.abs(x.n)));
   const hasNeg = items.some((x) => x.n < 0);
-  const maxIdx = items.reduce((b, x, i) => (x.n > items[b].n ? i : b), 0);
+  // 強調する棒：emphasis に項目名があればその棒（例：先月）、無ければいちばん大きい棒
+  const emIdx = v.emphasis ? items.findIndex((x) => x.label === v.emphasis) : -1;
+  const maxIdx = emIdx >= 0 ? emIdx : items.reduce((b, x, i) => (x.n > items[b].n ? i : b), 0);
   const horizontal = e.portrait || n > 6 || items.some((x) => x.label.length > 6);
+  // 棒が多くても場面の途中で伸び切るよう、1本ずつの出だしのずれを本数に合わせて縮める
+  const stg = Math.min(0.07, 0.4 / Math.max(1, n));
   const bottom = e.H - 22;
   if (horizontal) {
     const lw = Math.min(e.W * 0.32, 150), x0 = 8 + lw + 8;
@@ -356,31 +398,31 @@ const drawBar: Draw = (c, sc, e) => {
     const bh = Math.min(40, (bottom - top - 8) / n - 10);
     items.forEach((it, i) => {
       const y = top + 4 + i * (bh + 10);
-      const k = ease(sub(e.p, 0.1 + i * 0.06, 0.5 + i * 0.06));
+      const k = ease(sub(e.p, 0.1 + i * stg, 0.5 + i * stg));
       const w = Math.abs(it.n) * unitW * k;
-      const rgb = i === maxIdx ? e.accent : it.n < 0 ? BLUE : '150,165,190';
+      const rgb = i === maxIdx ? e.accent : it.n < 0 ? NEG() : '150,165,190';
       text(c, it.label, x0 - 10, y + bh / 2 + 5, 14, WHITE, { align: 'right', alpha: 0.9, maxW: lw, bold: i === maxIdx });
       rr(c, it.n < 0 ? zero - w : zero, y, Math.max(2, w), bh, 6); c.fillStyle = `rgb(${rgb})`; c.fill();
       text(c, valText(it, k), it.n < 0 ? zero - w - 6 : zero + w + 6, y + bh / 2 + 5, 14, WHITE, { bold: true, align: it.n < 0 ? 'right' : 'left', alpha: ease(sub(e.p, 0.3, 0.5)), maxW: valW - 6 });
     });
-    if (hasNeg) { c.fillStyle = 'rgba(255,255,255,0.4)'; c.fillRect(zero, top, 1.5, bottom - top); }
+    if (hasNeg) { c.fillStyle = `rgba(${WHITE},0.4)`; c.fillRect(zero, top, 1.5, bottom - top); }
   } else {
     const x0 = 20, aw = e.W - 40, slot = aw / n, bw = Math.min(70, slot * 0.6);
     const baseY = hasNeg ? top + (bottom - 30 - top) / 2 + 10 : bottom - 30;
-    const hMax = hasNeg ? (bottom - 30 - top) / 2 - 24 : baseY - top - 30;
-    c.fillStyle = 'rgba(255,255,255,0.08)';
+    const hMax = hasNeg ? (bottom - 30 - top) / 2 - 36 : baseY - top - 30;
+    c.fillStyle = `rgba(${WHITE},0.08)`;
     for (let g = 1; g <= 3; g++) c.fillRect(x0, baseY - (hMax * g) / 3, aw, 1);
     items.forEach((it, i) => {
-      const k = ease(sub(e.p, 0.1 + i * 0.07, 0.5 + i * 0.07));
+      const k = ease(sub(e.p, 0.1 + i * stg, 0.5 + i * stg));
       const h = (Math.abs(it.n) / maxAbs) * hMax * k;
       const x = x0 + slot * i + (slot - bw) / 2;
-      const rgb = i === maxIdx ? e.accent : it.n < 0 ? BLUE : '150,165,190';
+      const rgb = i === maxIdx ? e.accent : it.n < 0 ? NEG() : '150,165,190';
       if (i === maxIdx) glowCircle(c, x + bw / 2, baseY - h, 60, e.accent, 0.18 * k);
       rr(c, x, it.n < 0 ? baseY : baseY - h, bw, Math.max(2, h), 8); c.fillStyle = `rgb(${rgb})`; c.fill();
       text(c, valText(it, k), x + bw / 2, it.n < 0 ? baseY + h + 18 : baseY - h - 8, 15, WHITE, { bold: true, align: 'center', alpha: ease(sub(e.p, 0.3, 0.5)), maxW: slot - 4 });
       text(c, it.label, x + bw / 2, bottom - 10, 14, WHITE, { align: 'center', alpha: 0.85, maxW: slot - 4, bold: i === maxIdx });
     });
-    c.fillStyle = 'rgba(255,255,255,0.4)'; c.fillRect(x0, baseY, aw, 1.5);
+    c.fillStyle = `rgba(${WHITE},0.4)`; c.fillRect(x0, baseY, aw, 1.5);
   }
   sourceNote(c, e, v.source);
 };
@@ -392,14 +434,14 @@ const drawLine: Draw = (c, sc, e) => {
   const n = pts.length;
   const lo0 = Math.min(...pts.map((p) => p.n)), hi0 = Math.max(...pts.map((p) => p.n));
   const pad = (hi0 - lo0) * 0.15 || Math.abs(hi0) * 0.1 || 1;
-  const lo = lo0 - pad, hi = hi0 + pad;
+  const lo = lo0 >= 0 ? Math.max(0, lo0 - pad) : lo0 - pad, hi = hi0 + pad;
   const x0 = 52, x1 = e.W - 60, y0 = top + 10, y1 = e.H - 44;
   const X = (i: number) => x0 + ((x1 - x0) * i) / Math.max(1, n - 1);
   const Y = (v2: number) => y1 - ((v2 - lo) / (hi - lo)) * (y1 - y0);
   c.save();
   for (let g = 0; g <= 4; g++) {
     const gv = lo + ((hi - lo) * g) / 4, gy = Y(gv);
-    c.fillStyle = 'rgba(255,255,255,0.08)'; c.fillRect(x0, gy, x1 - x0, 1);
+    c.fillStyle = `rgba(${WHITE},0.08)`; c.fillRect(x0, gy, x1 - x0, 1);
     text(c, fmtNum(gv), x0 - 8, gy + 4, 11, WHITE, { align: 'right', alpha: 0.5 });
   }
   const step = Math.ceil(n / (e.portrait ? 4 : 7));
@@ -472,7 +514,7 @@ const drawOverlay: Draw = (c, sc, e) => {
   c.save();
   for (let g = 0; g <= 4; g++) {
     const gv = lo + ((hi - lo) * g) / 4, gy = Y(gv);
-    c.fillStyle = 'rgba(255,255,255,0.08)'; c.fillRect(x0, gy, x1 - x0, 1);
+    c.fillStyle = `rgba(${WHITE},0.08)`; c.fillRect(x0, gy, x1 - x0, 1);
     text(c, fmtNum(gv), x0 - 8, gy + 4, 11, WHITE, { align: 'right', alpha: 0.5 });
   }
   const k = ease(sub(e.p, 0.08, 0.8));
@@ -501,7 +543,7 @@ const drawOverlay: Draw = (c, sc, e) => {
       const above = i % 2 === 0;
       font(c, 11, true); const w = c.measureText(p.markerLabel).width + 12;
       const by = above ? my - 26 : my + 10;
-      rr(c, mx - w / 2, by, w, 18, 9); c.fillStyle = 'rgba(6,10,19,0.88)'; c.fill();
+      rr(c, mx - w / 2, by, w, 18, 9); c.fillStyle = `rgba(${PILL},0.88)`; c.fill();
       c.strokeStyle = `rgba(${rgb},0.7)`; c.lineWidth = 1; c.stroke();
       text(c, p.markerLabel, mx, by + 13, 11, rgb, { bold: true, align: 'center' });
     });
@@ -569,7 +611,7 @@ const drawTimeline: Draw = (c, sc, e) => {
   const k = ease(sub(e.p, 0.08, 0.85));
   if (e.portrait) {
     const x = 40, y0 = top + 10, y1 = e.H - 20, step = (y1 - y0) / Math.max(1, n);
-    c.fillStyle = 'rgba(255,255,255,0.2)'; c.fillRect(x - 1.5, y0, 3, y1 - y0);
+    c.fillStyle = `rgba(${WHITE},0.2)`; c.fillRect(x - 1.5, y0, 3, y1 - y0);
     c.fillStyle = `rgb(${e.accent})`; c.fillRect(x - 1.5, y0, 3, (y1 - y0) * k);
     items.forEach((it, i) => {
       const y = y0 + step * i + step * 0.35;
@@ -584,7 +626,7 @@ const drawTimeline: Draw = (c, sc, e) => {
     });
   } else {
     const y = top + (e.H - top) * 0.48, x0 = 30, x1 = e.W - 30, step = (x1 - x0) / Math.max(1, n - 1);
-    c.fillStyle = 'rgba(255,255,255,0.2)'; c.fillRect(x0, y - 1.5, x1 - x0, 3);
+    c.fillStyle = `rgba(${WHITE},0.2)`; c.fillRect(x0, y - 1.5, x1 - x0, 3);
     c.fillStyle = `rgb(${e.accent})`; c.fillRect(x0, y - 1.5, (x1 - x0) * k, 3);
     const w = Math.min(150, step * 0.95 || 150);
     items.forEach((it, i) => {
@@ -796,9 +838,17 @@ export function drawFittedImage(c: CanvasRenderingContext2D, img: CanvasImageSou
   c.drawImage(img, x0, y0, dw, dh);
 }
 
+/** 白い背景の配色で画像がまだ無い場面：アイコンの図は使わず、見出しと要点だけの文字のスライドにする */
+const drawTextSlide: Draw = (c, sc, e) => {
+  const v = sc.visual;
+  const top = heading(c, e, v.heading || sc.title, v.subheading, e.accent);
+  const msg = v.emphasis || sc.caption || '';
+  if (msg) textBlock(c, msg, e.W / 2, top + (e.H - top) * 0.45, e.W - 60, e.portrait ? 28 : 32, WHITE, { bold: true, align: 'center', maxLines: 3, lh: 1.4, alpha: ease(sub(e.p, 0.1, 0.3)) });
+};
+
 const drawImage: Draw = (c, sc, e) => {
   const img = e.image;
-  if (!img || !img.complete || !img.naturalWidth) { drawIllustration(c, sc, e); return; }
+  if (!img || !img.complete || !img.naturalWidth) { (LIGHT ? drawTextSlide : drawIllustration)(c, sc, e); return; }
   const v = sc.visual;
   const k = ease(sub(e.p, 0, 0.15));
   c.save(); c.globalAlpha *= k;
@@ -808,11 +858,11 @@ const drawImage: Draw = (c, sc, e) => {
   g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,0.75)');
   c.fillStyle = g; c.fillRect(0, 0, e.W, e.H);
   c.restore();
-  if (v.heading) text(c, v.heading, 20, 36, 22, WHITE, { bold: true, shadow: true, maxW: e.W - 40, alpha: k });
+  if (v.heading) text(c, v.heading, 20, 36, 22, PURE, { bold: true, shadow: true, maxW: e.W - 40, alpha: k });
   // 画像の下部に重ねる文字は「強調のひとこと」を入れた場合だけ（空ならテロップで代用せず、何も重ねない）
   const msg = v.emphasis;
-  if (msg) textBlock(c, msg, 20, e.H - (e.portrait ? 70 : 50), e.W - 40, e.portrait ? 22 : 24, WHITE, { bold: true, maxLines: 2, shadow: true, alpha: ease(sub(e.p, 0.15, 0.35)) });
-  text(c, '※イメージ', e.W - 12, 20, 11, WHITE, { align: 'right', alpha: 0.7 });
+  if (msg) textBlock(c, msg, 20, e.H - (e.portrait ? 70 : 50), e.W - 40, e.portrait ? 22 : 24, PURE, { bold: true, maxLines: 2, shadow: true, alpha: ease(sub(e.p, 0.15, 0.35)) });
+  text(c, '※イメージ', e.W - 12, 20, 11, PURE, { align: 'right', alpha: 0.7 });
 };
 
 const drawPoint: Draw = (c, sc, e) => {
@@ -937,7 +987,7 @@ const drawBranch: Draw = (c, sc, e) => {
   const bt = niceTicks(nLo, nHi, 4), bstep = bt.length > 1 ? bt[1] - bt[0] : 1; // [Stage E-16] きりのよい目盛り
   bt.forEach((gv) => {
     const gy = Y(gv);
-    c.fillStyle = 'rgba(255,255,255,0.08)'; c.fillRect(x0, gy, x1 - x0, 1);
+    c.fillStyle = `rgba(${WHITE},0.08)`; c.fillRect(x0, gy, x1 - x0, 1);
     text(c, `${tickText(gv, bstep)}${br.unit ?? ''}`, x0 - 8, gy + 4, 11, WHITE, { align: 'right', alpha: 0.5 });
   });
   if (br.thresholdY != null) {
@@ -988,7 +1038,7 @@ const drawBranch: Draw = (c, sc, e) => {
       const ph = 22 + o.stat.lines.length * 18 + 8;
       const px = e.W - 20 - panelW;
       c.save(); c.globalAlpha *= ease(sub(e.p, 0.5 + i * 0.1, 0.75 + i * 0.1));
-      rr(c, px, panelY, panelW, ph, 12); c.fillStyle = 'rgba(6,10,19,0.92)'; c.fill();
+      rr(c, px, panelY, panelW, ph, 12); c.fillStyle = `rgba(${PILL},0.92)`; c.fill();
       c.strokeStyle = `rgba(${rgb},0.6)`; c.lineWidth = 1.5; c.stroke();
       text(c, o.stat.title, px + 14, panelY + 20, 13, rgb, { bold: true, maxW: panelW - 24 });
       o.stat.lines.forEach((ln, j) => text(c, ln, px + 14, panelY + 40 + j * 18, 12, WHITE, { alpha: 0.85, maxW: panelW - 24 }));
@@ -1013,7 +1063,7 @@ const drawHistogram: Draw = (c, sc, e) => {
   const curIdx = items.findIndex((it) => it.seriesEmphasis);
   const bottom = e.H - (e.showSource ? 36 : 30), x0 = 16, aw = e.W - 32, slot = aw / n, bw = Math.max(3, slot * 0.78);
   const hMax = Math.max(10, bottom - top - 24);
-  c.fillStyle = 'rgba(255,255,255,0.08)';
+  c.fillStyle = `rgba(${WHITE},0.08)`;
   for (let g = 1; g <= 3; g++) c.fillRect(x0, bottom - (hMax * g) / 3, aw, 1);
   items.forEach((it, i) => {
     const k = ease(sub(e.p, 0.06 + (i * 0.6) / n, 0.3 + (i * 0.6) / n));
@@ -1033,7 +1083,7 @@ const drawHistogram: Draw = (c, sc, e) => {
       text(c, it.label, x0 + slot * i + slot / 2, bottom + 16, 10, i === curIdx ? e.accent : WHITE, { align: 'center', alpha: i === curIdx ? 1 : 0.6, maxW: slot * (i === curIdx ? 2 : step) - 2, bold: i === curIdx });
     }
   });
-  c.fillStyle = 'rgba(255,255,255,0.4)'; c.fillRect(x0, bottom, aw, 1.5);
+  c.fillStyle = `rgba(${WHITE},0.4)`; c.fillRect(x0, bottom, aw, 1.5);
   sourceNote(c, e, v.source);
 };
 
@@ -1064,10 +1114,10 @@ const drawDistribution: Draw = (c, sc, e) => {
   const dStep = dTicks.length > 1 ? Math.abs(dTicks[1] - dTicks[0]) : 1;
   dTicks.forEach((gv) => {
     const gy = Y(gv);
-    c.fillStyle = 'rgba(255,255,255,0.07)'; c.fillRect(x0 - 6, gy, aw + 12, 1);
+    c.fillStyle = `rgba(${WHITE},0.07)`; c.fillRect(x0 - 6, gy, aw + 12, 1);
     text(c, `${logScale ? fmtNum(gv) : tickText(gv, dStep)}${dist?.unit || ''}`, x0 - 12, gy + 4, 10, WHITE, { align: 'right', alpha: 0.45 });
   });
-  if (lo < 0 && hi > 0) { c.fillStyle = 'rgba(255,255,255,0.3)'; c.fillRect(x0 - 6, Y(0), aw + 12, 1.5); }
+  if (lo < 0 && hi > 0) { c.fillStyle = `rgba(${WHITE},0.3)`; c.fillRect(x0 - 6, Y(0), aw + 12, 1.5); }
   const k = ease(sub(e.p, 0.1, 0.8));
   groups.forEach((g, gi) => {
     const cx = x0 + slot * gi + slot / 2;
@@ -1132,7 +1182,7 @@ const drawGroupedBar: Draw = (c, sc, e) => {
   const groupW = Math.min(slot * 0.82, 26 * nSeries + 8 * (nSeries - 1));
   const barW = Math.max(4, (groupW - 8 * (nSeries - 1)) / nSeries);
   c.save();
-  c.fillStyle = 'rgba(255,255,255,0.08)';
+  c.fillStyle = `rgba(${WHITE},0.08)`;
   for (let g = 1; g <= 3; g++) {
     const gy = hasNeg ? baseY - (hMax * g) / 3 : baseY - (hMax * g) / 3;
     c.fillRect(x0, gy, aw, 1);
@@ -1155,7 +1205,7 @@ const drawGroupedBar: Draw = (c, sc, e) => {
     });
     text(c, cat, x0 + slot * ci + slot / 2, bottom + 16, 12, WHITE, { align: 'center', alpha: 0.85, maxW: slot - 4, bold: true });
   });
-  c.fillStyle = 'rgba(255,255,255,0.4)'; c.fillRect(x0, baseY, aw, 1.5);
+  c.fillStyle = `rgba(${WHITE},0.4)`; c.fillRect(x0, baseY, aw, 1.5);
   // 凡例（系列名＋色）
   let lx = x0, ly = bottom + 36;
   seriesOrder.forEach((sk, si) => {
@@ -1191,7 +1241,7 @@ function pillW(c: Ctx, s: string, size = 10) { font(c, size, true); return c.mea
 function pill(c: Ctx, s: string, x: number, y: number, rgb: string, align: 'left' | 'right' | 'center' = 'left', size = 10) {
   font(c, size, true); const w = c.measureText(s).width + 10;
   const bx = align === 'left' ? x : align === 'right' ? x - w : x - w / 2;
-  rr(c, bx, y - size - 2, w, size + 7, (size + 7) / 2); c.fillStyle = 'rgba(6,10,19,0.85)'; c.fill();
+  rr(c, bx, y - size - 2, w, size + 7, (size + 7) / 2); c.fillStyle = `rgba(${PILL},0.85)`; c.fill();
   text(c, s, bx + w / 2, y + 1, size, rgb, { bold: true, align: 'center' });
 }
 
@@ -1263,15 +1313,15 @@ const drawFan: Draw = (c, sc, e) => {
   const yt = niceTicks(lo, hi, 5), ystep = yt.length > 1 ? yt[1] - yt[0] : 1;
   yt.forEach((gv) => {
     const gy = Y(gv);
-    c.fillStyle = 'rgba(255,255,255,0.07)'; c.fillRect(x0, gy, x1 - x0, 1);
+    c.fillStyle = `rgba(${WHITE},0.07)`; c.fillRect(x0, gy, x1 - x0, 1);
     text(c, `${tickText(gv, ystep)}${u}`, x0 - 6, gy + 4, 10, WHITE, { align: 'right', alpha: 0.5 });
   });
   c.save(); c.beginPath(); c.rect(x0 - 1, y0 - 4, x1 - x0 + 2, y1 - y0 + 8); c.clip();
-  if (lo < 0 && hi > 0) { c.fillStyle = 'rgba(255,255,255,0.28)'; c.fillRect(x0, Y(0), x1 - x0, 1); }
+  if (lo < 0 && hi > 0) { c.fillStyle = `rgba(${WHITE},0.28)`; c.fillRect(x0, Y(0), x1 - x0, 1); }
   const ticks = f.xTicks ?? [xLo, (xLo + xHi) / 2, xHi].map((x) => ({ x: Math.round(x), label: `${fmtNum(Math.round(x))}${f.xUnit ?? ''}` }));
 
   f.hLines?.forEach((h) => {
-    c.save(); c.setLineDash([5, 5]); c.strokeStyle = 'rgba(255,255,255,0.35)'; c.lineWidth = 1;
+    c.save(); c.setLineDash([5, 5]); c.strokeStyle = `rgba(${WHITE},0.35)`; c.lineWidth = 1;
     c.beginPath(); c.moveTo(x0, Y(h.y)); c.lineTo(x1, Y(h.y)); c.stroke(); c.restore();
   });
   const k = ease(sub(e.p, 0.08, 0.7));
@@ -1340,7 +1390,7 @@ const drawFan: Draw = (c, sc, e) => {
     font(c, 10, true); const w = c.measureText(m.label).width + 10;
     const above = i % 2 === 0;
     const bx = Math.min(e.W - w - 4, Math.max(4, mx - w / 2)), by = above ? my - 24 : my + 8;
-    rr(c, bx, by, w, 16, 8); c.fillStyle = 'rgba(6,10,19,0.88)'; c.fill();
+    rr(c, bx, by, w, 16, 8); c.fillStyle = `rgba(${PILL},0.88)`; c.fill();
     c.strokeStyle = `rgba(${rgb},0.7)`; c.lineWidth = 1; c.stroke();
     text(c, m.label, bx + w / 2, by + 12, 10, rgb, { bold: true, align: 'center' });
   });
@@ -1378,8 +1428,8 @@ const drawZoomLine: Draw = (c, sc, e) => {
   c.save();
   c.beginPath(); c.rect(x0 - 2, y0 - 10, x1 - x0 + 4, y1 - y0 + 20); c.clip();
   const zt = niceTicks(lo, hi, 4), zstep = zt.length > 1 ? zt[1] - zt[0] : 1;
-  zt.forEach((gv) => { c.fillStyle = 'rgba(255,255,255,0.07)'; c.fillRect(x0, Y(gv), x1 - x0, 1); });
-  if (lo < 0 && hi > 0) { c.fillStyle = 'rgba(255,255,255,0.3)'; c.fillRect(x0, Y(0), x1 - x0, 1); }
+  zt.forEach((gv) => { c.fillStyle = `rgba(${WHITE},0.07)`; c.fillRect(x0, Y(gv), x1 - x0, 1); });
+  if (lo < 0 && hi > 0) { c.fillStyle = `rgba(${WHITE},0.3)`; c.fillRect(x0, Y(0), x1 - x0, 1); }
   const dk = ease(sub(e.p, 0.06, 0.42));
   const upto = Math.max(1, Math.floor(dk * (n - 1)));
   const grad = c.createLinearGradient(0, y0, 0, y1);
@@ -1437,7 +1487,7 @@ const drawButterfly: Draw = (c, sc, e) => {
   text(c, b.rightLabel, cx + 10, top + 6, 13, TEAL, { bold: true });
   const noteH = b.note ? (b.note.includes('\n') ? 36 : 22) : 0;
   const areaTop = top + 18, rowH = Math.min(e.portrait ? 70 : 74, (e.H - areaTop - 12 - noteH) / b.rows.length);
-  c.fillStyle = 'rgba(255,255,255,0.35)'; c.fillRect(cx - 0.5, areaTop, 1, rowH * b.rows.length);
+  c.fillStyle = `rgba(${WHITE},0.35)`; c.fillRect(cx - 0.5, areaTop, 1, rowH * b.rows.length);
   b.rows.forEach((r, i) => {
     const y = areaTop + i * rowH;
     const k = ease(sub(e.p, 0.1 + i * 0.12, 0.4 + i * 0.12));
@@ -1475,11 +1525,11 @@ const drawDdHistory: Draw = (c, sc, e) => {
     c.fillStyle = `rgba(${AMBER},${0.12 * hk})`; c.fillRect(X(hl.from), y0, X(hl.to) - X(hl.from), y1 - y0);
   });
   h.hLines.forEach((l) => {
-    c.save(); c.setLineDash([5, 5]); c.strokeStyle = 'rgba(255,255,255,0.3)'; c.lineWidth = 1;
+    c.save(); c.setLineDash([5, 5]); c.strokeStyle = `rgba(${WHITE},0.3)`; c.lineWidth = 1;
     c.beginPath(); c.moveTo(x0, Y(l.y)); c.lineTo(x1, Y(l.y)); c.stroke(); c.restore();
     text(c, `${l.y}%`, x0 - 5, Y(l.y) + 4, 10, WHITE, { align: 'right', alpha: 0.55 });
   });
-  c.fillStyle = 'rgba(255,255,255,0.35)'; c.fillRect(x0, Y(0), x1 - x0, 1);
+  c.fillStyle = `rgba(${WHITE},0.35)`; c.fillRect(x0, Y(0), x1 - x0, 1);
   text(c, '0%', x0 - 5, Y(0) + 4, 10, WHITE, { align: 'right', alpha: 0.55 });
   const k = ease(sub(e.p, 0.06, 0.7));
   const xCut = xLo + (xHi - xLo) * k;
@@ -1518,9 +1568,9 @@ const drawDdHistory: Draw = (c, sc, e) => {
     const px = X(l.x), py = Y(l.y);
     const by = y1 + 6 + row * 18;
     c.save(); c.globalAlpha *= lk;
-    c.strokeStyle = 'rgba(255,255,255,0.45)'; c.lineWidth = 1; c.beginPath(); c.moveTo(px, py); c.lineTo(px, by); c.stroke();
+    c.strokeStyle = `rgba(${WHITE},0.45)`; c.lineWidth = 1; c.beginPath(); c.moveTo(px, py); c.lineTo(px, by); c.stroke();
     c.beginPath(); c.arc(px, py, 3, 0, Math.PI * 2); c.fillStyle = '#fff'; c.fill();
-    rr(c, bx, by, w, 16, 8); c.fillStyle = 'rgba(6,10,19,0.9)'; c.fill(); c.strokeStyle = `rgba(${RUST},0.8)`; c.stroke();
+    rr(c, bx, by, w, 16, 8); c.fillStyle = `rgba(${PILL},0.9)`; c.fill(); c.strokeStyle = `rgba(${RUST},0.8)`; c.stroke();
     text(c, l.label, bx + w / 2, by + 12, 10, WHITE, { bold: true, align: 'center' });
     c.restore();
   });
@@ -1550,12 +1600,15 @@ const DRAWERS: Record<string, Draw> = {
 
 /** 場面の図解を、仮想サイズ（e.W×e.H）の座標で描く */
 export function drawVisual(c: Ctx, sc0: ExplainerScene, e: VisualEnv): void {
+  setVisualLight(!!e.light);
   let sc = sc0;
   // 数値として扱えない値（バージョン番号・日付など）しかないグラフは、要点カードとして描く（以前に保存した台本にも効くよう描画時にも確認）
   const k0 = sc.visual.kind;
   if (k0 === 'bar' || k0 === 'line' || k0 === 'donut' || k0 === 'number') {
     const nums = sc.visual.items.filter((it) => parseValue(it.value) !== null).length;
-    if (nums < (k0 === 'number' ? 1 : 2)) sc = { ...sc, visual: { ...sc.visual, kind: 'points', items: sc.visual.items.slice(0, 4).map((it) => ({ ...it, text: [it.value, it.text].filter(Boolean).join(' ') })) } };
+    // 白い背景の配色（週次レポート）はアイコンの図を使わないので、文字のスライドにする
+    if (nums < (k0 === 'number' ? 1 : 2) && LIGHT) sc = { ...sc, visual: { ...sc.visual, kind: 'image' } };
+    else if (nums < (k0 === 'number' ? 1 : 2)) sc = { ...sc, visual: { ...sc.visual, kind: 'points', items: sc.visual.items.slice(0, 4).map((it) => ({ ...it, text: [it.value, it.text].filter(Boolean).join(' ') })) } };
   }
   const fn = DRAWERS[sc.visual.kind] ?? drawPoint;
   c.save();
