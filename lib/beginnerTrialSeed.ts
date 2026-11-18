@@ -21,6 +21,9 @@ export const DAIWA_PURCHASES: { date: string; name: string; amount: number; nav?
   // 2/5：純金信託（1540）1株を成行（約定単価24,725円）＋ iFree 日経225インデックス 25,275円（合計50,000円）
   { date: '2026-02-05', name: '1540 純金上場信託（現物国内保管型）', amount: 24725 },
   { date: '2026-02-05', name: 'iFree 日経225インデックス', amount: 25275 },
+  // 3/2：純金信託（1540）・eMAXIS Slim 国内株式(TOPIX)・iFreeレバレッジ FANG+ を注文（金額は未確認のため未記録）
+  // 4/1発注（約定日4/2）：iFreeレバレッジ FANG+ 50,000円。日付は値動きの起点にするため約定日にしている
+  { date: '2026-04-02', name: 'iFreeレバレッジ FANG＋', amount: 50000 },
 ];
 
 /** 指定した月（YYYY-MM）の買い付け */
