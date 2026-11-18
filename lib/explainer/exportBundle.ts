@@ -19,16 +19,18 @@ export function canPickFolder(): boolean {
   return typeof window !== 'undefined' && typeof (window as any).showDirectoryPicker === 'function';
 }
 
-export async function getSavedFolder(): Promise<any | null> {
-  try { return (await getSetting<any>(FOLDER_KEY)) ?? null; } catch { return null; }
+/** channel：チャンネル（YouTubeのアカウント）ごとに保存先を分ける（未指定＝解説動画） */
+const folderKey = (channel?: string) => (channel && channel !== 'explainer' ? `${FOLDER_KEY}:${channel}` : FOLDER_KEY);
+export async function getSavedFolder(channel?: string): Promise<any | null> {
+  try { return (await getSetting<any>(folderKey(channel))) ?? null; } catch { return null; }
 }
 
 /** 保存先のフォルダを選ぶ（ボタンを押した直後に呼ぶこと：ブラウザの制限） */
-export async function pickFolder(): Promise<any | null> {
+export async function pickFolder(channel?: string): Promise<any | null> {
   if (!canPickFolder()) return null;
   try {
-    const h = await (window as any).showDirectoryPicker({ id: 'explainer-export', mode: 'readwrite', startIn: 'videos' });
-    await setSetting(FOLDER_KEY, h);
+    const h = await (window as any).showDirectoryPicker({ id: channel && channel !== 'explainer' ? `explainer-export-${channel}` : 'explainer-export', mode: 'readwrite', startIn: 'videos' });
+    await setSetting(folderKey(channel), h);
     return h;
   } catch { return null; } // 選ぶのをやめた
 }

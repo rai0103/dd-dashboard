@@ -25,8 +25,8 @@ export function autoFitFor(img, W, H) {
 }
 
 // onPolygon（任意）：「ポリゴン風に加工」を押したとき。今の見せ方を渡すので、呼び出し側で保存してから加工の画面へ進む
-export default function ImageFitModal({ img, fit, heading = "", portrait = false, onApply, onClose, onPolygon }) {
-  const { W, H } = portrait ? VISUAL_SIZE.short : VISUAL_SIZE.long;
+export default function ImageFitModal({ img, fit, heading = "", portrait = false, full = false, onApply, onClose, onPolygon }) {
+  const { W, H } = full ? (portrait ? VISUAL_SIZE.shortFull : VISUAL_SIZE.longFull) : (portrait ? VISUAL_SIZE.short : VISUAL_SIZE.long);
   const [f, setF] = useState(() => (fit ? { ...fit } : autoFitFor(img, W, H)));
   const [isAuto, setIsAuto] = useState(!fit);
   const [p, setP] = useState(0); // プレビューする時点（0＝場面の始め、1＝終わり）
@@ -109,9 +109,9 @@ export default function ImageFitModal({ img, fit, heading = "", portrait = false
 }
 
 /** 場面一覧のサムネイル：動画と同じ見せ方（imageFit）で画像を小さく描く */
-export function FitThumb({ img, fit, portrait = false }) {
+export function FitThumb({ img, fit, portrait = false, full = false }) {
   const ref = useRef(null);
-  const { W, H } = portrait ? VISUAL_SIZE.short : VISUAL_SIZE.long;
+  const { W, H } = full ? (portrait ? VISUAL_SIZE.shortFull : VISUAL_SIZE.longFull) : (portrait ? VISUAL_SIZE.short : VISUAL_SIZE.long);
   useEffect(() => {
     const cv = ref.current; if (!cv || !img) return;
     const k = 0.5;

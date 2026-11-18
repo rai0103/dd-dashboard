@@ -22,8 +22,8 @@ import { listBgms, saveBgm, deleteBgm } from "@/lib/videoBgmLibrary";
 import { listBackgrounds, saveBackground, deleteBackground } from "@/lib/videoBackgroundLibrary";
 import { listAvatars, saveAvatar, deleteAvatar, newAvatar, MAX_CLIPS } from "@/lib/videoAvatarLibrary";
 import { VideoAvatar } from "@/lib/videoAvatarRender";
-import { ExplainerRenderer, RENDER_SIZE } from "@/lib/explainer/renderer";
-import { generateProject, generateShort, rewriteScene, rewriteNarration, applyLearnedEdit, updateReadingForEdit, planSceneImages, matchRequiredImages, CHARS_PER_MIN } from "@/lib/explainer/aiScript";
+import { ExplainerRenderer, RENDER_SIZE, VISUAL_SIZE } from "@/lib/explainer/renderer";
+import { generateProject, generateShort, rewriteScene, rewriteNarration, applyLearnedEdit, updateReadingForEdit, planSceneImages, matchRequiredImages, extractPurchasesFromImages, CHARS_PER_MIN } from "@/lib/explainer/aiScript";
 import { pickImageScenes, splitFreeAi, canHaveImage, spreadPick } from "@/lib/explainer/autoImages";
 import { AiClientError } from "@/lib/explainer/aiClient";
 import { referenceBlocks, referenceTexts, fetchUrlReference, fileToBase64, newRefId, refLabel, requiredRefNotes, MAX_PDF_BYTES } from "@/lib/explainer/references";
@@ -43,7 +43,8 @@ import { easternStamp } from "@/lib/marketClock";
 import { parseStooqCSV } from "@/lib/csvPrice";
 import { buildStockCatalogFromSnapshot, buildStockCatalogFromCsv, mergeStockCatalogs, resolveYearCompareItems } from "@/lib/explainer/stockCatalog";
 import { buildFixedDataChapters, fixedChaptersNote, mergeFixedChapters, dataPeriodOf, dataPeriodNoteOf } from "@/lib/explainer/dataChapters";
-import { purchasesInMonth } from "@/lib/beginnerTrialSeed";
+import { DAIWA_PURCHASES } from "@/lib/beginnerTrialSeed";
+import { scheduleSyncPush } from "@/lib/sync";
 import { WEEKLY_CHANNEL, WEEKLY_PERSONA, buildWeeklyData, parsePurchases, yenJp, buildTrialReportChapters, trialFactsText, trialStatus, monthlyReturn, planVsActual, cagrOf, yearsToGoal, requiredRate, TRIAL_RULES } from "@/lib/explainer/weeklyReport";
 import { decorateTitleScene } from "@/lib/explainer/sp500SheetScenes";
 import { computeSp500Sheets } from "@/lib/sp500Sheets";
@@ -135,12 +136,12 @@ function GenProgressPanel({ step, done, total, elapsedSec, onAbort }) {
 // drawVisual()を直接呼んで図解（棒グラフ・折れ線・要点カード等）の静止画を小さなcanvasに描く
 // （ExplainerRendererクラス＝アバター・音声込みのフル描画は使わない。図解単体の軽量な描画のみ）。
 // p=1（場面の最後まで進んだ状態）で描くことで、アニメーションの途中状態ではない完成形を見せる。
-function SceneThumbCanvas({ sc, portrait }) {
+function SceneThumbCanvas({ sc, portrait, full = false }) {
   const ref = useRef(null);
   useEffect(() => {
     const canvas = ref.current;
     if (!canvas) return;
-    const vis = portrait ? { W: 420, H: 361 } : { W: 640, H: 400 };
+    const vis = full ? (portrait ? VISUAL_SIZE.shortFull : VISUAL_SIZE.longFull) : (portrait ? VISUAL_SIZE.short : VISUAL_SIZE.long);
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     const cssW = canvas.clientWidth || 240, cssH = canvas.clientHeight || (portrait ? 206 : 150);
     canvas.width = Math.round(cssW * dpr); canvas.height = Math.round(cssH * dpr);
@@ -261,11 +262,45 @@ export default function ExplainerStudio() {
   };
   useEffect(() => { if (mode === "weekly") loadWeeklySnaps(); }, [mode]);
   // 今月の買い付け：入力が空なら、買い付けの記録（lib/beginnerTrialSeed.ts）から最新のスクショの月の分を使う
-  const weeklyLedgerPurchases = useMemo(() => {
-    const last = [...weeklySnaps].sort((a, b) => a.date.localeCompare(b.date)).pop();
-    return last ? purchasesInMonth(last.date.slice(0, 7)).map((p) => ({ name: p.name, amount: p.amount })) : [];
+  // 買い付けの記録：購入画面のスクショから読み取ったもの（trial_purchases。スマホと同期）＋ これまでの記録（lib/beginnerTrialSeed.ts）
+  const [trialPurchases, setTrialPurchases] = useState([]);
+  const loadTrialPurchases = async () => { try { const r = await storage.get("trial_purchases"); setTrialPurchases(r?.value ? JSON.parse(r.value) : []); } catch (e) { setTrialPurchases([]); } };
+  useEffect(() => { if (mode === "weekly") loadTrialPurchases(); }, [mode]);
+  const saveTrialPurchases = async (list) => {
+    setTrialPurchases(list);
+    try { await storage.set("trial_purchases", JSON.stringify(list)); scheduleSyncPush(); } catch (e) { /* 無視 */ }
+  };
+  const [purchaseBusy, setPurchaseBusy] = useState("");
+  const importPurchaseShots = async (files) => {
+    const imgs = [];
+    for (const f of files) { if (/^image\//.test(f.type)) imgs.push({ mediaType: f.type, base64: await fileToBase64(f) }); }
+    if (!imgs.length) return;
+    setPurchaseBusy(`購入画面を読み取り中…（${imgs.length}枚）`);
+    try {
+      const got = await extractPurchasesFromImages(imgs, new Date().getFullYear());
+      const key = (p) => `${p.date}|${p.name.normalize("NFKC").replace(/\s/g, "")}|${p.amount}`;
+      const known = new Set([...trialPurchases, ...DAIWA_PURCHASES].map(key));
+      const add = got.filter((p) => !known.has(key(p))).map((p) => ({ ...p, source: "screenshot", addedAt: Date.now() }));
+      if (add.length) await saveTrialPurchases([...trialPurchases, ...add].sort((a, b) => a.date.localeCompare(b.date)));
+      setPurchaseBusy(got.length ? `${got.length}件を読み取り、${add.length}件を記録しました${got.length - add.length ? `（${got.length - add.length}件は記録済み）` : ""}` : "買い付けを読み取れませんでした");
+    } catch (e) { setPurchaseBusy(`読み取れませんでした：${e?.message || e}`); }
+  };
+  // 今週（前週のスクショの翌日〜今週のスクショの日）に約定した買い付け
+  const weekWindow = useMemo(() => {
+    const list = [...weeklySnaps].sort((a, b) => a.date.localeCompare(b.date));
+    const last = list[list.length - 1];
+    if (!last) return null;
+    const lim = new Date(`${last.date}T00:00:00Z`); lim.setUTCDate(lim.getUTCDate() - 5);
+    const prev = [...list].reverse().find((x) => x.date <= lim.toISOString().slice(0, 10));
+    const from = prev ? prev.date : (() => { const t = new Date(`${last.date}T00:00:00Z`); t.setUTCDate(t.getUTCDate() - 7); return t.toISOString().slice(0, 10); })();
+    return { from, to: last.date };
   }, [weeklySnaps]);
-  const weeklyPurchases = useMemo(() => (weeklyPurchasesText.trim() ? parsePurchases(weeklyPurchasesText) : weeklyLedgerPurchases), [weeklyPurchasesText, weeklyLedgerPurchases]);
+  const weekLedgerPurchases = useMemo(() => {
+    if (!weekWindow) return [];
+    return [...DAIWA_PURCHASES, ...trialPurchases].filter((p) => p.date > weekWindow.from && p.date <= weekWindow.to);
+  }, [weekWindow, trialPurchases]);
+  // 今週の買い付け＝記録のうち今週約定したもの＋手入力（日付なし＝今週分）
+  const weeklyPurchases = useMemo(() => [...weekLedgerPurchases.map((p) => ({ name: p.name, amount: p.amount, date: p.date })), ...parsePurchases(weeklyPurchasesText)], [weekLedgerPurchases, weeklyPurchasesText]);
   const weeklyData = useMemo(() => buildWeeklyData(weeklySnaps, weeklyPurchases), [weeklySnaps, weeklyPurchases]);
   // 週次／月次（月初）レポートの種類と、現在地・計画との比較に使うデータ（投資収支xlsxの月末の評価額・スクショの資産合計・S&P500の全期間）
   const [weeklyKind, setWeeklyKind] = useState(() => { try { return localStorage.getItem("weekly-kind-v1") || "weekly"; } catch (e) { return "weekly"; } });
@@ -549,6 +584,8 @@ export default function ExplainerStudio() {
   useEffect(() => { if (project) { try { localStorage.setItem(PROJECT_KEY, JSON.stringify(project)); } catch (e) { /* ignore */ } } }, [project]);
   useEffect(() => { if (project) setInputOpen(false); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
   const [format, setFormat] = useState("long");
+  // 週次レポート（年100万円投資で1億円を目指すチャンネル）は、人物を出さずに画面いっぱいに情報を出し、色も解説動画と変える
+  const fullLayout = (project?.mode ?? mode) === "weekly";
   const scenes = project ? (format === "long" ? project.longScenes : project.shortScenes) : NO_SCENES;
   const setScenes = (fn) => setProject((p) => {
     if (!p) return p;
@@ -1543,8 +1580,9 @@ export default function ExplainerStudio() {
       const r = new ExplainerRenderer(canvas, {
         format, scenes, videoTitle: format === "short" && project.youtube.shortTitle ? project.youtube.shortTitle.replace(/#\S+/g, "").trim() : project.videoTitle,
         kicker: project.kicker, chapterTitles: project.chapters.map((c) => c.title),
-        avatar: avatarObj, backgroundImage: backgroundImgEl, backgroundOpacity: backgroundOpacity / 100,
+        avatar: fullLayout ? null : avatarObj, backgroundImage: backgroundImgEl, backgroundOpacity: backgroundOpacity / 100,
         images: imageEls, showSubtitles, showSourceNotes: sourcesInVideo,
+        layout: fullLayout ? "full" : "avatar", theme: fullLayout ? "weekly" : "standard",
       });
       r.setDurations(sceneDurs.length === scenes.length ? sceneDurs : estDurs);
       r.setNarrationDurations((sceneDurs.length === scenes.length ? sceneDurs : estDurs).map((d) => Math.max(0, d - 1.1)));
@@ -1553,7 +1591,7 @@ export default function ExplainerStudio() {
       updateSceneProgress(seekPosRef.current);
     } catch (e) { console.error("ExplainerRenderer init error:", e); rendererRef.current = null; }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project, scenes, format, avatarObj, backgroundImgEl, backgroundOpacity, imageEls, showSubtitles, sourcesInVideo, estDurs]);
+  }, [project, scenes, format, avatarObj, backgroundImgEl, backgroundOpacity, imageEls, showSubtitles, sourcesInVideo, estDurs, fullLayout]);
 
   const stopLoop = () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); rafRef.current = 0; isPlayingRef.current = false; };
   // list：音声を用意する場面（省略時は表示中の形式の場面）。表示中でない形式（長尺＋ショートのセット書き出しで
@@ -1671,8 +1709,10 @@ export default function ExplainerStudio() {
   const canvasPng = (canvas) => new Promise((res) => canvas.toBlob((b) => res(b), "image/png"));
 
   const [exportFolder, setExportFolder] = useState(null);
-  useEffect(() => { getSavedFolder().then(setExportFolder); }, []);
-  const chooseExportFolder = async () => { const h = await pickFolder(); if (h) setExportFolder(h); return h; };
+  // 保存先はチャンネル（YouTubeのアカウント）ごとに分ける：解説動画／週次レポート
+  const exportChannel = fullLayout ? "weekly" : "explainer";
+  useEffect(() => { getSavedFolder(exportChannel).then(setExportFolder); }, [exportChannel]);
+  const chooseExportFolder = async () => { const h = await pickFolder(exportChannel); if (h) setExportFolder(h); return h; };
   const [exportNote, setExportNote] = useState("");
 
   // ---------------- 新しい動画を作る（リセット） ----------------
@@ -1749,8 +1789,9 @@ export default function ExplainerStudio() {
       const r = new ExplainerRenderer(canvas, {
         format: fmt, scenes: list, videoTitle: fmt === "short" && project.youtube.shortTitle ? project.youtube.shortTitle.replace(/#\S+/g, "").trim() : project.videoTitle,
         kicker: project.kicker, chapterTitles: project.chapters.map((c) => c.title),
-        avatar: avatarObj, backgroundImage: backgroundImgEl, backgroundOpacity: backgroundOpacity / 100,
+        avatar: fullLayout ? null : avatarObj, backgroundImage: backgroundImgEl, backgroundOpacity: backgroundOpacity / 100,
         images: imageEls, showSubtitles, showSourceNotes: sourcesInVideo,
+        layout: fullLayout ? "full" : "avatar", theme: fullLayout ? "weekly" : "standard",
       });
       const audioStream = mixer().startRecordingTap();
       const pr = await prepareAudio(list, { timeoutSec: 120, onStep: (k, n) => setExportStage(`${stageLabel ? `${stageLabel}・` : ""}ナレーション音声を準備中（${k}/${n}）`) });
@@ -2257,8 +2298,24 @@ export default function ExplainerStudio() {
                     <div className="text-[11px]" style={{ color: C.amber }}>大和コネクト証券のスクショがまだありません。ダッシュボードの「データ入力」→「証券会社スクショ取込」で、毎週末に大和コネクト証券のスクショを取り込んでください。</div>
                   )}
                   <button onClick={() => { loadWeeklySnaps(); loadTrialExtra(); }} className="self-start text-[10px] px-2 py-0.5 rounded" style={btn()}>スクショ・投資収支xlsxの取り込みを読み直す</button>
-                  <label className="text-[11px]" style={{ color: C.textMuted }}>今月の買い付け（月初の週だけ。1行に「銘柄 金額」。例：S&P500 30000／金 2万円）{!weeklyPurchasesText.trim() && weeklyLedgerPurchases.length ? `　※空欄のため、買い付けの記録（${weeklyLedgerPurchases.map((p) => `${p.name} ${p.amount.toLocaleString()}円`).join("、")}）を使います` : ""}</label>
-                  <textarea value={weeklyPurchasesText} onChange={(e) => setWeeklyPurchasesText(e.target.value)} rows={2} className="px-2 py-1 rounded text-[11px]" style={inputStyle} placeholder={"S&P500 30000\n金 20000"} />
+                  <div className="flex items-center gap-2 flex-wrap text-[11px]" style={{ color: C.textMuted }}>
+                    <span>今週の買い付け{weekWindow ? `（${weekWindow.from.slice(5).replace("-", "/")}の翌日〜${weekWindow.to.slice(5).replace("-", "/")}に約定）` : ""}</span>
+                    <label className="px-2 py-0.5 rounded cursor-pointer" style={btn("primary")}>購入画面のスクショから読み取る
+                      <input type="file" accept="image/*" multiple style={{ display: "none" }} onChange={(e) => { const fs = [...(e.target.files || [])]; e.target.value = ""; importPurchaseShots(fs); }} />
+                    </label>
+                    {purchaseBusy && <span style={{ color: C.teal }}>{purchaseBusy}</span>}
+                  </div>
+                  {weekLedgerPurchases.length > 0 ? (
+                    <div className="text-[11px] flex flex-col gap-0.5" style={{ color: C.text }}>
+                      {weekLedgerPurchases.map((p, k) => (
+                        <div key={`${p.date}-${p.name}-${k}`} className="flex items-center gap-2">
+                          <span style={{ color: C.textMuted }}>{p.date.slice(5).replace("-", "/")}</span><span>{p.name}</span><b>{Math.round(p.amount).toLocaleString()}円</b>{p.units && <span style={{ color: C.textDim }}>{p.units}</span>}
+                          {trialPurchases.includes(p) && <button onClick={() => saveTrialPurchases(trialPurchases.filter((x) => x !== p))} title="記録から削除" style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer" }}>×</button>}
+                        </div>
+                      ))}
+                    </div>
+                  ) : <div className="text-[10px]" style={{ color: C.textDim }}>今週約定した買い付けはありません（購入した週は、注文の詳細・取引履歴の画面のスクショを読み取ってください）。</div>}
+                  <textarea value={weeklyPurchasesText} onChange={(e) => setWeeklyPurchasesText(e.target.value)} rows={1} className="px-2 py-1 rounded text-[11px]" style={inputStyle} placeholder={"スクショが無いときの手入力（今週分。1行に「銘柄 金額」）例：S&P500 30000"} />
                   <label className="text-[11px]" style={{ color: C.textMuted }}>今週のトピックス（1行に1つ。「トピック ｜ コメントの要旨」。URLを書くとその記事も参考にします）→ 書いたら、下の「AIで検索して参考情報を追加」でトピックスごとに集めます</label>
                   <textarea value={weeklyTopicsText} onChange={(e) => setWeeklyTopicsText(e.target.value)} rows={3} className="px-2 py-1 rounded text-[11px]" style={inputStyle}
                     placeholder={"エヌビディアの決算 ｜ 数字は良いが期待が高すぎて売られた。AIバブルを疑うのはまだ早い\n日銀の利上げ観測 https://example.com/news ｜ 円高は積立には追い風"} />
@@ -2569,9 +2626,9 @@ export default function ExplainerStudio() {
                           <div className="flex gap-2 mb-1.5">
                             <div className="shrink-0 rounded overflow-hidden" style={{ width: format === "short" ? 92 : 150, height: format === "short" ? 158 : 94, background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
                               {sc.imageId && imageEls[sc.imageId] ? (
-                                <FitThumb img={imageEls[sc.imageId]} fit={sc.imageFit} portrait={format === "short"} />
+                                <FitThumb img={imageEls[sc.imageId]} fit={sc.imageFit} portrait={format === "short"} full={fullLayout} />
                               ) : (
-                                <SceneThumbCanvas sc={sc} portrait={format === "short"} />
+                                <SceneThumbCanvas sc={sc} portrait={format === "short"} full={fullLayout} />
                               )}
                             </div>
                             <div className="flex-1 min-w-0 flex flex-col gap-1">
@@ -2582,7 +2639,7 @@ export default function ExplainerStudio() {
                                     <button onClick={() => detachImage(sc)} className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={btn()}><X size={10} />画像を外す（図解表示に戻す）</button>
                                     <button onClick={() => setFitOpenId(sc.id)} disabled={!imageEls[sc.imageId]} title="スライドの枠に合わせて、画像の大きさ・位置を調整します（全体を表示／画面いっぱい）" className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={{ ...btn(), color: sc.imageFit ? C.teal : undefined }}><Maximize2 size={10} />サイズ・位置を調整{sc.imageFit ? "（調整済み）" : ""}</button>
                                     {fitOpenId === sc.id && imageEls[sc.imageId] && (
-                                      <ImageFitModal img={imageEls[sc.imageId]} fit={sc.imageFit} heading={sc.visual?.heading || ""} portrait={format === "short"}
+                                      <ImageFitModal img={imageEls[sc.imageId]} fit={sc.imageFit} heading={sc.visual?.heading || ""} portrait={format === "short"} full={fullLayout}
                                         onApply={(fit) => { patchScene(sc.id, { imageFit: fit }); setFitOpenId(null); const idx = scenes.findIndex((s) => s.id === sc.id); if (idx >= 0) previewSceneAt(idx); }}
                                         onClose={() => setFitOpenId(null)}
                                         onPolygon={(fit) => { patchScene(sc.id, { imageFit: fit }); setFitOpenId(null); polyThenFitRef.current = sc.id; setPolyOpenId(sc.id); }} />

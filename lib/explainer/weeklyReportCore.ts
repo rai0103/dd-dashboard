@@ -7,7 +7,7 @@ export const WEEKLY_GOAL = 100_000_000;
 export const WEEKLY_PERSONA = '30代の個人投資家が、自分の口座を毎週報告する語り口。くだけすぎない話し言葉で、相場や話題にはやや辛口に本音でコメントする（煽らない・断定しすぎない・売買の推奨はしない）。';
 
 export type Snapshot = { date: string; items: Record<string, number> };
-export interface Purchase { name: string; amount: number }
+export interface Purchase { name: string; amount: number; date?: string }
 export interface WeeklyRow { name: string; short: string; value: number; prev: number | null; buy: number; change: number | null; pct: number | null }
 export interface WeeklyData { asOf: string; prevDate: string | null; rows: WeeklyRow[]; total: number; prevTotal: number | null; buyTotal: number; change: number | null; pct: number | null; goal: number }
 
@@ -92,7 +92,7 @@ export function weeklyFactsText(d: WeeklyData, purchases: Purchase[]): string {
   const lines = [`【今週の資産状況（${md(d.asOf)}時点、大和コネクト証券のスクショ）】`, `評価額の合計：${yenJp(d.total)}`];
   if (d.change != null && d.prevDate) lines.push(`前週（${md(d.prevDate)}）比：${signed(d.change, (x) => yenJp(x))}（${signed(d.pct ?? 0, pct1)}）※買い付けた分を除いた値動き`);
   for (const r of d.rows) lines.push(`・${r.short}（${r.name}）：${yenJp(r.value)}${r.pct != null ? `、今週${signed(r.pct, pct1)}` : ''}${r.buy ? `、今週${yenJp(r.buy)}買い付け` : ''}`);
-  if (purchases.length) lines.push(`今月の買い付け：${purchases.map((p) => `${p.name} ${yenJp(p.amount)}`).join('、')}（合計${yenJp(purchases.reduce((s, p) => s + p.amount, 0))}）`);
+  if (purchases.length) lines.push(`今週の買い付け：${purchases.map((p) => `${p.name} ${yenJp(p.amount)}`).join('、')}（合計${yenJp(purchases.reduce((s, p) => s + p.amount, 0))}）`);
   lines.push(`目標1億円に対する達成率：${((d.total / d.goal) * 100).toFixed(2)}%`);
   return lines.join('\n');
 }

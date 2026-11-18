@@ -23,6 +23,10 @@ export interface ExplainerRenderConfig {
   showSubtitles: boolean;
   /** スライド内の出典表記を出すか */
   showSourceNotes?: boolean;
+  /** avatar＝右（ショートは下）に人物の領域を取る（既定）／full＝人物を出さず、画面いっぱいに図解を出す */
+  layout?: 'avatar' | 'full';
+  /** 画面の色。standard＝解説動画（紺〜黒）／weekly＝週次レポート（深緑） */
+  theme?: 'standard' | 'weekly';
 }
 
 const LONG = { W: 960, H: 540, colX: 672 };
@@ -30,8 +34,16 @@ const SHORT = { W: 540, H: 960 };
 // 図解の仮想サイズと、画面上の枠
 const LONG_VIS = { W: 640, H: 400, x: 16, y: 58, w: 646, h: 404 };
 const SHORT_VIS = { W: 420, H: 361, x: 20, y: 150, w: 500, h: 430 };
+// 人物を出さない全画面の配置（週次レポート）：図解を横いっぱい（ショートは下まで）に広げる
+const LONG_VIS_FULL = { W: 900, H: 402, x: 28, y: 58, w: 904, h: 404 };
+const SHORT_VIS_FULL = { W: 420, H: 548, x: 20, y: 150, w: 500, h: 652 };
 /** スライド（図解・画像）部分の大きさ。画像のサイズ調整画面（components/ImageFitModal.jsx）のプレビューも同じ比率で描く */
-export const VISUAL_SIZE = { long: { W: LONG_VIS.W, H: LONG_VIS.H }, short: { W: SHORT_VIS.W, H: SHORT_VIS.H } };
+export const VISUAL_SIZE = { long: { W: LONG_VIS.W, H: LONG_VIS.H }, short: { W: SHORT_VIS.W, H: SHORT_VIS.H }, longFull: { W: LONG_VIS_FULL.W, H: LONG_VIS_FULL.H }, shortFull: { W: SHORT_VIS_FULL.W, H: SHORT_VIS_FULL.H } };
+/** 画面の色（背景のグラデーション・見出し帯・人物の領域の地色） */
+const THEMES = {
+  standard: { bg0: '#070c18', bg1: '#0d1830', bar: 'rgba(5,9,20,0.75)', barShort: 'rgba(5,9,20,0.6)', person0: '#0a1630', person1: '#14305a', sub: 'rgba(4,8,18,0.78)', grid: 'rgba(255,255,255,0.035)' },
+  weekly: { bg0: '#06231d', bg1: '#0f3f33', bar: 'rgba(3,22,17,0.82)', barShort: 'rgba(3,22,17,0.7)', person0: '#0b2f26', person1: '#145243', sub: 'rgba(3,20,15,0.8)', grid: 'rgba(214,190,120,0.06)' },
+};
 
 /** 字幕：ナレーションを句点で区切り、文字数の割合で表示時間を割り当てる */
 export function subtitleAt(narration: string, localT: number, narrDur: number, maxChars: number): string {
@@ -85,7 +97,11 @@ export class ExplainerRenderer {
     this.offCtx = this.off.getContext('2d')!;
   }
 
-  private vis() { return this.cfg.format === 'long' ? LONG_VIS : SHORT_VIS; }
+  private full() { return this.cfg.layout === 'full'; }
+  private th() { return THEMES[this.cfg.theme ?? 'standard'] ?? THEMES.standard; }
+  /** 見出し・字幕・目次バーを出す横幅（長尺で人物を出すときは人物の領域を除く） */
+  private mainW() { return this.cfg.format === 'long' ? (this.full() ? LONG.W : LONG.colX) : this.LW; }
+  private vis() { return this.cfg.format === 'long' ? (this.full() ? LONG_VIS_FULL : LONG_VIS) : (this.full() ? SHORT_VIS_FULL : SHORT_VIS); }
 
   setDurations(d: number[]): void { if (d.length === this.cfg.scenes.length) this.durs = d.slice(); }
   /** 各場面のナレーション音声の長さ（秒）。字幕の切り替えに使う */
@@ -112,7 +128,8 @@ export class ExplainerRenderer {
   private drawBackdrop(gt: number, chapter: number) {
     const c = this.ctx, W = this.LW, H = this.LH;
     const g = c.createLinearGradient(0, 0, W, H);
-    g.addColorStop(0, '#070c18'); g.addColorStop(1, '#0d1830');
+    const th = this.th();
+    g.addColorStop(0, th.bg0); g.addColorStop(1, th.bg1);
     c.fillStyle = g; c.fillRect(0, 0, W, H);
     // ゆっくり動く色のにじみ（章ごとに色味を変える）
     const base = PALETTE[chapter % PALETTE.length], second = PALETTE[(chapter + 2) % PALETTE.length];
@@ -127,7 +144,7 @@ export class ExplainerRenderer {
     }
     // 細かい格子（ゆっくり流れる）
     c.save();
-    c.strokeStyle = 'rgba(255,255,255,0.035)'; c.lineWidth = 1;
+    c.strokeStyle = this.th().grid; c.lineWidth = 1;
     const step = 32, off = (gt * 6) % step;
     c.beginPath();
     for (let x = -step + off; x < W; x += step) { c.moveTo(x, 0); c.lineTo(x, H); }
@@ -149,7 +166,7 @@ export class ExplainerRenderer {
       c.globalAlpha = 1;
     } else {
       const g = c.createLinearGradient(x, y, x + w, y + h);
-      g.addColorStop(0, '#0a1630'); g.addColorStop(1, '#14305a');
+      g.addColorStop(0, this.th().person0); g.addColorStop(1, this.th().person1);
       c.fillStyle = g; c.fillRect(x, y, w, h);
     }
     c.restore();
@@ -165,9 +182,9 @@ export class ExplainerRenderer {
   private titleBar(sc: ExplainerScene, chapterIdx: number) {
     const c = this.ctx;
     const long = this.cfg.format === 'long';
-    const W = long ? LONG.colX : this.LW;
+    const W = this.mainW();
     if (long) {
-      c.fillStyle = 'rgba(5,9,20,0.75)'; c.fillRect(0, 0, W, 46);
+      c.fillStyle = this.th().bar; c.fillRect(0, 0, W, 46);
       const accent = PALETTE[chapterIdx % PALETTE.length];
       c.fillStyle = `rgb(${accent})`; c.fillRect(0, 44, W, 2);
       font(c, 12, true);
@@ -181,7 +198,7 @@ export class ExplainerRenderer {
       text(c, this.cfg.videoTitle, 24 + kw, 29, 17, WHITE, { bold: true, maxW: W - kw - 50 - chW });
       if (ch) text(c, ch, W - 14, 29, 13, WHITE, { align: 'right', alpha: 0.6, maxW: 220 });
     } else {
-      c.fillStyle = 'rgba(5,9,20,0.6)'; c.fillRect(0, 0, W, 140);
+      c.fillStyle = this.th().barShort; c.fillRect(0, 0, W, 140);
       const accent = PALETTE[chapterIdx % PALETTE.length];
       const kick = this.cfg.kicker || '解説';
       font(c, 18, true);
@@ -196,7 +213,7 @@ export class ExplainerRenderer {
   private chapterBar(gt: number) {
     const c = this.ctx;
     const long = this.cfg.format === 'long';
-    const W = long ? LONG.colX : this.LW, y = this.LH - (long ? 8 : 10), h = long ? 4 : 6;
+    const W = this.mainW(), y = this.LH - (long ? 8 : 10), h = long ? 4 : 6;
     const total = this.totalSeconds || 1;
     // 章ごとの区間
     const spans: { ch: number; start: number; end: number }[] = [];
@@ -218,18 +235,18 @@ export class ExplainerRenderer {
   private subtitle(sc: ExplainerScene, i: number, t: number, fade: number) {
     const c = this.ctx;
     const long = this.cfg.format === 'long';
-    const W = long ? LONG.colX : this.LW;
+    const W = this.mainW();
     const line = this.cfg.showSubtitles ? subtitleAt(sc.narration, t, this.narrDurs[i] || 0, long ? 34 : 30) : sc.caption;
     if (!line || sc.visual.kind === 'chapter') return;
     const size = long ? 19 : 28;
     const lines = wrap(c, line, W - (long ? 60 : 50), size, true).slice(0, 2);
     const lh = size * 1.32;
     const bh = lines.length * lh + (long ? 14 : 22);
-    const by = long ? this.LH - 18 - bh : 600;
+    const by = long ? this.LH - 18 - bh : (this.full() ? 812 : 600);
     c.save();
     c.globalAlpha *= fade;
     rr(c, long ? 16 : 14, by, W - (long ? 32 : 28), bh, 10);
-    c.fillStyle = 'rgba(4,8,18,0.78)'; c.fill();
+    c.fillStyle = this.th().sub; c.fill();
     lines.forEach((ln, k) => {
       font(c, size, true);
       c.textAlign = 'center'; c.textBaseline = 'alphabetic';
@@ -256,8 +273,10 @@ export class ExplainerRenderer {
 
     this.drawBackdrop(gt, sc.chapter);
     const long = this.cfg.format === 'long';
-    if (long) this.drawPersonArea(LONG.colX, 0, LONG.W - LONG.colX, LONG.H, gt);
-    else this.drawPersonArea(0, 560, SHORT.W, SHORT.H - 560, gt);
+    if (!this.full()) {
+      if (long) this.drawPersonArea(LONG.colX, 0, LONG.W - LONG.colX, LONG.H, gt);
+      else this.drawPersonArea(0, 560, SHORT.W, SHORT.H - 560, gt);
+    }
 
     // 図解（場面ごとに入り方を変える：右から・下から・拡大）
     const vis = this.vis();
@@ -293,9 +312,11 @@ export class ExplainerRenderer {
     this.drawBackdrop(gt, 0);
     const W = this.LW, H = this.LH;
     const accent = PALETTE[1];
-    if (long) this.drawPersonArea(LONG.colX - 40, 0, LONG.W - LONG.colX + 40, LONG.H, gt);
-    else this.drawPersonArea(0, 560, W, H - 560, gt);
-    const areaW = long ? LONG.colX - 30 : W - 40;
+    if (!this.full()) {
+      if (long) this.drawPersonArea(LONG.colX - 40, 0, LONG.W - LONG.colX + 40, LONG.H, gt);
+      else this.drawPersonArea(0, 560, W, H - 560, gt);
+    }
+    const areaW = long ? (this.full() ? W - 60 : LONG.colX - 30) : W - 40;
     // 大きな文字（黄色＋太いふち）
     const msg = textMain || this.cfg.videoTitle;
     let size = long ? 84 : 76, lines = wrap(c, msg, areaW - 40, size, true);

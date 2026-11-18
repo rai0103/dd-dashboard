@@ -32,9 +32,9 @@ function holdingScenes(d: WeeklyData, purchases: Purchase[]): ExplainerScene[] {
   }
   if (purchases.length) {
     const sum = purchases.reduce((s2, p) => s2 + p.amount, 0);
-    scenes.push(scene('今月の買い付け', `今月は${yenJp(sum)}を買い付け`,
-      `今月の買い付けです。${purchases.map((p) => `${shortFundName(p.name) || p.name}を${yenJp(p.amount)}`).join('、')}、合計${yenJp(sum)}を買いました。`,
-      { ...emptyVisual('bar'), heading: '今月の買い付け', subheading: `合計 ${sum.toLocaleString()}円`, items: purchases.map((p) => ({ label: shortFundName(p.name) || p.name, value: (p.amount / 10000).toFixed(1), text: `${Math.round(p.amount).toLocaleString()}円`, icon: 'yen' })), unit: '万円', source: '大和コネクト証券の取引' }));
+    scenes.push(scene('今週の買い付け', `今週は${yenJp(sum)}を買い付け`,
+      `今週は買い付けをしました。${purchases.map((p) => `${shortFundName(p.name) || p.name}を${yenJp(p.amount)}`).join('、')}、合計${yenJp(sum)}です。`,
+      { ...emptyVisual('bar'), heading: '今週の買い付け', subheading: `合計 ${sum.toLocaleString()}円`, items: purchases.map((p) => ({ label: shortFundName(p.name) || p.name, value: (p.amount / 10000).toFixed(1), text: `${Math.round(p.amount).toLocaleString()}円`, icon: 'yen' })), unit: '万円', source: '大和コネクト証券の取引' }));
   }
   return scenes;
 }

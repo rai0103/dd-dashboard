@@ -98,9 +98,13 @@ export function withInitialSnapshot<T extends { date: string; items: Record<stri
 }
 
 /** 買い付けの記録の銘柄名を、取り込み済みの名前に合わせる（同じ銘柄として積み上げグラフにつながるように） */
-export function purchasesMatched(snapshots: { items: Record<string, number> }[]): { date: string; name: string; amount: number }[] {
+export function purchasesMatched(snapshots: { items: Record<string, number> }[], extra: { date: string; name: string; amount: number }[] = []): { date: string; name: string; amount: number }[] {
   const key = (n: string) => n.normalize('NFKC').replace(/[\s()（）]/g, '').toLowerCase();
   const known = new Map<string, string>();
   for (const s of snapshots || []) for (const n of Object.keys(s.items)) if (!known.has(key(n))) known.set(key(n), n);
-  return DAIWA_PURCHASES.map((p) => ({ date: p.date, name: known.get(key(p.name)) ?? p.name, amount: p.amount }));
+  // 銘柄名の表記ゆれ（「純金上場信託」と「1540 純金上場信託（現物国内保管型）」など）は、片方がもう片方を含めば同じ銘柄とみなす
+  const resolve = (n: string) => known.get(key(n)) ?? [...known.entries()].find(([k]) => k.includes(key(n)) || key(n).includes(k))?.[1] ?? n;
+  const seen = new Set(DAIWA_PURCHASES.map((p) => `${p.date}|${p.amount}`));
+  const more = (extra || []).filter((p) => p && p.date && p.amount > 0 && !seen.has(`${p.date}|${p.amount}`));
+  return [...DAIWA_PURCHASES, ...more].map((p) => ({ date: p.date, name: resolve(p.name), amount: p.amount }));
 }

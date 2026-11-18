@@ -693,6 +693,39 @@ export async function matchRequiredImages(
   return out;
 }
 
+/**
+ * 証券会社の購入画面（注文の詳細・取引履歴・注文状況など）のスクショから、買い付けを読み取る（初心者トライアルの週次レポート用）。
+ * 戻り値：[{ date（約定日。無ければ発注日。YYYY-MM-DD）, name（銘柄名）, amount（円。受渡金額・注文金額、無ければ単価×数量）, units?, price? }]
+ */
+export async function extractPurchasesFromImages(images: { mediaType: string; base64: string }[], year: number, signal?: AbortSignal): Promise<{ date: string; name: string; amount: number; units?: string; price?: number }[]> {
+  if (!images.length) return [];
+  const content: any[] = images.map((im) => ({ type: 'image', source: { type: 'base64', media_type: im.mediaType, data: im.base64 } }));
+  content.push({ type: 'text', text: [
+    '上の画像は、証券会社アプリの買い付けの画面（注文内容の詳細・取引履歴・注文状況など）のスクリーンショットです。写っている「買付」の取引を1件ずつ読み取ってください。',
+    `- date：約定日（無ければ発注日）を YYYY-MM-DD で。年が書かれていなければ ${year} 年。`,
+    '- name：銘柄名（画面のとおり。全角英数字は半角に直す。例：eMAXIS Slim 米国株式(S&P500)、純金上場信託、NF日経レバ）。',
+    '- amount：買い付けた金額（円）。受渡金額・注文金額があればそれ。無ければ 約定単価×株数。',
+    '- units：数量（例：6,382口、1株）。price：単価（約定単価・基準価額）。分からなければ省略。',
+    '- 入金・出金・売却は含めない。同じ取引が複数の画像に写っていたら1件にまとめる。金額が読み取れない取引は含めない。',
+  ].join('\n') });
+  const r = await callTool<any>({
+    system: [{ type: 'text', text: 'あなたは証券会社の画面を正確に読み取るアシスタントです。画面に無い数字を作らないでください。' }],
+    content,
+    toolName: 'list_purchases',
+    toolDescription: '画像に写っている買い付けの取引を一覧にする。',
+    inputSchema: {
+      type: 'object',
+      properties: { purchases: { type: 'array', items: { type: 'object', properties: { date: { type: 'string' }, name: { type: 'string' }, amount: { type: 'number' }, units: { type: 'string' }, price: { type: 'number' } }, required: ['date', 'name', 'amount'] } } },
+      required: ['purchases'],
+    },
+    maxTokens: 2000,
+    signal,
+  });
+  return (Array.isArray(r?.purchases) ? r.purchases : [])
+    .map((x: any) => ({ date: String(x?.date || '').slice(0, 10), name: String(x?.name || '').trim(), amount: Math.round(Number(x?.amount) || 0), ...(x?.units ? { units: String(x.units) } : {}), ...(Number(x?.price) > 0 ? { price: Number(x.price) } : {}) }))
+    .filter((x: any) => /^\d{4}-\d{2}-\d{2}$/.test(x.date) && x.name && x.amount > 0);
+}
+
 async function generateChapterPart(inp: GenerateInput, o: Outline, idx: number, count: number, partNo: number, partTotal: number, prev: ExplainerScene[], signal?: AbortSignal): Promise<ExplainerScene[]> {
   const ch = o.chapters[idx];
   const first = prev.length === 0;

@@ -7911,7 +7911,10 @@ function BeginnerTrialSection({ data, holdings, holdingsAsOf, brokerHoldingHisto
   const showYearEnd = Number(asOf.slice(0, 4)) >= 2027;
   // 銘柄別評価額の取り込み履歴＋最初の買い付け（2026/1/10・ブログのスクショから転記。lib/beginnerTrialSeed.ts）
   const daiwaSnapshots = useMemo(() => withInitialSnapshot(brokerHoldingHistory?.[BEGINNER_TRIAL.brokerKey] ?? []), [brokerHoldingHistory]);
-  const daiwaPurchases = useMemo(() => purchasesMatched(daiwaSnapshots), [daiwaSnapshots]);
+  // 買い付けの記録：これまでの分（lib/beginnerTrialSeed.ts）＋動画作成（週次レポート）で購入画面のスクショから読み取った分（trial_purchases）
+  const [storedPurchases, setStoredPurchases] = useState([]);
+  useEffect(() => { storage.get("trial_purchases").then((r) => setStoredPurchases(r?.value ? JSON.parse(r.value) : [])).catch(() => {}); }, []);
+  const daiwaPurchases = useMemo(() => purchasesMatched(daiwaSnapshots, storedPurchases), [daiwaSnapshots, storedPurchases]);
   // 積み上げグラフの月ごとの合計：投資収支xlsxの評価額＋口座画面の内訳が分かっている時点（同じ日ならそちらを優先）
   const daiwaTotals = useMemo(() => {
     const cps = checkpointsMatched(daiwaSnapshots);
