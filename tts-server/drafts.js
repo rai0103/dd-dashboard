@@ -54,7 +54,8 @@ function registerTask(s) {
     if (process.platform !== 'win32') { resolve({ ok: false, error: 'Windows専用' }); return; }
     const root = path.join(__dirname, '..');
     const script = s.enabled
-      ? `$a = New-ScheduledTaskAction -Execute '${process.execPath}' -Argument 'scripts\\auto-draft.mjs' -WorkingDirectory '${root}';` +
+      // 黒い画面（コンソール）を出さないよう、scripts/run-hidden.vbs 経由で node を実行する
+      ? `$a = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument '"${root}\\scripts\\run-hidden.vbs" "${process.execPath}" "${root}\\scripts\\auto-draft.mjs"' -WorkingDirectory '${root}';` +
         `$t = New-ScheduledTaskTrigger -Daily -At '${s.time}';` +
         `$st = New-ScheduledTaskSettingsSet -WakeToRun -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 2);` +
         `$p = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive;` +
