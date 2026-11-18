@@ -1096,6 +1096,8 @@ export default function ExplainerStudio() {
   // [ポリゴン風に加工] 場面の画像をポリゴン風にした画像を新しく保存して付け替える（元の画像はライブラリに残す）。
   // フリー素材の出典は引き継ぎ、概要欄のクレジットに「ポリゴン風に加工」と書く
   const [polyOpenId, setPolyOpenId] = useState(null);
+  // サイズ調整の画面から「ポリゴン風に加工へ」で進んだ場面。加工を終えたら、サイズ調整の画面に戻す
+  const polyThenFitRef = useRef(null);
   // [画像のサイズ・位置を調整] 開いている場面のid
   const [fitOpenId, setFitOpenId] = useState(null);
   const applyPolygon = async (sc, blob) => {
@@ -1106,6 +1108,7 @@ export default function ExplainerStudio() {
     await refreshImages();
     setScenes((list) => list.map((s) => (s.id === sc.id ? { ...s, imageId: im.id, visual: { ...s.visual, kind: "image" } } : s)));
     setPolyOpenId(null);
+    if (polyThenFitRef.current === sc.id) { polyThenFitRef.current = null; setFitOpenId(sc.id); }
     const idx = scenes.findIndex((s) => s.id === sc.id);
     if (idx >= 0) previewSceneAt(idx);
   };
@@ -2397,12 +2400,13 @@ export default function ExplainerStudio() {
                                     {fitOpenId === sc.id && imageEls[sc.imageId] && (
                                       <ImageFitModal img={imageEls[sc.imageId]} fit={sc.imageFit} heading={sc.visual?.heading || ""} portrait={format === "short"}
                                         onApply={(fit) => { patchScene(sc.id, { imageFit: fit }); setFitOpenId(null); const idx = scenes.findIndex((s) => s.id === sc.id); if (idx >= 0) previewSceneAt(idx); }}
-                                        onClose={() => setFitOpenId(null)} />
+                                        onClose={() => setFitOpenId(null)}
+                                        onPolygon={(fit) => { patchScene(sc.id, { imageFit: fit }); setFitOpenId(null); polyThenFitRef.current = sc.id; setPolyOpenId(sc.id); }} />
                                     )}
                                     <button onClick={() => setPolyOpenId(sc.id)} disabled={!images.find((im) => im.id === sc.imageId)} title="実在の人物などを、三角形の面で塗り分けたポリゴン風の絵にします" className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={btn()}><Sparkles size={10} />ポリゴン風に加工</button>
                                     {polyOpenId === sc.id && images.find((im) => im.id === sc.imageId) && (
                                       <LowPolyModal image={images.find((im) => im.id === sc.imageId).blob} credit={imageCreditOf(sc.imageId)} aspect={format === "short" ? "9:16" : "16:9"}
-                                        onApply={(blob) => applyPolygon(sc, blob)} onClose={() => setPolyOpenId(null)} />
+                                        onApply={(blob) => applyPolygon(sc, blob)} onClose={() => { setPolyOpenId(null); if (polyThenFitRef.current === sc.id) { polyThenFitRef.current = null; setFitOpenId(sc.id); } }} />
                                     )}
                                   </>
                                 ) : (
