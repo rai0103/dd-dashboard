@@ -594,15 +594,14 @@ export default function ExplainerStudio() {
   const refreshWeeklyFixed = () => {
     if (!project || project.mode !== "weekly") return;
     const fresh = new Map(buildTrialReportChapters(trialReport).flatMap((c2) => c2.scenes).map((x) => [x.fixedKey, x]));
-    const topicNames = weeklyTopicList().map((t) => t.topic);
     let titleDone = false;
     const longScenes = project.longScenes.map((sc) => {
-      if (sc.visual.kind === "title" && !titleDone) { titleDone = true; return decorateTrialTitle(sc, trialReport, topicNames, WEEKLY_CHANNEL); }
+      if (sc.visual.kind === "title" && !titleDone) { titleDone = true; return decorateTrialTitle(sc, trialReport, WEEKLY_CHANNEL); }
       const n = sc.fixedKey ? fresh.get(sc.fixedKey) : null;
       if (n) return { ...sc, title: n.title, caption: n.caption, narration: n.narration, reading: n.reading, readingStale: false, visual: n.visual, minSec: n.minSec, genNarration: n.narration };
       return weeklyKindGuard(sc);
     }).filter((sc) => !(sc.fixedKey && sc.fixedKey.startsWith("fixed:weekly:") && !fresh.has(sc.fixedKey))); // 今は作らなくなった場面（例：これまでの入金）は外す
-    setProject((p) => ({ ...p, longScenes, shortScenes: p.shortScenes.map(weeklyKindGuard) }));
+    setProject((p) => ({ ...p, videoTitle: WEEKLY_CHANNEL, longScenes, shortScenes: p.shortScenes.map(weeklyKindGuard) }));
   };
   const scenes = project ? (format === "long" ? project.longScenes : project.shortScenes) : NO_SCENES;
   const setScenes = (fn) => setProject((p) => {
@@ -915,10 +914,10 @@ export default function ExplainerStudio() {
         const merged = mergeFixedChapters(p.chapters, longScenes, fixed);
         longScenes = assembleLong(merged.chapters, merged.perChapter, p.sources, true, sourcesInVideo);
         p = { ...p, chapters: merged.chapters };
-        // 表紙：チャンネル名・「週次報告（日付）」「月次報告（年月）」・トピックス
-        const topicNames = weeklyTopicList().map((t) => t.topic);
+        // 表紙：チャンネル名・「2026年1月〜（今日現在）」・「目指せ！15年で1億円！」。画面上部の見出しもチャンネル名にする（どちらも編集可）
         const ti = longScenes.findIndex((sc) => sc.visual.kind === "title");
-        if (ti >= 0) longScenes = longScenes.map((sc, i) => (i === ti ? decorateTrialTitle(sc, trialReport, topicNames, WEEKLY_CHANNEL) : sc));
+        if (ti >= 0) longScenes = longScenes.map((sc, i) => (i === ti ? decorateTrialTitle(sc, trialReport, WEEKLY_CHANNEL) : sc));
+        p = { ...p, videoTitle: WEEKLY_CHANNEL };
       }
       if (mode === "stock" || mode === "sp500") {
         const snap = primaryStockSnapshot();

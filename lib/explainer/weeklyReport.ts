@@ -274,19 +274,21 @@ export function reportDateLabel(kind: 'weekly' | 'monthly', asOf: string): strin
   return `週次報告（${t.getUTCFullYear()}年${t.getUTCMonth() + 1}月${t.getUTCDate()}日）`;
 }
 
-/** 表紙（タイトルの場面）：チャンネル名・週次／月次報告の日付・トピックス。背景には評価額の推移をうっすら描く */
-export function decorateTrialTitle(sc: ExplainerScene, inp: TrialReportInput, topics: string[], channel: string): ExplainerScene {
+/** 表紙（タイトルの場面）：チャンネル名・「2026年1月〜（◯年◯月◯日現在）」・「目指せ！15年で1億円！」。
+ * 背景の画像は毎回選ぶ（場面の画像）。画像が無いときは評価額の推移をうっすら描く。文字はあとから自由に直せる */
+export function decorateTrialTitle(sc: ExplainerScene, inp: TrialReportInput, channel: string, today = new Date()): ExplainerScene {
   if (sc.visual.kind !== 'title') return sc;
-  const asOf = inp.status?.asOf ?? inp.weekly?.asOf ?? new Date().toISOString().slice(0, 10);
+  const asOf = inp.status?.asOf ?? inp.weekly?.asOf ?? today.toISOString().slice(0, 10);
   const assets = inp.status?.assets ?? inp.weekly?.total;
   const bg = assets != null ? valueLine(inp.history ?? [], asOf, assets) : [];
+  const now = `${today.getFullYear()}年${today.getMonth() + 1}月${today.getDate()}日`;
   return {
     ...sc,
     visual: {
       ...sc.visual,
-      emphasis: channel,
-      heading: reportDateLabel(inp.kind, asOf),
-      subheading: topics.length ? `Topics：${topics.join('・')}` : '',
+      heading: channel,
+      subheading: `${START_Y}年${START_M}月〜（${now}現在）`,
+      emphasis: `目指せ！${inp.target.years}年で1億円！`,
       items: [],
       background: bg.length >= 2 ? bg : undefined,
       titleNote: undefined,
