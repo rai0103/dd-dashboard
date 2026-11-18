@@ -32,6 +32,9 @@ export const DAIWA_PURCHASES: { date: string; name: string; amount: number; nav?
   // 8/3 18時台に発注（15時以降の注文のため、約定は翌営業日の8/4として記録）：TOPIX 3万円・NASDAQ100 2万円
   { date: '2026-08-04', name: 'eMAXIS Slim 国内株式(TOPIX)', amount: 30000 },
   { date: '2026-08-04', name: 'iFreeNEXT NASDAQ100インデックス', amount: 20000 },
+  // 9月（取引履歴より）：純金信託 1株 約定9/1・単価21,270円、eMAXIS Slim 米国株式(S&P500) 約定9/2・6,382口・基準価額45,017円・28,730円
+  { date: '2026-09-01', name: '1540 純金上場信託（現物国内保管型）', amount: 21270 },
+  { date: '2026-09-02', name: 'eMAXIS Slim 米国株式(S&P500)', amount: 28730, nav: 45017 },
 ];
 
 /**
