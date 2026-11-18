@@ -44,7 +44,7 @@ import { parseStooqCSV } from "@/lib/csvPrice";
 import { buildStockCatalogFromSnapshot, buildStockCatalogFromCsv, mergeStockCatalogs, resolveYearCompareItems } from "@/lib/explainer/stockCatalog";
 import { buildFixedDataChapters, fixedChaptersNote, mergeFixedChapters, dataPeriodOf, dataPeriodNoteOf } from "@/lib/explainer/dataChapters";
 import { purchasesInMonth } from "@/lib/beginnerTrialSeed";
-import { WEEKLY_CHANNEL, WEEKLY_PERSONA, buildWeeklyData, parsePurchases, weeklyFactsText, buildWeeklyFixedChapter, yenJp } from "@/lib/explainer/weeklyReport";
+import { WEEKLY_CHANNEL, WEEKLY_PERSONA, buildWeeklyData, parsePurchases, yenJp, buildTrialReportChapters, trialFactsText, trialStatus, monthlyReturn, planVsActual, cagrOf, yearsToGoal, requiredRate, TRIAL_RULES } from "@/lib/explainer/weeklyReport";
 import { decorateTitleScene } from "@/lib/explainer/sp500SheetScenes";
 import { computeSp500Sheets } from "@/lib/sp500Sheets";
 import { drawVisual, PALETTE } from "@/lib/explainer/visuals";
@@ -267,6 +267,41 @@ export default function ExplainerStudio() {
   }, [weeklySnaps]);
   const weeklyPurchases = useMemo(() => (weeklyPurchasesText.trim() ? parsePurchases(weeklyPurchasesText) : weeklyLedgerPurchases), [weeklyPurchasesText, weeklyLedgerPurchases]);
   const weeklyData = useMemo(() => buildWeeklyData(weeklySnaps, weeklyPurchases), [weeklySnaps, weeklyPurchases]);
+  // 週次／月次（月初）レポートの種類と、現在地・計画との比較に使うデータ（投資収支xlsxの月末の評価額・スクショの資産合計・S&P500の全期間）
+  const [weeklyKind, setWeeklyKind] = useState(() => { try { return localStorage.getItem("weekly-kind-v1") || "weekly"; } catch (e) { return "weekly"; } });
+  useEffect(() => { try { localStorage.setItem("weekly-kind-v1", weeklyKind); } catch (e) { /* 無視 */ } }, [weeklyKind]);
+  const [trialExtra, setTrialExtra] = useState({ excel: [], summary: null, spxPoints: [] });
+  const loadTrialExtra = async () => {
+    const get = async (k) => { try { const r = await storage.get(k); return r?.value ? JSON.parse(r.value) : null; } catch (e) { return null; } };
+    const [perf, sums, spx] = await Promise.all([get("investment_performance_data"), get("broker_summaries"), get("price-series:VOO")]);
+    setTrialExtra({
+      excel: (perf?.beginnerTrial ?? []).filter((p) => p && p.value != null && p.date >= "2026-01-01").map((p) => ({ date: p.date, value: p.value })),
+      summary: sums?.daiwa ?? null,
+      spxPoints: Array.isArray(spx?.points) ? spx.points : [],
+    });
+  };
+  useEffect(() => { if (mode === "weekly") loadTrialExtra(); }, [mode]);
+  const trialReport = useMemo(() => {
+    const d = weeklyData;
+    const sm = trialExtra.summary;
+    // 資産合計：スクショの「資産を見る」の合計（現金を含む）が同じ日の取り込みならそれ、無ければ保有銘柄の合計
+    const sameDay = d && sm && (sm.asOf === d.asOf || String(sm.importedAt || "").slice(0, 10) === d.asOf) && sm.screenTotal > 0;
+    const assets = d ? (sameDay ? sm.screenTotal : d.total) : null;
+    const points = [...trialExtra.excel, ...(d && assets ? [{ date: d.asOf, value: assets }] : [])];
+    const c = cagrOf(trialExtra.spxPoints);
+    const spx = c ? { rate: c.rate, years: yearsToGoal(c.rate), period: `${c.start.slice(0, 4)}〜${c.end.slice(0, 4)}年` } : null;
+    const target = { years: TRIAL_RULES.targetYears, rate: requiredRate(TRIAL_RULES.targetYears) };
+    const now = new Date(); const pm = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const prevYm = `${pm.getFullYear()}-${String(pm.getMonth() + 1).padStart(2, "0")}`;
+    return {
+      kind: weeklyKind, weekly: d, purchases: weeklyPurchases,
+      status: d && assets ? trialStatus(d.asOf, assets, points) : null,
+      assetsIncludesCash: !!sameDay,
+      spx, target,
+      monthly: weeklyKind === "monthly" ? monthlyReturn(points, prevYm) : null,
+      planRows: weeklyKind === "monthly" ? planVsActual(points, prevYm, target.rate) : null,
+    };
+  }, [weeklyData, weeklyPurchases, trialExtra, weeklyKind]);
   // トピックス：1行に1つ。「トピック ｜ コメントの要旨」。URLを書いた行は、そのURLも参考情報に入れる
   const weeklyTopicList = () => weeklyTopicsText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).map((l) => {
     const [t, ...g] = l.split(/\s*[|｜]\s*/);
@@ -589,17 +624,21 @@ export default function ExplainerStudio() {
     // 週次レポート：語り口・今週の数字・トピックスと要旨をAIに渡し、今週の資産状況の固定章の場面数を予算から差し引く
     let extra = extraInstruction;
     if (mode === "weekly") {
-      const wk = weeklyData;
+      const monthlyKind = weeklyKind === "monthly";
       const topics = weeklyTopicList();
+      const fixedChs = buildTrialReportChapters(trialReport);
       extra = [
-        `チャンネル名「${WEEKLY_CHANNEL}」の週次レポート動画。語り手は${WEEKLY_PERSONA}`,
-        "動画の冒頭で、チャンネル名と「今週の報告」であることを短く名乗る。締めでは来週の注目点と、チャンネル登録の呼びかけを短く。",
-        wk ? weeklyFactsText(wk, weeklyPurchases) : "",
-        wk ? "今週の評価額・銘柄別の値動き・買い付け・目標の達成率は、アプリが実データから作る章で説明するので、あなたは数字の場面を作らない。導入とトピックスの雑感では、上の数字と食い違うことを言わない。" : "",
-        topics.length ? `【今週のトピックス】次のトピックスを、それぞれ1章ずつ扱う。「要旨」は語り手（制作者）自身の意見なので、要旨を軸にし、参考資料で事実・数字の裏付けと補足を加えて、語り手の本音として話す。要旨と違う結論にしない。\n${topics.map((t, i) => `${i + 1}. ${t.topic}${t.gist ? `（要旨：${t.gist}）` : ""}`).join("\n")}` : "",
+        `チャンネル名「${WEEKLY_CHANNEL}」の${monthlyKind ? "月次レポート（月初の回）" : "週次レポート"}動画。語り手は${WEEKLY_PERSONA}`,
+        `動画の冒頭（role=intro、場面2個）で、チャンネル名と「${monthlyKind ? "今月最初の報告（先月の成績と長期目標の振り返り）" : "今週の報告"}」であることを短く名乗る。チャンネルのルール（初期費用・毎月の積立・ボーナス月）と目標年数の説明、${monthlyKind ? "先月の月次リターン・長期目標との差、" : ""}現在の元本・評価額・期間ごとの騰落率・銘柄別の値動き・買い付け・目標の達成率は、アプリが実データから作る章（導入の直後に入る）で説明するので、あなたはそれらの場面を作らない。`,
+        trialFactsText(trialReport),
+        "導入・トピックス・締めでは、上の数字と食い違うことを言わない。",
+        topics.length
+          ? `【${monthlyKind ? "今月の" : "今週の"}トピックス】次のトピックスを、それぞれ1章ずつ扱う（トピックスの章の場面は合計10場面程度）。「要旨」は語り手（制作者）自身の意見なので、要旨を軸にし、参考資料で事実・数字の裏付けと補足を加えて、語り手の本音として話す。要旨と違う結論にしない。\n${topics.map((t, i) => `${i + 1}. ${t.topic}${t.gist ? `（要旨：${t.gist}）` : ""}`).join("\n")}`
+          : "トピックスの指定が無いので、前週の相場の振り返りを1章（場面5個程度）で扱う。",
+        `最後の章（role=outro）は「雑感」として、${monthlyKind ? "今月の投資方針と、" : ""}今回の結果とトピックスについて語り手の本音を述べて締める（チャンネル登録の呼びかけは最後の場面で短く）。`,
         extraInstruction,
       ].filter(Boolean).join("\n");
-      if (wk) dataExtra = { reservedScenes: buildWeeklyFixedChapter(wk, weeklyPurchases).scenes.length + 1 };
+      dataExtra = { reservedScenes: fixedChs.reduce((a, c2) => a + c2.scenes.length + 1, 0) };
     }
     return { topic: topic.trim(), mode, audience, targetMinutes: minutes, extraInstruction: extra, refBlocks: referenceBlocks(refs), today: todayStr(), speechRate: rate, imageShare: imgAutoEnabled ? imgShare : 0, stockCatalog, requiredRefNotes: requiredRefNotes(refs), learnedEdits: (learned.general[mode] || []).map((x) => ({ before: x.before, after: x.after })), ...dataExtra };
   };
@@ -816,8 +855,8 @@ export default function ExplainerStudio() {
       // AIの導入章の直後に挿入する（以前は導入章＝「つかみ」の章の先頭にまとめて差し込んでいた）。章の扉・章番号は振り直す。
       // 新しい分析をダッシュボードに足して動画にも反映したいときは、DDDashboard.jsx側でstock-catalog:*に書き出し→
       // lib/explainer/に固定場面ビルダーを足し→lib/explainer/dataChapters.tsのbuildFixedDataChaptersに追加する。
-      if (mode === "weekly" && weeklyData) {
-        const fixed = [buildWeeklyFixedChapter(weeklyData, weeklyPurchases)];
+      if (mode === "weekly") {
+        const fixed = buildTrialReportChapters(trialReport);
         const merged = mergeFixedChapters(p.chapters, longScenes, fixed);
         longScenes = assembleLong(merged.chapters, merged.perChapter, p.sources, true, sourcesInVideo);
         p = { ...p, chapters: merged.chapters };
@@ -847,7 +886,7 @@ export default function ExplainerStudio() {
         toApply.forEach(({ i }, k) => { if (results[k]) longScenes[i] = { ...longScenes[i], narration: results[k].narration, reading: results[k].reading, readingStale: false }; });
       }
       // ラベル（kicker）は、選んだ長尺の長さから自動で入れる（例：5分で解説）。生成後も自由に書き換えられる
-      p = { ...p, longScenes, shortScenes: S.scenes, kicker: mode === "weekly" ? "週次レポート" : autoKickerFor(minutes) };
+      p = { ...p, longScenes, shortScenes: S.scenes, kicker: mode === "weekly" ? (weeklyKind === "monthly" ? "月次レポート" : "週次レポート") : autoKickerFor(minutes) };
       setProject(p); setFormat("long"); setInputOpen(false); setSeekPos(0);
       // 手動で作った動画のテーマも記録する（夜間の自動生成で同じ話題を選ばないように。自動ドラフトの実行中は、そちらで記録する）
       if ((mode === "news" || mode === "keyword") && new URLSearchParams(window.location.search).get("autodraft") !== "1") {
@@ -2189,7 +2228,24 @@ export default function ExplainerStudio() {
               })()}
               {mode === "weekly" && (
                 <div className="flex flex-col gap-2 rounded p-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
-                  <div className="text-[11px] font-bold" style={{ color: C.teal }}>週次レポート：{WEEKLY_CHANNEL}</div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-[11px] font-bold" style={{ color: C.teal }}>{WEEKLY_CHANNEL}</span>
+                    {[["weekly", "週次レポート（週末）"], ["monthly", "月次レポート（月初）"]].map(([k, l]) => (
+                      <button key={k} onClick={() => setWeeklyKind(k)} className="text-[10px] px-2 py-0.5 rounded" style={weeklyKind === k ? btn("primary") : btn()}>{l}</button>
+                    ))}
+                  </div>
+                  <div className="text-[10px] leading-relaxed" style={{ color: C.textDim }}>
+                    構成：導入 → ルール説明（初期40万円＋毎月5万円＋6・12月各20万円、{TRIAL_RULES.targetYears}年で1億円：必要な年率およそ{(trialReport.target.rate * 100).toFixed(0)}%{trialReport.spx?.years ? `／S&P500の過去の値動き 年${(trialReport.spx.rate * 100).toFixed(1)}%なら約${Math.round(trialReport.spx.years)}年` : ""}）
+                    {weeklyKind === "monthly" ? " → 先月の月次リターン・計画との差" : ""} → 元本・評価額・期間ごとの騰落率・銘柄別・目標の達成率 → トピックス（10場面程度） → 雑感
+                  </div>
+                  {trialReport.status && (
+                    <div className="text-[11px]" style={{ color: C.textMuted }}>
+                      元本 <b style={{ color: C.text }}>{yenJp(trialReport.status.principal)}</b>／評価額 <b style={{ color: C.text }}>{yenJp(trialReport.status.assets)}</b>{trialReport.assetsIncludesCash ? "（現金を含む）" : "（保有銘柄の合計）"}／トータル <b style={{ color: trialReport.status.plPct >= 0 ? C.teal : C.rust }}>{trialReport.status.plPct >= 0 ? "+" : ""}{trialReport.status.plPct.toFixed(1)}%</b>
+                      {trialReport.status.monthPct != null && `／月初から ${trialReport.status.monthPct >= 0 ? "+" : ""}${trialReport.status.monthPct.toFixed(1)}%`}
+                      {trialReport.status.yearPct != null && trialReport.status.yearStart && `／年初から ${trialReport.status.yearPct >= 0 ? "+" : ""}${trialReport.status.yearPct.toFixed(1)}%`}
+                      {weeklyKind === "monthly" && (trialReport.monthly ? `／先月の月次リターン ${trialReport.monthly.pct >= 0 ? "+" : ""}${trialReport.monthly.pct.toFixed(1)}%` : "／先月の月次リターン：先月末の評価額が無いため出せません（投資収支xlsxを更新してください）")}
+                    </div>
+                  )}
                   {weeklyData ? (
                     <div className="text-[11px] leading-relaxed" style={{ color: C.textMuted }}>
                       今週（{weeklyData.asOf}のスクショ）：評価額 <b style={{ color: C.text }}>{yenJp(weeklyData.total)}</b>
@@ -2200,7 +2256,7 @@ export default function ExplainerStudio() {
                   ) : (
                     <div className="text-[11px]" style={{ color: C.amber }}>大和コネクト証券のスクショがまだありません。ダッシュボードの「データ入力」→「証券会社スクショ取込」で、毎週末に大和コネクト証券のスクショを取り込んでください。</div>
                   )}
-                  <button onClick={loadWeeklySnaps} className="self-start text-[10px] px-2 py-0.5 rounded" style={btn()}>スクショの取り込みを読み直す</button>
+                  <button onClick={() => { loadWeeklySnaps(); loadTrialExtra(); }} className="self-start text-[10px] px-2 py-0.5 rounded" style={btn()}>スクショ・投資収支xlsxの取り込みを読み直す</button>
                   <label className="text-[11px]" style={{ color: C.textMuted }}>今月の買い付け（月初の週だけ。1行に「銘柄 金額」。例：S&P500 30000／金 2万円）{!weeklyPurchasesText.trim() && weeklyLedgerPurchases.length ? `　※空欄のため、買い付けの記録（${weeklyLedgerPurchases.map((p) => `${p.name} ${p.amount.toLocaleString()}円`).join("、")}）を使います` : ""}</label>
                   <textarea value={weeklyPurchasesText} onChange={(e) => setWeeklyPurchasesText(e.target.value)} rows={2} className="px-2 py-1 rounded text-[11px]" style={inputStyle} placeholder={"S&P500 30000\n金 20000"} />
                   <label className="text-[11px]" style={{ color: C.textMuted }}>今週のトピックス（1行に1つ。「トピック ｜ コメントの要旨」。URLを書くとその記事も参考にします）→ 書いたら、下の「AIで検索して参考情報を追加」でトピックスごとに集めます</label>
