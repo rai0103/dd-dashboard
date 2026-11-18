@@ -29,6 +29,9 @@ export const DAIWA_PURCHASES: { date: string; name: string; amount: number; nav?
   // 純金信託の約定単価は画面に無いため、毎月の5万円から投資信託の注文金額を引いた残り（19,545円）としている
   { date: '2026-07-01', name: '1540 純金上場信託（現物国内保管型）', amount: 50000 - 30455 },
   { date: '2026-07-01', name: 'iFreeNEXT NASDAQ100インデックス', amount: 30455 },
+  // 8/3 18時台に発注（15時以降の注文のため、約定は翌営業日の8/4として記録）：TOPIX 3万円・NASDAQ100 2万円
+  { date: '2026-08-04', name: 'eMAXIS Slim 国内株式(TOPIX)', amount: 30000 },
+  { date: '2026-08-04', name: 'iFreeNEXT NASDAQ100インデックス', amount: 20000 },
 ];
 
 /**
@@ -38,6 +41,9 @@ export const DAIWA_PURCHASES: { date: string; name: string; amount: number; nav?
 export const DAIWA_CHECKPOINTS: { date: string; total: number; fixed: Record<string, number>; note: string }[] = [
   // 6/1（ボーナス月）：株式(1)107,725円・投資信託(4)652,376円・現金250,000円（入金済み・未投資）
   { date: '2026-06-01', total: 107725 + 652376, fixed: { '1540 純金上場信託（現物国内保管型）': 107725 }, note: '株式107,725円・投資信託652,376円（現金250,000円は未投資のため除く）' },
+  // 8/3：株式(2)282,740円・投資信託(5)702,011円・現金50,000円（未投資）、すべての資産1,034,751円（評価損益+34,751円）。
+  // 株式は2銘柄（純金信託ともう1銘柄）で内訳が分からないため、合計だけを使う
+  { date: '2026-08-03', total: 282740 + 702011, fixed: {}, note: '株式282,740円・投資信託702,011円（現金50,000円は未投資のため除く）' },
 ];
 
 /** 内訳の時点の銘柄名を、取り込み済みの名前に合わせる */
