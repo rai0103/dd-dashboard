@@ -35,6 +35,9 @@ export const DAIWA_PURCHASES: { date: string; name: string; amount: number; nav?
   // 9月（取引履歴より）：純金信託 1株 約定9/1・単価21,270円、eMAXIS Slim 米国株式(S&P500) 約定9/2・6,382口・基準価額45,017円・28,730円
   { date: '2026-09-01', name: '1540 純金上場信託（現物国内保管型）', amount: 21270 },
   { date: '2026-09-02', name: 'eMAXIS Slim 米国株式(S&P500)', amount: 28730, nav: 45017 },
+  // 10月：純金信託 1株 10/5約定・単価19,640円、eMAXIS Slim 米国株式(S&P500) 30,360円（約定10/6）
+  { date: '2026-10-05', name: '1540 純金上場信託（現物国内保管型）', amount: 19640 },
+  { date: '2026-10-06', name: 'eMAXIS Slim 米国株式(S&P500)', amount: 30360 },
 ];
 
 /**
