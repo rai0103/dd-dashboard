@@ -93,7 +93,8 @@ export function performanceRows(series: Record<string, Dated[]>, start: string):
  * 評価額の積み上げ（銘柄別）の推移。
  * ・スクショの取り込み（snapshots）がある日：その日の銘柄ごとの評価額（実際の値）
  * ・それ以外の月（投資収支xlsxの月ごとの口座合計 totals がある日）：一番近いスクショの銘柄構成を、代用データの値動きで
- *   その日の値に動かし（口数は変わらないと仮定）、合計がその月の口座の評価額に一致するように比率を合わせた推計値
+ *   その日の値に動かし（口数は変わらないと仮定）、合計がその月の口座の評価額に一致するように比率を合わせた推計値。
+ *   買い付けの記録（purchases）があれば、スクショの後に買った分も、買った日からの値動きで足してから比率を合わせる
  * 戻り値は日付順の行 { date, estimated, total, [銘柄名]: 円 }
  */
 export function stackedHoldingRows(
@@ -101,9 +102,10 @@ export function stackedHoldingRows(
   totals: { date: string; value: number | null }[],
   priceOf: (name: string) => Dated[] | null,
   start: string,
+  purchases: { date: string; name: string; amount: number }[] = [],
 ): { rows: Record<string, number | string | boolean>[]; names: string[] } {
   const snaps = snapshots.filter((s) => s.date >= start).sort((a, b) => a.date.localeCompare(b.date));
-  const names = [...new Set(snaps.flatMap((s) => Object.keys(s.items)))].sort();
+  const names = [...new Set([...snaps.flatMap((s) => Object.keys(s.items)), ...purchases.map((p) => p.name)])].sort();
   const rows: Record<string, number | string | boolean>[] = [];
   const snapMonths = new Set(snaps.map((s) => s.date.slice(0, 7)));
   for (const s of snaps) {
@@ -128,6 +130,14 @@ export function stackedHoldingRows(
         const p1 = ps ? valueAt(ps, t.date) : null, p0 = ps ? valueAt(ps, ref.date) : null;
         est[n] = p1 != null && p0 ? v0 * (p1 / p0) : v0;
         sum += est[n];
+      }
+      // スクショの後、この日までに買った分を、買った日からの値動きで足す
+      if (before) for (const p of purchases) {
+        if (!(p.date > before.date && p.date <= t.date) || !(p.amount > 0)) continue;
+        const ps = priceOf(p.name);
+        const p1 = ps ? valueAt(ps, t.date) : null, p0 = ps ? valueAt(ps, p.date) : null;
+        const v = p1 != null && p0 ? p.amount * (p1 / p0) : p.amount;
+        est[p.name] = (est[p.name] ?? 0) + v; sum += v;
       }
       if (!(sum > 0)) continue;
       const k = t.value / sum;

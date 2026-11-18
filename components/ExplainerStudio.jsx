@@ -43,6 +43,7 @@ import { easternStamp } from "@/lib/marketClock";
 import { parseStooqCSV } from "@/lib/csvPrice";
 import { buildStockCatalogFromSnapshot, buildStockCatalogFromCsv, mergeStockCatalogs, resolveYearCompareItems } from "@/lib/explainer/stockCatalog";
 import { buildFixedDataChapters, fixedChaptersNote, mergeFixedChapters, dataPeriodOf, dataPeriodNoteOf } from "@/lib/explainer/dataChapters";
+import { purchasesInMonth } from "@/lib/beginnerTrialSeed";
 import { WEEKLY_CHANNEL, WEEKLY_PERSONA, buildWeeklyData, parsePurchases, weeklyFactsText, buildWeeklyFixedChapter, yenJp } from "@/lib/explainer/weeklyReport";
 import { decorateTitleScene } from "@/lib/explainer/sp500SheetScenes";
 import { computeSp500Sheets } from "@/lib/sp500Sheets";
@@ -259,7 +260,12 @@ export default function ExplainerStudio() {
     try { const r = await storage.get("broker_holding_history"); const h = r?.value ? JSON.parse(r.value) : {}; setWeeklySnaps(Array.isArray(h?.daiwa) ? h.daiwa : []); } catch (e) { setWeeklySnaps([]); }
   };
   useEffect(() => { if (mode === "weekly") loadWeeklySnaps(); }, [mode]);
-  const weeklyPurchases = useMemo(() => parsePurchases(weeklyPurchasesText), [weeklyPurchasesText]);
+  // 今月の買い付け：入力が空なら、買い付けの記録（lib/beginnerTrialSeed.ts）から最新のスクショの月の分を使う
+  const weeklyLedgerPurchases = useMemo(() => {
+    const last = [...weeklySnaps].sort((a, b) => a.date.localeCompare(b.date)).pop();
+    return last ? purchasesInMonth(last.date.slice(0, 7)).map((p) => ({ name: p.name, amount: p.amount })) : [];
+  }, [weeklySnaps]);
+  const weeklyPurchases = useMemo(() => (weeklyPurchasesText.trim() ? parsePurchases(weeklyPurchasesText) : weeklyLedgerPurchases), [weeklyPurchasesText, weeklyLedgerPurchases]);
   const weeklyData = useMemo(() => buildWeeklyData(weeklySnaps, weeklyPurchases), [weeklySnaps, weeklyPurchases]);
   // トピックス：1行に1つ。「トピック ｜ コメントの要旨」。URLを書いた行は、そのURLも参考情報に入れる
   const weeklyTopicList = () => weeklyTopicsText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).map((l) => {
@@ -2195,7 +2201,7 @@ export default function ExplainerStudio() {
                     <div className="text-[11px]" style={{ color: C.amber }}>大和コネクト証券のスクショがまだありません。ダッシュボードの「データ入力」→「証券会社スクショ取込」で、毎週末に大和コネクト証券のスクショを取り込んでください。</div>
                   )}
                   <button onClick={loadWeeklySnaps} className="self-start text-[10px] px-2 py-0.5 rounded" style={btn()}>スクショの取り込みを読み直す</button>
-                  <label className="text-[11px]" style={{ color: C.textMuted }}>今月の買い付け（月初の週だけ。1行に「銘柄 金額」。例：S&P500 30000／金 2万円）</label>
+                  <label className="text-[11px]" style={{ color: C.textMuted }}>今月の買い付け（月初の週だけ。1行に「銘柄 金額」。例：S&P500 30000／金 2万円）{!weeklyPurchasesText.trim() && weeklyLedgerPurchases.length ? `　※空欄のため、買い付けの記録（${weeklyLedgerPurchases.map((p) => `${p.name} ${p.amount.toLocaleString()}円`).join("、")}）を使います` : ""}</label>
                   <textarea value={weeklyPurchasesText} onChange={(e) => setWeeklyPurchasesText(e.target.value)} rows={2} className="px-2 py-1 rounded text-[11px]" style={inputStyle} placeholder={"S&P500 30000\n金 20000"} />
                   <label className="text-[11px]" style={{ color: C.textMuted }}>今週のトピックス（1行に1つ。「トピック ｜ コメントの要旨」。URLを書くとその記事も参考にします）→ 書いたら、下の「AIで検索して参考情報を追加」でトピックスごとに集めます</label>
                   <textarea value={weeklyTopicsText} onChange={(e) => setWeeklyTopicsText(e.target.value)} rows={3} className="px-2 py-1 rounded text-[11px]" style={inputStyle}

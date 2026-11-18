@@ -45,3 +45,13 @@ test("stackedHoldingRows：スクショの月は実際の値、ほかの月は�
   assert.equal(sep.A, Math.round(300 * 500 / 700)); assert.equal(sep.B, Math.round(400 * 500 / 700));
   assert.equal(rows[2].estimated, false); assert.equal(rows[2].A, 600);
 });
+
+test("stackedHoldingRows：スクショの後の買い付けを、買った日からの値動きで足してから合計に合わせる", () => {
+  const snaps = [{ date: "2026-01-10", items: { A: 100 } }, { date: "2026-03-10", items: { A: 120, B: 60 } }];
+  const totals = [{ date: "2026-02-28", value: 165 }];
+  const price: Record<string, { date: string; close: number }[]> = { A: [{ date: "2026-01-10", close: 100 }, { date: "2026-02-28", close: 110 }], B: [{ date: "2026-01-15", close: 100 }, { date: "2026-02-28", close: 110 }] };
+  const { rows } = stackedHoldingRows(snaps, totals, (n) => price[n] ?? null, "2026-01-01", [{ date: "2026-01-15", name: "B", amount: 50 }]);
+  const feb = rows.find((r) => r.date === "2026-02-28")!;
+  // A=100×1.1=110、B=50×1.1=55 → 合計165（口座合計と一致）
+  assert.equal(feb.A, 110); assert.equal(feb.B, 55);
+});
