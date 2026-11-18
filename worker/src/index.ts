@@ -180,6 +180,41 @@ export default {
       }
     }
 
+    // GET /api/stooq-history?s=SYMBOL&start_date=YYYY-MM-DD
+    // Stooqの日足CSV（任意の銘柄）の終値。保有銘柄の値動きの代用（指数・国内ETF・ドル円）に使う（lib/holdingProxies.ts）。
+    // s は Stooq の銘柄記号（例：^spx・^ndx・^tpx・^nkx・usdjpy・1540.jp・1570.jp）。start_date省略時は直近1年分。
+    // 応答: { symbol, values: [{ date: "YYYY-MM-DD", close: number }] }（データが無い銘柄は空配列）
+    if (url.pathname === "/api/stooq-history") {
+      const symbol = (url.searchParams.get("s") || "").trim().toLowerCase();
+      if (!/^\^?[a-z0-9._-]{1,20}$/.test(symbol)) return jsonResponse({ error: "s（銘柄記号）の形式が正しくありません" }, 400);
+      const startDate = url.searchParams.get("start_date");
+      if (startDate && !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) return jsonResponse({ error: "start_date は YYYY-MM-DD で指定してください" }, 400);
+      try {
+        const today = new Date();
+        const from = startDate ? new Date(startDate + "T00:00:00Z") : new Date(today.getTime() - 366 * 86400000);
+        const ymd = (d: Date) => d.toISOString().slice(0, 10).replace(/-/g, "");
+        const stooqUrl = `https://stooq.com/q/d/l/?s=${encodeURIComponent(symbol)}&i=d&d1=${ymd(from)}&d2=${ymd(new Date(today.getTime() + 86400000))}`;
+        const res = await fetch(stooqUrl, { headers: { "User-Agent": "Mozilla/5.0 (compatible; dd-dashboard/1.0)" } });
+        if (!res.ok) throw new Error(`stooq responded ${res.status}`);
+        const text = (await res.text()).trim();
+        if (/^no data/i.test(text) || !text.includes(",")) return jsonResponse({ symbol, values: [] });
+        const lines = text.split(/\r?\n/);
+        const head = lines[0].split(",").map((h) => h.trim().toLowerCase());
+        const di = head.indexOf("date"), ci = head.indexOf("close");
+        if (di < 0 || ci < 0) return jsonResponse({ symbol, values: [] });
+        const byDate = new Map<string, number>();
+        for (const line of lines.slice(1)) {
+          const c = line.split(",");
+          const date = (c[di] || "").trim(), close = parseFloat(c[ci]);
+          if (/^\d{4}-\d{2}-\d{2}$/.test(date) && !Number.isNaN(close) && close > 0) byDate.set(date, close);
+        }
+        const values = [...byDate].map(([date, close]) => ({ date, close })).sort((a, b) => a.date.localeCompare(b.date));
+        return jsonResponse({ symbol, values });
+      } catch (e) {
+        return jsonResponse({ error: "価格履歴の取得に失敗しました", detail: e instanceof Error ? e.message : String(e) }, 502);
+      }
+    }
+
     // GET /api/market-summary
     // VOO・QQQ・ゴールド（XAU/USD）の最新終値と、前日・前週・前月・前年比（%）を返す。
     // 1日1回の呼び出しを想定（Twelve Data time_series を3銘柄分呼ぶ＝約3クレジット）。

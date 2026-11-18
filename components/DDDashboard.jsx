@@ -6,6 +6,7 @@ import {
   ReferenceLine, ReferenceDot, ReferenceArea, ResponsiveContainer, PieChart, Pie, Cell, Brush, Customized,
 } from "recharts";
 import { computeRsi } from "@/lib/rsi";
+import { proxyForHolding, buildProxySeries, performanceRows, stackedHoldingRows } from "@/lib/holdingProxies";
 import { parseNkxBundle, parseStooqDaily, mergeNkx, nkxStoredRows, nkxNextStart, isStaleSinceTokyo } from "@/lib/nkxSeries";
 import { DEFAULT_RSI_TRIGGER_SETTINGS, normalizeRsiTriggerSettings, statusFor, ymd as rsiYmd } from "@/lib/rsiTrigger";
 import RsiTriggerPanel, { rsiBadge } from "@/components/RsiTriggerPanel";
@@ -48,6 +49,8 @@ const STOCK_PRICES_API_URL = "https://stock-prices.shinichiogasawara0103.workers
 const GOLD_HISTORY_API_URL = "https://stock-prices.shinichiogasawara0103.workers.dev/api/gold-history";
 // 日経平均株価（^NKX）の日次終値（Worker経由でStooqから取得。?start_date=YYYY-MM-DD 以降の分）。
 const NIKKEI_HISTORY_API_URL = "https://stock-prices.shinichiogasawara0103.workers.dev/api/nikkei-history";
+// Stooqの日足（任意の銘柄）。保有銘柄の値動きの代用（指数・国内ETF・ドル円）に使う（lib/holdingProxies.ts）
+const STOOQ_HISTORY_API_URL = "https://stock-prices.shinichiogasawara0103.workers.dev/api/stooq-history";
 
 /* ---------------- design tokens ---------------- */
 const C = {
@@ -7744,6 +7747,133 @@ function PlanVsActualSection({ planSeries, yen }) {
   );
 }
 
+// ⑦保有銘柄のチャート（大和コネクト証券）：①評価額の積み上げ（口座開設から）②値動き（騰落率・最大5年）をタブで切り替える。
+// 値動きはStooqの日足で代用（投資信託は連動する指数。lib/holdingProxies.ts）。取得した日足はこの端末に1日1回だけ保存し直す。
+const PROXY_CACHE_KEY = "holding_proxy_cache_v1";
+const PERF_RANGES = [{ key: 1, label: "1年" }, { key: 3, label: "3年" }, { key: 5, label: "5年" }];
+function useHoldingProxySeries(names) {
+  const [state, setState] = useState({ loading: false, error: "", series: {}, used: {} });
+  const namesKey = names.join("|");
+  useEffect(() => {
+    if (!names.length) return;
+    let live = true;
+    const today = localYMD();
+    const start = (() => { const d = new Date(); d.setFullYear(d.getFullYear() - 5); d.setDate(d.getDate() - 20); return localYMD(d); })();
+    let cache = null;
+    try { cache = JSON.parse(localStorage.getItem(PROXY_CACHE_KEY) || "null"); } catch { cache = null; }
+    if (!cache || cache.fetchedOn !== today || cache.start > start) cache = { fetchedOn: today, start, raw: {} };
+    const raw = cache.raw;
+    const fetchSym = async (sym) => {
+      if (raw[sym]) return raw[sym];
+      const r = await fetch(`${STOOQ_HISTORY_API_URL}?s=${encodeURIComponent(sym)}&start_date=${start}`);
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      raw[sym] = Array.isArray(j.values) ? j.values : [];
+      return raw[sym];
+    };
+    (async () => {
+      setState((s) => ({ ...s, loading: true, error: "" }));
+      const series = {}, used = {};
+      let failed = 0;
+      for (const name of names) {
+        const px = proxyForHolding(name);
+        if (!px) continue;
+        for (const src of px.sources) {
+          try {
+            const vals = await fetchSym(src.symbol);
+            if (vals.length < 20) continue;
+            const fx = src.fx ? await fetchSym("usdjpy") : null;
+            const built = buildProxySeries(vals, src, fx);
+            if (built.length < 20) continue;
+            series[name] = built; used[name] = `${src.label}${src.fx ? "・円換算" : ""}${(src.lev ?? 1) > 1 ? `・日々の値動き×${src.lev}` : ""}`;
+            break;
+          } catch { failed++; }
+        }
+      }
+      try { localStorage.setItem(PROXY_CACHE_KEY, JSON.stringify(cache)); } catch { /* 容量不足などは無視 */ }
+      if (live) setState({ loading: false, error: failed && !Object.keys(series).length ? "値動きのデータを取得できませんでした（Cloudflare Workerを更新したか確認してください）" : "", series, used });
+    })();
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [namesKey]);
+  return state;
+}
+export function HoldingsChartPanel({ snapshots, totals, colorOf, currentNames, yen }) {
+  const [tab, setTab] = useState("stack");
+  const [years, setYears] = useState(5);
+  const allNames = useMemo(() => [...new Set([...currentNames, ...snapshots.flatMap((s) => Object.keys(s.items))])].sort(), [currentNames, snapshots]);
+  const px = useHoldingProxySeries(allNames);
+  const color = (n, i) => colorOf.get(n) ?? HOLDING_PALETTE[(i + 3) % HOLDING_PALETTE.length];
+  const stack = useMemo(() => stackedHoldingRows(snapshots, totals, (n) => px.series[n] ?? null, BEGINNER_TRIAL.start), [snapshots, totals, px.series]);
+  const firstShot = stack.rows.find((r) => !r.estimated)?.date ?? null;
+  const perfStart = useMemo(() => { const d = new Date(); d.setFullYear(d.getFullYear() - years); return localYMD(d); }, [years]);
+  const perfNames = currentNames.filter((n) => px.series[n]);
+  const perf = useMemo(() => {
+    const rows = performanceRows(Object.fromEntries(perfNames.map((n) => [n, px.series[n]])), perfStart);
+    // 日足は多いので、3年以上は各週の最後の日だけに間引く
+    if (years < 3) return rows;
+    const weekOf = (d) => { const t = new Date(`${d}T00:00:00`); t.setDate(t.getDate() - ((t.getDay() + 6) % 7)); return localYMD(t); };
+    return rows.filter((r, i) => i === rows.length - 1 || weekOf(String(rows[i + 1].date)) !== weekOf(String(r.date)));
+  }, [perfNames.join("|"), px.series, perfStart, years]); // eslint-disable-line react-hooks/exhaustive-deps
+  const tabBtn = (on) => ({ background: on ? C.teal : "transparent", color: on ? C.bg : C.textMuted, border: `1px solid ${on ? C.teal : C.borderSoft}`, borderRadius: 6, padding: "2px 10px", fontSize: 11, cursor: "pointer", fontWeight: on ? 700 : 400 });
+  return (
+    <div className="mt-4">
+      <div className="flex items-center gap-2 mb-2 flex-wrap">
+        <span className="text-xs" style={{ color: C.textMuted }}>保有銘柄のチャート</span>
+        <button style={tabBtn(tab === "stack")} onClick={() => setTab("stack")}>評価額の推移（積み上げ）</button>
+        <button style={tabBtn(tab === "perf")} onClick={() => setTab("perf")}>値動き（騰落率）</button>
+        {tab === "perf" && <span className="flex items-center gap-1 ml-2">{PERF_RANGES.map((r) => <button key={r.key} style={tabBtn(years === r.key)} onClick={() => setYears(r.key)}>{r.label}</button>)}</span>}
+        {px.loading && <span className="text-[10px]" style={{ color: C.textDim }}>値動きのデータを取得中…</span>}
+      </div>
+      {px.error && <div className="text-[10px] mb-1" style={{ color: C.amber }}>{px.error}</div>}
+      {tab === "stack" ? (
+        stack.rows.length ? (
+          <>
+            <div style={{ width: "100%", height: 260 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={stack.rows} margin={{ top: 8, right: 12, bottom: 4, left: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={C.borderSoft} />
+                  <XAxis dataKey="date" tick={{ fontSize: 9, fill: C.textDim }} tickFormatter={fmtYm} />
+                  <YAxis tick={{ fontSize: 9, fill: C.textDim }} tickFormatter={fmtOkuMan} width={48} />
+                  <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 11 }}
+                    labelFormatter={(v, p) => `${fmtDateSlash(v)}${p?.[0]?.payload?.estimated ? "（推計）" : "（スクショ）"}　合計 ${yen(p?.[0]?.payload?.total)}`}
+                    formatter={(v, n) => [yen(v), n]} itemSorter={(it) => -(it.value ?? 0)} />
+                  {firstShot && stack.rows.some((r) => r.estimated && r.date < firstShot) && <ReferenceLine x={firstShot} stroke={C.textMuted} strokeDasharray="2 3" label={{ value: "ここからスクショの実績", position: "insideTopRight", fill: C.textMuted, fontSize: 9 }} />}
+                  {stack.names.map((n, i) => <Area key={n} type="monotone" dataKey={n} name={n} stackId="1" stroke={color(n, i)} fill={color(n, i)} fillOpacity={0.55} isAnimationActive={false} />)}
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="text-[10px] mt-1" style={{ color: C.textDim }}>※スクショを取り込んだ日は実際の銘柄別評価額です。それ以外の月は、近いスクショの銘柄構成を各銘柄の値動き（下の代用データ）で動かし、合計を投資収支xlsxのその月の評価額に合わせた推計です。毎月スクショを取り込むと、その月から実績に置き換わります。</div>
+          </>
+        ) : <div className="text-xs" style={{ color: C.textDim }}>スクショの取り込みがまだありません。</div>
+      ) : (
+        perf.length ? (
+          <>
+            <div style={{ width: "100%", height: 260 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={perf} margin={{ top: 8, right: 12, bottom: 4, left: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={C.borderSoft} />
+                  <XAxis dataKey="date" tick={{ fontSize: 9, fill: C.textDim }} tickFormatter={fmtYm} minTickGap={24} />
+                  <YAxis tick={{ fontSize: 9, fill: C.textDim }} tickFormatter={(v) => `${v > 0 ? "+" : ""}${Math.round(v)}%`} width={48} />
+                  <ReferenceLine y={0} stroke={C.textMuted} />
+                  <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 11 }} labelFormatter={(v) => fmtDateSlash(v)}
+                    formatter={(v, n) => [`${v > 0 ? "+" : ""}${Number(v).toFixed(1)}%`, n]} itemSorter={(it) => -(it.value ?? 0)} />
+                  {perfNames.map((n, i) => <Line key={n} type="monotone" dataKey={n} name={n} stroke={color(n, i)} strokeWidth={1.6} dot={false} isAnimationActive={false} connectNulls />)}
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="text-[10px] mt-1 leading-relaxed" style={{ color: C.textDim }}>
+              ※{years}年前を0%とした値動きです（データが{years}年分無い銘柄は、データのある最初の日を0%にしています）。投資信託は基準価額の代わりに連動する指数で描いています（信託報酬・配当の扱い・為替の時刻の違いで実際とは少しずれます）。
+              <div className="mt-0.5">{perfNames.map((n) => `${n}：${px.used[n]}`).join("／")}</div>
+              {currentNames.some((n) => !px.series[n]) && !px.loading && <div className="mt-0.5" style={{ color: C.amber }}>値動きのデータが無い銘柄：{currentNames.filter((n) => !px.series[n]).join("、")}</div>}
+            </div>
+          </>
+        ) : <div className="text-xs" style={{ color: C.textDim }}>{px.loading ? "値動きのデータを取得中です…" : "値動きのデータがありません。"}</div>
+      )}
+    </div>
+  );
+}
+
 // ⑦初心者トライアル：大和コネクト証券で2026年1月に開始した積立投資（初期40万円・毎月5万円・6/12月は+20万円）。目標は評価額1,000万円。
 const BEGINNER_TRIAL = { start: "2026-01-01", goal: 10_000_000, brokerKey: "daiwa", owner: "大和コネクト証券", accountLabel: "大和コネクト証券" };
 // 銘柄の色：名前順で固定（評価額の順位が変わっても色が入れ替わらないように）
@@ -7778,11 +7908,12 @@ function BeginnerTrialSection({ data, holdings, holdingsAsOf, brokerHoldingHisto
   const axis = useMemo(() => trialAxis(points.flatMap((p) => [p.value, p.principal]).filter((v) => v != null), BEGINNER_TRIAL.goal), [points]);
   const sourceLabel = latest ? `${fmtDateSlash(latest.date)} 時点・${latest.source === "screenshot" ? "スクショ取込" : "投資収支xlsx"}` : "";
   const showYearEnd = Number(asOf.slice(0, 4)) >= 2027;
+  const holdingColorOf = useMemo(() => new Map([...daiwaHoldings].map((h) => h.name).sort().map((n, i) => [n, HOLDING_PALETTE[i % HOLDING_PALETTE.length]])), [daiwaHoldings]);
   const holdingRows = useMemo(() => {
     const changes = holdingChanges(brokerHoldingHistory, BEGINNER_TRIAL.brokerKey, asOf, daiwaHoldings);
-    const colorOf = new Map([...daiwaHoldings].map((h) => h.name).sort().map((n, i) => [n, HOLDING_PALETTE[i % HOLDING_PALETTE.length]]));
+    const colorOf = holdingColorOf;
     return [...daiwaHoldings].sort((a, b) => b.amount - a.amount).map((h) => ({ key: h.id ?? h.name, label: h.name, color: colorOf.get(h.name), value: h.amount, ...changes[h.name] }));
-  }, [daiwaHoldings, brokerHoldingHistory, asOf]);
+  }, [daiwaHoldings, brokerHoldingHistory, asOf, holdingColorOf]);
 
   return (
     <div>
@@ -7838,6 +7969,7 @@ function BeginnerTrialSection({ data, holdings, holdingsAsOf, brokerHoldingHisto
           <div className="text-[10px] mt-2" style={{ color: C.textDim }}>※銘柄ごとの前月比は、前の月に取り込んだスクショとの差です（前の月の取り込みが無い場合は「—」）。前年末比は口座開設初年のため2027年から表示します。</div>
         </>
       ) : <div className="text-xs" style={{ color: C.textDim }}>大和コネクト証券の保有銘柄がまだ登録されていません。「データ入力」→「証券会社スクショ取込」で大和コネクト証券のスクショを取り込むと表示されます。</div>}
+      {holdingRows.length > 0 && <HoldingsChartPanel snapshots={brokerHoldingHistory?.[BEGINNER_TRIAL.brokerKey] ?? []} totals={points.map((p) => ({ date: p.date, value: p.value }))} colorOf={holdingColorOf} currentNames={holdingRows.map((r) => r.label)} yen={yen} />}
     </div>
   );
 }
