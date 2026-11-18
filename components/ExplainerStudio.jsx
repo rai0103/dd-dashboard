@@ -43,6 +43,7 @@ import { easternStamp } from "@/lib/marketClock";
 import { parseStooqCSV } from "@/lib/csvPrice";
 import { buildStockCatalogFromSnapshot, buildStockCatalogFromCsv, mergeStockCatalogs, resolveYearCompareItems } from "@/lib/explainer/stockCatalog";
 import { buildFixedDataChapters, fixedChaptersNote, mergeFixedChapters, dataPeriodOf, dataPeriodNoteOf } from "@/lib/explainer/dataChapters";
+import { WEEKLY_CHANNEL, WEEKLY_PERSONA, buildWeeklyData, parsePurchases, weeklyFactsText, buildWeeklyFixedChapter, yenJp } from "@/lib/explainer/weeklyReport";
 import { decorateTitleScene } from "@/lib/explainer/sp500SheetScenes";
 import { computeSp500Sheets } from "@/lib/sp500Sheets";
 import { drawVisual, PALETTE } from "@/lib/explainer/visuals";
@@ -247,6 +248,25 @@ export default function ExplainerStudio() {
     const keep = refs.filter((r) => r.kind !== "pdf" && r.kind !== "csv" && r.kind !== "image").map((r) => (r.kind === "url" ? { ...r, pdfBase64: undefined, status: r.pdfBase64 ? "pending" : r.status } : r));
     try { localStorage.setItem(INPUT_KEY, JSON.stringify({ topic, mode, audience, targetMinutes, extraInstruction, refs: keep })); } catch (e) { /* 容量超過などは無視 */ }
   }, [topic, mode, audience, targetMinutes, extraInstruction, refs]);
+
+  // ---------------- 週次レポート（年100万円投資で1億円を目指すチャンネル） ----------------
+  // 大和コネクト証券のスクショ（ダッシュボードの「証券会社スクショ取込」で毎週取り込む）から今週の資産状況を作る
+  const [weeklyTopicsText, setWeeklyTopicsText] = useState(() => { try { return localStorage.getItem("weekly-topics-v1") || ""; } catch (e) { return ""; } });
+  const [weeklyPurchasesText, setWeeklyPurchasesText] = useState(() => { try { return localStorage.getItem("weekly-purchases-v1") || ""; } catch (e) { return ""; } });
+  useEffect(() => { try { localStorage.setItem("weekly-topics-v1", weeklyTopicsText); localStorage.setItem("weekly-purchases-v1", weeklyPurchasesText); } catch (e) { /* 無視 */ } }, [weeklyTopicsText, weeklyPurchasesText]);
+  const [weeklySnaps, setWeeklySnaps] = useState([]);
+  const loadWeeklySnaps = async () => {
+    try { const r = await storage.get("broker_holding_history"); const h = r?.value ? JSON.parse(r.value) : {}; setWeeklySnaps(Array.isArray(h?.daiwa) ? h.daiwa : []); } catch (e) { setWeeklySnaps([]); }
+  };
+  useEffect(() => { if (mode === "weekly") loadWeeklySnaps(); }, [mode]);
+  const weeklyPurchases = useMemo(() => parsePurchases(weeklyPurchasesText), [weeklyPurchasesText]);
+  const weeklyData = useMemo(() => buildWeeklyData(weeklySnaps, weeklyPurchases), [weeklySnaps, weeklyPurchases]);
+  // トピックス：1行に1つ。「トピック ｜ コメントの要旨」。URLを書いた行は、そのURLも参考情報に入れる
+  const weeklyTopicList = () => weeklyTopicsText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).map((l) => {
+    const [t, ...g] = l.split(/\s*[|｜]\s*/);
+    const urls = (l.match(/https?:\/\/\S+/g) || []);
+    return { topic: t.replace(/https?:\/\/\S+/g, "").trim() || urls[0] || "", gist: g.join(" ").replace(/https?:\/\/\S+/g, "").trim(), urls };
+  }).filter((t) => t.topic);
   const [refTextOpen, setRefTextOpen] = useState(false);
   const [refImgLibOpen, setRefImgLibOpen] = useState(false); // 参考情報「スクショを追加」の、画像ライブラリから選ぶポップアップの開閉
   const [libSelectedIds, setLibSelectedIds] = useState(() => new Set()); // ライブラリピッカー内での複数選択（ポップアップを開くたびにリセット）
@@ -445,6 +465,36 @@ export default function ExplainerStudio() {
     }
   };
 
+  // 週次レポート：トピックスごとに、指定のURLを読み込み、Web（Claude・Gemini）で裏付けになる情報を集める
+  const runWeeklyResearch = async () => {
+    const topics = weeklyTopicList();
+    if (!topics.length) { setResearchError("トピックスを1行に1つ入力してください（「トピック ｜ コメントの要旨」）。"); return; }
+    setResearchBusy(true); setResearchError("");
+    const ac = new AbortController(); researchAbortRef.current = ac;
+    const errs = [];
+    try {
+      const existing = new Set(refs.filter((x) => x.kind === "url").map((x) => x.url));
+      for (const t of topics) {
+        const urlRefs = t.urls.filter((u) => !existing.has(u)).map((u) => { existing.add(u); return { id: newRefId(), kind: "url", url: u, title: u, text: "", status: "pending", required: true }; });
+        if (urlRefs.length) { setRefs((p) => [...p, ...urlRefs]); urlRefs.forEach((it) => loadUrl(it.id, it.url)); }
+        if (!t.topic || /^https?:/.test(t.topic)) continue;
+        try {
+          const r = await researchTopic(t.topic, t.gist ? `制作者の意見「${t.gist}」の裏付け・補足になる最新の事実と数字` : researchPrompt.trim(), ac.signal);
+          const combined = [];
+          [...r.claude.urls, ...r.gemini.urls].forEach((u) => { if (combined.length >= 3 || existing.has(u.url) || combined.some((x) => x.url === u.url)) return; combined.push(u); existing.add(u.url); });
+          const newUrl = combined.map((u) => ({ id: newRefId(), kind: "url", url: u.url, title: u.title || u.url, text: "", status: "pending" }));
+          const texts = [];
+          if (r.gemini.text.trim()) texts.push({ id: newRefId(), kind: "text", title: `Gemini：${t.topic}`, text: r.gemini.text.trim() });
+          if (r.claude.text.trim()) texts.push({ id: newRefId(), kind: "text", title: `Claude：${t.topic}`, text: r.claude.text.trim() });
+          setRefs((p) => [...p, ...newUrl, ...texts]);
+          newUrl.forEach((it) => loadUrl(it.id, it.url));
+          [r.claude.error, r.gemini.error].filter(Boolean).forEach((e) => errs.push(`${t.topic}：${e}`));
+        } catch (e) { if (e?.code === "ABORTED") throw e; errs.push(`${t.topic}：${e?.message || e}`); }
+      }
+    } catch (e) { errs.push(e instanceof AiClientError ? e.message : e?.message || String(e)); }
+    finally { setResearchBusy(false); researchAbortRef.current = null; if (errs.length) setResearchError(errs.join(" / ")); }
+  };
+
   // ---------------- プロジェクト（台本） ----------------
   const [project, setProject] = useState(() => {
     try {
@@ -530,7 +580,22 @@ export default function ExplainerStudio() {
         ...(mode === "sp500" && fixed.length ? { fixedBodyNote: fixedChaptersNote(fixed) } : {}),
       };
     }
-    return { topic: topic.trim(), mode, audience, targetMinutes: minutes, extraInstruction, refBlocks: referenceBlocks(refs), today: todayStr(), speechRate: rate, imageShare: imgAutoEnabled ? imgShare : 0, stockCatalog, requiredRefNotes: requiredRefNotes(refs), learnedEdits: (learned.general[mode] || []).map((x) => ({ before: x.before, after: x.after })), ...dataExtra };
+    // 週次レポート：語り口・今週の数字・トピックスと要旨をAIに渡し、今週の資産状況の固定章の場面数を予算から差し引く
+    let extra = extraInstruction;
+    if (mode === "weekly") {
+      const wk = weeklyData;
+      const topics = weeklyTopicList();
+      extra = [
+        `チャンネル名「${WEEKLY_CHANNEL}」の週次レポート動画。語り手は${WEEKLY_PERSONA}`,
+        "動画の冒頭で、チャンネル名と「今週の報告」であることを短く名乗る。締めでは来週の注目点と、チャンネル登録の呼びかけを短く。",
+        wk ? weeklyFactsText(wk, weeklyPurchases) : "",
+        wk ? "今週の評価額・銘柄別の値動き・買い付け・目標の達成率は、アプリが実データから作る章で説明するので、あなたは数字の場面を作らない。導入とトピックスの雑感では、上の数字と食い違うことを言わない。" : "",
+        topics.length ? `【今週のトピックス】次のトピックスを、それぞれ1章ずつ扱う。「要旨」は語り手（制作者）自身の意見なので、要旨を軸にし、参考資料で事実・数字の裏付けと補足を加えて、語り手の本音として話す。要旨と違う結論にしない。\n${topics.map((t, i) => `${i + 1}. ${t.topic}${t.gist ? `（要旨：${t.gist}）` : ""}`).join("\n")}` : "",
+        extraInstruction,
+      ].filter(Boolean).join("\n");
+      if (wk) dataExtra = { reservedScenes: buildWeeklyFixedChapter(wk, weeklyPurchases).scenes.length + 1 };
+    }
+    return { topic: topic.trim(), mode, audience, targetMinutes: minutes, extraInstruction: extra, refBlocks: referenceBlocks(refs), today: todayStr(), speechRate: rate, imageShare: imgAutoEnabled ? imgShare : 0, stockCatalog, requiredRefNotes: requiredRefNotes(refs), learnedEdits: (learned.general[mode] || []).map((x) => ({ before: x.before, after: x.after })), ...dataExtra };
   };
   // 株式情報モードはS&P500を優先（無ければSOXL）、S&P500モードはS&P500のみ
   function primaryStockSnapshot() { return mode === "sp500" ? stockSnapshots.SP500 : (stockSnapshots.SP500 ?? stockSnapshots.SOXL); }
@@ -745,6 +810,12 @@ export default function ExplainerStudio() {
       // AIの導入章の直後に挿入する（以前は導入章＝「つかみ」の章の先頭にまとめて差し込んでいた）。章の扉・章番号は振り直す。
       // 新しい分析をダッシュボードに足して動画にも反映したいときは、DDDashboard.jsx側でstock-catalog:*に書き出し→
       // lib/explainer/に固定場面ビルダーを足し→lib/explainer/dataChapters.tsのbuildFixedDataChaptersに追加する。
+      if (mode === "weekly" && weeklyData) {
+        const fixed = [buildWeeklyFixedChapter(weeklyData, weeklyPurchases)];
+        const merged = mergeFixedChapters(p.chapters, longScenes, fixed);
+        longScenes = assembleLong(merged.chapters, merged.perChapter, p.sources, true, sourcesInVideo);
+        p = { ...p, chapters: merged.chapters };
+      }
       if (mode === "stock" || mode === "sp500") {
         const snap = primaryStockSnapshot();
         const fixed = buildFixedDataChapters(snap, snap?.instrumentLabel ?? "S&P500", sheetInputFor(snap));
@@ -770,7 +841,7 @@ export default function ExplainerStudio() {
         toApply.forEach(({ i }, k) => { if (results[k]) longScenes[i] = { ...longScenes[i], narration: results[k].narration, reading: results[k].reading, readingStale: false }; });
       }
       // ラベル（kicker）は、選んだ長尺の長さから自動で入れる（例：5分で解説）。生成後も自由に書き換えられる
-      p = { ...p, longScenes, shortScenes: S.scenes, kicker: autoKickerFor(minutes) };
+      p = { ...p, longScenes, shortScenes: S.scenes, kicker: mode === "weekly" ? "週次レポート" : autoKickerFor(minutes) };
       setProject(p); setFormat("long"); setInputOpen(false); setSeekPos(0);
       // 手動で作った動画のテーマも記録する（夜間の自動生成で同じ話題を選ばないように。自動ドラフトの実行中は、そちらで記録する）
       if ((mode === "news" || mode === "keyword") && new URLSearchParams(window.location.search).get("autodraft") !== "1") {
@@ -1303,6 +1374,36 @@ export default function ExplainerStudio() {
   useEffect(() => { if (!activeBgm) { setBgmUrl(null); return; } const u = URL.createObjectURL(activeBgm.blob); setBgmUrl(u); return () => URL.revokeObjectURL(u); }, [activeBgm]);
   const handleBgmUpload = async (e) => { const f = e.target.files?.[0]; if (!f) return; try { const s = await saveBgm(f, true); await refreshBgms(); setActiveBgmId(s.id); } catch (err) { alert("BGMの保存に失敗しました"); } };
   const handleBgmDelete = async (id) => { await deleteBgm(id, true); if (activeBgmId === id) setActiveBgmId(""); refreshBgms(); };
+  // [チャンネルごとの設定] 週次レポート（年100万円投資で1億円を目指すチャンネル）は、解説動画とは別のアバター・声・BGMを使う。
+  // モードを切り替えたら、今の設定を切り替え前のチャンネルに保存し、切り替え先のチャンネルの設定を読み込む（初めてなら今の設定のまま）。
+  const CHANNEL_KEY = "explainer-channel-profiles-v1";
+  const channelOf = (m) => (m === "weekly" ? "weekly" : "explainer");
+  const channelRef = useRef(channelOf(mode));
+  const readChannels = () => { try { return JSON.parse(localStorage.getItem(CHANNEL_KEY) || "{}") || {}; } catch (e) { return {}; } };
+  useEffect(() => {
+    const next = channelOf(mode), prev = channelRef.current;
+    if (next === prev) return;
+    channelRef.current = next;
+    const all = readChannels();
+    all[prev] = { avatarId, voiceIndex, activePresetId, pitch, rate, activeBgmId };
+    try { localStorage.setItem(CHANNEL_KEY, JSON.stringify(all)); } catch (e) { /* 無視 */ }
+    const p = all[next];
+    if (!p) return;
+    if (p.avatarId !== undefined) setAvatarId(p.avatarId);
+    if (p.voiceIndex) setVoiceIndex(p.voiceIndex);
+    setActivePresetId(p.activePresetId ?? null);
+    if (p.pitch) setPitch(p.pitch);
+    if (p.rate) setRate(p.rate);
+    if (p.activeBgmId !== undefined) setActiveBgmId(p.activeBgmId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode]);
+  useEffect(() => {
+    // 切り替えた直後は、読み込んだ切り替え先の設定がそのまま保存される（channelRefは切り替え先になっている）
+    const all = readChannels();
+    all[channelRef.current] = { avatarId, voiceIndex, activePresetId, pitch, rate, activeBgmId };
+    try { localStorage.setItem(CHANNEL_KEY, JSON.stringify(all)); } catch (e) { /* 無視 */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [avatarId, voiceIndex, activePresetId, pitch, rate, activeBgmId]);
 
   const [backgrounds, setBackgrounds] = useState([]);
   // [共通化] 長尺動画作成と同じ保存キーを使い、どちらで選んだ背景も引き継ぐ
@@ -2065,10 +2166,10 @@ export default function ExplainerStudio() {
           {inputOpen && (
             <div className="flex flex-col gap-3 mt-3 text-xs">
               <div className="flex flex-wrap gap-2 items-center">
-                {[["news", "ニュース"], ["stock", "株式情報"], ["sp500", "S&P500"], ["keyword", "キーワード（用語）"]].map(([k, l]) => (
+                {[["news", "ニュース"], ["stock", "株式情報"], ["sp500", "S&P500"], ["keyword", "キーワード（用語）"], ["weekly", "週次レポート"]].map(([k, l]) => (
                   <button key={k} onClick={() => handleModeClick(k)} className="text-[11px] px-2.5 py-1 rounded" style={{ color: mode === k ? C.bg : C.textMuted, background: mode === k ? C.teal : "transparent", border: `1px solid ${C.borderSoft}`, cursor: "pointer", fontWeight: mode === k ? 700 : 400 }}>{l}</button>
                 ))}
-                <input value={topic} onChange={(e) => setTopic(e.target.value)} placeholder={mode === "news" ? "例：日銀が政策金利を0.75%に引き上げ" : mode === "stock" ? "例：2026年10月28日（消去・書き換え可）" : mode === "sp500" ? "例：S&P500　最新分析（消去・書き換え可）" : "例：インフレ／NISA／半導体の微細化"} className="flex-1 min-w-[220px] px-2 py-1.5 rounded text-sm" style={inputStyle} />
+                <input value={topic} onChange={(e) => setTopic(e.target.value)} placeholder={mode === "news" ? "例：日銀が政策金利を0.75%に引き上げ" : mode === "stock" ? "例：2026年10月28日（消去・書き換え可）" : mode === "sp500" ? "例：S&P500　最新分析（消去・書き換え可）" : mode === "weekly" ? "例：週次レポート（11月第4週）" : "例：インフレ／NISA／半導体の微細化"} className="flex-1 min-w-[220px] px-2 py-1.5 rounded text-sm" style={inputStyle} />
               </div>
               {(mode === "stock" || mode === "sp500") && (() => {
                 // [Stage E-15] 動画に使う実データの期間を表示する（ダッシュボードを開いた時点のデータが使われるため、古い・未取得に気づけるように）
@@ -2080,6 +2181,27 @@ export default function ExplainerStudio() {
                   </div>
                 );
               })()}
+              {mode === "weekly" && (
+                <div className="flex flex-col gap-2 rounded p-2" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
+                  <div className="text-[11px] font-bold" style={{ color: C.teal }}>週次レポート：{WEEKLY_CHANNEL}</div>
+                  {weeklyData ? (
+                    <div className="text-[11px] leading-relaxed" style={{ color: C.textMuted }}>
+                      今週（{weeklyData.asOf}のスクショ）：評価額 <b style={{ color: C.text }}>{yenJp(weeklyData.total)}</b>
+                      {weeklyData.prevDate ? <>　前週（{weeklyData.prevDate}）比 <b style={{ color: (weeklyData.change ?? 0) >= 0 ? C.teal : C.rust }}>{(weeklyData.change ?? 0) >= 0 ? "+" : "−"}{yenJp(Math.abs(weeklyData.change ?? 0))}（{(weeklyData.pct ?? 0) >= 0 ? "+" : ""}{(weeklyData.pct ?? 0).toFixed(1)}%）</b>{weeklyData.buyTotal ? `（買い付け${yenJp(weeklyData.buyTotal)}を除く）` : ""}</> : <span style={{ color: C.amber }}>　前週のスクショが無いため、前週比は出ません（毎週末に取り込むと次回から出ます）</span>}
+                      <div>{weeklyData.rows.map((r) => `${r.short} ${r.pct != null ? `${r.pct >= 0 ? "+" : ""}${r.pct.toFixed(1)}%` : "—"}`).join("／")}</div>
+                      <div>目標1億円の達成率 {((weeklyData.total / weeklyData.goal) * 100).toFixed(2)}%</div>
+                    </div>
+                  ) : (
+                    <div className="text-[11px]" style={{ color: C.amber }}>大和コネクト証券のスクショがまだありません。ダッシュボードの「データ入力」→「証券会社スクショ取込」で、毎週末に大和コネクト証券のスクショを取り込んでください。</div>
+                  )}
+                  <button onClick={loadWeeklySnaps} className="self-start text-[10px] px-2 py-0.5 rounded" style={btn()}>スクショの取り込みを読み直す</button>
+                  <label className="text-[11px]" style={{ color: C.textMuted }}>今月の買い付け（月初の週だけ。1行に「銘柄 金額」。例：S&P500 30000／金 2万円）</label>
+                  <textarea value={weeklyPurchasesText} onChange={(e) => setWeeklyPurchasesText(e.target.value)} rows={2} className="px-2 py-1 rounded text-[11px]" style={inputStyle} placeholder={"S&P500 30000\n金 20000"} />
+                  <label className="text-[11px]" style={{ color: C.textMuted }}>今週のトピックス（1行に1つ。「トピック ｜ コメントの要旨」。URLを書くとその記事も参考にします）→ 書いたら、下の「AIで検索して参考情報を追加」でトピックスごとに集めます</label>
+                  <textarea value={weeklyTopicsText} onChange={(e) => setWeeklyTopicsText(e.target.value)} rows={3} className="px-2 py-1 rounded text-[11px]" style={inputStyle}
+                    placeholder={"エヌビディアの決算 ｜ 数字は良いが期待が高すぎて売られた。AIバブルを疑うのはまだ早い\n日銀の利上げ観測 https://example.com/news ｜ 円高は積立には追い風"} />
+                </div>
+              )}
               <div className="flex flex-wrap gap-3 items-center" style={{ color: C.textMuted }}>
                 <label className="flex items-center gap-1.5">視聴者
                   <select value={audience} onChange={(e) => setAudience(e.target.value)} className="px-1.5 py-1 rounded text-[11px]" style={inputStyle}>
@@ -2101,7 +2223,7 @@ export default function ExplainerStudio() {
                   <input value={researchPrompt} onChange={(e) => setResearchPrompt(e.target.value)} placeholder="検索プロンプト（任意）：空欄ならテーマをそのまま検索します。例）2026年10月の決算の反応に絞って" className="flex-1 min-w-[260px] px-2 py-1 rounded text-[11px]" style={inputStyle} />
                 </div>
                 <div className="flex items-center gap-2 mb-2 flex-wrap">
-                  <button onClick={runResearch} disabled={researchBusy} className="text-[11px] px-2 py-1 rounded flex items-center gap-1" style={{ ...btn("primary"), opacity: researchBusy ? 0.6 : 1 }}><Search size={11} /> {researchBusy ? "検索中…" : "AIで検索して参考情報を追加"}</button>
+                  <button onClick={mode === "weekly" ? runWeeklyResearch : runResearch} disabled={researchBusy} className="text-[11px] px-2 py-1 rounded flex items-center gap-1" style={{ ...btn("primary"), opacity: researchBusy ? 0.6 : 1 }}><Search size={11} /> {researchBusy ? "検索中…" : mode === "weekly" ? "AIで検索して参考情報を追加（トピックスごと）" : "AIで検索して参考情報を追加"}</button>
                   <span className="text-[10px]" style={{ color: C.textDim }}>{researchPrompt.trim() ? (topic.trim() ? "テーマ＋上の検索プロンプトの内容で" : "上の検索プロンプトの内容で") : "テーマについて"}、Claudeの検索とGeminiの検索でURL最大5件・要約テキスト2件（Gemini・Claude）を自動で追加します（何度でも押せます。不要な結果は個別に削除できます）。</span>
                   {researchError && <div className="text-[10px] w-full" style={{ color: C.rust }}>{researchError}</div>}
                 </div>

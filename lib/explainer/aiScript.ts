@@ -9,7 +9,7 @@ import { resolveYearCompareItems, resolveCatalogKey } from './stockCatalog';
 
 export interface GenerateInput {
   topic: string;
-  mode: 'news' | 'stock' | 'sp500' | 'keyword';
+  mode: 'news' | 'stock' | 'sp500' | 'keyword' | 'weekly';
   audience: 'beginner' | 'general' | 'advanced' | 'expert';
   targetMinutes: number;
   extraInstruction: string;
@@ -291,6 +291,11 @@ const SCENE_ANGLES: Record<GenerateInput['mode'], string[]> = {
     '実務での使われ方・具体的な活用例を中心にした構成',
     '初心者が最初に疑問に思う点から始める構成',
   ],
+  weekly: [
+    '今週いちばん効いた値動きから入り、トピックスにつなげる構成',
+    'トピックスへの本音の雑感を中心にした構成',
+    '目標1億円までの道のりと今週の出来事を重ねる構成',
+  ],
 };
 function pickAngle(mode: GenerateInput['mode']): string {
   const list = SCENE_ANGLES[mode] ?? SCENE_ANGLES.news;
@@ -298,7 +303,7 @@ function pickAngle(mode: GenerateInput['mode']): string {
 }
 
 export function header(inp: GenerateInput): string {
-  const kind = inp.mode === 'news' ? 'ニュース' : inp.mode === 'stock' ? '株式情報' : inp.mode === 'sp500' ? 'S&P500（最新データ分析）' : 'キーワード（用語）';
+  const kind = inp.mode === 'news' ? 'ニュース' : inp.mode === 'stock' ? '株式情報' : inp.mode === 'sp500' ? 'S&P500（最新データ分析）' : inp.mode === 'weekly' ? '週次レポート（語り手自身の口座の報告と、今週のトピックスへの雑感）' : 'キーワード（用語）';
   return [
     `【テーマ（${kind}）】${inp.topic}`,
     `【想定視聴者】${AUDIENCE[inp.audience]}`,
@@ -355,7 +360,9 @@ export async function generateOutline(inp: GenerateInput, signal?: AbortSignal):
       ? '- chapters は、最初に role=intro（動画タイトル＋この動画でわかること、場面2個）、必要なら role=body を1章、最後に role=outro（まとめ＋締め、場面2〜3個）。'
       : '- chapters は、最初に role=intro（つかみ＋この動画でわかること、場面2〜3個）、次に role=body の本編を3〜6章、最後に role=outro（まとめ＋締め、場面2〜3個）。',
     '- chapters[].title は動画の画面上部にそのまま表示される視聴者向けの見出し。「つかみ」「導入」「イントロ」などの制作用語を入れない。',
-    inp.mode === 'news'
+    inp.mode === 'weekly'
+      ? '- 本編は、制作者の指示にある「今週のトピックス」を1つ1章ずつ（何が起きたか → 裏付けの事実・数字 → 語り手の本音の雑感）。トピックスが無ければ今週の相場の振り返りを1〜2章。'
+      : inp.mode === 'news'
       ? '- 本編の流れの例：何が起きたか → 背景・そもそもの仕組み → なぜ重要か（影響） → 今後の注目点。'
       : '- 本編の流れの例：ひとことで言うと → 仕組み・具体例 → 似た用語との違い・よくある誤解 → 身近な影響・使われ方。',
     '- 各章の sceneCount の合計が、場面の目安数に近くなるようにする。goal は章で伝えること、keyPoints は章で扱う要点（他の章と重複させない）。',
@@ -413,7 +420,7 @@ export async function generateOutline(inp: GenerateInput, signal?: AbortSignal):
   const fixYears = (t: string) => (inp.dataYears ? t.replace(/数十年/g, `${inp.dataYears}年`) : t);
   return {
     videoTitle: fixYears(String(r?.videoTitle || inp.topic)),
-    kicker: String(r?.kicker || (inp.mode === 'news' ? 'ニュース解説' : 'キーワード解説')),
+    kicker: String(r?.kicker || (inp.mode === 'news' ? 'ニュース解説' : inp.mode === 'weekly' ? '週次レポート' : 'キーワード解説')),
     chapters,
     youtube: {
       title: fixYears(String(y.title || r?.videoTitle || inp.topic)), description: fixYears(String(y.description || '')),

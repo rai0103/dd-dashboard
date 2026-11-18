@@ -164,7 +164,7 @@ export interface SourceNote { title: string; detail: string }
 export interface ExplainerProject {
   version: 1;
   topic: string;
-  mode: 'news' | 'stock' | 'sp500' | 'keyword';
+  mode: 'news' | 'stock' | 'sp500' | 'keyword' | 'weekly';
   audience: 'beginner' | 'general' | 'advanced' | 'expert';
   targetMinutes: number;
   videoTitle: string;
