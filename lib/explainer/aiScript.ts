@@ -266,7 +266,7 @@ const WEEKLY_KIND_NOTE = '- 【週次レポートの図解】visual.kind は tit
 /** 週次レポートで使わない図解が返ってきたら、数値が2つ以上あれば棒グラフ、無ければ画像の場面にする */
 export function weeklyKindGuard(sc: ExplainerScene): ExplainerScene {
   const k = sc.visual.kind;
-  if ((WEEKLY_KINDS as readonly string[]).includes(k) || k === 'chapter' || k === 'sources') return sc;
+  if (sc.fixedKey || (WEEKLY_KINDS as readonly string[]).includes(k) || k === 'chapter' || k === 'sources') return sc; // 実データの固定場面はそのまま
   const nums = sc.visual.items.filter((it) => /\d/.test(String(it.value || ''))).length;
   if (nums >= 2) return { ...sc, visual: { ...sc.visual, kind: 'bar' } };
   const prompt = sc.visual.imagePrompt || `${sc.visual.heading || sc.title}, editorial photo style, no text, no logos, no real people`;

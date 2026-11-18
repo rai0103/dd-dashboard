@@ -912,7 +912,34 @@ const drawQa: Draw = (c, sc, e) => {
   }
 };
 
+/** 白いスライド：アイコンを使わない箇条書き（左に見出し、右に内容。ナレーションに合わせて上から順に出す） */
+const drawBullets: Draw = (c, sc, e) => {
+  const v = sc.visual;
+  const top = heading(c, e, v.heading || 'まとめ', v.subheading, e.accent) + 6;
+  const items = v.items, n = Math.max(1, items.length);
+  const rowH = Math.min(e.portrait ? 92 : 64, (e.H - top - 12) / n);
+  const labW = e.portrait ? 0 : Math.min(190, e.W * 0.24);
+  const fs = e.portrait ? 20 : Math.min(24, rowH * 0.4);
+  items.forEach((it, i) => {
+    const y = top + i * rowH;
+    const kk = ease(sub(e.p, 0.04 + (i * 0.72) / n, 0.12 + (i * 0.72) / n));
+    if (kk <= 0) return;
+    c.save(); c.globalAlpha *= kk; c.translate((1 - kk) * -24, 0);
+    c.fillStyle = `rgba(${WHITE},0.08)`; c.fillRect(8, y + rowH - 1, e.W - 16, 1);
+    rr(c, 10, y + rowH / 2 - (e.portrait ? 22 : 7), 6, e.portrait ? 18 : 14, 2); c.fillStyle = `rgb(${e.accent})`; c.fill();
+    if (e.portrait) {
+      text(c, it.label, 26, y + rowH / 2 - 8, 15, e.accent, { bold: true, maxW: e.W - 40 });
+      textBlock(c, it.text || it.label, 26, y + rowH / 2 + 20, e.W - 40, fs, WHITE, { bold: true, maxLines: 2, lh: 1.25 });
+    } else {
+      text(c, it.label, 28, y + rowH / 2 + 6, Math.min(18, fs - 4), e.accent, { bold: true, maxW: labW - 24 });
+      text(c, it.text || it.label, 28 + labW, y + rowH / 2 + fs * 0.36, fs, WHITE, { bold: true, maxW: e.W - labW - 44 });
+    }
+    c.restore();
+  });
+};
+
 const drawSummary: Draw = (c, sc, e) => {
+  if (LIGHT) { drawBullets(c, sc, e); return; }
   const v = sc.visual;
   const top = heading(c, e, v.heading || 'まとめ', v.subheading, e.accent);
   const items = v.items, n = items.length;

@@ -45,7 +45,7 @@ import { buildStockCatalogFromSnapshot, buildStockCatalogFromCsv, mergeStockCata
 import { buildFixedDataChapters, fixedChaptersNote, mergeFixedChapters, dataPeriodOf, dataPeriodNoteOf } from "@/lib/explainer/dataChapters";
 import { DAIWA_PURCHASES } from "@/lib/beginnerTrialSeed";
 import { scheduleSyncPush } from "@/lib/sync";
-import { WEEKLY_CHANNEL, WEEKLY_PERSONA, decorateTrialTitle, buildWeeklyData, parsePurchases, yenJp, buildTrialReportChapters, trialFactsText, trialStatus, monthlyReturn, planVsActual, cagrOf, yearsToGoal, requiredRate, TRIAL_RULES } from "@/lib/explainer/weeklyReport";
+import { WEEKLY_CHANNEL, WEEKLY_PERSONA, decorateTrialTitle, trialRulesScene, placeRulesScene, RULES_SCENE_KEY, buildWeeklyData, parsePurchases, yenJp, buildTrialReportChapters, trialFactsText, trialStatus, monthlyReturn, planVsActual, cagrOf, yearsToGoal, requiredRate, TRIAL_RULES } from "@/lib/explainer/weeklyReport";
 import { decorateTitleScene } from "@/lib/explainer/sp500SheetScenes";
 import { computeSp500Sheets } from "@/lib/sp500Sheets";
 import { drawVisual, setVisualLight, PALETTE } from "@/lib/explainer/visuals";
@@ -600,8 +600,15 @@ export default function ExplainerStudio() {
       const n = sc.fixedKey ? fresh.get(sc.fixedKey) : null;
       if (n) return { ...sc, title: n.title, caption: n.caption, narration: n.narration, reading: n.reading, readingStale: false, visual: n.visual, minSec: n.minSec, genNarration: n.narration };
       return weeklyKindGuard(sc);
-    }).filter((sc) => !(sc.fixedKey && sc.fixedKey.startsWith("fixed:weekly:") && !fresh.has(sc.fixedKey))); // 今は作らなくなった場面（例：これまでの入金）は外す
-    setProject((p) => ({ ...p, videoTitle: WEEKLY_CHANNEL, longScenes, shortScenes: p.shortScenes.map(weeklyKindGuard) }));
+    }).filter((sc) => sc.fixedKey === RULES_SCENE_KEY || !(sc.fixedKey && sc.fixedKey.startsWith("fixed:weekly:") && !fresh.has(sc.fixedKey))) // 今は作らなくなった場面（例：これまでの入金）は外す
+      // 以前の「このチャンネルのルール」の章は、中身が「1億円までの道のり」になったので章の名前も合わせる
+      .map((sc) => (sc.visual.kind === "chapter" && sc.visual.heading === "このチャンネルのルール" ? { ...sc, title: "1億円までの道のり", visual: { ...sc.visual, heading: "1億円までの道のり" } } : sc));
+    setProject((p) => ({
+      ...p, videoTitle: WEEKLY_CHANNEL,
+      chapters: (p.chapters || []).map((c2) => (c2.title === "このチャンネルのルール" ? { ...c2, title: "1億円までの道のり", reading: "いちおくえんまでの、みちのり" } : c2)),
+      longScenes: placeRulesScene(longScenes, trialRulesScene(trialReport)),
+      shortScenes: p.shortScenes.map(weeklyKindGuard),
+    }));
   };
   const scenes = project ? (format === "long" ? project.longScenes : project.shortScenes) : NO_SCENES;
   const setScenes = (fn) => setProject((p) => {
@@ -683,7 +690,7 @@ export default function ExplainerStudio() {
       const fixedChs = buildTrialReportChapters(trialReport);
       extra = [
         `チャンネル名「${WEEKLY_CHANNEL}」の${monthlyKind ? "月次レポート（月初の回）" : "週次レポート"}動画。語り手は${WEEKLY_PERSONA}`,
-        `動画の冒頭（role=intro、場面2個）で、チャンネル名と「${monthlyKind ? "今月最初の報告（先月の成績と長期目標の振り返り）" : "今週の報告"}」であることを短く名乗る。チャンネルのルール（初期費用・毎月の積立・ボーナス月）と目標年数の説明、${monthlyKind ? "先月の月次リターン・長期目標との差、" : ""}現在の元本・評価額・期間ごとの騰落率・銘柄別の値動き・買い付け・目標の達成率は、アプリが実データから作る章（導入の直後に入る）で説明するので、あなたはそれらの場面を作らない。`,
+        `動画の冒頭（role=intro、場面2個）で、チャンネル名と「${monthlyKind ? "今月最初の報告（先月の成績と長期目標の振り返り）" : "今週の報告"}」であることを短く名乗る。チャンネルのルール（初期費用・毎月の積立・ボーナス月・目標）は表紙の次の1枚でアプリが箇条書きで説明するので、導入では触れない。1億円までの年数の比較、${monthlyKind ? "先月の月次リターン・長期目標との差、" : ""}現在の元本・評価額・期間ごとの騰落率・銘柄別の値動き・買い付け・目標の達成率は、アプリが実データから作る章（導入の直後に入る）で説明するので、あなたはそれらの場面を作らない。`,
         trialFactsText(trialReport),
         "導入・トピックス・締めでは、上の数字と食い違うことを言わない。",
         topics.length
@@ -692,7 +699,7 @@ export default function ExplainerStudio() {
         `最後の章（role=outro）は「雑感」として、${monthlyKind ? "今月の投資方針と、" : ""}今回の結果とトピックスについて語り手の本音を述べて締める（チャンネル登録の呼びかけは最後の場面で短く）。`,
         extraInstruction,
       ].filter(Boolean).join("\n");
-      dataExtra = { reservedScenes: fixedChs.reduce((a, c2) => a + c2.scenes.length + 1, 0) };
+      dataExtra = { reservedScenes: fixedChs.reduce((a, c2) => a + c2.scenes.length + 1, 0) + 1 }; // ＋1＝表紙の次のルールの箇条書き
     }
     return { topic: topic.trim(), mode, audience, targetMinutes: minutes, extraInstruction: extra, refBlocks: referenceBlocks(refs), today: todayStr(), speechRate: rate, imageShare: imgAutoEnabled ? imgShare : 0, stockCatalog, requiredRefNotes: requiredRefNotes(refs), learnedEdits: (learned.general[mode] || []).map((x) => ({ before: x.before, after: x.after })), ...dataExtra };
   };
@@ -917,6 +924,8 @@ export default function ExplainerStudio() {
         // 表紙：チャンネル名・「2026年1月〜（今日現在）」・「目指せ！15年で1億円！」。画面上部の見出しもチャンネル名にする（どちらも編集可）
         const ti = longScenes.findIndex((sc) => sc.visual.kind === "title");
         if (ti >= 0) longScenes = longScenes.map((sc, i) => (i === ti ? decorateTrialTitle(sc, trialReport, WEEKLY_CHANNEL) : sc));
+        // 表紙の次の1枚で、チャンネルのルールを箇条書きで説明する
+        longScenes = placeRulesScene(longScenes, trialRulesScene(trialReport));
         p = { ...p, videoTitle: WEEKLY_CHANNEL };
       }
       if (mode === "stock" || mode === "sp500") {

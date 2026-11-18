@@ -100,20 +100,29 @@ export interface TrialReportInput {
   history?: ValuePoint[];
 }
 
-/** 毎回のルール説明（チャンネルの前提） */
+/** 表紙の次の1枚：チャンネルのルールを箇条書きで説明する（毎回同じ内容。数値はルールから作る） */
+export const RULES_SCENE_KEY = 'fixed:weekly:rules-bullets';
+export function trialRulesScene(inp: TrialReportInput): ExplainerScene {
+  const R = TRIAL_RULES;
+  const ratePct = (inp.target.rate * 100).toFixed(0);
+  const items: VisualItem[] = [
+    { label: 'スタート', value: '', text: `${START_Y}年${START_M}月、初期費用${manYen(R.initial)}`, icon: 'flag' },
+    { label: '毎月の積立', value: '', text: `毎月${manYen(R.monthly)}`, icon: 'calendar' },
+    { label: 'ボーナス月', value: '', text: `6月・12月に各${manYen(R.bonus)}を追加`, icon: 'coin' },
+    { label: '年間の投資額', value: '', text: '年100万円', icon: 'yen' },
+    { label: '目標', value: '', text: `${inp.target.years}年で1億円（必要な利回り：年率 約${ratePct}%）`, icon: 'target' },
+  ];
+  const sc = scene('このチャンネルのルール', `年100万円で${inp.target.years}年1億円`,
+    `このチャンネルのルールです。${START_Y}年${START_M}月に初期費用${manYen(R.initial)}でスタートし、毎月${manYen(R.monthly)}を積み立てます。6月と12月はボーナスから${manYen(R.bonus)}ずつ追加して、合計で年100万円の投資です。目標は${inp.target.years}年で1億円。そのために必要な利回りは、年率およそ${ratePct}%です。`,
+    { ...emptyVisual('summary'), heading: 'このチャンネルのルール', items });
+  return { ...sc, minSec: 12, fixedKey: RULES_SCENE_KEY };
+}
+
+/** 1億円までの道のり（投資しない・S&P500・目標の比較） */
 function rulesChapter(inp: TrialReportInput): FixedChapter {
   const R = TRIAL_RULES;
   const noInvest = yearsToGoal(0) ?? 100;
   const scenes: ExplainerScene[] = [];
-  // 1年目の入金のスケジュール（棒グラフ）
-  const items: VisualItem[] = [];
-  for (let m = 1; m <= 12; m++) {
-    const ym = `${START_Y}-${String(m).padStart(2, '0')}`;
-    items.push({ label: `${m}月`, value: String(contributionInMonth(ym) / 10000), text: '', icon: 'yen' });
-  }
-  scenes.push(scene('このチャンネルのルール', '年100万円をコツコツ投資',
-    `このチャンネルのルールです。2026年1月に初期費用${manYen(R.initial)}でスタートし、毎月${manYen(R.monthly)}、6月と12月はボーナスから${manYen(R.bonus)}ずつ追加します。合計で年100万円の投資です。`,
-    { ...emptyVisual('bar'), heading: 'このチャンネルのルール：毎月の入金', subheading: `初期費用${manYen(R.initial)}（${START_Y}年1月）＋毎月${manYen(R.monthly)}＋6月・12月に各${manYen(R.bonus)}＝年100万円`, items, unit: '万円', emphasis: '1月', source: 'チャンネルのルール' }));
   // 1億円までの道のり（投資しない／S&P500の年率／目標の年率）の折れ線
   const horizon = Math.min(40, Math.max(30, Math.ceil((inp.spx?.years ?? 28) + 2)));
   const goalM = man1(R.goal);
@@ -136,7 +145,7 @@ function rulesChapter(inp: TrialReportInput): FixedChapter {
   if (inp.spx?.years) markers.push({ x: inp.spx.years, y: goalM, label: `約${Math.round(inp.spx.years)}年`, role: 'avg' });
   const xTicks = [0, 5, 10, 15, 20, 25, 30, 35, 40].filter((y) => y <= horizon).map((y) => ({ x: y, label: `${y}年` }));
   scenes.push(scene('1億円まで何年？', `目標は${inp.target.years}年で1億円`,
-    `目標は1億円。投資しないで貯めるだけなら約${Math.round(noInvest)}年かかります。${inp.spx?.years ? `S&P500の過去の値動き、年率${(inp.spx.rate * 100).toFixed(1)}%で運用できれば約${Math.round(inp.spx.years)}年。` : ''}このチャンネルは、その半分の${inp.target.years}年での達成を目指します。そのために必要な利回りは、年率およそ${(inp.target.rate * 100).toFixed(0)}%です。`,
+    `1億円まで何年かかるのか。投資しないで貯めるだけなら約${Math.round(noInvest)}年かかります。${inp.spx?.years ? `S&P500の過去の値動き、年率${(inp.spx.rate * 100).toFixed(1)}%で運用できれば約${Math.round(inp.spx.years)}年。このチャンネルは、その半分の${inp.target.years}年での達成を目指します。` : `このチャンネルは${inp.target.years}年での達成を目指します。`}`,
     fanVisual('1億円までの道のり', `初期40万円＋年100万円を積み立てた場合${inp.spx?.period ? `（S&P500は${inp.spx.period}の価格の年率）` : ''}`, {
       series, markers, xTicks, hLines: [{ y: goalM, label: '目標 1億円' }],
       chips: [
@@ -145,7 +154,7 @@ function rulesChapter(inp: TrialReportInput): FixedChapter {
         { label: '目標', value: `${inp.target.years}年（年${(inp.target.rate * 100).toFixed(0)}%）`, role: 'focus' },
       ],
     }, inp.spx ? 'S&P500の日次終値から計算' : 'チャンネルのルールから計算')));
-  return { plan: plan('このチャンネルのルール', 'このちゃんねるの、るーる', '年100万円の積立ルールと、1億円までの目標年数'), scenes, position: 'afterIntro' };
+  return { plan: plan('1億円までの道のり', 'いちおくえんまでの、みちのり', '投資しない・S&P500・このチャンネルの目標で、1億円に届くまでの年数の比較'), scenes, position: 'afterIntro' };
 }
 
 /** 月初：先月の月次リターンと、長期目標（計画）との差 */
@@ -294,6 +303,14 @@ export function decorateTrialTitle(sc: ExplainerScene, inp: TrialReportInput, ch
       titleNote: undefined,
     },
   };
+}
+
+/** ルールの箇条書きを、表紙（最初のタイトルの場面）のすぐ次に置く（すでにあれば置き直す） */
+export function placeRulesScene(scenes: ExplainerScene[], rules: ExplainerScene): ExplainerScene[] {
+  const list = scenes.filter((x) => x.fixedKey !== RULES_SCENE_KEY);
+  const ti = list.findIndex((x) => x.visual.kind === 'title');
+  const at = ti >= 0 ? ti + 1 : 0;
+  return [...list.slice(0, at), { ...rules, chapter: ti >= 0 ? list[ti].chapter : 0 }, ...list.slice(at)];
 }
 
 type FixedChapter = { plan: ChapterPlan; scenes: ExplainerScene[]; position: 'afterIntro' };
