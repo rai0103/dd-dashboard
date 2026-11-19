@@ -169,6 +169,13 @@ async function handleDrafts(req, res, pathname, deps) {
           time: /^\d{1,2}:\d{2}$/.test(String(s.time || '')) ? String(s.time).padStart(5, '0') : DEFAULT_SCHEDULE.time,
           keywords: (Array.isArray(s.keywords) ? s.keywords : []).map((k) => ({ theme: String(k && k.theme || '').trim(), mode: k && k.mode === 'keyword' ? 'keyword' : 'news', ...(k && k.urgent ? { urgent: true } : {}), ...(k && k.note && String(k.note).trim() ? { note: String(k.note).trim().slice(0, 500) } : {}) })).filter((k) => k.theme),
           minutes: Number(s.minutes) || undefined,
+          // 画像の自動挿入（スライドの割合・AI生成の割合・画風）。夜間の生成はこの設定を使う
+          ...(s.images && typeof s.images === 'object' ? { images: {
+            enabled: !!s.images.enabled,
+            share: Math.max(0, Math.min(1, Number(s.images.share) || 0)),
+            aiShare: Math.max(0, Math.min(1, Number(s.images.aiShare) || 0)),
+            style: String(s.images.style || '').slice(0, 300),
+          } } : {}),
           // 自動で選ぶテーマのジャンル（空＝全ジャンルからシャッフル）
           genres: (Array.isArray(s.genres) ? s.genres : []).map(String).filter((g) => /^[a-z-]{2,30}$/.test(g)).slice(0, 10),
         };

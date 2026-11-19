@@ -2029,7 +2029,7 @@ export default function ExplainerStudio() {
   // 予約テーマ（なければ前日の話題のニュース）で、リサーチ→台本→画像まで作り、drafts/pending に保存する。
   // 動画の書き出し・アップロードはしない（画像の確認から先は、ユーザーが普段の画面で行う）。
   const latestRef = useRef({});
-  latestRef.current = { handleGenerate, runResearch, project, refs, genProgress };
+  latestRef.current = { handleGenerate, runResearch, project, refs, genProgress, imgAutoEnabled, imgShare, imgAiShare };
   useEffect(() => {
     const qs = new URLSearchParams(window.location.search);
     if (qs.get("autodraft") !== "1") return;
@@ -2069,6 +2069,11 @@ export default function ExplainerStudio() {
         const urgentOnly = qs.get("urgent") === "1"; // 「すぐ」の予約だけを作る（話題のニュースからの自動選択はしない）
         if (!urgentOnly && (!sch.enabled || sch.count < 1)) { await saveDraftStatus({ ...status, state: "done", finishedAt: Date.now(), message: "自動生成はオフです" }); return; }
         if (sch.minutes) setTargetMinutes(Math.min(8, Math.max(3, sch.minutes)));
+        // 画像の自動挿入：予約に保存した設定を使う（無ければ、取り込んだ設定の控えのまま）。使った設定はログに残す
+        const im = sch.images;
+        if (im) { setImgAutoEnabled(!!im.enabled); setImgShare(Number(im.share) || 0); setImgAiShare(Number(im.aiShare) || 0); if (typeof im.style === "string") setImageStyleHint(im.style); }
+        { const L = latestRef.current; const en = im ? !!im.enabled : L.imgAutoEnabled, sh = im ? Number(im.share) || 0 : L.imgShare, ai = im ? Number(im.aiShare) || 0 : L.imgAiShare;
+          status.step = `画像の自動挿入：${en && sh > 0 ? `オン（スライドの${Math.round(sh * 100)}%・AI生成${Math.round(ai * 100)}%）` : "オフ"}${im ? "" : "（設定の控えから）"}`; status.stepAt = Date.now(); await saveDraftStatus(status).catch(() => {}); await sleep(600); }
         const doneThemes = new Set(status.results.map((r) => r.theme));
         const want = urgentOnly ? 10 : Math.max(0, sch.count - status.results.length);
         const queue = sch.keywords.filter((k) => (!urgentOnly || k.urgent) && !doneThemes.has(k.theme)).slice(0, want).map((k) => ({ ...k, source: "reserved" }));
@@ -2281,7 +2286,7 @@ export default function ExplainerStudio() {
             </label>
           </div>
         </header>
-        <DraftPanel C={C} disabled={genBusy || isExporting} minutes={targetMinutes} onOpen={openDraft} hasProject={!!project} onSaveProfile={saveProfileForDrafts} onBackup={() => backupProject(project, { theme: topic, mode })} />
+        <DraftPanel C={C} disabled={genBusy || isExporting} minutes={targetMinutes} onOpen={openDraft} hasProject={!!project} onSaveProfile={saveProfileForDrafts} onBackup={() => backupProject(project, { theme: topic, mode })} imageSettings={{ enabled: imgAutoEnabled, share: imgShare, aiShare: imgAiShare, style: imageStyleHint }} />
 
         {/* ---------- 入力 ---------- */}
         <div className="rounded-lg p-3" style={{ background: C.panel, border: `1px solid ${C.border}` }}>

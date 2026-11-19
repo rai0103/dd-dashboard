@@ -10,7 +10,7 @@ const SOURCE_LABEL = { auto: "自動", reserved: "予約", sequel: "続編", man
 const MODE_LABEL = { news: "ニュース", keyword: "用語", weekly: "週次レポート", stock: "株式情報", sp500: "S&P500" };
 const fmt = (t) => (t ? new Date(t).toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "");
 
-export default function DraftPanel({ C, disabled, minutes, onOpen, hasProject = false, onSaveProfile = null, onBackup = null }) {
+export default function DraftPanel({ C, disabled, minutes, onOpen, hasProject = false, onSaveProfile = null, onBackup = null, imageSettings = null }) {
   const [open, setOpen] = useState(false);
   const [sch, setSch] = useState(null);
   const [text, setText] = useState("");
@@ -58,7 +58,8 @@ export default function DraftPanel({ C, disabled, minutes, onOpen, hasProject = 
     try {
       // 自動生成のChromeは普段のブラウザと設定が別なので、今の設定（声・画像の割合など）も一緒に渡しておく
       if (onSaveProfile) await onSaveProfile().catch(() => {});
-      const r = await saveDraftSchedule({ ...sch, keywords, minutes });
+      // 画像の自動挿入の設定は、予約そのものにも保存する（設定の控えに頼らず、確実に夜間の生成で使う）
+      const r = await saveDraftSchedule({ ...sch, keywords, minutes, ...(imageSettings ? { images: imageSettings } : {}) });
       setMsg(r?.task && r.task.ok === false ? `保存しました（タスクの登録に失敗：${r.task.error}）` : `保存しました${sch.enabled ? `（毎日${sch.time}に自動で作ります）` : "（自動生成はオフ）"}`);
       load();
     } catch (e) {
@@ -204,6 +205,10 @@ export default function DraftPanel({ C, disabled, minutes, onOpen, hasProject = 
               <textarea value={text} onChange={(e) => setText(e.target.value)} rows={3} className="px-2 py-1 text-xs" style={field} placeholder={"例：日銀の金融政策決定会合\n用語：インフレ ｜ 物価と金利の関係を中心に"} />
               <div className="flex items-center gap-2">
                 <button onClick={save} disabled={busy} className="text-[11px] px-3 py-1 rounded" style={btn}>予約を保存</button>
+                <span className="text-[10px]" style={{ color: C.textMuted }}>
+                  夜間の画像：{sch.images ? (sch.images.enabled ? `オン（スライドの${Math.round(sch.images.share * 100)}%・AI生成${Math.round(sch.images.aiShare * 100)}%）` : "オフ") : "未保存"}
+                  {imageSettings && (!sch.images || sch.images.enabled !== imageSettings.enabled || sch.images.share !== imageSettings.share || sch.images.aiShare !== imageSettings.aiShare || (sch.images.style || "") !== (imageSettings.style || "")) ? "（今の画面の設定と違います。「予約を保存」で反映）" : ""}
+                </span>
                 {msg && <span className="text-[11px]" style={{ color: C.textMuted }}>{msg}</span>}
               </div>
             </div>
