@@ -73,6 +73,24 @@ async function listDrafts() {
   return out.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 }
 
+/**
+ * 取り込み済みのドラフト（drafts/imported）と、別の台本を開く前に自動で残した控え（backup-…）。新しい順に最大 limit 件。
+ * dir＝フォルダ名（もう一度開くときに使う）、importedAt＝取り込んだ／控えを残した時刻
+ */
+async function listImported(limit = 15) {
+  let names = [];
+  try { names = await fs.readdir(IMPORTED); } catch { return []; }
+  const out = [];
+  for (const n of names) {
+    const m = await readJson(path.join(IMPORTED, n, 'meta.json'), null);
+    if (!m) continue;
+    const t = Number((n.match(/-(\d{12,})$/) || [])[1]) || m.createdAt || 0;
+    out.push({ ...m, dir: n, importedAt: t });
+  }
+  return out.sort((a, b) => (b.importedAt || 0) - (a.importedAt || 0)).slice(0, limit);
+}
+const draftDir = (u) => (u.searchParams.get('imported') ? path.join(IMPORTED, safe(u.searchParams.get('imported'))) : path.join(PENDING, safe(u.searchParams.get('draft'))));
+
 /** 前日の話題のニュースから、解説動画のテーマ候補をGemini（Google検索）で集める */
 async function trending(researchWithGemini, n, exclude) {
   const y = new Date(Date.now() - 86400000);
@@ -94,7 +112,7 @@ async function handleDrafts(req, res, pathname, deps) {
   const u = new URL(req.url, 'http://localhost');
   try {
     if (pathname === '/api/drafts/blob') {
-      const f = path.join(PENDING, safe(u.searchParams.get('draft')), 'blobs', safe(u.searchParams.get('key')));
+      const f = path.join(draftDir(u), 'blobs', safe(u.searchParams.get('key')));
       if (req.method === 'POST') {
         await fs.mkdir(path.dirname(f), { recursive: true });
         await fs.writeFile(f, await readRaw(req));
@@ -110,14 +128,14 @@ async function handleDrafts(req, res, pathname, deps) {
       return true;
     }
     if (req.method === 'GET') {
-      const id = u.searchParams.get('draft');
+      const id = u.searchParams.get('draft') || u.searchParams.get('imported');
       if (id) {
-        const p = await readJson(path.join(PENDING, safe(id), 'project.json'), null);
+        const p = await readJson(path.join(draftDir(u), 'project.json'), null);
         send(res, p ? 200 : 404, p ? { project: p } : { error: 'ドラフトが見つかりません' });
         return true;
       }
-      const [schedule, history, status, drafts] = await Promise.all([getSchedule(), readHistory(), readJson(path.join(ROOT, 'status.json'), { state: 'idle' }), listDrafts()]);
-      send(res, 200, { schedule, history, status, drafts });
+      const [schedule, history, status, drafts, importedDrafts] = await Promise.all([getSchedule(), readHistory(), readJson(path.join(ROOT, 'status.json'), { state: 'idle' }), listDrafts(), listImported()]);
+      send(res, 200, { schedule, history, status, drafts, importedDrafts });
       return true;
     }
     const b = JSON.parse((await readRaw(req)).toString('utf-8') || '{}');
@@ -184,6 +202,15 @@ async function handleDrafts(req, res, pathname, deps) {
         await fs.rename(path.join(PENDING, safe(b.id)), path.join(IMPORTED, `${safe(b.id)}-${Date.now()}`));
         send(res, 200, { ok: true });
         return true;
+      // 別の台本（ドラフト）を開く前に、今開いている台本の控えを残す（あとで「もう一度開く」から戻せる）
+      case 'backup': {
+        await fs.mkdir(IMPORTED, { recursive: true });
+        const dir = path.join(IMPORTED, `backup-${Date.now()}`);
+        await writeJson(path.join(dir, 'project.json'), b.project);
+        await writeJson(path.join(dir, 'meta.json'), { ...(b.meta || {}), id: `backup-${Date.now()}`, source: 'backup', images: [] });
+        send(res, 200, { ok: true });
+        return true;
+      }
       case 'trending': {
         const themes = await trending(deps.researchWithGemini, Math.max(1, Number(b.count) || 3), Array.isArray(b.exclude) ? b.exclude.map(String) : []);
         send(res, 200, { themes });

@@ -1,19 +1,21 @@
 "use client";
 // 自動ドラフト：毎朝の自動生成の設定（本数・時刻・予約テーマ）と、できたドラフトの取り込み
 import { useEffect, useState } from "react";
-import { getDraftState, importDraft, saveDraftSchedule, setHistorySequel, addDraftHistory, deleteHistory } from "@/lib/explainer/autoDraft";
+import { getDraftState, importDraft, reopenImported, saveDraftSchedule, setHistorySequel, addDraftHistory, deleteHistory } from "@/lib/explainer/autoDraft";
 import { canPickFolder, scanExportedVideos } from "@/lib/explainer/exportBundle";
 
 const ymd = (t) => (t ? new Date(t).toLocaleDateString("ja-JP", { year: "numeric", month: "numeric", day: "numeric" }) : "—");
-const SOURCE_LABEL = { auto: "自動", reserved: "予約", sequel: "続編", manual: "手動", past: "書き出し済み", entry: "手入力" };
+const SOURCE_LABEL = { auto: "自動", reserved: "予約", sequel: "続編", manual: "手動", past: "書き出し済み", entry: "手入力", backup: "控え" };
+const MODE_LABEL = { news: "ニュース", keyword: "用語", weekly: "週次レポート", stock: "株式情報", sp500: "S&P500" };
 const fmt = (t) => (t ? new Date(t).toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "");
 
-export default function DraftPanel({ C, disabled, minutes, onOpen, hasProject = false, onSaveProfile = null }) {
+export default function DraftPanel({ C, disabled, minutes, onOpen, hasProject = false, onSaveProfile = null, onBackup = null }) {
   const [open, setOpen] = useState(false);
   const [sch, setSch] = useState(null);
   const [text, setText] = useState("");
   const [status, setStatus] = useState(null);
   const [drafts, setDrafts] = useState([]);
+  const [recent, setRecent] = useState([]);
   const [history, setHistory] = useState([]);
   const [histOpen, setHistOpen] = useState(false);
   const [histMsg, setHistMsg] = useState("");
@@ -29,6 +31,7 @@ export default function DraftPanel({ C, disabled, minutes, onOpen, hasProject = 
       setText(st.schedule.keywords.map((k) => `${k.mode === "keyword" ? `用語：${k.theme}` : k.theme}${k.note ? ` ｜ ${k.note}` : ""}`).join("\n"));
       setStatus(st.status);
       setDrafts(st.drafts || []);
+      setRecent(Array.isArray(st.importedDrafts) ? st.importedDrafts : []);
       setHistory(Array.isArray(st.history) ? st.history : []);
       if ((st.drafts || []).length) setOpen(true);
     } catch (e) {
@@ -59,14 +62,19 @@ export default function DraftPanel({ C, disabled, minutes, onOpen, hasProject = 
     }
   };
 
-  const openDraft = async (d) => {
-    // 取り込むとドラフトは「取り込み済み」に移るので、確認は取り込む前に行う
-    if (hasProject && !confirm("今の台本を閉じて、ドラフトを開きます。よろしいですか？（今の台本を残したい場合は、先に「台本を保存」を押してください）")) return;
-    setBusy(true); setMsg("ドラフトを取り込み中…");
+  // 今の台本は、閉じる前に控えとしてPCのフォルダに残す（「最近開いた台本」からいつでも戻せる）。残せなかったときだけ確認する
+  const keepCurrent = async () => {
+    if (!hasProject) return true;
+    try { if (onBackup) { await onBackup(); return true; } } catch (e) { /* 下で確認 */ }
+    return confirm("今の台本の控えを残せませんでした。今の台本を閉じて開きますか？（残したい場合は、先に「台本を保存」を押してください）");
+  };
+  const openDraft = async (d, again = false) => {
+    if (!(await keepCurrent())) return;
+    setBusy(true); setMsg(again ? "台本を開いています…" : "ドラフトを取り込み中…");
     try {
-      const p = await importDraft(d);
+      const p = again ? await reopenImported(d) : await importDraft(d);
       await onOpen(p, d);
-      setMsg("取り込みました。");
+      setMsg(hasProject ? "開きました（前の台本は「最近開いた台本」に控えを残しました）。" : "開きました。");
       load();
     } catch (e) {
       setMsg(`取り込めませんでした：${e.message}`);
@@ -149,6 +157,23 @@ export default function DraftPanel({ C, disabled, minutes, onOpen, hasProject = 
               <button onClick={() => openDraft(d)} disabled={disabled || busy} className="text-[11px] px-2 py-1 rounded" style={{ ...btn, opacity: disabled || busy ? 0.5 : 1 }}>開く</button>
             </div>
           ))}
+          {drafts.length === 0 && (
+            <div className="text-[11px]" style={{ color: C.textMuted }}>新しいドラフトはありません。一度開いたドラフト（今朝の分も）は、下の「最近開いた台本」からもう一度開けます。</div>
+          )}
+          {recent.length > 0 && (
+            <div className="flex flex-col gap-1 pt-1" style={{ borderTop: `1px solid ${C.borderSoft ?? "#334155"}` }}>
+              <div className="text-[11px] font-bold" style={{ color: C.teal }}>最近開いた台本（もう一度開く）</div>
+              {recent.map((d) => (
+                <div key={d.dir} className="flex items-center gap-2 text-xs">
+                  <div className="flex-1 min-w-0">
+                    <div className="truncate">{d.title}</div>
+                    <div className="truncate text-[10px]" style={{ color: C.textMuted }}>{SOURCE_LABEL[d.source] || "自動"}・{MODE_LABEL[d.mode] || "ニュース"}「{d.theme}」・{d.scenes}場面・作成 {fmt(d.createdAt)}{d.source !== "backup" ? `・開いた日時 ${fmt(d.importedAt)}` : ""}</div>
+                  </div>
+                  <button onClick={() => openDraft(d, true)} disabled={disabled || busy} className="text-[11px] px-2 py-1 rounded" style={{ ...btn, opacity: disabled || busy ? 0.5 : 1 }}>もう一度開く</button>
+                </div>
+              ))}
+            </div>
+          )}
           {sch && (
             <div className="flex flex-col gap-2 pt-1" style={{ borderTop: `1px solid ${C.borderSoft ?? "#334155"}` }}>
               <div className="flex items-center gap-3 text-xs flex-wrap">

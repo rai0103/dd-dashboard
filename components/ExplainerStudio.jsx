@@ -33,7 +33,7 @@ import { generateImage } from "@/lib/explainer/imageClient";
 import { searchFreeImages, fetchFreeImage, rankFreeImages } from "@/lib/explainer/freeImageClient";
 import { researchTopic } from "@/lib/explainer/researchClient";
 import DraftPanel from "@/components/DraftPanel";
-import { addDraftHistory, exportDraft, getDraftState, saveDraftSchedule, saveDraftStatus, trendingThemes, setHistorySequel, isSimilarTheme } from "@/lib/explainer/autoDraft";
+import { addDraftHistory, exportDraft, backupProject, getDraftState, saveDraftSchedule, saveDraftStatus, trendingThemes, setHistorySequel, isSimilarTheme } from "@/lib/explainer/autoDraft";
 import { safeFileName, canPickFolder, getSavedFolder, pickFolder, ensureWritable, saveBundle, descriptionText } from "@/lib/explainer/exportBundle";
 import { exportVideoProfile, importVideoProfile } from "@/lib/videoProfileSnapshot";
 import AutoScheduleStudio from "@/components/AutoScheduleStudio";
@@ -2161,7 +2161,8 @@ export default function ExplainerStudio() {
   /** 自動ドラフトを取り込んで、編集画面に開く */
   const openDraft = async (p, meta) => {
     const { __draftRefs, ...proj } = p || {};
-    setMode(meta.mode === "keyword" ? "keyword" : "news");
+    const m = proj.mode || meta.mode;
+    setMode(["keyword", "weekly", "stock", "sp500"].includes(m) ? m : "news");
     setTopic(meta.theme);
     setRefs(Array.isArray(__draftRefs) ? __draftRefs : []);
     setFormat("long"); setSeekPos(0); setCurrentSceneIdx(0);
@@ -2271,7 +2272,7 @@ export default function ExplainerStudio() {
             </label>
           </div>
         </header>
-        <DraftPanel C={C} disabled={genBusy || isExporting} minutes={targetMinutes} onOpen={openDraft} hasProject={!!project} onSaveProfile={saveProfileForDrafts} />
+        <DraftPanel C={C} disabled={genBusy || isExporting} minutes={targetMinutes} onOpen={openDraft} hasProject={!!project} onSaveProfile={saveProfileForDrafts} onBackup={() => backupProject(project, { theme: topic, mode })} />
 
         {/* ---------- 入力 ---------- */}
         <div className="rounded-lg p-3" style={{ background: C.panel, border: `1px solid ${C.border}` }}>

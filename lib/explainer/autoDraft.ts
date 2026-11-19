@@ -4,7 +4,7 @@ import { listImages, putImage } from './imageStore';
 
 export interface DraftKeyword { theme: string; mode: 'news' | 'keyword'; urgent?: boolean; note?: string }
 export interface DraftSchedule { enabled: boolean; count: number; time: string; keywords: DraftKeyword[]; minutes?: number }
-export interface DraftMeta { id: string; theme: string; mode: string; title: string; scenes: number; createdAt: number; source: 'reserved' | 'auto'; images?: { id: string; name: string; caption?: string; credit?: unknown; createdAt: number; type: string }[] }
+export interface DraftMeta { id: string; theme: string; mode: string; title: string; scenes: number; createdAt: number; source: 'reserved' | 'auto' | 'sequel' | 'backup' | string; /** 取り込み済み（drafts/imported）のフォルダ名と、取り込んだ時刻 */ dir?: string; importedAt?: number; images?: { id: string; name: string; caption?: string; credit?: unknown; createdAt: number; type: string }[] }
 export interface DraftStatus { state: 'idle' | 'running' | 'done' | 'error'; startedAt?: number; finishedAt?: number; message?: string; step?: string; stepAt?: number; run?: string; results?: { theme: string; ok: boolean; error?: string }[] }
 
 const base = () => `${getTtsBaseUrl()}/api/drafts`;
@@ -17,7 +17,7 @@ async function post(body: unknown) {
 /** 作ったテーマの記録（drafts/history.json）。theme はシリーズのテーマ（続編も最初のテーマのまま）、part は第何弾か */
 export interface DraftHistory { id: string; theme: string; title?: string; createdAt?: number; mode?: 'news' | 'keyword'; part?: number; source?: string; sequelOf?: string; draftId?: string; /** 次の自動生成で続編を作る */ sequel?: boolean }
 
-export async function getDraftState(): Promise<{ schedule: DraftSchedule; history: DraftHistory[]; status: DraftStatus; drafts: DraftMeta[] }> {
+export async function getDraftState(): Promise<{ schedule: DraftSchedule; history: DraftHistory[]; status: DraftStatus; drafts: DraftMeta[]; importedDrafts?: DraftMeta[] }> {
   const r = await fetch(base(), { cache: 'no-store' });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json();
@@ -69,4 +69,28 @@ export async function importDraft(meta: DraftMeta): Promise<any> {
   }
   await post({ action: 'imported', id: meta.id });
   return d.project;
+}
+
+/** 取り込み済みのドラフト（または自動で残した控え）を、もう一度開く。台本を返す（取り込み済みのまま動かさない） */
+export async function reopenImported(meta: DraftMeta): Promise<any> {
+  if (!meta.dir) throw new Error('フォルダが分かりません');
+  const q = `imported=${encodeURIComponent(meta.dir)}`;
+  const r = await fetch(`${base()}?${q}`, { cache: 'no-store' });
+  const d = await r.json();
+  if (!r.ok || !d.project) throw new Error(d?.error || 'ドラフトを読み込めませんでした');
+  const have = new Set((await listImages().catch(() => [])).map((im) => im.id));
+  for (const im of meta.images || []) {
+    if (have.has(im.id)) continue; // すでにこのブラウザにある画像は取り込み直さない
+    const br = await fetch(`${base()}/blob?${q}&key=${encodeURIComponent(im.id)}`);
+    if (!br.ok) continue;
+    const blob = await br.blob();
+    await putImage({ id: im.id, name: im.name, blob, rightsConfirmed: true, createdAt: im.createdAt || Date.now(), caption: im.caption, ...(im.credit ? { credit: im.credit as any } : {}) });
+  }
+  return d.project;
+}
+
+/** 別の台本を開く前に、今の台本の控えを PC のフォルダ（drafts/imported/backup-…）に残す。画像はこのブラウザに残っているので台本だけ */
+export async function backupProject(project: any, info: { theme: string; mode: string }): Promise<void> {
+  if (!project) return;
+  await post({ action: 'backup', project, meta: { theme: info.theme || project.videoTitle || '', mode: project.mode || info.mode, title: project.videoTitle || info.theme || '（無題）', scenes: (project.longScenes || []).length, createdAt: Date.now() } });
 }
