@@ -33,7 +33,7 @@ import { generateImage } from "@/lib/explainer/imageClient";
 import { searchFreeImages, fetchFreeImage, rankFreeImages } from "@/lib/explainer/freeImageClient";
 import { researchTopic } from "@/lib/explainer/researchClient";
 import DraftPanel from "@/components/DraftPanel";
-import { addDraftHistory, exportDraft, backupProject, getDraftState, saveDraftSchedule, saveDraftStatus, trendingThemes, setHistorySequel, isSimilarTheme } from "@/lib/explainer/autoDraft";
+import { addDraftHistory, exportDraft, backupProject, getDraftState, saveDraftSchedule, saveDraftStatus, trendingThemes, setHistorySequel, isSimilarTheme, THEME_GENRES, pickGenres } from "@/lib/explainer/autoDraft";
 import { safeFileName, canPickFolder, getSavedFolder, pickFolder, ensureWritable, saveBundle, descriptionText } from "@/lib/explainer/exportBundle";
 import { exportVideoProfile, importVideoProfile } from "@/lib/videoProfileSnapshot";
 import AutoScheduleStudio from "@/components/AutoScheduleStudio";
@@ -2097,8 +2097,17 @@ export default function ExplainerStudio() {
           try {
             // 過去に作ったテーマ・動画タイトルは選ばない（言い方を変えた同じ話題も除く）
             const past = [...history.map((h) => h.theme), ...history.map((h) => h.title).filter(Boolean), ...doneThemes, ...queue.map((q) => q.theme)];
-            const { themes } = await trendingThemes(want - queue.length + 3, past);
-            for (const t of themes) { if (queue.length >= want) break; if (!isSimilarTheme(t, [...past, ...queue.map((q) => q.theme)])) queue.push({ theme: t, mode: "news", source: "auto" }); }
+            // ジャンル：予約で選んだジャンル（無ければ全ジャンル）から、1本ずつシャッフルで割り当てる
+            const slots = pickGenres(sch.genres, want - queue.length).map((k) => THEME_GENRES.find((g) => g.key === k));
+            const { themes, items } = await trendingThemes(want - queue.length + 3, past, slots.map((g) => ({ label: g.label, hint: g.hint })));
+            const fresh = (t) => !isSimilarTheme(t, [...past, ...queue.map((q) => q.theme)]);
+            if (Array.isArray(items) && items.length) {
+              for (const g of slots) {
+                const hit = items.find((x) => x.genre === g.label && fresh(x.theme)) ?? items.find((x) => fresh(x.theme)); // そのジャンルで残りが無ければ、ほかのジャンルの候補で埋める
+                if (hit) queue.push({ theme: hit.theme, mode: "news", source: "auto", genre: hit.genre });
+              }
+            }
+            for (const t of themes) { if (queue.length >= want) break; if (fresh(t)) queue.push({ theme: t, mode: "news", source: "auto" }); }
           } catch (e) { status.message = `話題のニュースを取得できませんでした：${e?.message || e}`; }
         }
         // 進み具合を status.step に書き出す（scripts/auto-draft.mjs がログに残し、止まった場所が分かるようにする）
@@ -2138,9 +2147,9 @@ export default function ExplainerStudio() {
               const cur = await getDraftState();
               await saveDraftSchedule({ ...cur.schedule, keywords: cur.schedule.keywords.filter((k) => k.theme !== q.theme) }, false);
             }
-            status.results.push({ theme: q.theme, ok: true });
+            status.results.push({ theme: q.theme, ok: true, ...(q.genre ? { genre: q.genre } : {}) });
           } catch (e) {
-            status.results.push({ theme: q.theme, ok: false, error: e?.message || String(e) });
+            status.results.push({ theme: q.theme, ok: false, error: e?.message || String(e), ...(q.genre ? { genre: q.genre } : {}) });
             // 「すぐ」の予約は失敗しても外す（10分ごとに作り直し続けないように）
             if (q.urgent) {
               const cur = await getDraftState().catch(() => null);

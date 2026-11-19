@@ -1,6 +1,7 @@
 "use client";
 // 自動ドラフト：毎朝の自動生成の設定（本数・時刻・予約テーマ）と、できたドラフトの取り込み
 import { useEffect, useState } from "react";
+import { THEME_GENRES } from "@/lib/explainer/autoDraftTheme";
 import { getDraftState, importDraft, reopenImported, saveDraftSchedule, setHistorySequel, addDraftHistory, deleteHistory } from "@/lib/explainer/autoDraft";
 import { canPickFolder, scanExportedVideos } from "@/lib/explainer/exportBundle";
 
@@ -186,6 +187,18 @@ export default function DraftPanel({ C, disabled, minutes, onOpen, hasProject = 
                 <label className="flex items-center gap-1"><input type="checkbox" checked={sch.enabled} onChange={(e) => setSch({ ...sch, enabled: e.target.checked })} /> 毎朝自動で作る</label>
                 <label className="flex items-center gap-1">本数 <input type="number" min={1} max={10} value={sch.count} onChange={(e) => setSch({ ...sch, count: Math.max(1, Math.min(10, Number(e.target.value) || 1)) })} className="w-14 px-1 py-0.5 text-xs" style={field} /></label>
                 <label className="flex items-center gap-1">開始時刻 <input type="time" value={sch.time} onChange={(e) => setSch({ ...sch, time: e.target.value })} className="px-1 py-0.5 text-xs" style={field} /></label>
+              </div>
+              <div className="flex items-center gap-x-3 gap-y-1 text-xs flex-wrap">
+                <span className="text-[11px]" style={{ color: C.textMuted }}>自動で選ぶジャンル</span>
+                {THEME_GENRES.map((g) => {
+                  const on = (sch.genres || []).includes(g.key);
+                  return (
+                    <label key={g.key} className="flex items-center gap-1" title={g.hint}>
+                      <input type="checkbox" checked={on} onChange={(e) => setSch({ ...sch, genres: e.target.checked ? [...(sch.genres || []), g.key] : (sch.genres || []).filter((k) => k !== g.key) })} />{g.label}
+                    </label>
+                  );
+                })}
+                <span className="text-[10px]" style={{ color: C.textDim ?? C.textMuted }}>{(sch.genres || []).length ? "選んだジャンルから1本ずつ、順番をシャッフルして選びます" : "未選択＝全ジャンルからシャッフルで選びます"}（予約テーマ・続編が先。変えたら「予約を保存」）</span>
               </div>
               <div className="text-[11px]" style={{ color: C.textMuted }}>予約テーマ（1行に1つ。先に使います。用語解説にしたいときは「用語：NISA」のように書きます。扱ってほしい点は「 ｜ 」の後ろに書けます）。足りない分は、前日の話題のニュースから自動で選びます。</div>
               <textarea value={text} onChange={(e) => setText(e.target.value)} rows={3} className="px-2 py-1 text-xs" style={field} placeholder={"例：日銀の金融政策決定会合\n用語：インフレ ｜ 物価と金利の関係を中心に"} />

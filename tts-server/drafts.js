@@ -91,18 +91,39 @@ async function listImported(limit = 15) {
 }
 const draftDir = (u) => (u.searchParams.get('imported') ? path.join(IMPORTED, safe(u.searchParams.get('imported'))) : path.join(PENDING, safe(u.searchParams.get('draft'))));
 
-/** 前日の話題のニュースから、解説動画のテーマ候補をGemini（Google検索）で集める */
-async function trending(researchWithGemini, n, exclude) {
+const cleanLine = (l) => l.replace(/\*\*/g, '').replace(/^\s*(?:[-・*•]|[0-9０-９]{1,2}\s*[.．)）、])\s*/, '').replace(/^[「『]|[」』]$/g, '').trim();
+const okTheme = (l) => l && l.length <= 40 && !/[:：]$/.test(l) && !/^(以下|次の|こちら|上記|※)/.test(l);
+
+/**
+ * 前日の話題のニュースから、解説動画のテーマ候補をGemini（Google検索）で集める。
+ * genres（{label, hint}）を渡すと、ジャンルごとに候補を集め、[{ genre, theme }] も返す
+ */
+async function trending(researchWithGemini, n, exclude, genres) {
   const y = new Date(Date.now() - 86400000);
   const d = `${y.getFullYear()}年${y.getMonth() + 1}月${y.getDate()}日`;
-  const prompt = `${d}に日本で話題になったニュース（経済・金融・マーケット・ビジネス・テクノロジー・社会）の中から、「ニュース・キーワード解説」のYouTube動画のテーマに向くものを${n + 5}件挙げてください。最新のWeb情報で確認したものだけにしてください。\n出力は1行に1件、テーマだけ（30字以内の日本語。例：日銀が政策金利を0.75%に引き上げ）。番号・記号・説明・前置きは書かないでください。${exclude.length ? `\n次の話題は過去に動画にしたので、同じ話題（言い方を変えたものも含む）は除いてください：${exclude.slice(-120).join('、')}` : ''}`;
+  const ex = exclude.length ? `\n次の話題は過去に動画にしたので、同じ話題（言い方を変えたものも含む）は除いてください：${exclude.slice(-120).join('、')}` : '';
+  if (Array.isArray(genres) && genres.length) {
+    const uniq = [];
+    for (const g of genres) if (g && g.label && !uniq.some((u) => u.label === g.label)) uniq.push(g);
+    const per = Math.max(3, Math.ceil(n / uniq.length) + 2);
+    const prompt = `${d}前後に話題になったニュースの中から、「ニュース・キーワード解説」のYouTube動画のテーマに向くものを、次のジャンルごとに${per}件ずつ挙げてください。最新のWeb情報で確認したものだけにしてください。\n${uniq.map((g) => `・${g.label}：${g.hint || ''}`).join('\n')}\n出力は1行に1件、「ジャンル名｜テーマ」の形（テーマは30字以内の日本語。例：日本経済｜日銀が政策金利を0.75%に引き上げ）。ジャンル名は上の名前をそのまま使ってください。番号・記号・説明・前置きは書かないでください。${ex}`;
+    const r = await researchWithGemini(prompt);
+    if (r.error && !r.text) throw new Error(r.error);
+    const items = [];
+    for (const raw of String(r.text || '').split(/\r?\n/)) {
+      const l = cleanLine(raw);
+      const m = l.match(/^(.+?)\s*[|｜]\s*(.+)$/);
+      if (!m) continue;
+      const g = uniq.find((u) => m[1].includes(u.label));
+      const theme = cleanLine(m[2]);
+      if (g && okTheme(theme)) items.push({ genre: g.label, theme });
+    }
+    return { themes: items.map((x) => x.theme), items };
+  }
+  const prompt = `${d}に日本で話題になったニュース（経済・金融・マーケット・ビジネス・テクノロジー・社会）の中から、「ニュース・キーワード解説」のYouTube動画のテーマに向くものを${n + 5}件挙げてください。最新のWeb情報で確認したものだけにしてください。\n出力は1行に1件、テーマだけ（30字以内の日本語。例：日銀が政策金利を0.75%に引き上げ）。番号・記号・説明・前置きは書かないでください。${ex}`;
   const r = await researchWithGemini(prompt);
   if (r.error && !r.text) throw new Error(r.error);
-  // 箇条書きの記号・番号（「1.」「2)」「・」「-」「*」）だけを外す（「2026年度予算案…」のように数字で始まるテーマは残す）。
-  // 前置き・まとめの行（「以下は…」「：」で終わる行など）や、Markdownの強調・かぎかっこも取り除く
-  return String(r.text || '').split(/\r?\n/)
-    .map((l) => l.replace(/\*\*/g, '').replace(/^\s*(?:[-・*•]|[0-9０-９]{1,2}\s*[.．)）、])\s*/, '').replace(/^[「『]|[」』]$/g, '').trim())
-    .filter((l) => l && l.length <= 40 && !/[:：]$/.test(l) && !/^(以下|次の|こちら|上記|※)/.test(l));
+  return { themes: String(r.text || '').split(/\r?\n/).map(cleanLine).filter(okTheme), items: [] };
 }
 
 /** 処理したら true を返す */
@@ -148,6 +169,8 @@ async function handleDrafts(req, res, pathname, deps) {
           time: /^\d{1,2}:\d{2}$/.test(String(s.time || '')) ? String(s.time).padStart(5, '0') : DEFAULT_SCHEDULE.time,
           keywords: (Array.isArray(s.keywords) ? s.keywords : []).map((k) => ({ theme: String(k && k.theme || '').trim(), mode: k && k.mode === 'keyword' ? 'keyword' : 'news', ...(k && k.urgent ? { urgent: true } : {}), ...(k && k.note && String(k.note).trim() ? { note: String(k.note).trim().slice(0, 500) } : {}) })).filter((k) => k.theme),
           minutes: Number(s.minutes) || undefined,
+          // 自動で選ぶテーマのジャンル（空＝全ジャンルからシャッフル）
+          genres: (Array.isArray(s.genres) ? s.genres : []).map(String).filter((g) => /^[a-z-]{2,30}$/.test(g)).slice(0, 10),
         };
         await writeJson(path.join(ROOT, 'schedule.json'), next);
         const reg = b.register === false ? { ok: true } : await registerTask(next);
@@ -212,8 +235,8 @@ async function handleDrafts(req, res, pathname, deps) {
         return true;
       }
       case 'trending': {
-        const themes = await trending(deps.researchWithGemini, Math.max(1, Number(b.count) || 3), Array.isArray(b.exclude) ? b.exclude.map(String) : []);
-        send(res, 200, { themes });
+        const out = await trending(deps.researchWithGemini, Math.max(1, Number(b.count) || 3), Array.isArray(b.exclude) ? b.exclude.map(String) : [], Array.isArray(b.genres) ? b.genres : null);
+        send(res, 200, out);
         return true;
       }
       default: send(res, 400, { error: 'unknown action' }); return true;

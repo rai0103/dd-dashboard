@@ -3,7 +3,7 @@ import { getTtsBaseUrl } from '../videoAudioMixer';
 import { listImages, putImage } from './imageStore';
 
 export interface DraftKeyword { theme: string; mode: 'news' | 'keyword'; urgent?: boolean; note?: string }
-export interface DraftSchedule { enabled: boolean; count: number; time: string; keywords: DraftKeyword[]; minutes?: number }
+export interface DraftSchedule { enabled: boolean; count: number; time: string; keywords: DraftKeyword[]; minutes?: number; /** 自動で選ぶテーマのジャンル（autoDraftTheme.ts の THEME_GENRES の key。空＝全ジャンルからシャッフル） */ genres?: string[] }
 export interface DraftMeta { id: string; theme: string; mode: string; title: string; scenes: number; createdAt: number; source: 'reserved' | 'auto' | 'sequel' | 'backup' | string; /** 取り込み済み（drafts/imported）のフォルダ名と、取り込んだ時刻 */ dir?: string; importedAt?: number; images?: { id: string; name: string; caption?: string; credit?: unknown; createdAt: number; type: string }[] }
 export interface DraftStatus { state: 'idle' | 'running' | 'done' | 'error'; startedAt?: number; finishedAt?: number; message?: string; step?: string; stepAt?: number; run?: string; results?: { theme: string; ok: boolean; error?: string }[] }
 
@@ -29,7 +29,10 @@ export const setHistorySequel = (id: string, sequel: boolean) => post({ action: 
 export const deleteHistory = (id: string) => post({ action: 'historyDelete', id });
 
 export { isSimilarTheme } from './autoDraftTheme';
-export const trendingThemes = (count: number, exclude: string[]): Promise<{ themes: string[] }> => post({ action: 'trending', count, exclude });
+export { THEME_GENRES, pickGenres, genreLabel } from './autoDraftTheme';
+/** 話題のニュースからテーマ候補を集める。genres（{label, hint}）を渡すとジャンルごとの候補（items）も返る */
+export const trendingThemes = (count: number, exclude: string[], genres?: { label: string; hint: string }[]): Promise<{ themes: string[]; items?: { genre: string; theme: string }[] }> =>
+  post({ action: 'trending', count, exclude, ...(genres && genres.length ? { genres } : {}) });
 
 /** 台本で使っている画像のID */
 function imageIds(project: any): string[] {

@@ -27,3 +27,35 @@ export function isSimilarTheme(theme: string, past: string[]): boolean {
     return inter / Math.max(1, Math.min(ga.size, gb.size)) >= 0.5 && inter >= 4;
   });
 }
+
+/* ---------------- 自動で選ぶテーマのジャンル ---------------- */
+/** 夜間の自動生成で、話題のニュースを探すジャンル。hint はAI（Google検索）に渡す範囲の説明 */
+export const THEME_GENRES = [
+  { key: 'jp-economy', label: '日本経済', hint: '日本の景気・物価・賃金・金利・日銀・為替・株式市場・政府の経済政策' },
+  { key: 'world-economy', label: '世界経済', hint: '米国・中国・欧州など海外の景気・物価・金利・中央銀行・貿易・市場の動き' },
+  { key: 'jp-company', label: '日本企業', hint: '日本企業の決算・新製品・M&A・経営・不祥事・業界の動き' },
+  { key: 'global-company', label: '海外企業', hint: '海外企業（米国のテック企業など）の決算・新製品・M&A・経営・規制の動き' },
+  { key: 'jp-news', label: '国内時事', hint: '日本国内の政治・社会・制度・事件などの時事ニュース（経済以外も含む）' },
+  { key: 'world-news', label: '海外時事', hint: '海外の政治・外交・紛争・選挙・社会などの時事ニュース（経済以外も含む）' },
+] as const;
+export type ThemeGenreKey = typeof THEME_GENRES[number]['key'];
+export const genreLabel = (key: string) => THEME_GENRES.find((g) => g.key === key)?.label ?? key;
+
+/**
+ * n本分のジャンルを決める。selected（選んだジャンル）があればその中から、無ければ全ジャンルから、
+ * シャッフルした順に割り当てる（本数がジャンル数より多いときは、シャッフルし直して続ける）。
+ */
+export function pickGenres(selected: readonly string[] | undefined, n: number, rand: () => number = Math.random): string[] {
+  const valid = new Set<string>(THEME_GENRES.map((g) => g.key));
+  const pool = [...new Set((selected || []).filter((k) => valid.has(k)))];
+  const base = pool.length ? pool : THEME_GENRES.map((g) => g.key);
+  const out: string[] = [];
+  while (out.length < n) {
+    const deck = [...base];
+    for (let i = deck.length - 1; i > 0; i--) { const j = Math.floor(rand() * (i + 1)); [deck[i], deck[j]] = [deck[j], deck[i]]; }
+    // 続けて同じジャンルにならないように（ジャンルが2つ以上あるとき）
+    if (out.length && deck.length > 1 && deck[0] === out[out.length - 1]) deck.push(deck.shift() as string);
+    out.push(...deck);
+  }
+  return out.slice(0, n);
+}
