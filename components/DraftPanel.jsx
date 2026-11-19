@@ -16,6 +16,7 @@ export default function DraftPanel({ C, disabled, minutes, onOpen, hasProject = 
   const [status, setStatus] = useState(null);
   const [drafts, setDrafts] = useState([]);
   const [recent, setRecent] = useState([]);
+  const [serverOld, setServerOld] = useState(false);
   const [history, setHistory] = useState([]);
   const [histOpen, setHistOpen] = useState(false);
   const [histMsg, setHistMsg] = useState("");
@@ -32,6 +33,8 @@ export default function DraftPanel({ C, disabled, minutes, onOpen, hasProject = 
       setStatus(st.status);
       setDrafts(st.drafts || []);
       setRecent(Array.isArray(st.importedDrafts) ? st.importedDrafts : []);
+      // 古いtts-server（起動し直す前）は「最近開いた台本」を返さない
+      setServerOld(!Array.isArray(st.importedDrafts));
       setHistory(Array.isArray(st.history) ? st.history : []);
       if ((st.drafts || []).length) setOpen(true);
     } catch (e) {
@@ -159,6 +162,9 @@ export default function DraftPanel({ C, disabled, minutes, onOpen, hasProject = 
           ))}
           {drafts.length === 0 && (
             <div className="text-[11px]" style={{ color: C.textMuted }}>新しいドラフトはありません。一度開いたドラフト（今朝の分も）は、下の「最近開いた台本」からもう一度開けます。</div>
+          )}
+          {serverOld && (
+            <div className="text-[11px]" style={{ color: C.amber }}>「最近開いた台本」を出すには、裏で動いているtts-serverを起動し直す必要があります。開いている黒い画面をすべて閉じてから、ショートカット（start-dd-dashboard）で起動し直してください。</div>
           )}
           {recent.length > 0 && (
             <div className="flex flex-col gap-1 pt-1" style={{ borderTop: `1px solid ${C.borderSoft ?? "#334155"}` }}>
