@@ -136,8 +136,9 @@ function GenProgressPanel({ step, done, total, elapsedSec, onAbort }) {
 // drawVisual()を直接呼んで図解（棒グラフ・折れ線・要点カード等）の静止画を小さなcanvasに描く
 // （ExplainerRendererクラス＝アバター・音声込みのフル描画は使わない。図解単体の軽量な描画のみ）。
 // p=1（場面の最後まで進んだ状態）で描くことで、アニメーションの途中状態ではない完成形を見せる。
-// 表紙（タイトルの場面）に画像を付けたときは、タイトルの文字を残したまま背景画像にする。それ以外は画像の場面にする
-const withImageVisual = (v, extra = { emphasis: "" }) => (v.kind === "title" ? v : { ...v, kind: "image", ...extra });
+// 表紙（タイトル）・章の扉に画像を付けたときは、スライドはそのままで背景に薄く敷く。それ以外は画像の場面にする
+const BACKDROP_KINDS = ["title", "chapter"];
+const withImageVisual = (v, extra = { emphasis: "" }) => (BACKDROP_KINDS.includes(v.kind) ? v : { ...v, kind: "image", ...extra });
 function SceneThumbCanvas({ sc, portrait, full = false, light = false, image = null }) {
   const ref = useRef(null);
   useEffect(() => {
@@ -2673,7 +2674,7 @@ export default function ExplainerStudio() {
                           {/* [Stage G-4] スライド（図解・画像）のサムネイル。画像が無ければ図解をそのままcanvasに描く */}
                           <div className="flex gap-2 mb-1.5">
                             <div className="shrink-0 rounded overflow-hidden" style={{ width: format === "short" ? 92 : 150, height: format === "short" ? 158 : 94, background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
-                              {sc.imageId && imageEls[sc.imageId] && sc.visual.kind !== "title" ? (
+                              {sc.imageId && imageEls[sc.imageId] && !BACKDROP_KINDS.includes(sc.visual.kind) ? (
                                 <FitThumb img={imageEls[sc.imageId]} fit={sc.imageFit} portrait={format === "short"} full={fullLayout} />
                               ) : (
                                 <SceneThumbCanvas sc={sc} portrait={format === "short"} full={fullLayout} light={fullLayout} image={sc.imageId ? imageEls[sc.imageId] ?? null : null} />

@@ -170,20 +170,26 @@ function unitOf(c: Ctx, e: VisualEnv, unit: string, top: number): string {
 // ---------- 種類ごとの描画 ----------
 type Draw = (c: Ctx, sc: ExplainerScene, e: VisualEnv) => void;
 
+/**
+ * 表紙・章の扉の背景画像。場面に画像を付けたときだけ、スライドの枠いっぱいに薄く透かして敷く
+ * （上にいつもどおりのスライドを描くので、文字が読める濃さにとどめる）。サイズ・位置の調整（imageFit）も効く
+ */
+function drawBackdropImage(c: Ctx, sc: ExplainerScene, e: VisualEnv) {
+  const img = e.image && e.image.complete && e.image.naturalWidth ? e.image : null;
+  if (!img) return;
+  c.save();
+  rr(c, 0, 0, e.W, e.H, 16); c.clip();
+  c.globalAlpha *= (LIGHT ? 0.25 : 0.38) * ease(sub(e.p, 0, 0.15));
+  drawFittedImage(c, img, e.W, e.H, sc.imageFit, e.p, sc.id);
+  c.restore();
+}
+
 const drawTitle: Draw = (c, sc, e) => {
   const v = sc.visual, cx = e.W / 2;
-  // 表紙の背景画像（場面に画像を付けたとき）。文字が読めるよう、上に薄い膜をかける
-  const img = e.image && e.image.complete && e.image.naturalWidth ? e.image : null;
-  if (img) {
-    c.save();
-    rr(c, 0, 0, e.W, e.H, 16); c.clip();
-    drawFittedImage(c, img, e.W, e.H, sc.imageFit, e.p, sc.id);
-    c.fillStyle = LIGHT ? 'rgba(255,255,255,0.72)' : 'rgba(4,8,18,0.55)';
-    c.fillRect(0, 0, e.W, e.H);
-    c.restore();
-  }
+  // 表紙の背景画像（場面に画像を付けたとき）：薄く透かして敷き、その上にいつものスライドを描く
+  drawBackdropImage(c, sc, e);
   // [Stage E-16] 背景の推移（例：全期間の指数）をうっすら描く
-  if (!img && v.background && v.background.length > 1) {
+  if (v.background && v.background.length > 1) {
     const bg = v.background;
     const bxLo = bg[0].x, bxHi = bg[bg.length - 1].x;
     const byLo = Math.min(...bg.map((p) => p.y)), byHi = Math.max(...bg.map((p) => p.y));
@@ -201,7 +207,7 @@ const drawTitle: Draw = (c, sc, e) => {
     }
   }
   // 回るリングと浮かぶアイコン（白い背景の配色＝レポートの表紙では出さない）
-  if (!LIGHT && !img) {
+  if (!LIGHT) {
   c.save();
   c.translate(cx, e.H * 0.48);
   for (let i = 0; i < 3; i++) {
@@ -243,6 +249,7 @@ const drawTitle: Draw = (c, sc, e) => {
 };
 
 const drawChapter: Draw = (c, sc, e) => {
+  drawBackdropImage(c, sc, e); // 章の扉の背景画像（付けたときだけ。薄く透かす）
   const v = sc.visual, n = String(v.emphasis || '1').padStart(2, '0');
   const k = ease(sub(e.p, 0, 0.35));
   const x0 = e.portrait ? e.W / 2 : 40, align: CanvasTextAlign = e.portrait ? 'center' : 'left';
