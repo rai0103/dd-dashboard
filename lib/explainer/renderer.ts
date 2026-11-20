@@ -20,6 +20,8 @@ export interface ExplainerRenderConfig {
   backgroundImage?: HTMLImageElement | null;
   backgroundOpacity: number; // 0〜1
   images?: Record<string, HTMLImageElement>;
+  /** 画像ごとの表記（フリー素材の出典など。1〜2行）。スライドの画像・背景の画像に小さく重ねる */
+  imageLabels?: Record<string, string[]>;
   showSubtitles: boolean;
   /** スライド内の出典表記を出すか */
   showSourceNotes?: boolean;
@@ -299,7 +301,8 @@ export class ExplainerRenderer {
     oc.setTransform(1, 0, 0, 1, 0, 0);
     oc.clearRect(0, 0, this.off.width, this.off.height);
     oc.setTransform((this.k * vis.w) / vis.W, 0, 0, (this.k * vis.h) / vis.H, 0, 0);
-    drawVisual(oc, sc, { W: vis.W, H: vis.H, p, t, portrait: !long, image: sc.imageId ? this.cfg.images?.[sc.imageId] ?? null : null, bg: sc.bgImageId ? this.cfg.images?.[sc.bgImageId] ?? null : null, accent, showSource: !!this.cfg.showSourceNotes, light: this.th().light });
+    drawVisual(oc, sc, { W: vis.W, H: vis.H, p, t, portrait: !long, image: sc.imageId ? this.cfg.images?.[sc.imageId] ?? null : null, bg: sc.bgImageId ? this.cfg.images?.[sc.bgImageId] ?? null : null,
+      imageLabel: sc.imageId ? this.cfg.imageLabels?.[sc.imageId] : undefined, bgLabel: sc.bgImageId ? this.cfg.imageLabels?.[sc.bgImageId] : undefined, accent, showSource: !!this.cfg.showSourceNotes, light: this.th().light });
     const mode = i % 3;
     const ein = ease(fadeIn);
     c.save();

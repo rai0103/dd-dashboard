@@ -1181,6 +1181,16 @@ export default function ExplainerStudio() {
   const [images, setImages] = useState([]);
   const refreshImages = () => listImages().then(setImages).catch(() => {});
   const imageCreditOf = (id) => images.find((im) => im.id === id)?.credit || null;
+  // スライドに重ねる画像の表記：フリー素材は出典（提供元・作者／ライセンス）、AI生成は「AI生成のイメージ」、それ以外は「イメージ」
+  const imageLabels = useMemo(() => {
+    const m = {};
+    for (const im of images) {
+      const c = im.credit;
+      if (c && c.source) m[im.id] = [`出典：${c.source}`, [c.credit, c.modified ? `（${c.modified}）` : ""].filter(Boolean).join("")].filter(Boolean);
+      else m[im.id] = [/^ai-/i.test(im.name || "") ? "※AI生成のイメージ" : "※イメージ"];
+    }
+    return m;
+  }, [images]);
   useEffect(() => { refreshImages(); }, []);
   // グラフ作成ページ（/chart-studio/）など、別タブ・別ウィンドウで画像ライブラリに保存してからこのタブに
   // 戻ってきたときに一覧が古いままにならないよう、このタブが前面に戻るたびに読み直す
@@ -1633,7 +1643,7 @@ export default function ExplainerStudio() {
         format, scenes, videoTitle: format === "short" && project.youtube.shortTitle ? project.youtube.shortTitle.replace(/#\S+/g, "").trim() : project.videoTitle,
         kicker: project.kicker, chapterTitles: project.chapters.map((c) => c.title),
         avatar: fullLayout ? null : avatarObj, backgroundImage: backgroundImgEl, backgroundOpacity: backgroundOpacity / 100,
-        images: imageEls, showSubtitles, showSourceNotes: sourcesInVideo,
+        images: imageEls, imageLabels, showSubtitles, showSourceNotes: sourcesInVideo,
         layout: fullLayout ? "full" : "avatar", theme: fullLayout ? "weekly" : "standard",
       });
       r.setDurations(sceneDurs.length === scenes.length ? sceneDurs : estDurs);
@@ -1643,7 +1653,7 @@ export default function ExplainerStudio() {
       updateSceneProgress(seekPosRef.current);
     } catch (e) { console.error("ExplainerRenderer init error:", e); rendererRef.current = null; }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project, scenes, format, avatarObj, backgroundImgEl, backgroundOpacity, imageEls, showSubtitles, sourcesInVideo, estDurs, fullLayout]);
+  }, [project, scenes, format, avatarObj, backgroundImgEl, backgroundOpacity, imageEls, imageLabels, showSubtitles, sourcesInVideo, estDurs, fullLayout]);
 
   const stopLoop = () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); rafRef.current = 0; isPlayingRef.current = false; };
   // list：音声を用意する場面（省略時は表示中の形式の場面）。表示中でない形式（長尺＋ショートのセット書き出しで
@@ -1842,7 +1852,7 @@ export default function ExplainerStudio() {
         format: fmt, scenes: list, videoTitle: fmt === "short" && project.youtube.shortTitle ? project.youtube.shortTitle.replace(/#\S+/g, "").trim() : project.videoTitle,
         kicker: project.kicker, chapterTitles: project.chapters.map((c) => c.title),
         avatar: fullLayout ? null : avatarObj, backgroundImage: backgroundImgEl, backgroundOpacity: backgroundOpacity / 100,
-        images: imageEls, showSubtitles, showSourceNotes: sourcesInVideo,
+        images: imageEls, imageLabels, showSubtitles, showSourceNotes: sourcesInVideo,
         layout: fullLayout ? "full" : "avatar", theme: fullLayout ? "weekly" : "standard",
       });
       const audioStream = mixer().startRecordingTap();

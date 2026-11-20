@@ -53,6 +53,9 @@ export interface VisualEnv {
   bg?: HTMLImageElement | null;
   /** 背景の画像の動き（ゆっくり寄る）に使う進み具合。無ければ p（画像の調整画面のプレビュー用） */
   bgP?: number;
+  /** 画像・背景の画像に重ねる表記（フリー素材の出典など。1〜2行）。無ければ画像の場面は「※イメージ」 */
+  imageLabel?: string[];
+  bgLabel?: string[];
 }
 
 // ---------- 文字 ----------
@@ -174,6 +177,27 @@ function unitOf(c: Ctx, e: VisualEnv, unit: string, top: number): string {
 // ---------- 種類ごとの描画 ----------
 type Draw = (c: Ctx, sc: ExplainerScene, e: VisualEnv) => void;
 
+/**
+ * 画像の出典などの表記を、右上（画像の場面）または右下（背景の画像）に小さく描く（日本文化動画と同じく、1行目が出典、2行目が作者・ライセンス）。
+ * onPhoto＝写真の上に重ねる（白い文字＋影）。背景の画像のときはスライドの配色の文字色で薄く
+ */
+function creditLines(c: Ctx, e: VisualEnv, lines: string[], pos: 'top' | 'bottom', onPhoto: boolean) {
+  // 背景の画像は図解の文字と重なりにくいよう、1行にまとめて小さく
+  const ls = (pos === 'bottom' ? [lines.filter(Boolean).join('｜')] : lines.filter(Boolean)).slice(0, 2);
+  if (!ls.length || !ls[0]) return;
+  const a = ease(sub(e.p, 0.05, 0.2));
+  const maxW = e.W * (e.portrait ? 0.85 : 0.62);
+  const sizes = ls.map((_, i) => (pos === 'bottom' ? 9 : i === 0 ? 11 : 10));
+  const ys = ls.map((_, i) => (pos === 'top' ? 20 + i * 14 : e.H - 7));
+  if (onPhoto) {
+    // 写真の明るい部分でも読めるよう、うすい黒の札を敷く
+    const w = Math.min(maxW, Math.max(...ls.map((l, i) => { font(c, sizes[i]); return c.measureText(l).width; }))) + 14;
+    const top = ys[0] - sizes[0] - 4, h = ys[ys.length - 1] - top + 6;
+    c.save(); c.globalAlpha *= a; rr(c, e.W - 12 - w + 7, top, w, h, 6); c.fillStyle = 'rgba(0,0,0,0.42)'; c.fill(); c.restore();
+  }
+  ls.forEach((l, i) => text(c, l, e.W - 12, ys[i], sizes[i], onPhoto ? PURE : WHITE, { align: 'right', alpha: (onPhoto ? 0.92 : 0.6) * a, maxW }));
+}
+
 /** 背景の画像の既定の濃さ（暗い背景／白い背景） */
 export const defaultBgOpacity = (light: boolean) => (light ? 0.25 : 0.38);
 const BG_COVER: ImageFit = { mode: 'cover', zoom: 1, x: 0, y: 0, motion: false };
@@ -187,6 +211,7 @@ function drawSceneBg(c: Ctx, sc: ExplainerScene, e: VisualEnv) {
   c.globalAlpha *= op * ease(sub(e.p, 0, 0.12));
   drawFittedImage(c, img, e.W, e.H, sc.bgFit ?? BG_COVER, e.bgP ?? e.p, `bg${sc.id}`);
   c.restore();
+  // 出典の表記はスライドの最後（文字の上）に描くため、drawVisual の最後で描く
 }
 
 /**
@@ -888,7 +913,7 @@ const drawImage: Draw = (c, sc, e) => {
   // 画像の下部に重ねる文字は「強調のひとこと」を入れた場合だけ（空ならテロップで代用せず、何も重ねない）
   const msg = v.emphasis;
   if (msg) textBlock(c, msg, 20, e.H - (e.portrait ? 70 : 50), e.W - 40, e.portrait ? 22 : 24, PURE, { bold: true, maxLines: 2, shadow: true, alpha: ease(sub(e.p, 0.15, 0.35)) });
-  text(c, '※イメージ', e.W - 12, 20, 11, PURE, { align: 'right', alpha: 0.7 });
+  creditLines(c, e, e.imageLabel?.length ? e.imageLabel : ['※イメージ'], 'top', true);
 };
 
 const drawPoint: Draw = (c, sc, e) => {
@@ -1668,5 +1693,12 @@ export function drawVisual(c: Ctx, sc0: ExplainerScene, e: VisualEnv): void {
   c.textBaseline = 'alphabetic';
   try { drawSceneBg(c, sc, e); } catch (err) { console.error('背景の画像の描画エラー', err); }
   try { fn(c, sc, e); } catch (err) { console.error('図解の描画エラー', sc.visual.kind, err); }
+  // 背景の画像の出典（右下・小さく）。表紙・章の扉に以前の方法で付けた背景の画像（imageId）も同じ
+  try {
+    // 背景は飾りなので、出典があるとき（フリー素材）だけ書く（自分の画像の「※イメージ」は出さない）
+    const credited = (l?: string[]) => !!l?.length && /^出典/.test(l[0]);
+    if (e.bg && credited(e.bgLabel)) creditLines(c, e, e.bgLabel!, 'bottom', false);
+    else if (e.image && credited(e.imageLabel) && (sc.visual.kind === 'title' || sc.visual.kind === 'chapter')) creditLines(c, e, e.imageLabel!, 'bottom', false);
+  } catch { /* 表記の描画に失敗しても場面は描く */ }
   c.restore();
 }
