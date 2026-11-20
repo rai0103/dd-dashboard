@@ -2130,6 +2130,10 @@ function ChartMarkers({ xAxisMap, yAxisMap, points, activeDate }) {
 const markerLines = (label) => String(label || "").split(/[　、]/).map((x) => x.trim()).filter(Boolean);
 // ツールチップをカーソルから離して出す距離（px）。近すぎると、見たい点の前後のチャートが隠れる
 const TOOLTIP_OFFSET = 56;
+// ツールチップを、線から離れたチャートの下の方（空いている所）に出す：横はカーソルに追従、縦はグラフ枠の下端に下辺をそろえる。
+// plotBottom＝グラフ枠の下端のy（チャートの高さ−下余白−X軸（30）−スクロールバー）。高さが分からないときは今までどおりカーソルの近く
+const tooltipBottomPos = (chartH, marginBottom = 0, brushH = 0) => (chartH ? { y: chartH - marginBottom - 30 - brushH - 6 } : undefined);
+const AnchorBottom = ({ on, children }) => (on ? <div style={{ transform: "translateY(-100%)" }}>{children}</div> : children);
 // カーソル追従ツールチップの中身。標準の日付・DD%・評価額・ATHに加え、ホバー中の日付がマーカー点（大底・高値更新等）と
 // 一致する場合はその注釈をこの同じ吹き出しの中に追記する。吹き出しを1つに統合することで、
 // マーカー用の別の吹き出しとカーソル追従ツールチップが別々の位置に出て重なる、という問題が構造的に起きなくなる。
@@ -2278,7 +2282,7 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBru
       <XAxis dataKey="date" tickFormatter={(dt) => fmtAxisDate(dt, rangeDays)} tick={{ fill: C.textDim, fontSize }} axisLine={{ stroke: C.border }} tickLine={false} minTickGap={40} />
       <YAxis yAxisId="price" domain={["auto", "auto"]} tick={{ fill: priceColor, fontSize }} axisLine={false} tickLine={false} width={compact ? 40 : 48} label={{ value: "評価額", angle: -90, position: "insideLeft", fill: priceColor, fontSize }} />
       <YAxis yAxisId="dd" orientation="right" domain={[ddTicks[ddTicks.length - 1], 0]} ticks={ddTicks} interval={0} tick={{ fill: C.rust, fontSize }} axisLine={false} tickLine={false} width={compact ? 38 : 46} label={{ value: "DD%", angle: 90, position: "insideRight", fill: C.rust, fontSize }} />
-      <Tooltip offset={TOOLTIP_OFFSET} content={(props) => <EvalTooltipContent {...props} markerByTime={markerByTime} showRsi={showRsi} currency={d?.currency} />} />
+      <Tooltip offset={TOOLTIP_OFFSET} position={tooltipBottomPos(mainH, margin.bottom, withBrush && !showRsi ? 26 : 0)} content={(props) => <AnchorBottom on={!!mainH}><EvalTooltipContent {...props} markerByTime={markerByTime} showRsi={showRsi} currency={d?.currency} /></AnchorBottom>} />
       {MILESTONES.filter((t) => t !== -3).map((t) => (<ReferenceLine key={t} yAxisId="dd" y={t} stroke={C.borderSoft} strokeDasharray="2 3" label={{ value: `${t}%`, position: "insideBottomRight", fill: C.textDim, fontSize: Math.max(8, fontSize - 2) }} />))}
       {/* DD-3%の目安ライン。値はDD%軸の目盛（常に-3を含む）で示すため、チャート内のラベルは付けない */}
       <ReferenceLine yAxisId="dd" y={-3} stroke={C.rust} strokeDasharray="4 3" strokeWidth={1.3} />
@@ -2435,7 +2439,7 @@ function MultiPriceChartBody({ keys, views, hidden, fontSize = 10, compact = fal
         const sr = MULTI_SERIES[k];
         return <YAxis key={k} yAxisId={sr.yAxisId} orientation={i === 0 ? "left" : "right"} domain={["auto", "auto"]} tick={{ fill: sr.color, fontSize }} axisLine={false} tickLine={false} width={compact ? 44 : 52} label={{ value: sr.name, angle: i === 0 ? -90 : 90, position: i === 0 ? "insideLeft" : "insideRight", fill: sr.color, fontSize }} />;
       })}
-      <Tooltip offset={TOOLTIP_OFFSET} content={(props) => <MultiTooltipContent {...props} markersByTime={markersByTime} hidden={hidden} keys={active} />} />
+      <Tooltip offset={TOOLTIP_OFFSET} position={tooltipBottomPos(height, 0)} content={(props) => <AnchorBottom on={!!height}><MultiTooltipContent {...props} markersByTime={markersByTime} hidden={hidden} keys={active} /></AnchorBottom>} />
       {active.map((k) => { const sr = MULTI_SERIES[k]; return <Line key={k} yAxisId={sr.yAxisId} type="linear" dataKey={sr.priceKey} stroke={sr.color} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls hide={!!hidden[sr.hiddenKey]} name={sr.name} />; })}
       {/* 単体表示と同様のATH補助線（DD開始～回復の間は水平になり、ドローダウン区間が分かる）。各銘柄の系列色の点線で描く */}
       {active.map((k) => { const sr = MULTI_SERIES[k]; return <Line key={`${k}-ath`} yAxisId={sr.yAxisId} type="linear" dataKey={sr.athKey} stroke={sr.color} strokeDasharray="3 4" strokeWidth={1} strokeOpacity={0.7} dot={false} activeDot={false} isAnimationActive={false} connectNulls hide={!!hidden[sr.hiddenKey] || !!hidden.markers} name={`${sr.name} ATH`} />; })}
