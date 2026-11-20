@@ -2125,6 +2125,11 @@ function ChartMarkers({ xAxisMap, yAxisMap, points, activeDate }) {
     </g>
   );
 }
+// マーカーの注釈（例：「$456.41（2025/4/8）DD-18.9%　DD開始～大底：34日間、DD-3%→-5%：5日間、大底～回復：55日間」）を、
+// ツールチップの中では区切り（全角スペース・読点）ごとに改行して幅を狭める（チャートの前後が隠れないように）
+const markerLines = (label) => String(label || "").split(/[　、]/).map((x) => x.trim()).filter(Boolean);
+// ツールチップをカーソルから離して出す距離（px）。近すぎると、見たい点の前後のチャートが隠れる
+const TOOLTIP_OFFSET = 56;
 // カーソル追従ツールチップの中身。標準の日付・DD%・評価額・ATHに加え、ホバー中の日付がマーカー点（大底・高値更新等）と
 // 一致する場合はその注釈をこの同じ吹き出しの中に追記する。吹き出しを1つに統合することで、
 // マーカー用の別の吹き出しとカーソル追従ツールチップが別々の位置に出て重なる、という問題が構造的に起きなくなる。
@@ -2143,7 +2148,7 @@ function EvalTooltipContent({ active, payload, label, markerByTime, showRsi = fa
         {showRsi && payload[0]?.payload?.rsi != null && (() => { const v = payload[0].payload.rsi; return (<li style={{ display: "block", paddingTop: 4, paddingBottom: 4, color: C.violet }}>RSI(14) : {v.toFixed(1)}{v >= 70 ? "（買われすぎ）" : v <= 30 ? "（売られすぎ）" : ""}</li>); })()}
       </ul>
       {marker && (
-        <div className="mono" style={{ marginTop: 4, paddingTop: 4, borderTop: `1px solid ${C.borderSoft}`, color: marker.color, fontWeight: 700 }}>{marker.label}</div>
+        <div className="mono" style={{ marginTop: 4, paddingTop: 4, borderTop: `1px solid ${C.borderSoft}`, color: marker.color, fontWeight: 700, lineHeight: 1.5 }}>{markerLines(marker.label).map((l, k) => <div key={k}>{l}</div>)}</div>
       )}
     </div>
   );
@@ -2273,7 +2278,7 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBru
       <XAxis dataKey="date" tickFormatter={(dt) => fmtAxisDate(dt, rangeDays)} tick={{ fill: C.textDim, fontSize }} axisLine={{ stroke: C.border }} tickLine={false} minTickGap={40} />
       <YAxis yAxisId="price" domain={["auto", "auto"]} tick={{ fill: priceColor, fontSize }} axisLine={false} tickLine={false} width={compact ? 40 : 48} label={{ value: "評価額", angle: -90, position: "insideLeft", fill: priceColor, fontSize }} />
       <YAxis yAxisId="dd" orientation="right" domain={[ddTicks[ddTicks.length - 1], 0]} ticks={ddTicks} interval={0} tick={{ fill: C.rust, fontSize }} axisLine={false} tickLine={false} width={compact ? 38 : 46} label={{ value: "DD%", angle: 90, position: "insideRight", fill: C.rust, fontSize }} />
-      <Tooltip content={(props) => <EvalTooltipContent {...props} markerByTime={markerByTime} showRsi={showRsi} currency={d?.currency} />} />
+      <Tooltip offset={TOOLTIP_OFFSET} content={(props) => <EvalTooltipContent {...props} markerByTime={markerByTime} showRsi={showRsi} currency={d?.currency} />} />
       {MILESTONES.filter((t) => t !== -3).map((t) => (<ReferenceLine key={t} yAxisId="dd" y={t} stroke={C.borderSoft} strokeDasharray="2 3" label={{ value: `${t}%`, position: "insideBottomRight", fill: C.textDim, fontSize: Math.max(8, fontSize - 2) }} />))}
       {/* DD-3%の目安ライン。値はDD%軸の目盛（常に-3を含む）で示すため、チャート内のラベルは付けない */}
       <ReferenceLine yAxisId="dd" y={-3} stroke={C.rust} strokeDasharray="4 3" strokeWidth={1.3} />
@@ -2403,7 +2408,7 @@ function MultiTooltipContent({ active, payload, label, markersByTime, hidden, ke
         </div>
       ))}
       {markers.map((m, i) => (
-        <div key={i} className="mono" style={{ marginTop: 4, paddingTop: 4, borderTop: `1px solid ${C.borderSoft}`, color: m.color, fontWeight: 700 }}>{m.label}</div>
+        <div key={i} className="mono" style={{ marginTop: 4, paddingTop: 4, borderTop: `1px solid ${C.borderSoft}`, color: m.color, fontWeight: 700, lineHeight: 1.5 }}>{markerLines(m.label).map((l, k) => <div key={k}>{l}</div>)}</div>
       ))}
     </div>
   );
@@ -2430,7 +2435,7 @@ function MultiPriceChartBody({ keys, views, hidden, fontSize = 10, compact = fal
         const sr = MULTI_SERIES[k];
         return <YAxis key={k} yAxisId={sr.yAxisId} orientation={i === 0 ? "left" : "right"} domain={["auto", "auto"]} tick={{ fill: sr.color, fontSize }} axisLine={false} tickLine={false} width={compact ? 44 : 52} label={{ value: sr.name, angle: i === 0 ? -90 : 90, position: i === 0 ? "insideLeft" : "insideRight", fill: sr.color, fontSize }} />;
       })}
-      <Tooltip content={(props) => <MultiTooltipContent {...props} markersByTime={markersByTime} hidden={hidden} keys={active} />} />
+      <Tooltip offset={TOOLTIP_OFFSET} content={(props) => <MultiTooltipContent {...props} markersByTime={markersByTime} hidden={hidden} keys={active} />} />
       {active.map((k) => { const sr = MULTI_SERIES[k]; return <Line key={k} yAxisId={sr.yAxisId} type="linear" dataKey={sr.priceKey} stroke={sr.color} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls hide={!!hidden[sr.hiddenKey]} name={sr.name} />; })}
       {/* 単体表示と同様のATH補助線（DD開始～回復の間は水平になり、ドローダウン区間が分かる）。各銘柄の系列色の点線で描く */}
       {active.map((k) => { const sr = MULTI_SERIES[k]; return <Line key={`${k}-ath`} yAxisId={sr.yAxisId} type="linear" dataKey={sr.athKey} stroke={sr.color} strokeDasharray="3 4" strokeWidth={1} strokeOpacity={0.7} dot={false} activeDot={false} isAnimationActive={false} connectNulls hide={!!hidden[sr.hiddenKey] || !!hidden.markers} name={`${sr.name} ATH`} />; })}
