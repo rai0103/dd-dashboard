@@ -49,6 +49,10 @@ export interface VisualEnv {
   showSource?: boolean;
   /** 白い背景の配色で描く（週次レポート） */
   light?: boolean;
+  /** 背景に敷く画像（場面の bgImageId）。濃さ・見せ方は場面の bgOpacity・bgFit */
+  bg?: HTMLImageElement | null;
+  /** 背景の画像の動き（ゆっくり寄る）に使う進み具合。無ければ p（画像の調整画面のプレビュー用） */
+  bgP?: number;
 }
 
 // ---------- 文字 ----------
@@ -170,6 +174,21 @@ function unitOf(c: Ctx, e: VisualEnv, unit: string, top: number): string {
 // ---------- 種類ごとの描画 ----------
 type Draw = (c: Ctx, sc: ExplainerScene, e: VisualEnv) => void;
 
+/** 背景の画像の既定の濃さ（暗い背景／白い背景） */
+export const defaultBgOpacity = (light: boolean) => (light ? 0.25 : 0.38);
+const BG_COVER: ImageFit = { mode: 'cover', zoom: 1, x: 0, y: 0, motion: false };
+/** どの図解でも使える背景の画像：スライドの枠いっぱいに、指定の濃さで透かして敷く */
+function drawSceneBg(c: Ctx, sc: ExplainerScene, e: VisualEnv) {
+  const img = e.bg && e.bg.complete && e.bg.naturalWidth ? e.bg : null;
+  if (!img) return;
+  const op = Math.max(0, Math.min(1, sc.bgOpacity ?? defaultBgOpacity(LIGHT)));
+  c.save();
+  rr(c, 0, 0, e.W, e.H, 16); c.clip();
+  c.globalAlpha *= op * ease(sub(e.p, 0, 0.12));
+  drawFittedImage(c, img, e.W, e.H, sc.bgFit ?? BG_COVER, e.bgP ?? e.p, `bg${sc.id}`);
+  c.restore();
+}
+
 /**
  * 表紙・章の扉の背景画像。場面に画像を付けたときだけ、スライドの枠いっぱいに薄く透かして敷く
  * （上にいつもどおりのスライドを描くので、文字が読める濃さにとどめる）。サイズ・位置の調整（imageFit）も効く
@@ -179,7 +198,7 @@ function drawBackdropImage(c: Ctx, sc: ExplainerScene, e: VisualEnv) {
   if (!img) return;
   c.save();
   rr(c, 0, 0, e.W, e.H, 16); c.clip();
-  c.globalAlpha *= (LIGHT ? 0.25 : 0.38) * ease(sub(e.p, 0, 0.15));
+  c.globalAlpha *= Math.max(0, Math.min(1, sc.bgOpacity ?? defaultBgOpacity(LIGHT))) * ease(sub(e.p, 0, 0.15));
   drawFittedImage(c, img, e.W, e.H, sc.imageFit, e.p, sc.id);
   c.restore();
 }
@@ -1647,6 +1666,7 @@ export function drawVisual(c: Ctx, sc0: ExplainerScene, e: VisualEnv): void {
   const fn = DRAWERS[sc.visual.kind] ?? drawPoint;
   c.save();
   c.textBaseline = 'alphabetic';
+  try { drawSceneBg(c, sc, e); } catch (err) { console.error('背景の画像の描画エラー', err); }
   try { fn(c, sc, e); } catch (err) { console.error('図解の描画エラー', sc.visual.kind, err); }
   c.restore();
 }

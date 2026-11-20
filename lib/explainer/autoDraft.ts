@@ -37,7 +37,7 @@ export const trendingThemes = (count: number, exclude: string[], genres?: { labe
 /** 台本で使っている画像のID */
 function imageIds(project: any): string[] {
   const ids = new Set<string>();
-  for (const s of [...(project?.longScenes || []), ...(project?.shortScenes || [])]) if (s?.imageId) ids.add(s.imageId);
+  for (const s of [...(project?.longScenes || []), ...(project?.shortScenes || [])]) { if (s?.imageId) ids.add(s.imageId); if (s?.bgImageId) ids.add(s.bgImageId); }
   return [...ids];
 }
 

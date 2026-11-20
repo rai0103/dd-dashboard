@@ -3,10 +3,11 @@
 // [画像のサイズ・位置を調整] 場面に付けた画像を、スライドの枠にどう収めるか（全体表示／画面いっぱい・拡大率・位置・ゆっくり寄る動き）を決める。
 // プレビューは動画の書き出しと同じ描き方（lib/explainer/visuals.ts の drawFittedImage）で描くので、見えたとおりに動画になる。
 // 画像そのものは加工しない（場面の imageFit に見せ方だけを保存する）。
+// background（背景に敷く画像）のときは、実際のスライド（図解）を上に重ねて描き、背景の濃さ（透かし具合）も調整できる（場面の bgFit・bgOpacity）。
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { X, Check, Maximize, Minimize, RotateCcw, Move, Sparkles } from "lucide-react";
-import { drawFittedImage } from "@/lib/explainer/visuals";
+import { drawFittedImage, drawVisual, setVisualLight, defaultBgOpacity, PALETTE } from "@/lib/explainer/visuals";
 import { VISUAL_SIZE } from "@/lib/explainer/renderer";
 
 const C = {
@@ -25,10 +26,14 @@ export function autoFitFor(img, W, H) {
 }
 
 // onPolygon（任意）：「ポリゴン風に加工」を押したとき。今の見せ方を渡すので、呼び出し側で保存してから加工の画面へ進む
-export default function ImageFitModal({ img, fit, heading = "", portrait = false, full = false, onApply, onClose, onPolygon }) {
+// background：背景に敷く画像の調整（scene＝重ねて描く場面、sceneImage＝その場面の画像（あれば）、light＝白い背景の配色、opacity＝今の濃さ）。
+// onApply(fit, opacity) で返す（画像の場面のときは opacity は使わない）
+export default function ImageFitModal({ img, fit, heading = "", portrait = false, full = false, onApply, onClose, onPolygon, background = false, scene = null, sceneImage = null, light = false, opacity }) {
   const { W, H } = full ? (portrait ? VISUAL_SIZE.shortFull : VISUAL_SIZE.longFull) : (portrait ? VISUAL_SIZE.short : VISUAL_SIZE.long);
-  const [f, setF] = useState(() => (fit ? { ...fit } : autoFitFor(img, W, H)));
-  const [isAuto, setIsAuto] = useState(!fit);
+  // 背景は、既定で画面いっぱい（動きなし）
+  const [f, setF] = useState(() => (fit ? { ...fit } : background ? { mode: "cover", zoom: 1, x: 0, y: 0, motion: false } : autoFitFor(img, W, H)));
+  const [isAuto, setIsAuto] = useState(!fit && !background);
+  const [op, setOp] = useState(() => (typeof opacity === "number" ? opacity : defaultBgOpacity(light)));
   const [p, setP] = useState(0); // プレビューする時点（0＝場面の始め、1＝終わり）
   const cvRef = useRef(null);
   const drag = useRef(null);
@@ -40,6 +45,14 @@ export default function ImageFitModal({ img, fit, heading = "", portrait = false
     cv.width = W * dpr; cv.height = H * dpr;
     const c = cv.getContext("2d");
     c.setTransform(dpr, 0, 0, dpr, 0, 0);
+    if (background && scene) {
+      // 動画と同じ描き方：地の色 → 背景の画像（透かし）→ その上にいつものスライド（場面の最後の状態）
+      c.fillStyle = light ? "#ffffff" : "#0b1426"; c.fillRect(0, 0, W, H);
+      setVisualLight(light);
+      const accent = light ? PALETTE[0] : PALETTE[(scene.chapter || 0) % PALETTE.length];
+      drawVisual(c, { ...scene, bgFit: isAuto ? undefined : f, bgOpacity: op }, { W, H, p: 1, t: 1, bgP: p, portrait, image: sceneImage, bg: img, accent, showSource: false, light });
+      return;
+    }
     c.fillStyle = "#000"; c.fillRect(0, 0, W, H);
     c.save();
     drawFittedImage(c, img, W, H, isAuto ? undefined : f, p, "preview");
@@ -49,7 +62,7 @@ export default function ImageFitModal({ img, fit, heading = "", portrait = false
     c.fillStyle = g; c.fillRect(0, 0, W, H);
     c.restore();
     if (heading) { c.font = "bold 22px sans-serif"; c.fillStyle = "#fff"; c.shadowColor = "rgba(0,0,0,.6)"; c.shadowBlur = 6; c.fillText(heading, 20, 36, W - 40); c.shadowBlur = 0; }
-  }, [img, f, isAuto, p, W, H, heading]);
+  }, [img, f, isAuto, p, W, H, heading, background, scene, sceneImage, light, op]);
 
   useEffect(() => {
     const onKey = (e) => { if (e.key === "Escape") onClose(); };
@@ -69,12 +82,22 @@ export default function ImageFitModal({ img, fit, heading = "", portrait = false
     <div className="fixed inset-0 flex items-center justify-center p-3" style={{ zIndex: 1000, background: "rgba(0,0,0,.8)" }} onClick={onClose}>
       <div className="flex w-full flex-col overflow-hidden rounded-lg" style={{ maxHeight: "96vh", maxWidth: 1200, background: C.panel, border: `1px solid ${C.border}` }} onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center gap-3 p-4" style={{ borderBottom: `1px solid ${C.border}` }}>
-          <div className="mr-auto text-lg" style={{ color: C.text }}>画像のサイズ・位置を調整</div>
+          <div className="mr-auto text-lg" style={{ color: C.text }}>{background ? "背景の画像の濃さ・サイズ・位置を調整" : "画像のサイズ・位置を調整"}</div>
           {onPolygon && <button className="text-sm px-3 py-1.5 rounded flex items-center gap-1" style={ghost} onClick={() => onPolygon(isAuto ? undefined : f)} title="実在の人物などを、三角形の面で塗り分けたポリゴン風の絵にします。加工したあと、この画面に戻って大きさ・位置を調整できます"><Sparkles size={14} />ポリゴン風に加工へ</button>}
-          <button className="text-sm px-3 py-1.5 rounded flex items-center gap-1" style={primary} onClick={() => onApply(isAuto ? undefined : f)}><Check size={14} />この見せ方にする</button>
+          <button className="text-sm px-3 py-1.5 rounded flex items-center gap-1" style={primary} onClick={() => onApply(isAuto ? undefined : f, op)}><Check size={14} />この見せ方にする</button>
           <button className="text-sm px-3 py-1.5 rounded flex items-center gap-1" style={ghost} onClick={onClose}><X size={14} />閉じる</button>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-4 flex flex-col gap-3">
+          {background && (
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <label className="flex items-center gap-2" style={{ color: C.text }}>背景の濃さ（透かし具合）
+                <input type="range" min={0.05} max={0.9} step={0.01} value={op} onChange={(e) => setOp(Number(e.target.value))} style={{ width: 280 }} />
+                <b style={{ width: 48 }}>{Math.round(op * 100)}%</b>
+              </label>
+              <button style={{ ...ghost, padding: "4px 10px", borderRadius: 6 }} onClick={() => setOp(defaultBgOpacity(light))}>既定の濃さ（{Math.round(defaultBgOpacity(light) * 100)}%）</button>
+              <span style={{ color: C.textDim }}>濃くすると画像がはっきり、薄くすると文字が読みやすくなります。</span>
+            </div>
+          )}
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <button style={modeBtn(!isAuto && f.mode === "contain")} className="flex items-center gap-1" onClick={() => set({ mode: "contain", zoom: 1, x: 0, y: 0, motion: false })} title="画像全体がスライドに収まるように縮める（余白はぼかした画像で埋めます）"><Minimize size={13} />全体を表示</button>
             <button style={modeBtn(!isAuto && f.mode === "cover")} className="flex items-center gap-1" onClick={() => set({ mode: "cover", zoom: 1, x: 0, y: 0 })} title="スライドいっぱいに広げる（はみ出た端は切れます）"><Maximize size={13} />画面いっぱい</button>
@@ -99,7 +122,7 @@ export default function ImageFitModal({ img, fit, heading = "", portrait = false
                 <input type="range" min={0} max={1} step={0.01} value={p} onChange={(e) => setP(Number(e.target.value))} style={{ width: 160 }} />
               </label>
             )}
-            <span style={{ color: C.textDim }}>枠は動画のスライド部分と同じ比率です。画像からはみ出た部分は、ぼかした画像で埋まります。</span>
+            <span style={{ color: C.textDim }}>{background ? "プレビューは実際のスライド（図解）を重ねた、動画と同じ見え方です。" : ""}枠は動画のスライド部分と同じ比率です。画像からはみ出た部分は、ぼかした画像で埋まります。</span>
           </div>
         </div>
       </div>
