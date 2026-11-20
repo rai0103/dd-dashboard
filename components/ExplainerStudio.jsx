@@ -1302,6 +1302,21 @@ export default function ExplainerStudio() {
     const idx = scenes.findIndex((s) => s.id === sc.id);
     if (idx >= 0) previewSceneAt(idx);
   };
+  // [背景をポリゴン風に加工] 背景の画像をポリゴン風にした画像を新しく保存して付け替える（濃さ・見せ方はそのまま）
+  const [bgPolyOpenId, setBgPolyOpenId] = useState(null);
+  const bgPolyThenFitRef = useRef(null);
+  const applyBgPolygon = async (sc, blob) => {
+    const old = images.find((im) => im.id === sc.bgImageId);
+    const credit = old?.credit ? { ...old.credit, modified: "ポリゴン風に加工" } : undefined;
+    const file = new File([blob], `poly-bg-${sc.id}-${Date.now()}.png`, { type: blob.type || "image/png" });
+    const im = await saveImage(file, old?.caption, credit);
+    await refreshImages();
+    setScenes((list) => list.map((s) => (s.id === sc.id ? { ...s, bgImageId: im.id } : s)));
+    setBgPolyOpenId(null);
+    if (bgPolyThenFitRef.current === sc.id) { bgPolyThenFitRef.current = null; setBgFitOpenId(sc.id); }
+    const idx = scenes.findIndex((s) => s.id === sc.id);
+    if (idx >= 0) previewSceneAt(idx);
+  };
   // 場面ごとに「AIで生成」：既存のimagePrompt（台本生成時にAIが用意した英語のプロンプト案）で1枚生成し、そのまま添付する
   const [imgGenBusyId, setImgGenBusyId] = useState(null);
   const [imgGenError, setImgGenError] = useState("");
@@ -2731,7 +2746,12 @@ export default function ExplainerStudio() {
                                     <>
                                       {imageEls[sc.bgImageId] && <span className="inline-block rounded overflow-hidden" style={{ width: 40, height: 24, border: `1px solid ${C.borderSoft}` }}><img src={imageEls[sc.bgImageId].src} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /></span>}
                                       <button onClick={() => setBgFitOpenId(sc.id)} disabled={!imageEls[sc.bgImageId]} className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={{ ...btn(), color: C.teal }} title="実際のスライドを重ねたプレビューで、背景の濃さ（透かし具合）・サイズ・位置を調整します"><Maximize2 size={10} />濃さ・位置を調整（{Math.round((sc.bgOpacity ?? defaultBgOpacity(fullLayout)) * 100)}%）</button>
+                                      <button onClick={() => setBgPolyOpenId(sc.id)} disabled={!images.find((im) => im.id === sc.bgImageId)} title="背景の画像を、三角形の面で塗り分けたポリゴン風の絵にします（濃さ・位置はそのまま）" className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={btn()}><Sparkles size={10} />ポリゴン風に加工</button>
                                       <button onClick={() => { patchScene(sc.id, { bgImageId: null, bgFit: undefined, bgOpacity: undefined }); const idx = scenes.findIndex((s) => s.id === sc.id); if (idx >= 0) previewSceneAt(idx); }} className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={btn()}><X size={10} />背景を外す</button>
+                                      {bgPolyOpenId === sc.id && images.find((im) => im.id === sc.bgImageId) && (
+                                        <LowPolyModal image={images.find((im) => im.id === sc.bgImageId).blob} credit={imageCreditOf(sc.bgImageId)} aspect={format === "short" ? "9:16" : "16:9"}
+                                          onApply={(blob) => applyBgPolygon(sc, blob)} onClose={() => { setBgPolyOpenId(null); if (bgPolyThenFitRef.current === sc.id) { bgPolyThenFitRef.current = null; setBgFitOpenId(sc.id); } }} />
+                                      )}
                                     </>
                                   ) : (
                                     <>
@@ -2747,7 +2767,8 @@ export default function ExplainerStudio() {
                                   {bgFitOpenId === sc.id && imageEls[sc.bgImageId] && (
                                     <ImageFitModal background img={imageEls[sc.bgImageId]} fit={sc.bgFit} opacity={sc.bgOpacity} scene={sc} sceneImage={sc.imageId ? imageEls[sc.imageId] ?? null : null} light={fullLayout} portrait={format === "short"} full={fullLayout}
                                       onApply={(fit, op) => { patchScene(sc.id, { bgFit: fit, bgOpacity: op }); setBgFitOpenId(null); const idx = scenes.findIndex((s) => s.id === sc.id); if (idx >= 0) previewSceneAt(idx); }}
-                                      onClose={() => setBgFitOpenId(null)} />
+                                      onClose={() => setBgFitOpenId(null)}
+                                      onPolygon={images.find((im) => im.id === sc.bgImageId) ? (fit, op) => { patchScene(sc.id, { bgFit: fit, bgOpacity: op }); setBgFitOpenId(null); bgPolyThenFitRef.current = sc.id; setBgPolyOpenId(sc.id); } : undefined} />
                                   )}
                                 </div>
                               )}

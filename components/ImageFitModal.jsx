@@ -83,7 +83,7 @@ export default function ImageFitModal({ img, fit, heading = "", portrait = false
       <div className="flex w-full flex-col overflow-hidden rounded-lg" style={{ maxHeight: "96vh", maxWidth: 1200, background: C.panel, border: `1px solid ${C.border}` }} onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center gap-3 p-4" style={{ borderBottom: `1px solid ${C.border}` }}>
           <div className="mr-auto text-lg" style={{ color: C.text }}>{background ? "背景の画像の濃さ・サイズ・位置を調整" : "画像のサイズ・位置を調整"}</div>
-          {onPolygon && <button className="text-sm px-3 py-1.5 rounded flex items-center gap-1" style={ghost} onClick={() => onPolygon(isAuto ? undefined : f)} title="実在の人物などを、三角形の面で塗り分けたポリゴン風の絵にします。加工したあと、この画面に戻って大きさ・位置を調整できます"><Sparkles size={14} />ポリゴン風に加工へ</button>}
+          {onPolygon && <button className="text-sm px-3 py-1.5 rounded flex items-center gap-1" style={ghost} onClick={() => onPolygon(isAuto ? undefined : f, op)} title="実在の人物などを、三角形の面で塗り分けたポリゴン風の絵にします。加工したあと、この画面に戻って大きさ・位置を調整できます"><Sparkles size={14} />ポリゴン風に加工へ</button>}
           <button className="text-sm px-3 py-1.5 rounded flex items-center gap-1" style={primary} onClick={() => onApply(isAuto ? undefined : f, op)}><Check size={14} />この見せ方にする</button>
           <button className="text-sm px-3 py-1.5 rounded flex items-center gap-1" style={ghost} onClick={onClose}><X size={14} />閉じる</button>
         </div>
