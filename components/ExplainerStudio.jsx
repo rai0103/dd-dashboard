@@ -1605,8 +1605,24 @@ export default function ExplainerStudio() {
   useEffect(() => { setTotalSec(0); setSceneDurs([]); setNarrMeasure(null); }, [scenes, format]);
   // 速さを変えたら、実測した全体の長さは使えないので見込みに戻す（ナレーションの実測値は残して比で計算する）
   useEffect(() => { setTotalSec(0); setSceneDurs([]); }, [rate]);
+  // [プレビュー中の自動スクロール] プレビュー中（準備中・再生中）は、プレビュー画面と場面一覧の行が画面のいちばん上に来るようにする
+  const previewRowRef = useRef(null);
+  const alignPreviewToTop = () => {
+    const row = previewRowRef.current; if (!row) return;
+    const top = row.getBoundingClientRect().top + window.scrollY - 8;
+    if (Math.abs(window.scrollY - top) > 4) window.scrollTo({ top, behavior: "auto" });
+  };
+  const previewActive = isPlaying || !!playPrep;
   useEffect(() => {
-    const el = sceneRefs.current[currentSceneIdx], list = listRef.current;
+    if (!previewActive) return;
+    alignPreviewToTop();
+    // 位置が決まってから、プレビュー中の場面のカードをプレビュー画面の高さにそろえる
+    const t = setTimeout(() => alignSceneCard(currentSceneIdx), 60);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewActive]);
+  const alignSceneCard = (idx) => {
+    const el = sceneRefs.current[idx], list = listRef.current;
     if (!el || !list) return;
     // 再生中の場面のカードを、左のプレビュー画面と同じ高さ（上端をそろえる）に表示する。
     // ①右の設定パネルを、場面一覧の上端がプレビュー画面の上端に来るところまでスクロール（一覧の上の見出しは隠れる）
@@ -1619,6 +1635,12 @@ export default function ExplainerStudio() {
     }
     const delta = el.getBoundingClientRect().top - list.getBoundingClientRect().top;
     if (Math.abs(delta) > 2) list.scrollTo({ top: list.scrollTop + delta, behavior: "smooth" });
+  };
+  useEffect(() => {
+    // 再生中に場面が変わったら、ページがずれていても、プレビュー画面を上にそろえ直してからカードを合わせる
+    if (isPlayingRef.current) alignPreviewToTop();
+    alignSceneCard(currentSceneIdx);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentSceneIdx]);
   // 読み上げ中の場面の、どの文字まで読み終えたか（ナレーション枠のハイライト用）。音声の長さは prepareAudio で確定する
   const narrDursRef = useRef([]);
@@ -2613,7 +2635,7 @@ export default function ExplainerStudio() {
               <span className="ml-auto text-[11px]" style={{ color: C.textDim }}>「{project.videoTitle}」</span>
             </div>
 
-            <div className="flex flex-col gap-4 md:flex-row md:items-start">
+            <div ref={previewRowRef} className="flex flex-col gap-4 md:flex-row md:items-start">
               {/* ---------- プレビュー（スクロールしても追従） ---------- */}
               <div className="flex flex-col gap-2 w-full" style={{ flex: "0 0 auto", maxWidth: format === "long" ? 560 : 330, position: "sticky", top: 8, alignSelf: "flex-start" }}>
                 <div className="relative rounded-lg overflow-hidden border" style={{ borderColor: C.borderSoft, background: "#000", aspectRatio: format === "long" ? "16 / 9" : "9 / 16" }}>
@@ -2745,7 +2767,16 @@ export default function ExplainerStudio() {
                             </select>
                             <button onClick={() => speak(ttsText(sc))} className="text-[10px] flex items-center gap-0.5" style={{ color: C.teal, background: "none", border: "none", cursor: "pointer" }}><Play size={10} />試聴</button>
                             <button onClick={() => playFromScene(i)} title="この場面の最初から、最後の場面まで通しで再生" className="text-[10px] flex items-center gap-0.5" style={{ color: C.teal, background: "none", border: "none", cursor: "pointer" }}><Play size={10} />再生</button>
-                            <button onClick={() => { if (isPlaying) handlePause(); }} disabled={!isPlaying} title="プレビューを一時停止" className="text-[10px] flex items-center gap-0.5" style={{ color: isPlaying ? C.teal : C.textDim, background: "none", border: "none", cursor: isPlaying ? "pointer" : "default", opacity: isPlaying ? 1 : 0.4 }}><Pause size={10} />一時停止</button>
+                            {(() => {
+                              // プレビューの操作：再生中＝一時停止／準備中＝取りやめ／準備完了＝再生する／止めている場面（修正後など）＝そこから再開
+                              const preparing = !!playPrep && !playPrep.ready, ready = !!playPrep?.ready;
+                              const canResume = cur && !isPlaying && !playPrep;
+                              const on = isPlaying || preparing || ready || canResume;
+                              const label = isPlaying ? "一時停止" : preparing ? "準備中…" : ready ? "再生する" : canResume ? "ここから再開" : "一時停止";
+                              const onClick = isPlaying || preparing ? handlePause : ready ? startPreparedPlay : canResume ? handlePlay : undefined;
+                              const title = isPlaying ? "プレビューを一時停止" : preparing ? "プレビュー再生の準備を取りやめる" : ready ? "準備ができたプレビューを再生する" : canResume ? "止めた位置からプレビューを再開する（音声を用意してから「再生する」で始まります）" : "プレビューを一時停止";
+                              return <button onClick={onClick} disabled={!on} title={title} className="text-[10px] flex items-center gap-0.5 whitespace-nowrap" style={{ color: ready ? C.bg : on ? C.teal : C.textDim, background: ready ? C.teal : "none", borderRadius: 4, padding: ready ? "0 4px" : 0, border: "none", cursor: on ? "pointer" : "default", opacity: on ? 1 : 0.4 }}>{isPlaying || preparing ? <Pause size={10} /> : <Play size={10} />}{label}</button>;
+                            })()}
                             <button onClick={() => { setNarrAiOpenId((v) => (v === sc.id ? null : sc.id)); setNarrAiText(""); setNarrAiError(""); }} className="text-[10px] flex items-center gap-0.5" style={{ color: narrAiOpenId === sc.id ? C.teal : C.textDim, background: "none", border: "none", cursor: "pointer" }} title="スライドはそのまま、ナレーションだけをAIで変える"><RefreshCw size={10} />ナレーション変更</button>
                             <button onClick={() => { setAiOpenId((v) => (v === sc.id ? null : sc.id)); setAiText(""); setAiError(""); }} className="text-[10px] flex items-center gap-0.5" style={{ color: aiOpenId === sc.id ? C.teal : C.textDim, background: "none", border: "none", cursor: "pointer" }} title="AIに作り直しを指示（スライドごと作り直します）"><MessageSquare size={10} />AI</button>
                             <button onClick={() => removeScene(sc.id)} title="この場面を削除" style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer" }}><X size={12} /></button>
