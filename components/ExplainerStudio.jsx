@@ -1690,16 +1690,49 @@ export default function ExplainerStudio() {
     return { bufs, durs, starts, total, failed };
   };
   const exportingRef = useRef(false); // 書き出し中はプレビュー再生をしない（BGM・音声の制御が重なるため）
+  // [プレビュー再生の準備] 再生ボタンを押したら、まず全場面のナレーション音声・アバターの動画を用意する（その間はプレビューに進み具合を表示）。
+  // 準備ができてもすぐには再生せず、「プレビュー再生の準備ができました」を出し、画面をクリックしたら再生する（いきなり始まらないように）。
+  // playPrep：null＝何もしていない／{ stage, done, total }＝準備中／{ ready: true }＝準備完了（クリック待ち）
+  const [playPrep, setPlayPrep] = useState(null);
+  const prepTokenRef = useRef(0);
+  const preparedRef = useRef(null); // { pr, pos0, scenes }
+  const cancelPlayPrep = () => { prepTokenRef.current += 1; preparedRef.current = null; setPlayPrep(null); };
   const handlePlay = async () => {
     if (!rendererRef.current || !scenes.length || exportingRef.current) return;
     stopLoop(); mixer().stopBGM(); mixer().stopNarration();
     const raw = Math.min(1, Math.max(0, seekPosRef.current ?? 0));
     const pos0 = raw >= 0.999 ? 0 : raw;
-    setIsPlaying(true); isPlayingRef.current = true;
-    const pr = await prepareAudio();
+    const token = ++prepTokenRef.current;
+    preparedRef.current = null;
+    setPlayPrep({ stage: "ナレーション音声を用意しています", done: 0, total: scenes.length });
+    let pr;
+    try {
+      pr = await prepareAudio(scenes, { onStep: (k, n) => { if (prepTokenRef.current === token) setPlayPrep({ stage: "ナレーション音声を用意しています", done: k, total: n }); } });
+    } catch (e) { if (prepTokenRef.current === token) setPlayPrep(null); return; }
     const r = rendererRef.current;
-    if (!isPlayingRef.current || !r) return;
+    if (prepTokenRef.current !== token || !r) return;
     r.setDurations(pr.durs); r.setNarration(pr.bufs);
+    // アバターの動画（使っている場合）を再生位置まで用意する（最長20秒で打ち切り、残りは再生しながら読み込む）
+    setPlayPrep({ stage: "映像を用意しています", done: pr.durs.length, total: pr.durs.length });
+    try { await Promise.race([r.prepare(pos0), new Promise((res) => setTimeout(res, 20000))]); } catch (e) { /* 映像の準備に失敗しても再生はできる */ }
+    if (prepTokenRef.current !== token) return;
+    r.draw(pos0);
+    preparedRef.current = { pr, pos0, scenes };
+    setPlayPrep({ ready: true });
+  };
+  // 準備完了の画面をクリックしたら再生を始める（準備のあとで台本が変わっていたら、準備し直す）
+  const startPreparedPlay = () => {
+    const prep = preparedRef.current;
+    if (!prep || prep.scenes !== scenes || !rendererRef.current) { handlePlay(); return; }
+    preparedRef.current = null; setPlayPrep(null);
+    startPlayback(prep.pr, prep.pos0);
+  };
+  const startPlayback = (pr, pos0) => {
+    const r = rendererRef.current;
+    if (!r || exportingRef.current) return;
+    stopLoop(); mixer().stopBGM(); mixer().stopNarration();
+    r.setDurations(pr.durs); r.setNarration(pr.bufs); // 準備のあいだに画面の描き直しで作り直されていても、長さ・音声をそろえる
+    setIsPlaying(true); isPlayingRef.current = true;
     const elapsed0 = pos0 * pr.total;
     if (bgmUrl) { try { mixer().playBGM(bgmUrl, bgmVolume, true, elapsed0); } catch (e) { console.error(e); } }
     pr.bufs.forEach((b, i) => {
@@ -1719,8 +1752,8 @@ export default function ExplainerStudio() {
     };
     rafRef.current = requestAnimationFrame(tick);
   };
-  const handlePause = () => { stopLoop(); setIsPlaying(false); mixer().stopBGM(); mixer().stopNarration(); rendererRef.current?.pauseAvatar(); };
-  const handleSeek = (v) => { if (isPlayingRef.current) handlePause(); setSeekPos(v); rendererRef.current?.draw(v); updateSceneProgress(v); };
+  const handlePause = () => { cancelPlayPrep(); stopLoop(); setIsPlaying(false); mixer().stopBGM(); mixer().stopNarration(); rendererRef.current?.pauseAvatar(); };
+  const handleSeek = (v) => { if (isPlayingRef.current) handlePause(); else cancelPlayPrep(); /* 位置を変えたら、準備した再生（前の位置から）は取りやめる */ setSeekPos(v); rendererRef.current?.draw(v); updateSceneProgress(v); };
   const previewSceneAt = (idx) => {
     const r = rendererRef.current; if (!r || idx < 0) return;
     if (isPlayingRef.current) handlePause();
@@ -2585,6 +2618,20 @@ export default function ExplainerStudio() {
               <div className="flex flex-col gap-2 w-full" style={{ flex: "0 0 auto", maxWidth: format === "long" ? 560 : 330, position: "sticky", top: 8, alignSelf: "flex-start" }}>
                 <div className="relative rounded-lg overflow-hidden border" style={{ borderColor: C.borderSoft, background: "#000", aspectRatio: format === "long" ? "16 / 9" : "9 / 16" }}>
                   <canvas ref={canvasRef} className="w-full h-full" />
+                  {!isExporting && playPrep && !playPrep.ready && (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 text-center" style={{ background: "rgba(5,9,18,.72)", color: C.text }}>
+                      <RefreshCw size={20} className="animate-spin" style={{ color: C.teal }} />
+                      <div className="text-sm font-bold">プレビュー再生の準備中：{playPrep.stage}… {playPrep.total ? Math.round((playPrep.done / playPrep.total) * 100) : 0}%</div>
+                      <div className="text-[11px]" style={{ color: C.textMuted }}>{playPrep.total ? `${playPrep.done} / ${playPrep.total} 場面` : ""}　準備ができたら、クリックで再生を始めます（「一時停止」で取りやめ）</div>
+                    </div>
+                  )}
+                  {!isExporting && playPrep?.ready && (
+                    <button onClick={startPreparedPlay} className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 text-center" style={{ background: "rgba(5,9,18,.6)", color: C.text, border: "none", cursor: "pointer" }} title="クリックで再生">
+                      <span className="flex items-center justify-center rounded-full" style={{ width: 56, height: 56, background: C.teal }}><Play size={26} style={{ color: C.bg, marginLeft: 3 }} /></span>
+                      <span className="text-sm font-bold">プレビュー再生の準備ができました</span>
+                      <span className="text-[11px]" style={{ color: C.textMuted }}>画面をクリックすると再生します</span>
+                    </button>
+                  )}
                   {isExporting && (
                     <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 text-center" style={{ background: "rgba(5,9,18,.72)", color: C.text }}>
                       <Download size={20} style={{ color: C.amber }} />
@@ -2603,7 +2650,7 @@ export default function ExplainerStudio() {
                   タイトル<input value={project.videoTitle} onChange={(e) => setProject((p) => ({ ...p, videoTitle: e.target.value }))} className="flex-1 min-w-0 px-1.5 py-0.5 rounded text-[11px]" style={inputStyle} title="画面上部に出す動画タイトル" />
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
-                  <button onClick={isPlaying ? handlePause : handlePlay} disabled={isExporting} className="text-xs px-3 py-1.5 rounded flex items-center gap-1.5" style={{ ...btn("primary"), opacity: isExporting ? 0.4 : 1 }}>{isPlaying ? <><Pause size={13} /> 一時停止</> : <><Play size={13} /> プレビュー再生</>}</button>
+                  <button onClick={isPlaying || (playPrep && !playPrep.ready) ? handlePause : playPrep?.ready ? startPreparedPlay : handlePlay} disabled={isExporting} className="text-xs px-3 py-1.5 rounded flex items-center gap-1.5" style={{ ...btn("primary"), opacity: isExporting ? 0.4 : 1 }}>{isPlaying ? <><Pause size={13} /> 一時停止</> : playPrep && !playPrep.ready ? <><Pause size={13} /> 準備を取りやめる</> : playPrep?.ready ? <><Play size={13} /> 再生する</> : <><Play size={13} /> プレビュー再生</>}</button>
                   <button onClick={() => { handlePause(); handleSeek(0); }} className="text-xs px-3 py-1.5 rounded flex items-center gap-1.5" style={{ background: C.panel2, color: C.textMuted, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}><Square size={12} /> 先頭へ</button>
                   <button onClick={handleThumbnail} title={format === "long" ? "サムネ用の画像（大きな文字＋人物）をPNGで保存" : "いま表示中の1コマをPNGで保存"} className="text-xs px-3 py-1.5 rounded flex items-center gap-1.5" style={{ background: C.panel2, color: C.textMuted, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}><Camera size={12} /> サムネ保存</button>
                   {format === "long" && project.shortScenes?.length > 0 && (
