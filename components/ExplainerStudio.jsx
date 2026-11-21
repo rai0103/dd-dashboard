@@ -1612,15 +1612,6 @@ export default function ExplainerStudio() {
     const top = row.getBoundingClientRect().top + window.scrollY - 8;
     if (Math.abs(window.scrollY - top) > 4) window.scrollTo({ top, behavior: "auto" });
   };
-  const previewActive = isPlaying || !!playPrep;
-  useEffect(() => {
-    if (!previewActive) return;
-    alignPreviewToTop();
-    // 位置が決まってから、プレビュー中の場面のカードをプレビュー画面の高さにそろえる
-    const t = setTimeout(() => alignSceneCard(currentSceneIdx), 60);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [previewActive]);
   const alignSceneCard = (idx) => {
     const el = sceneRefs.current[idx], list = listRef.current;
     if (!el || !list) return;
@@ -1719,6 +1710,16 @@ export default function ExplainerStudio() {
   const prepTokenRef = useRef(0);
   const preparedRef = useRef(null); // { pr, pos0, scenes }
   const cancelPlayPrep = () => { prepTokenRef.current += 1; preparedRef.current = null; setPlayPrep(null); };
+  // プレビュー中（準備中・再生中）になったら、プレビュー画面と場面一覧を画面の一番上にそろえる（playPrep を宣言したあとに置く）
+  const previewActive = isPlaying || !!playPrep;
+  useEffect(() => {
+    if (!previewActive) return;
+    alignPreviewToTop();
+    // 位置が決まってから、プレビュー中の場面のカードをプレビュー画面の高さにそろえる
+    const t = setTimeout(() => alignSceneCard(currentSceneIdx), 60);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewActive]);
   const handlePlay = async () => {
     if (!rendererRef.current || !scenes.length || exportingRef.current) return;
     stopLoop(); mixer().stopBGM(); mixer().stopNarration();
