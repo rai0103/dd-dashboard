@@ -2640,6 +2640,18 @@ export default function ExplainerStudio() {
                     </div>
                   )}
                 </div>
+                {/* 再生・先頭へ・サムネ保存・書き出しは、プレビューのすぐ下に小さく1行で並べる */}
+                <div className="flex items-center gap-1.5 flex-nowrap overflow-x-auto">
+                  <button onClick={isPlaying || (playPrep && !playPrep.ready) ? handlePause : playPrep?.ready ? startPreparedPlay : handlePlay} disabled={isExporting} className="text-[11px] px-2 py-1 rounded flex items-center gap-1 whitespace-nowrap shrink-0" style={{ ...btn("primary"), opacity: isExporting ? 0.4 : 1 }}>{isPlaying ? <><Pause size={11} /> 一時停止</> : playPrep && !playPrep.ready ? <><Pause size={11} /> 準備を取りやめる</> : playPrep?.ready ? <><Play size={11} /> 再生する</> : <><Play size={11} /> プレビュー再生</>}</button>
+                  <button onClick={() => { handlePause(); handleSeek(0); }} className="text-[11px] px-2 py-1 rounded flex items-center gap-1 whitespace-nowrap shrink-0" style={{ background: C.panel2, color: C.textMuted, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}><Square size={10} /> 先頭へ</button>
+                  <button onClick={handleThumbnail} title={format === "long" ? "サムネ用の画像（大きな文字＋人物）をPNGで保存" : "いま表示中の1コマをPNGで保存"} className="text-[11px] px-2 py-1 rounded flex items-center gap-1 whitespace-nowrap shrink-0" style={{ background: C.panel2, color: C.textMuted, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}><Camera size={10} /> サムネ保存</button>
+                  <button onClick={() => handleExport({ withShort: exportWithShort })} disabled={isExporting} className="text-[11px] px-2 py-1 rounded flex items-center gap-1 whitespace-nowrap shrink-0" style={{ ...btn("amber"), background: isExporting ? C.panel2 : C.amber, color: isExporting ? C.textMuted : C.bg }} title={format === "long" && exportWithShort && project.shortScenes?.length > 0 ? "長尺に続けてショートも書き出します" : "動画を書き出します"}><Download size={11} /> {isExporting ? `書き出し中… ${exportProgress}%` : format === "long" && exportWithShort && project.shortScenes?.length > 0 ? "長尺＋ショートを書き出す" : "書き出す"}</button>
+                  {format === "long" && project.shortScenes?.length > 0 && (
+                    <label className="flex items-center gap-1 text-[10px] whitespace-nowrap shrink-0" style={{ color: C.textMuted }} title="長尺の書き出しに続けて、ショート動画（サムネ・概要欄も）を書き出して保存します">
+                      <input type="checkbox" checked={exportWithShort} disabled={isExporting} onChange={(e) => setExportWithShort(e.target.checked)} /> ショートも
+                    </label>
+                  )}
+                </div>
                 <input type="range" min={0} max={1} step={0.001} value={seekPos} onChange={(e) => handleSeek(Number(e.target.value))} className="w-full" />
                 <div className="text-[11px] mono -mt-1" style={{ color: C.textDim }}>
                   {fmtTime(seekPos * displayTotal)} / {fmtTime(displayTotal)}{totalSec ? "" : "（見込み）"}
@@ -2648,17 +2660,6 @@ export default function ExplainerStudio() {
                 <div className="flex items-center gap-1.5 text-[11px]" style={{ color: C.textDim }}>
                   ラベル<input value={project.kicker} onChange={(e) => setProject((p) => ({ ...p, kicker: e.target.value }))} className="w-32 px-1.5 py-0.5 rounded text-[11px]" style={inputStyle} title="左上の色付きラベル" />
                   タイトル<input value={project.videoTitle} onChange={(e) => setProject((p) => ({ ...p, videoTitle: e.target.value }))} className="flex-1 min-w-0 px-1.5 py-0.5 rounded text-[11px]" style={inputStyle} title="画面上部に出す動画タイトル" />
-                </div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <button onClick={isPlaying || (playPrep && !playPrep.ready) ? handlePause : playPrep?.ready ? startPreparedPlay : handlePlay} disabled={isExporting} className="text-xs px-3 py-1.5 rounded flex items-center gap-1.5" style={{ ...btn("primary"), opacity: isExporting ? 0.4 : 1 }}>{isPlaying ? <><Pause size={13} /> 一時停止</> : playPrep && !playPrep.ready ? <><Pause size={13} /> 準備を取りやめる</> : playPrep?.ready ? <><Play size={13} /> 再生する</> : <><Play size={13} /> プレビュー再生</>}</button>
-                  <button onClick={() => { handlePause(); handleSeek(0); }} className="text-xs px-3 py-1.5 rounded flex items-center gap-1.5" style={{ background: C.panel2, color: C.textMuted, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}><Square size={12} /> 先頭へ</button>
-                  <button onClick={handleThumbnail} title={format === "long" ? "サムネ用の画像（大きな文字＋人物）をPNGで保存" : "いま表示中の1コマをPNGで保存"} className="text-xs px-3 py-1.5 rounded flex items-center gap-1.5" style={{ background: C.panel2, color: C.textMuted, border: `1px solid ${C.borderSoft}`, cursor: "pointer" }}><Camera size={12} /> サムネ保存</button>
-                  {format === "long" && project.shortScenes?.length > 0 && (
-                    <label className="flex items-center gap-1 text-[11px] ml-auto" style={{ color: C.textMuted }} title="長尺の書き出しに続けて、ショート動画（サムネ・概要欄も）を書き出して保存します">
-                      <input type="checkbox" checked={exportWithShort} disabled={isExporting} onChange={(e) => setExportWithShort(e.target.checked)} /> ショートもセットで
-                    </label>
-                  )}
-                  <button onClick={() => handleExport({ withShort: exportWithShort })} disabled={isExporting} className={`text-xs px-3 py-1.5 rounded flex items-center gap-1.5 ${format === "long" && project.shortScenes?.length > 0 ? "" : "ml-auto"}`} style={{ ...btn("amber"), background: isExporting ? C.panel2 : C.amber, color: isExporting ? C.textMuted : C.bg }}><Download size={13} /> {isExporting ? `書き出し中${exportStage ? `：${exportStage}` : ""}… ${exportProgress}%` : format === "long" && exportWithShort && project.shortScenes?.length > 0 ? "長尺＋ショートを書き出す" : "動画を書き出す"}</button>
                 </div>
                 {format === "long" && <label className="flex items-center gap-1.5 text-[11px]" style={{ color: C.textDim }}><input type="checkbox" checked={sourcesInVideo} onChange={(e) => setSourcesInVideo(e.target.checked)} /> 動画に出典を表示（各スライドの「出典：…」と最後の「参考資料」の場面。オフでも概要欄には記載します）</label>}
                 <label className="flex items-center gap-1.5 text-[11px]" style={{ color: C.textDim }}><input type="checkbox" checked={showSubtitles} onChange={(e) => setShowSubtitles(e.target.checked)} /> 字幕（ナレーション）を表示（オフでテロップ）</label>
