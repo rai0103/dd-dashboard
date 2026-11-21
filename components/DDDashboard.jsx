@@ -2012,11 +2012,24 @@ function CrashEventMarkers({ xAxisMap, yAxisMap, points, chartWidth, onHoverChan
 /* ---------------- period selector ---------------- */
 const PERIODS = [{ key: "1M", label: "1m", days: 21 }, { key: "3M", label: "3m", days: 63 }, { key: "6M", label: "6m", days: 126 }, { key: "YTD", label: "ytd" }, { key: "1Y", label: "1y", days: 252 }, { key: "3Y", label: "3y", days: 756 }, { key: "5Y", label: "5y", days: 1260 }, { key: "10Y", label: "10y", days: 2520 }, { key: "20Y", label: "20y", days: 5040 }, { key: "30Y", label: "30y", days: 7560 }, { key: "MAX", label: "max" }];
 // 期間キーから、間引き前（フル解像度）の対象範囲を切り出す。期間の正確な開始・終了日/騰落%等の算出はこちらを使う。
+// 開始年を指定したとき（キーが「期間@開始年」、例：3Y@2018）は、その年の1月から選んだ期間を表示する
+// （1y＝その年、3y＝2018〜2020年、max＝その年から最新まで、1m〜6m＝その年の初めから◯営業日）。開始年が無ければ従来どおり最新から遡る。
+const PERIOD_YEARS = { YTD: 1, "1Y": 1, "3Y": 3, "5Y": 5, "10Y": 10, "20Y": 20, "30Y": 30 };
 function periodDateRange(FULL, last, key) {
   let sliced;
-  if (key === "MAX") sliced = FULL;
-  else if (key === "YTD") { const y = last.date.getFullYear(); sliced = FULL.filter((p) => p.date.getFullYear() === y); }
-  else { const days = PERIODS.find((p) => p.key === key).days; sliced = FULL.slice(-days); }
+  const [base, ys] = String(key || "1Y").split("@");
+  const y0 = Number(ys);
+  if (ys && y0) {
+    const startIdx = FULL.findIndex((p) => p.date.getFullYear() >= y0);
+    if (startIdx < 0) sliced = [];
+    else if (base === "MAX") sliced = FULL.slice(startIdx);
+    else if (PERIOD_YEARS[base]) { const yEnd = y0 + PERIOD_YEARS[base]; sliced = FULL.slice(startIdx).filter((p) => p.date.getFullYear() < yEnd); }
+    else { const days = PERIODS.find((p) => p.key === base)?.days ?? 252; sliced = FULL.slice(startIdx, startIdx + days); }
+    if (sliced.length < 2) sliced = FULL.slice(-21); // その年のデータが無い銘柄（上場前など）は直近を出す
+  }
+  else if (base === "MAX") sliced = FULL;
+  else if (base === "YTD") { const y = last.date.getFullYear(); sliced = FULL.filter((p) => p.date.getFullYear() === y); }
+  else { const days = PERIODS.find((p) => p.key === base)?.days ?? 252; sliced = FULL.slice(-days); }
   if (!sliced.length) sliced = FULL;
   return sliced;
 }
@@ -2051,7 +2064,8 @@ function computePeriodStats(periodRange, episodes) {
   // 同じATH更新局面内で-3%を何度跨いでも（新高値を更新しないまま部分反発→再下落する「二番底」等）1回として数える。
   return { periodReturn, maxDD, ddCount: eventsInRange.length, worstEpisode, athUpdateCount };
 }
-function fmtAxisDate(d, rangeDays) { if (rangeDays > 900) return `${d.getFullYear()}`; if (rangeDays > 120) return `${d.getFullYear()}/${d.getMonth() + 1}`; return `${d.getMonth() + 1}/${d.getDate()}`; }
+// 目盛りの日付：6年を超える範囲は年だけ、それ以下は年/月（3〜5年の表示で同じ年が並ばないように）
+function fmtAxisDate(d, rangeDays) { if (rangeDays > 2200) return `${d.getFullYear()}`; if (rangeDays > 120) return `${d.getFullYear()}/${d.getMonth() + 1}`; return `${d.getMonth() + 1}/${d.getDate()}`; }
 function fmtYMD(d) { return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`; }
 // 米国東部時間（NY市場基準）の年月日を "YYYY/M/D" 形式で返す。ヘッダーの日付表示・当日更新判定の基準に使う。
 function usEasternYMD(date = new Date()) {
@@ -2344,12 +2358,22 @@ function DDMarkerToggle({ hidden, toggle, size = "sm" }) {
   );
 }
 // 評価額/DDチャートの期間選択（ドロップダウン）。
+// 左に「開始年」（最新まで＝従来どおり最新から遡る／◯年〜＝その年の1月から）、右に期間。値は「期間」または「期間@開始年」
+const PERIOD_START_YEARS = Array.from({ length: new Date().getFullYear() - 1949 }, (_, i) => new Date().getFullYear() - i);
 function PeriodSelect({ value, onChange, size = "sm" }) {
+  const [base, ys] = String(value || "1Y").split("@");
+  const set = (b, y) => onChange(y ? `${b}@${y}` : b);
+  const st = { fontSize: size === "sm" ? 10 : 11, padding: size === "sm" ? "1px 4px" : "2px 6px", background: C.panel2, border: `1px solid ${ys ? C.teal : C.borderSoft}`, color: C.text, cursor: "pointer" };
   return (
-    <select value={value} onChange={(e) => onChange(e.target.value)} onClick={(e) => e.stopPropagation()} title="表示期間" className="mono rounded"
-      style={{ fontSize: size === "sm" ? 10 : 11, padding: size === "sm" ? "1px 4px" : "2px 6px", background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text, cursor: "pointer" }}>
-      {PERIODS.map((p) => (<option key={p.key} value={p.key}>{p.label}</option>))}
-    </select>
+    <span className="inline-flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+      <select value={ys || ""} onChange={(e) => set(base, e.target.value)} title="開始年：指定すると、その年の1月から右の期間を表示します（例：2018年〜と3y＝2018〜2020年）" className="mono rounded" style={st}>
+        <option value="">最新まで</option>
+        {PERIOD_START_YEARS.map((y) => (<option key={y} value={y}>{y}年〜</option>))}
+      </select>
+      <select value={base} onChange={(e) => set(e.target.value, ys)} title={ys ? `${ys}年から表示する期間` : "表示期間"} className="mono rounded" style={{ ...st, border: `1px solid ${C.borderSoft}` }}>
+        {PERIODS.map((p) => (<option key={p.key} value={p.key}>{ys && p.key === "YTD" ? "1年" : p.label}</option>))}
+      </select>
+    </span>
   );
 }
 // VOO（SP500本系列）・QQQ・GOLDのどれを表示するかを選ぶボタン（複数選択可）。1つなら評価額/DD%チャート、
