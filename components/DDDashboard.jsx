@@ -6415,17 +6415,19 @@ function SummaryModalContent({ d, dVoo, dQqq, holdings, currentHoldingPct, effec
 // 各カードは上段に「評価額（金額・大きく強調）」と「最高値比DD%（金額同様に大きく強調）」を横並びで、
 // 下段に「ATH金額」と「次の節目までの残り%・その節目の評価額」を1行にまとめて、金額と%の両方を一目で読み取れるようにする。
 // VOO・QQQの2枚構成（SP500はVOO換算に統合済み）。1枚あたりの高さに余裕があるため、数値を大きめに表示する。
-function MobileAthPage({ d, dVoo, dQqq, dNkx = null }) {
-  const tickers = [{ label: "VOO", data: dVoo }, { label: "QQQ", data: dQqq }, ...(dNkx ? [{ label: "日経平均", data: dNkx }] : [])]; // SP500はVOO換算に統合済みのため行を廃止
+// PC版の「現在のステータス」と同じく、各銘柄にRSI(14)トリガーの状態も出す（タップでRSIトリガーの画面を開く）。
+// 日経平均を含めて3銘柄になると1画面に収まらないことがあるため、ページは縦にスクロールできるようにする
+function MobileAthPage({ d, dVoo, dQqq, dNkx = null, rsiTrigger = null, onOpenRsiTrigger = null }) {
+  const tickers = [{ key: "voo", label: "VOO", data: dVoo }, { key: "qqq", label: "QQQ", data: dQqq }, ...(dNkx ? [{ key: "nkx", label: "日経平均", data: dNkx }] : [])]; // SP500はVOO換算に統合済みのため行を廃止
   return (
-    <div className="p-2 flex flex-col gap-2 h-full">
-      {tickers.map(({ label, data }) => {
+    <div className="p-2 flex flex-col gap-2 h-full overflow-y-auto">
+      {tickers.map(({ key, label, data }) => {
         const chg = data ? dayChangePct(data) : null;
         const updated = data ? isUpdatedToday(data) : false; // 翌取引日の開場（9:30 ET）を過ぎても次の終値が無ければ未更新（文字のグレーアウトで示す）
         const atAth = data ? data.currentDD >= 0 : false; // 最新値がATH（ATH更新中）。PCのステータス欄と同じく強調する（当日未更新ならやや薄く）
         const athDim = atAth && !updated ? 0.6 : 1;
         return (
-          <div key={label} className="rounded-lg px-3 py-2 flex-1 flex flex-col justify-center min-h-0" style={{ background: C.panel, border: `1px solid ${atAth ? C.rust : C.border}` }}>
+          <div key={label} className="rounded-lg px-3 py-2 flex-auto shrink-0 flex flex-col justify-center" style={{ background: C.panel, border: `1px solid ${atAth ? C.rust : C.border}` }}>
             <div className="flex items-center justify-between mb-2">
               <span className="text-base font-bold" style={{ color: C.textMuted }}>{label}</span>
             </div>
@@ -6450,6 +6452,12 @@ function MobileAthPage({ d, dVoo, dQqq, dNkx = null }) {
                     </>
                   )}
                 </div>
+                {rsiTrigger && rsiTrigger[key] && (
+                  <button onClick={onOpenRsiTrigger || undefined} className="mt-2 pt-2 text-left w-full" style={{ borderTop: `1px solid ${C.borderSoft}`, background: "transparent", border: "none", borderTopStyle: "solid", borderTopWidth: 1, borderTopColor: C.borderSoft, cursor: onOpenRsiTrigger ? "pointer" : "default" }}>
+                    <div className="flex items-center gap-1.5 mb-1"><Activity size={11} style={{ color: C.violet }} /><span className="text-[11px] font-bold" style={{ color: C.violet }}>RSI(14)トリガー</span>{onOpenRsiTrigger && <span className="text-[10px]" style={{ color: C.textDim }}>タップで詳細</span>}</div>
+                    <RsiStatusRow rsi={data?.last?.rsi ?? null} st={statusFor(data?.FULL, rsiTrigger[key], rsiTrigger.base, todayUtcDate())} s={rsiTrigger[key]} />
+                  </button>
+                )}
               </>
             ) : (<div className="text-xs" style={{ color: C.textDim }}>データ未取り込み</div>)}
           </div>
@@ -9466,7 +9474,7 @@ export default function DDDashboard() {
             activeIndex={mobilePage}
             onChange={setMobilePage}
             pages={[
-              { key: "ath", label: "評価額/ATH", icon: TrendingUp, content: <MobileAthPage d={d} dVoo={dVoo} dQqq={dQqq} dNkx={dNkx} /> },
+              { key: "ath", label: "評価額/ATH", icon: TrendingUp, content: <MobileAthPage d={d} dVoo={dVoo} dQqq={dQqq} dNkx={dNkx} rsiTrigger={rsiTrigger} onOpenRsiTrigger={() => setModal({ type: "rsiTrigger" })} /> },
               { key: "speed", label: "経過日数", icon: Clock, content: <MobileSpeedPage dVoo={dVoo} dQqq={dQqq} dNkx={dNkx} vooSeries={vooCalcSeries} qqqSeries={qqqCalcSeries} onOpenSpeedAlert={(inst) => { setSpeedAlertInstrument(inst); setModal({ type: "speedAlert" }); }} /> },
               { key: "chart", label: "チャート", icon: Activity, content: <MobileChartPage chartTab={chartTab} setChartTab={setChartTab} chartSources={chartSources} onToggleChartSource={toggleChartSource} sourceViews={sourceViews} chartData={chartData} rangeDays={rangeDays} d={d} dQqq={dQqq} qqqChartData={qqqChartData} qqqRangeDays={qqqRangeDays} qqqPeriodStats={qqqPeriodStats} goldView={goldView} hidden={hidden} toggle={toggle} period={period} setPeriod={setPeriod} periodStats={periodStats} historicalCrashes={historicalCrashes} selectedCrash={selectedCrash} onSelectCrash={handleSelectCrash} comparisonData={comparisonData} hiddenCrash={hiddenCrash} toggleCrash={toggleCrash} crashLegendItems={crashLegendItems} yearCompare={yearCompare} setYearCompare={setYearCompare} onZoom={() => setModal({ type: "mobileChartZoom" })} onOpenCrash={(c) => setModal({ type: "crash", crash: c })} /> },
               { key: "portfolio", label: "構成", icon: Layers, content: <MobilePortfolioPage pieView={pieView} setPieView={setPieView} holdings={combinedHoldings} ownerDates={ownerUpdatedDates} fxRates={fxRates} onOpen={() => setModal({ type: "portfolio" })} onOpenRealHoldingsRanking={() => setModal({ type: "realHoldingsRanking" })} dateLabel={holdingsDateLabel} /> },
