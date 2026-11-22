@@ -6440,7 +6440,7 @@ function SummaryModalContent({ d, dVoo, dQqq, holdings, currentHoldingPct, effec
 // 下段に「ATH金額」と「次の節目までの残り%・その節目の評価額」を1行にまとめて、金額と%の両方を一目で読み取れるようにする。
 // VOO・QQQの2枚構成（SP500はVOO換算に統合済み）。1枚あたりの高さに余裕があるため、数値を大きめに表示する。
 // PC版の「現在のステータス」と同じく、各銘柄にRSI(14)トリガーの状態も出す（タップでRSIトリガーの画面を開く）。
-// 日経平均を含めて3銘柄になると1画面に収まらないことがあるため、ページは縦にスクロールできるようにする
+// VOO・QQQ・日経平均の3銘柄が1画面に収まるよう、1銘柄を「評価額・最高値比」「ATH・次の節目」「RSI」の詰めた3段で表示する
 function MobileAthPage({ d, dVoo, dQqq, dNkx = null, rsiTrigger = null, onOpenRsiTrigger = null }) {
   const tickers = [{ key: "voo", label: "VOO", data: dVoo }, { key: "qqq", label: "QQQ", data: dQqq }, ...(dNkx ? [{ key: "nkx", label: "日経平均", data: dNkx }] : [])]; // SP500はVOO換算に統合済みのため行を廃止
   return (
@@ -6451,39 +6451,34 @@ function MobileAthPage({ d, dVoo, dQqq, dNkx = null, rsiTrigger = null, onOpenRs
         const atAth = data ? data.currentDD >= 0 : false; // 最新値がATH（ATH更新中）。PCのステータス欄と同じく強調する（当日未更新ならやや薄く）
         const athDim = atAth && !updated ? 0.6 : 1;
         return (
-          <div key={label} className="rounded-lg px-3 py-2 flex-auto shrink-0 flex flex-col justify-center" style={{ background: C.panel, border: `1px solid ${atAth ? C.rust : C.border}` }}>
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-base font-bold" style={{ color: C.textMuted }}>{label}</span>
-            </div>
+          <div key={label} className="rounded-lg px-3 py-1.5 flex-1 min-h-0 flex flex-col justify-center gap-1" style={{ background: C.panel, border: `1px solid ${atAth ? C.rust : C.border}` }}>
             {data ? (
               <>
-                <div className="grid grid-cols-2 gap-x-2 items-end mono">
-                  <div className="min-w-0">
-                    <div className="text-[11px] truncate" style={{ color: C.textDim }}>評価額{chg !== null && <span className="ml-1" style={{ color: updated ? (chg >= 0 ? C.teal : C.rust) : C.textDim }}>{chg >= 0 ? "+" : ""}{chg.toFixed(1)}%</span>}</div>
-                    <div className="text-3xl font-bold leading-tight truncate" style={{ color: updated ? C.text : C.textDim }}>{money(data.currentPrice, data.currency)}</div>
-                  </div>
-                  <div className="text-right min-w-0">
-                    <div className="text-[11px]" style={{ color: C.textDim }}>最高値比</div>
-                    <div className="text-3xl font-bold leading-tight" style={{ color: data.currentDD >= 0 ? C.teal : C.rust }}>{data.currentDD.toFixed(1)}%</div>
-                  </div>
+                <div className="flex items-baseline justify-between mono">
+                  <span className="flex items-baseline gap-2 min-w-0">
+                    <span className="text-sm font-bold" style={{ color: C.textMuted, fontFamily: "inherit" }}>{label}</span>
+                    {chg !== null && <span className="text-[11px]" style={{ color: updated ? (chg >= 0 ? C.teal : C.rust) : C.textDim }}>前日比 {chg >= 0 ? "+" : ""}{chg.toFixed(1)}%</span>}
+                  </span>
+                  <span className="text-[10px]" style={{ color: C.textDim }}>最高値比</span>
                 </div>
-                <div className="mono mt-3 pt-2" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
-                  <div className="text-[11px]" style={{ color: atAth ? C.teal : C.textDim, fontWeight: atAth ? 700 : 400, opacity: athDim }}>ATH {money(data.currentATH, data.currency)}（{fmtYMD(data.athDate)}）</div>
+                <div className="flex items-end justify-between gap-2 mono">
+                  <div className="text-2xl font-bold leading-none truncate" style={{ color: updated ? C.text : C.textDim }}>{money(data.currentPrice, data.currency)}</div>
+                  <div className="text-2xl font-bold leading-none shrink-0" style={{ color: data.currentDD >= 0 ? C.teal : C.rust }}>{data.currentDD.toFixed(1)}%</div>
+                </div>
+                <div className="mono pt-1 text-[11px] leading-snug" style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+                  <div style={{ color: atAth ? C.teal : C.textDim, fontWeight: atAth ? 700 : 400, opacity: athDim }}>ATH {money(data.currentATH, data.currency)}（{fmtYMD(data.athDate)}）</div>
                   {data.nextMilestone !== null && (
-                    <>
-                      <div className="text-[11px] mt-1" style={{ color: C.textDim }}>DD{data.nextMilestone}%まで {data.distanceToNextMilestone.toFixed(1)}%</div>
-                      <div className="text-3xl font-bold leading-tight truncate" style={{ color: C.rust }}>{money(data.nextMilestonePrice, data.currency)}</div>
-                    </>
+                    <div style={{ color: C.textDim }}>DD{data.nextMilestone}%まで {data.distanceToNextMilestone.toFixed(1)}%　<b className="text-base" style={{ color: C.rust }}>{money(data.nextMilestonePrice, data.currency)}</b></div>
                   )}
                 </div>
                 {rsiTrigger && rsiTrigger[key] && (
-                  <button onClick={onOpenRsiTrigger || undefined} className="mt-2 pt-2 text-left w-full" style={{ borderTop: `1px solid ${C.borderSoft}`, background: "transparent", border: "none", borderTopStyle: "solid", borderTopWidth: 1, borderTopColor: C.borderSoft, cursor: onOpenRsiTrigger ? "pointer" : "default" }}>
-                    <div className="flex items-center gap-1.5 mb-1"><Activity size={11} style={{ color: C.violet }} /><span className="text-[11px] font-bold" style={{ color: C.violet }}>RSI(14)トリガー</span>{onOpenRsiTrigger && <span className="text-[10px]" style={{ color: C.textDim }}>タップで詳細</span>}</div>
-                    <RsiStatusRow rsi={data?.last?.rsi ?? null} st={statusFor(data?.FULL, rsiTrigger[key], rsiTrigger.base, todayUtcDate())} s={rsiTrigger[key]} />
+                  <button onClick={onOpenRsiTrigger || undefined} className="pt-1 text-left w-full flex items-start gap-2" title="タップでRSIトリガーの詳細" style={{ background: "transparent", border: "none", borderTop: `1px solid ${C.borderSoft}`, cursor: onOpenRsiTrigger ? "pointer" : "default" }}>
+                    <span className="flex items-center gap-1 shrink-0 pt-0.5"><Activity size={11} style={{ color: C.violet }} /><span className="text-[10px] font-bold" style={{ color: C.violet }}>RSI</span></span>
+                    <div className="min-w-0 flex-1"><RsiStatusRow rsi={data?.last?.rsi ?? null} st={statusFor(data?.FULL, rsiTrigger[key], rsiTrigger.base, todayUtcDate())} s={rsiTrigger[key]} /></div>
                   </button>
                 )}
               </>
-            ) : (<div className="text-xs" style={{ color: C.textDim }}>データ未取り込み</div>)}
+            ) : (<div className="text-xs" style={{ color: C.textDim }}><b style={{ color: C.textMuted }}>{label}</b>　データ未取り込み</div>)}
           </div>
         );
       })}
