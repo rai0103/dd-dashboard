@@ -277,7 +277,8 @@ export const intervalKana = (r: CrashRow) => {
 };
 export const levelKana = (level: number) => `${integerToKana(level)}ぱーせんと`.replace('じゅうぱー', 'じゅっぱー').replace('にじゅうぱー', 'にじゅっぱー').replace('さんじゅうぱー', 'さんじゅっぱー').replace('よんじゅうぱー', 'よんじゅっぱー');
 
-const CRASH_NAMES: Record<number, string> = { 10: '調整', 20: '弱気相場', 30: '大暴落', 50: 'リーマンショック級' };
+// 呼び名は lib/ddCategory.ts の定義に統一（−10%〜調整・−20%〜弱気相場・−30%〜暴落・−40%〜歴史的暴落）
+const CRASH_NAMES: Record<number, string> = { 10: '調整', 20: '弱気相場', 30: '暴落', 40: '歴史的暴落', 50: '歴史的暴落' };
 /** 調整〜暴落の例示（確率は使わない）：サマリーmd由来があればそれ、なければ表の10/20/30% */
 export function crashList(s: UpdateStats): CrashEx[] {
   if (s.crashEx && s.crashEx.length) return s.crashEx;

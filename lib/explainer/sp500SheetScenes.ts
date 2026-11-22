@@ -307,11 +307,11 @@ export function factsScene(f: FactsSheet | null, label: string, sheets: Sp500She
     `年間の騰落率がマイナスの年は${f.negativeYearShare}%（${f.completeYears}年中）`,
     `DD−3%到達は年${f.dd3PerYear}回、そのうち${f.dd5Share}%が−5%まで進行`,
     `最高値の回復に最長約${f.longestYears}年（${ymJ(f.longestFrom)}〜${f.longestTo ? ymJ(f.longestTo) : '未回復'}）`,
-    `50%を超える暴落は${f.crash50}回（最大${pctT(f.maxDD)}）`,
+    `50%を超える歴史的暴落は${f.crash50}回（最大${pctT(f.maxDD)}）`,
     `${f.year}年はすでに${f.athThisYear}回、最高値を更新`,
   ];
   const narration = `最後に、過去${f.years}年のデータで分かったことを整理します。${items.join('。')}。`;
-  const reading = `さいごに、かこ、${intR(f.years)}ねんの、でーたで、わかったことを、せいりします。しすうは、${intR(f.years)}ねんで、やく、${intR(f.multiple)}ばい、ねんりつ、${pctR(f.cagr)}に、せいちょう。ねんかんの、とうらくりつが、まいなすの、としは、${numR(f.negativeYearShare)}ぱーせんと。でぃーでぃー、まいなす、さんぱーせんと、とうたつは、ねんに、${numR(f.dd3PerYear)}かい、そのうち、${numR(f.dd5Share)}ぱーせんとが、まいなす、ごぱーせんとまで、しんこう。さいたかねの、かいふくに、さいちょう、やく、${numR(f.longestYears)}ねん。ごじゅっぱーせんとを、こえる、ぼうらくは、${intR(f.crash50)}かい。${intR(f.year)}ねんは、すでに、${intR(f.athThisYear)}かい、さいたかねを、こうしん。`;
+  const reading = `さいごに、かこ、${intR(f.years)}ねんの、でーたで、わかったことを、せいりします。しすうは、${intR(f.years)}ねんで、やく、${intR(f.multiple)}ばい、ねんりつ、${pctR(f.cagr)}に、せいちょう。ねんかんの、とうらくりつが、まいなすの、としは、${numR(f.negativeYearShare)}ぱーせんと。でぃーでぃー、まいなす、さんぱーせんと、とうたつは、ねんに、${numR(f.dd3PerYear)}かい、そのうち、${numR(f.dd5Share)}ぱーせんとが、まいなす、ごぱーせんとまで、しんこう。さいたかねの、かいふくに、さいちょう、やく、${numR(f.longestYears)}ねん。ごじゅっぱーせんとを、こえる、れきしてき、ぼうらくは、${intR(f.crash50)}かい。${intR(f.year)}ねんは、すでに、${intR(f.athThisYear)}かい、さいたかねを、こうしん。`;
   return scene('まとめ：分かった事実', `過去${f.years}年間で分かった、6つの事実`, narration, reading, {
     ...emptyVisual('summary'), heading: `過去${f.years}年間で分かった、6つの事実`, subheading: `${label}・${f.startYear}〜${f.year}年の実績`, source: SRC(label, sheets),
     items: items.map((t) => ({ label: t, value: '', text: '', icon: 'check' as const })),

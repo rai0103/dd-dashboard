@@ -367,7 +367,7 @@ function buildPhase2Analysis(d, items, notes) {
   items.push({ text: `DD-3%到達：${dd3Str}（ATHの${fmtYMD(d.athDate)}から${daysAthToDd3 !== null ? daysAthToDd3 : "—"}日）・現在DD${d.currentDD.toFixed(1)}%`, link: ANALYSIS_LINK_SPEED });
   const athStat = findAthToDd3Stat(daysAthToDd3);
   if (athStat) {
-    items.push({ text: `同程度の期間（${athToDd3RangeLabel(athStat)}、n=${athStat.n}）：DD-5%到達${athStat.reach5Rate.toFixed(1)}%（平均${athStat.speedMeanDays.toFixed(1)}日）・最終DD平均${athStat.finalDDMean.toFixed(1)}%／中央値${athStat.finalDDMedian.toFixed(1)}%・大暴落（DD-15%以上）${athStat.crash15Rate.toFixed(1)}%`, link: ANALYSIS_LINK_SPEED });
+    items.push({ text: `同程度の期間（${athToDd3RangeLabel(athStat)}、n=${athStat.n}）：DD-5%到達${athStat.reach5Rate.toFixed(1)}%（平均${athStat.speedMeanDays.toFixed(1)}日）・最終DD平均${athStat.finalDDMean.toFixed(1)}%／中央値${athStat.finalDDMedian.toFixed(1)}%・DD-15%以上の下落${athStat.crash15Rate.toFixed(1)}%`, link: ANALYSIS_LINK_SPEED });
     notes.push(lowSampleNote(athStat, `${athToDd3RangeLabel(athStat)}したケース`));
   }
   const daysSinceDD3 = d.daysSinceDDStart;
@@ -451,10 +451,10 @@ function dayChangePct(dObj) {
   const prevPrice = dObj.FULL[dObj.FULL.length - 2].price;
   return ((dObj.last.price / prevPrice) - 1) * 100;
 }
-// 現在のDD（ドローダウン）の深さを「調整・下落・暴落・大暴落・歴史的暴落」の5段階に分類し（lib/ddCategory.tsの共通定義）、
+// 現在のDD（ドローダウン）の深さを「小幅な下落・軽い調整・小幅調整・調整・弱気相場・暴落・歴史的暴落」に分類し（lib/ddCategory.tsの共通定義）、
 // その節目の発生頻度（年に1度程度）をcrashFrequency（閾値は-10%〜-45%までしか無い）から引いて返す。
-// 歴史的暴落（-50%）の節目はcrashFrequencyに該当行が無いため、頻度の参照だけ実データの最深値-45%の行にクランプする
-// （カテゴリーの境界自体は-50%のまま。頻度表示のみの便宜的な代用）。
+// crashFrequencyは-10%〜-45%の行しか無いため、-10%より浅い呼び名（小幅な下落〜小幅調整）は頻度なし、
+// -45%より深い節目は-45%の行で代用する（呼び名の境界そのものは lib/ddCategory.ts の定義のまま）。
 function ddCategoryInfo(currentDD, crashFrequency) {
   const bucket = classifyDdCategory(currentDD);
   const lookupThreshold = Math.max(bucket.thresholdPct, -45);
@@ -468,8 +468,9 @@ function recentNTradingDays(FULL, n) {
 // 動画制作（主にショート動画の冒頭スライド用）の、前日比・現在のDD分類・直近7営業日をまとめたナレーション文。
 function buildOpeningSlideNarration(dayChg, currentDD, ddCat) {
   const chgText = dayChg !== null ? `${dayChg >= 0 ? "+" : ""}${dayChg.toFixed(2)}%` : "—";
-  const freqText = ddCat.avgIntervalYears != null ? `${ddCat.avgIntervalYears}年に1度` : "頻度不明";
-  return `S&P500は、前日比${chgText}、現在のDD（ドローダウン）は${currentDD.toFixed(1)}%で、${freqText}程度発生する${ddCat.label}（DD${ddCat.thresholdPct}%超）の水準です。直近7営業日のチャートを動的折れ線グラフで表示します。`;
+  const freqText = ddCat.avgIntervalYears != null ? `${ddCat.avgIntervalYears}年に1度程度発生する` : "";
+  const range = ddCat.thresholdPct === 0 ? "DD-3%未満" : `DD${ddCat.thresholdPct}%以上`;
+  return `S&P500は、前日比${chgText}、現在のDD（ドローダウン）は${currentDD.toFixed(1)}%で、${freqText}${ddCat.label}（${range}）の水準です。直近7営業日のチャートを動的折れ線グラフで表示します。`;
 }
 
 /* ---------------- トラックレコード統計（読み込まれている実データから都度算出） ---------------- */
@@ -480,7 +481,7 @@ const SPEED_BUCKETS = [
   { label: "3日以内", min: 0, max: 3 }, { label: "4〜5日", min: 4, max: 5 }, { label: "6〜10日", min: 6, max: 10 },
   { label: "11〜20日", min: 11, max: 20 }, { label: "21日超", min: 21, max: Infinity },
 ];
-const CRASH_THRESHOLDS = [-15, -20, -30, -40, -50]; // バックテスト表の「大暴落率」列（最終DD到達水準別）
+const CRASH_THRESHOLDS = [-15, -20, -30, -40, -50]; // バックテスト表の「深い下落の到達率」列（最終DD到達水準別）
 // 速度バケット内の各エピソード（{ep, speed35}）について、閾値ごとの最終到達率（%）を計算する。
 // ep.troughDD（最終的な最大ドローダウン）を閾値と比較する点は既存の「DD-15%以上」列と同じロジックで、閾値だけを配列で拡張している。
 function calcCrashRatesByThreshold(episodesInBucket, thresholds) {
@@ -513,7 +514,7 @@ function median(arr) {
   return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
 }
 // DD-3%圏への「複数回出入り」統計（動的算出版）。完了エピソード（dd3Episodes=findDDEpisodes(FULL,-3)の完了分）を
-// countDd3Entriesで求めた突入回数ごとにグルーピングし、回数別の最終DD中央値・平均期間・大暴落率を求める。
+// countDd3Entriesで求めた突入回数ごとにグルーピングし、回数別の最終DD中央値・平均期間・DD-15%以上の到達率を求める。
 // 5回以上は「5+」ビンとして1グループにまとめる（個々のnが小さく、特殊な長期停滞相場を含みやすいため）。
 function computeDd3EntryStats(FULL, dd3Episodes) {
   const rows = dd3Episodes.filter((e) => !e.isOngoing).map((e) => ({
@@ -712,7 +713,7 @@ function computeSpeedAlert(FULL, last, episode, currentDD, trackRecord) {
     const daysSinceDD3 = idx3 !== -1 ? last.i - idx3 : null;
     let hint = null;
     if (daysSinceDD3 !== null) {
-      if (daysSinceDD3 >= 21) hint = "緩慢な滑り出し（大暴落の兆候は薄い）";
+      if (daysSinceDD3 >= 21) hint = "緩慢な滑り出し（深い下落の兆候は薄い）";
       else if (daysSinceDD3 <= 3) hint = "速い滑り出し、DD5%到達に注意";
     }
     return { level: "pending5", currentDD, d3Date, daysSinceDD3, hint };
@@ -1745,7 +1746,7 @@ const AUTO_EPISODE_LIST_FROM = "2025-02-01";
 const ONGOING_CRASH_COLOR = C.amber;
 // KNOWN_CRASH_META・MINOR_EPISODE_METAに登録の無い局面（AUTO_EPISODE_LIST_FROM以降）の名称を、下落の深さと底値までの速さから自動生成する。
 function autoEpisodeName(maxDD, troughDay, isOngoing) {
-  const depth = maxDD <= -20 ? "弱気相場" : maxDD <= -10 ? "調整局面" : maxDD <= -5 ? "押し目" : "小幅な押し目";
+  const depth = classifyDdCategory(maxDD).label; // 下落の呼び名は lib/ddCategory.ts の定義に統一（軽い調整・小幅調整・調整・弱気相場・暴落…）
   const speed = troughDay <= 10 ? "急落型の" : troughDay >= 40 ? "長期化した" : "";
   return `${isOngoing ? "" : speed}${depth}`; // 進行中は底値が未確定のため速さの形容は付けない
 }
@@ -2990,7 +2991,7 @@ function findBoxStat(days) {
 }
 // ATH→DD-3%到達までの所要日数バケット別統計（S&P500実績に基づく）。
 // 「今回の下落がATHからどれくらいの期間をかけてDD-3%に至ったか」で過去エピソードを分類し、
-// その後の展開（DD-5%到達率・所要日数・最終下落幅・大暴落率）の傾向を示す。
+// その後の展開（DD-5%到達率・所要日数・最終下落幅・深い下落の到達率）の傾向を示す。
 const ATH_TO_DD3_STATS = [
   { minDays: 0, maxDays: 10, n: 83, reach5Rate: 51.8, speedMeanDays: 6.6, speedMedianDays: 5.0, finalDDMean: -8.8, finalDDMedian: -5.3, crash15Rate: 12.0 },
   { minDays: 11, maxDays: 20, n: 26, reach5Rate: 50.0, speedMeanDays: 7.0, speedMedianDays: 5.0, finalDDMean: -9.9, finalDDMedian: -5.1, crash15Rate: 19.2 },
@@ -3648,7 +3649,7 @@ function SpeedAlertModalContent({ d, instrumentLabel = "VOO", vooSeries = null, 
       )}
 
       <div>
-        <div className="text-xs mb-2" style={{ color: C.textDim }}>バックテスト：DD3→5%の速度別・大暴落率（最終DD到達水準別）（{instrumentLabel}{instrumentLabel === "日経平均" ? "（1949年5月からの日次の長期履歴）" : `（上場前は${instrumentLabel === "QQQ" ? "NDX指数をQQQ" : "SP500指数をVOO"}換算した長期履歴）`}のデータ 約{d.trackRecord.totalYears.toFixed(0)}年・DD5%到達{d.trackRecord.reachedD5Count}局面）</div>
+        <div className="text-xs mb-2" style={{ color: C.textDim }}>バックテスト：DD3→5%の速度別・深い下落の到達率（最終DD到達水準別）（{instrumentLabel}{instrumentLabel === "日経平均" ? "（1949年5月からの日次の長期履歴）" : `（上場前は${instrumentLabel === "QQQ" ? "NDX指数をQQQ" : "SP500指数をVOO"}換算した長期履歴）`}のデータ 約{d.trackRecord.totalYears.toFixed(0)}年・DD5%到達{d.trackRecord.reachedD5Count}局面）</div>
         <div className="overflow-x-auto">
           <table className="w-full text-xs mono" style={{ minWidth: 560 }}>
             <thead><tr style={{ color: C.textDim }}>
@@ -3672,7 +3673,7 @@ function SpeedAlertModalContent({ d, instrumentLabel = "VOO", vooSeries = null, 
         </div>
         <div className="text-[10px] mt-1.5" style={{ color: C.textDim }}>
           {d.trackRecord.crashEpisodeCount > 0
-            ? `大暴落${d.trackRecord.crashEpisodeCount}件のうち${d.trackRecord.crashFastCount}件（${d.trackRecord.crashFastShare}%）が「5日以内の急落型」で始まりました。`
+            ? `DD-15%以上の局面${d.trackRecord.crashEpisodeCount}件のうち${d.trackRecord.crashFastCount}件（${d.trackRecord.crashFastShare}%）が「5日以内の急落型」で始まりました。`
             : "読み込まれているデータには最終DD-15%以上に達した局面がまだありません。"}
           　※統計は過去傾向であり将来を保証するものではありません
         </div>
@@ -3683,7 +3684,7 @@ function SpeedAlertModalContent({ d, instrumentLabel = "VOO", vooSeries = null, 
       <div className="text-[11px] leading-relaxed rounded px-3 py-2" style={{ color: C.textDim, background: C.panel2, border: `1px solid ${C.borderSoft}` }}>
         <div className="font-semibold mb-1" style={{ color: C.textMuted }}>重要な限界（必ずお読みください）</div>
         ・急落警報（5日以内）は{d.trackRecord.fastMissRate !== null ? `${d.trackRecord.fastMissRate}%` : "多くの場合"}が空振り（浅く終わる）です。「確信」ではなく「警戒レベルを上げる」材料として使ってください。<br />
-        ・緩やかに始まる大暴落もあります（2007年金融危機はspeed_3to5=13日で最終DD-57%でした）。緩慢でも油断しないでください。<br />
+        ・緩やかに始まる歴史的暴落もあります（2007年金融危機はspeed_3to5=13日で最終DD-57%でした）。緩慢でも油断しないでください。<br />
         ・DD8%突破後は速度の予測力が落ち、節目の進行確率（上表）が判断の主役になります。<br />
         ・現在のDD%・速度計測は{instrumentLabel}の評価額、確率・バックテストは{instrumentLabel}{instrumentLabel === "日経平均" ? "（1949年5月からの日次の長期履歴）" : `（上場前は${instrumentLabel === "QQQ" ? "NDX指数をQQQ" : "SP500指数をVOO"}換算した長期履歴）`}のトラックレコード（約{d.trackRecord.totalYears.toFixed(0)}年・DD3%到達{d.trackRecord.n}局面）から都度算出した傾向であり、確定予測ではありません。データをアップロード・更新すると自動的に再計算されます。DD深度・金の動き・自己の判断と併用する補助指標です。本ツールは投資助言ではなく判断補助です。
       </div>
@@ -3981,7 +3982,7 @@ function ModelDebugContent({ d, dQqq, qqqAmplification }) {
       <div className="mono text-[10px]">
         <div>全体n={tr.dd3EntryStats.n}・複数回出入り率{tr.dd3EntryStats.overallRate ?? "算出不可"}%・相関（回数×最終DD）{tr.dd3EntryStats.correlations.entriesVsFinalDD}・相関（回数×期間）{tr.dd3EntryStats.correlations.entriesVsDuration}</div>
         {tr.dd3EntryStats.stats.map((s) => (
-          <div key={s.entries}>{s.entries >= 5 ? "5回以上" : `${s.entries}回`}: n={s.n} 最終DD中央値{s.finalDDMedian}% 平均期間{s.avgDurationDays}日 大暴落率{s.crash15Rate}%{s.lowSample ? "（参考値）" : ""}</div>
+          <div key={s.entries}>{s.entries >= 5 ? "5回以上" : `${s.entries}回`}: n={s.n} 最終DD中央値{s.finalDDMedian}% 平均期間{s.avgDurationDays}日 DD-15%以上{s.crash15Rate}%{s.lowSample ? "（参考値）" : ""}</div>
         ))}
       </div>
 

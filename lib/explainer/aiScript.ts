@@ -3,6 +3,7 @@
 // 参考資料（PDF・URL本文・テキスト）は毎回同じ先頭部分として渡し、プロンプトキャッシュで再利用する。
 import { callTool } from './aiClient';
 import { ICON_NAMES, VISUAL_KINDS, FIXED_ONLY_KINDS } from './types';
+import { DD_CATEGORY_GUIDE } from '../ddCategory';
 import type { ChapterPlan, ExplainerProject, ExplainerScene, GlossTerm, SourceNote, StockCatalog, YoutubeMeta } from './types';
 import { assembleLong, normalizeScene, sanitizeReading, fixBannedWording, stripRefMarks, stripRefMarksReading, applyGlossary, glossPrefix } from './scriptModel';
 import { resolveYearCompareItems, resolveCatalogKey } from './stockCatalog';
@@ -94,6 +95,7 @@ const SYSTEM_RULES = [
   '- 一般常識として確立した基礎知識（用語の定義・仕組み）は補ってよいが、断定しにくいことは「〜とされています」「〜という見方があります」と表現する。',
   '- 意見が分かれる話題は、特定の立場に偏らず、主な見方を並べて紹介する。',
   '- バージョン番号（8.4.27 等）・日付・型番は量ではないので、数値の図解（number・bar・line・donut）にしない（points・timeline 等で表す）。unit は短く（%・兆円・万人・倍 など4文字以内）。',
+  `- 株価や指数が最高値からどれだけ下がったか（ドローダウン、DD）を言葉で表すときは、呼び名を次に統一する（他の言い方に変えない）：${DD_CATEGORY_GUIDE}。`,
   '- 「ダッシュボード」という語は一般には意味が伝わりにくいため使わない。「過去の実績」「過去のデータ」のように言い換える。',
   '- 数値を使う図解（number・bar・line・donut）は、参考資料にある数値だけを使い、visual.source に資料の発行元・名称（例：総務省 情報通信白書）を必ず書く。資料に数値がなければ数値の図解は使わない。',
   '- 参考資料には「参考1」「参考2」…の番号が付いているが、これは制作用の整理番号。ナレーション・読み上げ文・テロップ・図解の文字・visual.source・sources のどこにも「参考1」「添付2」「資料3」「（参考1）」のような番号を書かない。出典を示すときは発行元や媒体の名前（例：「総務省の発表によると」「日本経済新聞の報道では」）で言う。',

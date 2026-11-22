@@ -240,14 +240,14 @@ test("buildVideoLongform：dayChange/finalReach（Stage D-6）がtrackRecordか�
   assert.equal(dc!.pct, result.stats!.dayChange);
   assert.equal(dc!.ddPct, result.stats!.dd);
   assert.equal(dc!.isNewAth, result.stats!.dd >= -0.005);
-  assert.ok(["調整", "下落", "暴落", "大暴落", "歴史的暴落"].includes(dc!.category.label));
+  assert.ok(["小幅な下落", "軽い調整", "小幅調整", "調整", "弱気相場", "暴落", "歴史的暴落"].includes(dc!.category.label));
   assert.equal(dc!.recent7.length, 7, "直近7営業日が入る");
   assert.deepEqual(
     dc!.recent7.map((pt) => pt.price),
     FULL.slice(-7).map((pt) => pt.price),
   );
-  // 調整カテゴリー（-3%行、p=100、ddFreqPerYear=2）なら、年に2.0回程度の頻度になる
-  if (dc!.category.label === "調整") {
+  // -3%行を使う呼び名（小幅な下落・軽い調整。p=100、ddFreqPerYear=2）なら、年に2.0回程度の頻度になる
+  if (dc!.category.label === "小幅な下落" || dc!.category.label === "軽い調整") {
     assert.equal(dc!.category.freqPerYear, 2);
     assert.equal(dc!.category.freqLabel, "年に2.0回");
   }
