@@ -1,4 +1,5 @@
 // 動画の書き出し（Canvas + BGM を MediaRecorder で録画）。FFmpeg などの外部ライブラリは使わない
+import { fixWebmDuration } from './webmDuration';
 
 export interface RecordingHandle {
   mimeType: string;
@@ -44,15 +45,28 @@ export class VideoExporter {
       audioBitsPerSecond: 128_000,
     });
     recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+    // 録画した長さ（ミリ秒）。WebMには長さが書かれないため、止めた後にこの値をファイルへ書き足す
+    // （開始イベントは最初のコマより遅れて届くため、start()を呼ぶ直前の時刻を使う）
+    const t0 = performance.now();
     recorder.start(500);
 
     return {
       mimeType: picked.mime,
       extension: picked.ext,
       stop: () => new Promise<Blob>((resolve, reject) => {
-        recorder.onstop = () => {
+        const stopAt = performance.now();
+        recorder.onstop = async () => {
           tracks.forEach(t => t.stop());
-          resolve(new Blob(chunks, { type: picked.mime.split(';')[0] }));
+          const type = picked.mime.split(';')[0];
+          const raw = new Blob(chunks, { type });
+          if (picked.ext !== 'webm') { resolve(raw); return; }
+          // YouTubeがショート（縦型・3分以内）と判定できるよう、WebMに動画の長さを書き込む（失敗したら元のまま）
+          try {
+            const fixed = fixWebmDuration(new Uint8Array(await raw.arrayBuffer()), stopAt - t0);
+            resolve(new Blob([fixed as BlobPart], { type }));
+          } catch {
+            resolve(raw);
+          }
         };
         recorder.onerror = (ev: any) => reject(new Error(`録画エラー: ${ev?.error?.message ?? 'unknown'}`));
         if (recorder.state !== 'inactive') recorder.stop();
