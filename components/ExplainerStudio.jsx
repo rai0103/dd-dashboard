@@ -7,6 +7,7 @@
 // 違い：台本は「テーマ＋参考情報（テキスト・URL・PDF）」からAIが作る。図解はすべて自作の図形・アイコンで描く（著作権・肖像権への配慮）。
 import { useEffect, useMemo, useRef, useState } from "react";
 import { fixHaForTts } from "@/lib/explainer/kanaFix";
+import { loadReadingDict, saveReadingDict, upsertReading, removeReading, onReadingDictChange, applyReadingDict, applyReadingDictToText, BUILTIN_READINGS } from "@/lib/explainer/readingDict";
 import NarrMixedBox from "@/components/NarrMixedBox";
 import FreeImagePicker from "@/components/FreeImagePicker";
 import LowPolyModal from "@/components/LowPolyModal";
@@ -23,7 +24,7 @@ import { listBackgrounds, saveBackground, deleteBackground } from "@/lib/videoBa
 import { listAvatars, saveAvatar, deleteAvatar, newAvatar, MAX_CLIPS } from "@/lib/videoAvatarLibrary";
 import { VideoAvatar } from "@/lib/videoAvatarRender";
 import { ExplainerRenderer, RENDER_SIZE, VISUAL_SIZE } from "@/lib/explainer/renderer";
-import { generateProject, generateShort, rewriteScene, rewriteNarration, applyLearnedEdit, updateReadingForEdit, planSceneImages, matchRequiredImages, extractPurchasesFromImages, weeklyKindGuard, CHARS_PER_MIN } from "@/lib/explainer/aiScript";
+import { generateProject, generateShort, rewriteScene, rewriteNarration, applyLearnedEdit, updateReadingForEdit, extractReadingFixes, planSceneImages, matchRequiredImages, extractPurchasesFromImages, weeklyKindGuard, CHARS_PER_MIN } from "@/lib/explainer/aiScript";
 import { pickImageScenes, splitFreeAi, canHaveImage, spreadPick } from "@/lib/explainer/autoImages";
 import { AiClientError } from "@/lib/explainer/aiClient";
 import { referenceBlocks, referenceTexts, fetchUrlReference, fileToBase64, newRefId, refLabel, requiredRefNotes, MAX_PDF_BYTES } from "@/lib/explainer/references";
@@ -92,9 +93,11 @@ const sliderInitValue = (key, fallback) => { const l = loadSliderLocks(); return
 // （以前に作った台本の読み上げ文や、読み上げ文が未更新でナレーションをそのまま読む場合にも効くように）。
 // 音声合成に渡す文。読み上げ文（ひらがな）は、「推進派は」→「すいしんはは」が「すいしんわわ」と読まれないよう、
 // 漢字の読みの最後の「は」をカタカナにしてから渡す（lib/explainer/kanaFix.ts。画面の読み上げ文は変えない）
-const ttsText = (sc) => applyTermReadings(sc.readingStale || !sc.reading ? sc.narration : fixHaForTts(sc.reading, sc.narration));
+// 読み方辞書（lib/explainer/readingDict.ts）：読み上げ文の間違った読みを直し、ナレーションをそのまま読む場合は語を読みに置き換える
+const ttsText = (sc) => applyTermReadings(sc.readingStale || !sc.reading ? applyReadingDictToText(sc.narration) : fixHaForTts(applyReadingDict(sc.reading, sc.narration), sc.narration));
 // テキスト欄の高さを中身に合わせる（スクロールバーを出さずに全文を表示する）
 const fitTextarea = (el) => { if (!el) return; el.style.height = "auto"; el.style.height = `${el.scrollHeight + 2}px`; };
+const katakanaToHiraganaLocal = (t) => String(t || "").replace(/[ァ-ヶ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x60));
 const fmtTime = (sec) => { const s = Math.max(0, Math.round(sec || 0)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
 const todayStr = () => { const d = new Date(); return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`; };
 const btn = (variant = "ghost") => variant === "primary"
@@ -1152,6 +1155,50 @@ export default function ExplainerStudio() {
     finally { setReadingBusyIds((prev) => { const n = new Set(prev); n.delete(sceneId); return n; }); }
     rememberEdit(sc, newNarr, newReading, base.narration);
   };
+  // 読み方辞書：読み上げ文を手で直したら、読み方の直しを覚えて次回以降の台本・読み上げに反映する
+  const [readingDict, setReadingDict] = useState([]);
+  useEffect(() => {
+    const off = onReadingDictChange(setReadingDict);
+    loadReadingDict(getTtsBaseUrl).then(setReadingDict).catch(() => {});
+    return off;
+  }, []);
+  const readingBaseRef = useRef({}); // 場面id → 直し始める前の読み上げ文
+  const [readingLearn, setReadingLearn] = useState(null); // { sceneId, entries, busy }
+  const [readingDictOpenId, setReadingDictOpenId] = useState(null);
+  const [dictWord, setDictWord] = useState("");
+  const [dictKana, setDictKana] = useState("");
+  const applyDictToScenes = () => setScenes((list) => list.map((x) => {
+    if (!x.reading || x.readingStale) return x;
+    const r2 = applyReadingDict(x.reading, x.narration);
+    return r2 === x.reading ? x : { ...x, reading: r2 };
+  }));
+  const handleReadingBlur = async (sceneId) => {
+    const before = readingBaseRef.current[sceneId];
+    delete readingBaseRef.current[sceneId];
+    const sc = scenes.find((x) => x.id === sceneId);
+    if (before == null || !sc || before === sc.reading || !sc.reading) return;
+    setReadingLearn({ sceneId, entries: [], busy: true });
+    let entries = [];
+    try { entries = await extractReadingFixes(sc.narration, before, sc.reading); } catch (e) { entries = []; }
+    if (!entries.length) { setReadingLearn(null); return; }
+    entries.forEach((e) => upsertReading(e));
+    saveReadingDict(getTtsBaseUrl);
+    applyDictToScenes(); // ほかの場面の同じ読み違いもすぐに直す
+    setReadingLearn({ sceneId, entries, busy: false });
+  };
+  const undoReadingLearn = () => {
+    (readingLearn?.entries || []).forEach((e) => removeReading(e));
+    saveReadingDict(getTtsBaseUrl);
+    setReadingLearn(null);
+  };
+  const addDictEntry = () => {
+    const w = dictWord.trim(), k = katakanaToHiraganaLocal(dictKana.trim());
+    if (!w || !/^[ぁ-ゟー]+$/.test(k)) return;
+    upsertReading({ word: w, reading: k, wrong: [], user: true });
+    saveReadingDict(getTtsBaseUrl);
+    setDictWord(""); setDictKana("");
+  };
+  const deleteDictEntry = (e) => { removeReading(e); saveReadingDict(getTtsBaseUrl); };
   // 場面ごとの「ナレーション変更」：スライド（図解）は変えず、ナレーションだけをAIで変える
   const [narrAiOpenId, setNarrAiOpenId] = useState(null);
   const [narrAiText, setNarrAiText] = useState("");
@@ -2048,6 +2095,8 @@ export default function ExplainerStudio() {
     (async () => {
       try {
         postStatus({ state: "running", message: "設定を読み込んでいます…", steps: addStep("開始", true) });
+        // 読み方辞書（制作者が直した読み）を、台本の生成より前に読み込んでおく
+        try { await loadReadingDict(getTtsBaseUrl); } catch (e) { /* 無くても進める */ }
 
         // ①保存先フォルダ（mode=videoのときのみ使う）を配信設定（/api/auto-schedule）から取得
         let outDir = "";
@@ -2909,15 +2958,49 @@ export default function ExplainerStudio() {
                               {/* 読み上げ文は全文を表示する（スクロールバーを出さず、文の長さに合わせて高さを自動で伸ばす） */}
                               <div className="rounded" style={{ background: C.panel }}>
                               <NarrMixedBox value={sc.reading} base={sc.reading}
-                                onChange={(t) => { if (isPlayingRef.current) handlePause(); patchScene(sc.id, { reading: t, readingStale: false }); }}
-                                onFocus={() => { if (isPlayingRef.current) handlePause(); }}
+                                onChange={(t) => { if (isPlayingRef.current) handlePause(); if (!(sc.id in readingBaseRef.current)) readingBaseRef.current[sc.id] = sc.reading; patchScene(sc.id, { reading: t, readingStale: false }); }}
+                                onBlur={() => handleReadingBlur(sc.id)}
+                                onFocus={() => { if (isPlayingRef.current) handlePause(); if (!(sc.id in readingBaseRef.current)) readingBaseRef.current[sc.id] = sc.reading; }}
                                 colors={{ text: C.text, border: C.borderSoft }}
                                 readUpTo={cur && isPlaying ? Math.round(readFrac * sc.reading.length) : null} />
                               </div>
                               <div className="text-[10px] flex items-center gap-2" style={{ color: C.textDim }}>
                                 音声はこの文（ひらがな）で読み上げます。ナレーションを直したら、ここも合わせて直すか「AI」で「読み上げ文を今のナレーションに合わせて」と指示してください。
                                 <button onClick={() => patchScene(sc.id, { reading: sanitizeReading(sc.reading, sc.narration).reading })} className="shrink-0" style={{ color: C.teal, background: "none", border: "none", cursor: "pointer" }}>整える</button>
+                                <button onClick={() => setReadingDictOpenId((v) => (v === sc.id ? null : sc.id))} className="shrink-0" style={{ color: C.teal, background: "none", border: "none", cursor: "pointer" }} title="読み違えやすい語の正しい読み。読み上げ文を手で直すと自動で覚えます">読み方辞書（{readingDict.length + BUILTIN_READINGS.length}語）</button>
                               </div>
+                              {readingLearn?.sceneId === sc.id && (
+                                <div className="text-[10px] flex items-center gap-2 mt-0.5" style={{ color: C.teal }}>
+                                  {readingLearn.busy ? "読み方の直しを確認中…" : (
+                                    <>
+                                      <Check size={10} /> 読み方を覚えました：{readingLearn.entries.map((e) => `${e.word || e.wrong.join("・")}＝${e.reading}${e.wrong.length ? `（「${e.wrong.join("・")}」と読まない）` : ""}`).join("、")}。次回以降の台本・読み上げにも反映します。
+                                      <button onClick={undoReadingLearn} className="underline" style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer", padding: 0 }}>取り消す</button>
+                                      <button onClick={() => setReadingLearn(null)} style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer", padding: 0 }}><X size={10} /></button>
+                                    </>
+                                  )}
+                                </div>
+                              )}
+                              {readingDictOpenId === sc.id && (
+                                <div className="mt-1 p-1.5 rounded flex flex-col gap-1 text-[10px]" style={{ background: C.panel, border: `1px solid ${C.borderSoft}`, color: C.text }}>
+                                  <div style={{ color: C.textDim }}>台本の生成時にAIへ指示し、生成後の読み上げ文と、読み上げの直前にも直します（夜間の自動生成でも使います）。</div>
+                                  <div className="flex flex-wrap gap-1">
+                                    {readingDict.map((e) => (
+                                      <span key={`u-${e.word}-${e.wrong.join("|")}`} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded" style={{ background: C.panel2 }}>
+                                        {e.word || e.wrong.join("・")}＝{e.reading}
+                                        <button onClick={() => deleteDictEntry(e)} title="この読み方を忘れる" style={{ color: C.textDim, background: "none", border: "none", cursor: "pointer", padding: 0 }}><X size={9} /></button>
+                                      </span>
+                                    ))}
+                                    {BUILTIN_READINGS.filter((b) => !readingDict.some((e) => e.word === b.word)).map((e) => (
+                                      <span key={`b-${e.word}`} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded" style={{ background: C.panel2, color: C.textDim }} title="組み込みの読み方">{e.word}＝{e.reading}</span>
+                                    ))}
+                                  </div>
+                                  <div className="flex items-center gap-1">
+                                    <input value={dictWord} onChange={(e) => setDictWord(e.target.value)} placeholder="語（例：続報）" className="w-28 px-1 py-0.5 rounded" style={inputStyle} />
+                                    <input value={dictKana} onChange={(e) => setDictKana(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addDictEntry(); }} placeholder="読み（ひらがな）" className="w-32 px-1 py-0.5 rounded" style={inputStyle} />
+                                    <button onClick={addDictEntry} className="px-1.5 py-0.5 rounded" style={btn("primary")}>追加</button>
+                                  </div>
+                                </div>
+                              )}
                             </div>
                           )}
                           {editVisualId === sc.id && (

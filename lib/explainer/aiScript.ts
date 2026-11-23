@@ -4,6 +4,7 @@
 import { callTool } from './aiClient';
 import { ICON_NAMES, VISUAL_KINDS, FIXED_ONLY_KINDS } from './types';
 import { DD_CATEGORY_GUIDE } from '../ddCategory';
+import { readingPromptLine, learnFromReadingEdit, type ReadingEntry } from './readingDict';
 import type { ChapterPlan, ExplainerProject, ExplainerScene, GlossTerm, SourceNote, StockCatalog, YoutubeMeta } from './types';
 import { assembleLong, normalizeScene, sanitizeReading, fixBannedWording, stripRefMarks, stripRefMarksReading, applyGlossary, glossPrefix } from './scriptModel';
 import { resolveYearCompareItems, resolveCatalogKey } from './stockCatalog';
@@ -175,6 +176,9 @@ function system(inp?: GenerateInput) {
   } else {
     blocks[0].cache_control = { type: 'ephemeral' };
   }
+  // 読み方辞書（制作者が直した読みを含む）。内容が変わってもキャッシュを壊さないよう、キャッシュ対象の後ろに足す
+  const rd = readingPromptLine();
+  if (rd) blocks.push({ type: 'text', text: rd });
   return blocks;
 }
 
@@ -964,6 +968,40 @@ export async function updateReadingForEdit(oldNarration: string, oldReading: str
   const rd = sanitizeReading(typeof r?.reading === 'string' ? r.reading : '', newNarration);
   if (!rd.ok) throw new Error('読み上げ文をひらがなにできませんでした。');
   return rd.reading;
+}
+
+/**
+ * 制作者が読み上げ文（ひらがな）を手で直したとき、読み違いの直しなら「語・正しい読み・間違った読み」を取り出す
+ * （読み方辞書に覚えさせ、次回以降の生成に反映するため）。言い回しの変更など読み方の直しでないものは返さない。
+ * AIが使えないときは、差分から推定する（learnFromReadingEdit）。
+ */
+export async function extractReadingFixes(narration: string, before: string, after: string, signal?: AbortSignal): Promise<ReadingEntry[]> {
+  try {
+    const r = await callTool<any>({
+      system: [{ type: 'text', text: 'あなたは日本語の読み仮名の校正者です。' }],
+      content: [{ type: 'text', text: [
+        '【ナレーション（漢字かな交じり）】' + narration,
+        '【直す前の読み上げ文（ひらがな）】' + before,
+        '【制作者が直した読み上げ文（ひらがな）】' + after,
+        '制作者が読み上げ文を直しました。直した箇所のうち「漢字の語の読み方の間違いを直したもの」を、ナレーションでの書き方（word：漢字・送りがなを含む語。例：続報、新たな）、',
+        '正しい読み（reading：wordに当たる部分だけのひらがな。例：ぞくほう、あらたな）、直す前の間違った読み（wrong：wordに当たる部分だけのひらがな。例：ぞっぽう、あたらしい）として列挙してください。',
+        '助詞の足し引き・言い回しの変更・読点の位置の変更など、語の読み方の直しでないものは含めないこと。該当が無ければ空の配列にすること。',
+      ].join('\n') }],
+      toolName: 'reading_fixes',
+      toolDescription: '読み上げ文の直しから、読み方の直し（語・正しい読み・間違った読み）を取り出す。',
+      inputSchema: { type: 'object', properties: { fixes: { type: 'array', items: { type: 'object', properties: { word: { type: 'string' }, reading: { type: 'string' }, wrong: { type: 'string' } }, required: ['word', 'reading', 'wrong'] } } }, required: ['fixes'] },
+      maxTokens: 600,
+      signal,
+    });
+    const list = Array.isArray(r?.fixes) ? r.fixes : [];
+    return list
+      .map((f: any) => ({ word: String(f?.word || '').trim(), reading: String(f?.reading || '').trim(), wrong: [String(f?.wrong || '').trim()].filter(Boolean), user: true }))
+      .filter((f: ReadingEntry) => f.word && /^[ぁ-ゟー]+$/.test(f.reading) && f.wrong.every((w) => /^[ぁ-ゟー]+$/.test(w) && w !== f.reading) && narration.includes(f.word));
+  } catch (e: any) {
+    if (e?.code === 'ABORTED') throw e;
+    const g = learnFromReadingEdit(before, after, narration);
+    return g ? [g] : [];
+  }
 }
 
 export interface GenerateProgress { step: string; done: number; total: number }

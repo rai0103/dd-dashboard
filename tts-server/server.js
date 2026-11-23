@@ -601,6 +601,32 @@ function sendJson(res, status, obj) {
   res.end(JSON.stringify(obj));
 }
 
+// 読み方辞書（続報→ぞくほう 等。lib/explainer/readingDict.ts）。手動の生成でも夜間の自動生成でも同じ辞書を使うため、ここに保存する
+function readingDictFile() { return path.join(autoBaseDir(), 'reading-dict.json'); }
+// GET /api/reading-dict -> 保存済みの項目の配列（無ければ []）
+async function handleGetReadingDict(req, res) {
+  if (!isLocal(req)) { sendJson(res, 403, { error: 'forbidden' }); return; }
+  try {
+    const list = JSON.parse(await fs.readFile(readingDictFile(), 'utf-8'));
+    sendJson(res, 200, Array.isArray(list) ? list : []);
+  } catch (e) {
+    sendJson(res, 200, []);
+  }
+}
+// POST /api/reading-dict [ { word, reading, wrong[] }, ... ] -> 丸ごと保存
+async function handlePostReadingDict(req, res) {
+  if (!isLocal(req)) { sendJson(res, 403, { error: 'forbidden' }); return; }
+  const body = await readJsonBody(req);
+  if (!Array.isArray(body)) { sendJson(res, 400, { ok: false, error: '配列を送ってください' }); return; }
+  try {
+    await fs.mkdir(autoBaseDir(), { recursive: true });
+    await fs.writeFile(readingDictFile(), JSON.stringify(body.slice(0, 300), null, 2));
+    sendJson(res, 200, { ok: true });
+  } catch (e) {
+    sendJson(res, 500, { ok: false, error: e && e.message ? e.message : String(e) });
+  }
+}
+
 // GET /api/auto-schedule            -> 保存済みの設定（auto.json）。無ければ null
 // GET /api/auto-schedule?tasks=1    -> Windowsに登録済みのタスク一覧
 async function handleGetAutoSchedule(req, res) {
@@ -819,6 +845,8 @@ const server = http.createServer((req, res) => {
   if (pathname === '/api/free-images/rank' && req.method === 'POST') { handlePostFreeImageRank(req, res); return; }
   if (pathname === '/api/free-image-proxy' && req.method === 'GET') { handleGetFreeImageProxy(req, res); return; }
   if (pathname === '/api/fetch-url' && req.method === 'GET') { handleFetchUrl(req, res); return; }
+  if (pathname === '/api/reading-dict' && req.method === 'GET') { handleGetReadingDict(req, res); return; }
+  if (pathname === '/api/reading-dict' && req.method === 'POST') { handlePostReadingDict(req, res); return; }
   if (pathname === '/api/auto-schedule' && req.method === 'GET') { handleGetAutoSchedule(req, res); return; }
   if (pathname === '/api/auto-schedule' && req.method === 'POST') { handlePostAutoSchedule(req, res); return; }
   if (pathname === '/api/auto-status' && req.method === 'GET') { handleGetAutoStatus(req, res); return; }

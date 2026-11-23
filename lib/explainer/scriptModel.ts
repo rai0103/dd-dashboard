@@ -1,5 +1,6 @@
 // 台本データの検証・補正・組み立て（AIやブラウザに依存しない純粋な関数。lib/explainer/scriptModel.test.ts でテスト）。
 import { ICON_NAMES, VISUAL_KINDS, emptyVisual } from './types.ts';
+import { applyReadingDict } from './readingDict.ts';
 import type { ChapterPlan, ExplainerProject, ExplainerScene, GlossTerm, IconName, ImageCredit, SourceNote, VisualItem, VisualKind, VisualSpec } from './types.ts';
 export type { GlossTerm };
 
@@ -135,6 +136,8 @@ export function sanitizeReading(reading: string, narration: string): { reading: 
   // 「だっしゅぼーど」は「ダッシュボード」の読みそのものなので、同じく「過去の実績」の読みに置き換える。
   r = r.replace(/さいこうね/g, 'さいたかね').replace(/からく(?!り)/g, 'げらく').replace(/だっしゅぼーど/g, 'かこのじっせき');
   r = applyTermReadings(r);
+  // 読み方辞書（続報→ぞくほう 等。制作者が読み上げ文を直して覚えさせた読みも含む）で、間違った読みを直す
+  r = applyReadingDict(r, narration);
   if (r && isKanaReading(r)) return { reading: r, ok: true };
   return { reading: narration, ok: false };
 }
