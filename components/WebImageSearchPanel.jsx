@@ -2,6 +2,8 @@
 
 // [Web画像検索] スライドに人物・建物・地名などが出てくるとき、通常の画像検索（Google・Bing。著作権フリーに限らない）を
 // 別のタブで開き、見つけた画像を「画面を撮影」または「貼り付け（Win+Shift+S で切り取った画像）」で取り込む。
+// 画像検索のタブで Win+Shift+S で切り取ってこのタブに戻ると、新しい画像をクリップボードから自動で読み、
+// そのまま範囲を選ぶ画面（貼り付け画面）を開く（開いた時点でクリップボードにあった古い画像では開かない）。
 // 取り込んだ画像はそのまま加工（ポリゴン風／ボカシ）の画面へ進む（呼び出し側の onImage）。
 // ネット上の画像は著作権・肖像権があるため、加工しないまま使うと注意を表示する（呼び出し側）。
 import { useEffect, useRef, useState } from "react";
@@ -40,6 +42,23 @@ async function captureScreen() {
   }
 }
 
+/** クリップボードの画像を読む（無ければnull。読めない・許可が無いときは例外） */
+async function peekClipboardImage() {
+  const items = await navigator.clipboard.read();
+  for (const it of items) {
+    const t = it.types.find((x) => x.startsWith("image/"));
+    if (t) return await it.getType(t);
+  }
+  return null;
+}
+/** 画像の見分け用の印（大きさ＋先頭部分のハッシュ） */
+async function sigOf(b) {
+  const u = new Uint8Array(await b.slice(0, 8192).arrayBuffer());
+  let h = 2166136261;
+  for (let i = 0; i < u.length; i++) { h ^= u[i]; h = Math.imul(h, 16777619) >>> 0; }
+  return `${b.size}:${h}`;
+}
+
 /** クリップボードの画像を読む（Win+Shift+S で切り取った画像など） */
 async function readClipboardImage() {
   if (!navigator.clipboard?.read) throw new Error("このブラウザはクリップボードの読み取りに対応していません。この画面で Ctrl+V を押してください。");
@@ -60,6 +79,42 @@ export default function WebImageSearchPanel({ texts, defaultQuery = "", extractN
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
   const touched = useRef(false);
+  // 自動の貼り付け："checking"（確認中）／"on"（使える）／"off"（クリップボードの読み取りが許可されていない等）
+  const [autoPaste, setAutoPaste] = useState("checking");
+  const seenRef = useRef(new Set()); // 取り込み済み・開いた時点にあった画像の印
+  const shotRef = useRef(null);
+  useEffect(() => { shotRef.current = shot; }, [shot]);
+  const take = async (b) => { try { seenRef.current.add(await sigOf(b)); } catch (e) { /* ignore */ } setError(""); setShot(b); };
+
+  // 開いた時点でクリップボードにある画像は「前の切り取り」として覚えておく（これで勝手に開かないように）。
+  // この読み取りで、初回はブラウザが「クリップボードの読み取り」の許可を求める
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      if (!navigator.clipboard?.read) { setAutoPaste("off"); return; }
+      try { const b = await peekClipboardImage(); if (b) seenRef.current.add(await sigOf(b)); if (live) setAutoPaste("on"); }
+      catch (e) { if (live) setAutoPaste("off"); }
+    })();
+    return () => { live = false; };
+  }, []);
+  // 画像検索のタブから戻ったとき（またはこのタブのまま切り取ったとき）、新しい画像があれば貼り付け画面を開く
+  useEffect(() => {
+    if (autoPaste !== "on") return;
+    let busy = false;
+    const check = async () => {
+      if (busy || shotRef.current || document.visibilityState !== "visible" || !document.hasFocus()) return;
+      busy = true;
+      try {
+        const b = await peekClipboardImage();
+        if (b && !seenRef.current.has(await sigOf(b)) && !shotRef.current) await take(b);
+      } catch (e) { /* 許可が無い・フォーカスが無い等は無視 */ }
+      finally { busy = false; }
+    };
+    window.addEventListener("focus", check);
+    document.addEventListener("visibilitychange", check);
+    const t = setInterval(check, 1500);
+    return () => { window.removeEventListener("focus", check); document.removeEventListener("visibilitychange", check); clearInterval(t); };
+  }, [autoPaste]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 開いたときに、スライドの文から人物・建物・地名を取り出して検索語の候補にする
   useEffect(() => {
@@ -79,7 +134,7 @@ export default function WebImageSearchPanel({ texts, defaultQuery = "", extractN
     const onPaste = (e) => {
       if (shot) return;
       const f = Array.from(e.clipboardData?.items || []).find((x) => x.type.startsWith("image/"))?.getAsFile();
-      if (f) { e.preventDefault(); setError(""); setShot(f); }
+      if (f) { e.preventDefault(); take(f); }
     };
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
@@ -94,7 +149,7 @@ export default function WebImageSearchPanel({ texts, defaultQuery = "", extractN
   };
   const doPaste = async () => {
     setError("");
-    try { setShot(await readClipboardImage()); }
+    try { await take(await readClipboardImage()); }
     catch (e) { setError(e?.name === "NotAllowedError" ? "クリップボードの読み取りが許可されませんでした。この画面で Ctrl+V を押してください。" : (e?.message || String(e))); }
   };
   const done = (blob) => {
@@ -136,6 +191,11 @@ export default function WebImageSearchPanel({ texts, defaultQuery = "", extractN
         <button onClick={doCapture} disabled={!!busy} className="px-2 py-0.5 rounded flex items-center gap-1" style={{ ...primary, opacity: busy ? 0.5 : 1 }} title="画像検索のタブを選んで1枚撮影し、使う範囲を選んでから加工の画面へ進みます"><Camera size={11} />画面を撮影して取り込む</button>
         <button onClick={doPaste} className="px-2 py-0.5 rounded flex items-center gap-1" style={ghost} title="Win+Shift+S で切り取った画像を貼り付けます（この画面で Ctrl+V でも可）"><ClipboardPaste size={11} />貼り付け（Win+Shift+S）</button>
         <span style={{ color: C.textDim }}>{busy || "取り込んだら、そのまま「ポリゴン風／ボカシ」の加工へ進みます。"}</span>
+      </div>
+      <div className="leading-snug" style={{ color: autoPaste === "on" ? C.teal : C.textDim }}>
+        {autoPaste === "on" ? "自動で貼り付け：画像検索のタブで Win+Shift+S で切り取ってこのタブに戻ると、範囲を選ぶ画面が自動で開きます。"
+          : autoPaste === "off" ? "自動の貼り付けは使えません（ブラウザでクリップボードの読み取りが許可されていません）。切り取ったあと、このタブで Ctrl+V を押すか「貼り付け」を押してください。アドレスバー左のアイコン →「クリップボード」を許可すると自動になります。"
+          : "クリップボードの読み取りを確認中…（初回はブラウザが許可を求めます。「許可」を押してください）"}
       </div>
       <div className="flex flex-wrap items-center gap-1">
         <span style={{ color: C.textMuted }}>出典</span>
