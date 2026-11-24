@@ -6,7 +6,7 @@
 // background（背景に敷く画像）のときは、実際のスライド（図解）を上に重ねて描き、背景の濃さ（透かし具合）も調整できる（場面の bgFit・bgOpacity）。
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { X, Check, Maximize, Minimize, RotateCcw, Move, Sparkles } from "lucide-react";
+import { X, Check, Maximize, Minimize, RotateCcw, Move, Sparkles, Droplets } from "lucide-react";
 import { drawFittedImage, drawVisual, setVisualLight, defaultBgOpacity, PALETTE } from "@/lib/explainer/visuals";
 import { VISUAL_SIZE } from "@/lib/explainer/renderer";
 
@@ -25,7 +25,7 @@ export function autoFitFor(img, W, H) {
   return cover > contain * 1.3 ? { mode: "contain", zoom: 1, x: 0, y: 0, motion: false } : { mode: "cover", zoom: 1, x: 0, y: 0, motion: true };
 }
 
-// onPolygon（任意）：「ポリゴン風に加工」を押したとき。今の見せ方を渡すので、呼び出し側で保存してから加工の画面へ進む
+// onPolygon（任意）：「ポリゴン風に加工」「ボカシ加工」を押したとき（3つ目の引数がtool："blur"＝ボカシ）。今の見せ方を渡すので、呼び出し側で保存してから加工の画面へ進む
 // background：背景に敷く画像の調整（scene＝重ねて描く場面、sceneImage＝その場面の画像（あれば）、light＝白い背景の配色、opacity＝今の濃さ）。
 // onApply(fit, opacity) で返す（画像の場面のときは opacity は使わない）
 export default function ImageFitModal({ img, fit, heading = "", portrait = false, full = false, onApply, onClose, onPolygon, background = false, scene = null, sceneImage = null, light = false, opacity }) {
@@ -84,6 +84,7 @@ export default function ImageFitModal({ img, fit, heading = "", portrait = false
         <div className="flex items-center gap-3 p-4" style={{ borderBottom: `1px solid ${C.border}` }}>
           <div className="mr-auto text-lg" style={{ color: C.text }}>{background ? "背景の画像の濃さ・サイズ・位置を調整" : "画像のサイズ・位置を調整"}</div>
           {onPolygon && <button className="text-sm px-3 py-1.5 rounded flex items-center gap-1" style={ghost} onClick={() => onPolygon(isAuto ? undefined : f, op)} title="実在の人物などを、三角形の面で塗り分けたポリゴン風の絵にします。加工したあと、この画面に戻って大きさ・位置を調整できます"><Sparkles size={14} />ポリゴン風に加工へ</button>}
+          {onPolygon && <button className="text-sm px-3 py-1.5 rounded flex items-center gap-1" style={ghost} onClick={() => onPolygon(isAuto ? undefined : f, op, "blur")} title="画像全体、または顔・看板などの範囲だけをぼかします。加工したあと、この画面に戻って大きさ・位置を調整できます"><Droplets size={14} />ボカシ加工へ</button>}
           <button className="text-sm px-3 py-1.5 rounded flex items-center gap-1" style={primary} onClick={() => onApply(isAuto ? undefined : f, op)}><Check size={14} />この見せ方にする</button>
           <button className="text-sm px-3 py-1.5 rounded flex items-center gap-1" style={ghost} onClick={onClose}><X size={14} />閉じる</button>
         </div>

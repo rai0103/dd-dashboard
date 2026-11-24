@@ -5,6 +5,7 @@ import { callTool } from './aiClient';
 import { ICON_NAMES, VISUAL_KINDS, FIXED_ONLY_KINDS } from './types';
 import { DD_CATEGORY_GUIDE } from '../ddCategory';
 import { readingPromptLine, learnFromReadingEdit, type ReadingEntry } from './readingDict';
+import { findProperNouns } from './properNouns';
 import type { ChapterPlan, ExplainerProject, ExplainerScene, GlossTerm, SourceNote, StockCatalog, YoutubeMeta } from './types';
 import { assembleLong, normalizeScene, sanitizeReading, fixBannedWording, stripRefMarks, stripRefMarksReading, applyGlossary, glossPrefix } from './scriptModel';
 import { resolveYearCompareItems, resolveCatalogKey } from './stockCatalog';
@@ -1001,6 +1002,43 @@ export async function extractReadingFixes(narration: string, before: string, aft
     if (e?.code === 'ABORTED') throw e;
     const g = learnFromReadingEdit(before, after, narration);
     return g ? [g] : [];
+  }
+}
+
+/** 画像検索の候補（人物・建物・地名・組織） */
+export interface ImageSearchName { name: string; kind: 'person' | 'building' | 'place' | 'org' | 'other'; query: string }
+
+/**
+ * スライドの文から、画像検索に使う人物名・建物名・地名・組織名を取り出す（Web画像検索の検索語の候補）。
+ * queryは画像検索にそのまま使える語（例：「ドイツ銀行 本社」「Christian Sewing」）。AIが使えないときは簡易な抽出で代わりにする。
+ */
+export async function extractImageSearchNames(texts: string[], signal?: AbortSignal): Promise<ImageSearchName[]> {
+  const body = texts.filter(Boolean).join('\n').slice(0, 1500);
+  const fallback = (): ImageSearchName[] => findProperNouns(texts).map((n) => ({ name: n, kind: 'other' as const, query: n }));
+  if (!body.trim()) return [];
+  try {
+    const r = await callTool<any>({
+      system: [{ type: 'text', text: 'あなたは報道写真の調査担当です。' }],
+      content: [{ type: 'text', text: [
+        '【スライドの文】',
+        body,
+        'この中に出てくる実在の人物名・建物名・地名・組織名（企業・国・機関）を、画像検索で写真を探す候補として最大6個挙げてください。',
+        'name は文中の書き方、kind は person／building／place／org／other、query は画像検索にそのまま入れる語（人物はフルネーム、建物・本社は「〇〇 本社」など。必要なら英語表記）。',
+        '一般名詞・抽象的な語（インフレ・株価・決算など）は含めない。該当が無ければ空の配列にすること。',
+      ].join('\n') }],
+      toolName: 'image_search_names',
+      toolDescription: 'スライドの文から、画像検索の候補になる固有名詞を取り出す。',
+      inputSchema: { type: 'object', properties: { names: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, kind: { type: 'string', enum: ['person', 'building', 'place', 'org', 'other'] }, query: { type: 'string' } }, required: ['name', 'kind', 'query'] } } }, required: ['names'] },
+      maxTokens: 500,
+      signal,
+    });
+    const list = (Array.isArray(r?.names) ? r.names : [])
+      .map((x: any) => ({ name: String(x?.name || '').trim().slice(0, 40), kind: (['person', 'building', 'place', 'org'].includes(x?.kind) ? x.kind : 'other') as ImageSearchName['kind'], query: String(x?.query || x?.name || '').trim().slice(0, 60) }))
+      .filter((x: ImageSearchName) => x.name && x.query);
+    return list.slice(0, 6);
+  } catch (e: any) {
+    if (e?.code === 'ABORTED') throw e;
+    return fallback();
   }
 }
 
