@@ -1269,10 +1269,18 @@ export default function ExplainerStudio() {
   // adjust：添付したあと、サイズ・位置の調整画面を開く（ファイル選択・ライブラリ・フリー素材。AIで生成した画像は枠に合わせて作るので開かない）
   // [背景に追加] slot="bg" のときは、スライドはそのままで背景に敷く（bgImageId）。それ以外は画像の場面に差し替える（imageId）
   const [pickSlot, setPickSlot] = useState("image");
-  // 場面ごとの「画像の追加先」（"image"＝スライドを画像に差し替え、"bg"＝背景に追加）。未選択は、表紙・章の扉なら背景、それ以外は差し替え
-  const [addSlots, setAddSlots] = useState({});
-  const addSlotOf = (sc) => addSlots[sc.id] || (BACKDROP_KINDS.includes(sc.visual?.kind) ? "bg" : "image");
-  const chooseAddSlot = (sceneId, slot) => { setAddSlots((m) => ({ ...m, [sceneId]: slot })); setPickSlot(slot); };
+  // 場面ごとに開いている画像の行（"image"＝画像・スライドの差し替え、"bg"＝背景の挿入、未設定＝閉じている）
+  const [openSlots, setOpenSlots] = useState({});
+  const openSlotOf = (sc) => openSlots[sc.id] || null;
+  const toggleAddSlot = (sceneId, slot) => {
+    const next = openSlots[sceneId] === slot ? null : slot;
+    setOpenSlots((m) => ({ ...m, [sceneId]: next }));
+    if (next) setPickSlot(next);
+    // 行を閉じた・切り替えたら、その場面で開いている選択画面（ライブラリ・フリー素材・画像検索）も閉じる
+    if (rightsPendingId === sceneId) setRightsPendingId(null);
+    if (freeOpenId === sceneId) setFreeOpenId(null);
+    if (webOpenId === sceneId) setWebOpenId(null);
+  };
   const [bgFitOpenId, setBgFitOpenId] = useState(null);
   const putSceneImage = (sceneId, imageId, slot) => setScenes((list) => list.map((s) => (s.id !== sceneId ? s
     : slot === "bg" ? { ...s, bgImageId: imageId, bgFit: undefined }
@@ -1409,10 +1417,11 @@ export default function ExplainerStudio() {
   const [imgGenBusyId, setImgGenBusyId] = useState(null);
   const [imgGenError, setImgGenError] = useState("");
   const genSceneImage = async (sc, slot = "image") => {
-    if (!sc.visual.imagePrompt) return;
+    // 画像の説明（台本の生成時にAIが用意）が無い場面は、スライドの見出しから作る
+    const prompt = sc.visual.imagePrompt || `An illustrative image for a Japanese news explainer slide about: ${[sc.visual.heading, sc.visual.subheading, sc.caption].filter(Boolean).join(" / ")}. No text, no letters, no logos, no real identifiable people.`;
     setImgGenBusyId(sc.id); setImgGenError("");
     try {
-      const blob = await generateImage(withStyleHint(sc.visual.imagePrompt, imageStyleHint), format === "short" ? "9:16" : "16:9");
+      const blob = await generateImage(withStyleHint(prompt, imageStyleHint), format === "short" ? "9:16" : "16:9");
       const file = new File([blob], `ai-${sc.id}-${Date.now()}.png`, { type: blob.type || "image/png" });
       await attachImage(sc.id, file, undefined, { adjust: slot === "bg", slot });
     } catch (e) { setImgGenError(errMsg(e)); }
@@ -2882,69 +2891,82 @@ export default function ExplainerStudio() {
                             </div>
                             <div className="flex-1 min-w-0 flex flex-col gap-1">
                               <div className="text-[10px] leading-snug" style={{ color: C.textDim }}>使えるのは、自分で撮影・作成した画像、利用条件を確認したフリー素材、画像生成AIで自作したもの（実在の人物・ロゴ・既存作品を含まない）です。</div>
-                              {/* 今の画像（差し替えた画像・背景の画像）。どちらも、いつでも外す・調整・加工ができる */}
-                              {sc.imageId && (
-                                <div className="flex items-center gap-1.5 flex-wrap">
-                                  <span className="text-[10px]" style={{ color: C.textDim }}>{BACKDROP_KINDS.includes(sc.visual.kind) ? "表紙の背景の画像：" : "差し替えた画像："}</span>
-                                    <button onClick={() => detachImage(sc)} className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={btn()}><X size={10} />画像を外す（図解表示に戻す）</button>
-                                    <button onClick={() => setFitOpenId(sc.id)} disabled={!imageEls[sc.imageId]} title="スライドの枠に合わせて、画像の大きさ・位置を調整します（全体を表示／画面いっぱい）" className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={{ ...btn(), color: sc.imageFit ? C.teal : undefined }}><Maximize2 size={10} />サイズ・位置を調整{sc.imageFit ? "（調整済み）" : ""}</button>
+                              {/* [画像] 「画像・スライドの差し替え」「背景の挿入」を選ぶと行が開き、今の画像の調整・加工と、追加元（ファイル・ライブラリ・フリー素材・画像検索・AI生成）を選べる */}
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                {[["image", "画像・スライドの差し替え", sc.imageId], ["bg", "背景の挿入", sc.bgImageId]].map(([slot, label, has]) => (
+                                  <button key={slot} onClick={() => toggleAddSlot(sc.id, slot)} className="text-[10px] px-2 py-0.5 rounded flex items-center gap-0.5" style={openSlotOf(sc) === slot ? btn("primary") : btn()}>
+                                    {label}{has ? <span style={{ fontWeight: 400, opacity: 0.85 }}>（設定済み）</span> : null}<ChevronRight size={10} style={{ transform: openSlotOf(sc) === slot ? "rotate(90deg)" : "none" }} />
+                                  </button>
+                                ))}
+                              </div>
+                              {openSlotOf(sc) === "image" && (
+                                <div className="flex flex-col gap-1 p-1.5 rounded" style={{ background: C.panel, border: `1px solid ${C.borderSoft}` }}>
+                                  {sc.imageId && (
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      <span className="text-[10px]" style={{ color: C.textDim }}>{BACKDROP_KINDS.includes(sc.visual.kind) ? "今の表紙の背景：" : "今の画像："}</span>
+                                      <button onClick={() => detachImage(sc)} className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={btn()}><X size={10} />画像を外す（図解表示に戻す）</button>
+                                      <button onClick={() => setFitOpenId(sc.id)} disabled={!imageEls[sc.imageId]} title="スライドの枠に合わせて、画像の大きさ・位置を調整します（全体を表示／画面いっぱい）" className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={{ ...btn(), color: sc.imageFit ? C.teal : undefined }}><Maximize2 size={10} />サイズ・位置を調整{sc.imageFit ? "（調整済み）" : ""}</button>
+                                      <button onClick={() => { setPolyTool("poly"); setPolyOpenId(sc.id); }} disabled={!images.find((im) => im.id === sc.imageId)} title="実在の人物などを、三角形の面で塗り分けたポリゴン風の絵にします" className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={btn()}><Sparkles size={10} />ポリゴン風に加工</button>
+                                      <button onClick={() => { setPolyTool("blur"); setPolyOpenId(sc.id); }} disabled={!images.find((im) => im.id === sc.imageId)} title="画像全体、または顔・看板などの範囲だけをぼかします" className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={btn()}><Droplets size={10} />ボカシ加工</button>
+                                    </div>
+                                  )}
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className="text-[10px]" style={{ color: C.textDim }}>{sc.imageId ? "入れ替える画像：" : "スライドを画像に差し替え："}</span>
+                                    <label className="text-[10px] px-1.5 py-0.5 rounded cursor-pointer" style={btn()}>ファイル
+                                      <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) attachImage(sc.id, f, undefined, { slot: "image" }); }} />
+                                    </label>
+                                    <button onClick={() => { setPickSlot("image"); setFreeOpenId(null); setWebOpenId(null); setRightsPendingId((v) => (v === sc.id && pickSlot === "image" ? null : sc.id)); setImgGenError(""); refreshImages(); }} className="text-[10px] px-1.5 py-0.5 rounded" style={{ ...btn(), color: rightsPendingId === sc.id && pickSlot === "image" ? C.teal : C.textMuted }}>ライブラリ</button>
+                                    <button onClick={() => { setPickSlot("image"); setWebOpenId(null); setRightsPendingId(null); if (!(freeOpenId === sc.id && pickSlot !== "image")) openFreeSearch(sc); }} title="著作権フリー（パブリックドメイン・CC0・CCライセンス・無料素材）の画像を検索して添付" className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={{ ...btn(), color: freeOpenId === sc.id && pickSlot === "image" ? C.teal : C.textMuted }}><Search size={10} />フリー素材</button>
+                                    <button onClick={() => openWebSearch(sc, "image")} title="通常の画像検索（Google・Bing。著作権フリーに限らない）を開き、画面の撮影・貼り付けで取り込んで、ポリゴン風・ボカシに加工します" className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={{ ...btn(), color: webOpenId === sc.id && pickSlot === "image" ? C.teal : hasNames(sc) ? C.amber : C.textMuted, borderColor: hasNames(sc) ? `${C.amber}88` : undefined }}><Globe size={10} />{hasNames(sc) ? "画像検索（人物・建物・地名）" : "画像検索"}</button>
+                                    <button onClick={() => genSceneImage(sc, "image")} disabled={imgGenBusyId === sc.id} title={sc.visual.imagePrompt ? "台本の生成時にAIが用意した画像の説明で、画像を生成します（1回ごとに課金）" : "スライドの見出しから画像を生成します（1回ごとに課金）"} className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={{ ...btn(), opacity: imgGenBusyId === sc.id ? 0.5 : 1 }}><Sparkles size={10} />{imgGenBusyId === sc.id ? "生成中…" : "AI生成"}</button>
+                                  </div>
+                                </div>
+                              )}
+                              {openSlotOf(sc) === "bg" && (
+                                <div className="flex flex-col gap-1 p-1.5 rounded" style={{ background: C.panel, border: `1px solid ${C.borderSoft}` }}>
+                                  {sc.bgImageId && (
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      <span className="text-[10px]" style={{ color: C.textDim }}>今の背景：</span>
+                                      {imageEls[sc.bgImageId] && <span className="inline-block rounded overflow-hidden" style={{ width: 40, height: 24, border: `1px solid ${C.borderSoft}` }}><img src={imageEls[sc.bgImageId].src} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /></span>}
+                                      <button onClick={() => setBgFitOpenId(sc.id)} disabled={!imageEls[sc.bgImageId]} className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={{ ...btn(), color: C.teal }} title="実際のスライドを重ねたプレビューで、背景の濃さ（透かし具合）・サイズ・位置を調整します"><Maximize2 size={10} />濃さ・位置を調整（{Math.round((sc.bgOpacity ?? defaultBgOpacity(fullLayout)) * 100)}%）</button>
+                                      <button onClick={() => { setPolyTool("poly"); setBgPolyOpenId(sc.id); }} disabled={!images.find((im) => im.id === sc.bgImageId)} title="背景の画像を、三角形の面で塗り分けたポリゴン風の絵にします（濃さ・位置はそのまま）" className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={btn()}><Sparkles size={10} />ポリゴン風に加工</button>
+                                      <button onClick={() => { setPolyTool("blur"); setBgPolyOpenId(sc.id); }} disabled={!images.find((im) => im.id === sc.bgImageId)} title="背景の画像の全体、または顔・看板などの範囲だけをぼかします（濃さ・位置はそのまま）" className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={btn()}><Droplets size={10} />ボカシ加工</button>
+                                      <button onClick={() => { patchScene(sc.id, { bgImageId: null, bgFit: undefined, bgOpacity: undefined }); const idx = scenes.findIndex((s) => s.id === sc.id); if (idx >= 0) previewSceneAt(idx); }} className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={btn()}><X size={10} />背景を外す</button>
+                                    </div>
+                                  )}
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className="text-[10px]" style={{ color: C.textDim }}>{sc.bgImageId ? "入れ替える画像：" : "背景に入れる画像（スライドはそのまま）："}</span>
+                                    <label className="text-[10px] px-1.5 py-0.5 rounded cursor-pointer" style={btn()}>ファイル
+                                      <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) attachImage(sc.id, f, undefined, { slot: "bg" }); }} />
+                                    </label>
+                                    <button onClick={() => { setPickSlot("bg"); setFreeOpenId(null); setWebOpenId(null); setRightsPendingId((v) => (v === sc.id && pickSlot === "bg" ? null : sc.id)); setImgGenError(""); refreshImages(); }} className="text-[10px] px-1.5 py-0.5 rounded" style={{ ...btn(), color: rightsPendingId === sc.id && pickSlot === "bg" ? C.teal : C.textMuted }}>ライブラリ</button>
+                                    <button onClick={() => { setPickSlot("bg"); setWebOpenId(null); setRightsPendingId(null); if (!(freeOpenId === sc.id && pickSlot !== "bg")) openFreeSearch(sc); }} title="著作権フリー（パブリックドメイン・CC0・CCライセンス・無料素材）の画像を検索して添付" className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={{ ...btn(), color: freeOpenId === sc.id && pickSlot === "bg" ? C.teal : C.textMuted }}><Search size={10} />フリー素材</button>
+                                    <button onClick={() => openWebSearch(sc, "bg")} title="通常の画像検索（Google・Bing。著作権フリーに限らない）を開き、画面の撮影・貼り付けで取り込んで、ポリゴン風・ボカシに加工します" className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={{ ...btn(), color: webOpenId === sc.id && pickSlot === "bg" ? C.teal : hasNames(sc) ? C.amber : C.textMuted, borderColor: hasNames(sc) ? `${C.amber}88` : undefined }}><Globe size={10} />{hasNames(sc) ? "画像検索（人物・建物・地名）" : "画像検索"}</button>
+                                    <button onClick={() => genSceneImage(sc, "bg")} disabled={imgGenBusyId === sc.id} title={sc.visual.imagePrompt ? "台本の生成時にAIが用意した画像の説明で、画像を生成します（1回ごとに課金）" : "スライドの見出しから画像を生成します（1回ごとに課金）"} className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={{ ...btn(), opacity: imgGenBusyId === sc.id ? 0.5 : 1 }}><Sparkles size={10} />{imgGenBusyId === sc.id ? "生成中…" : "AI生成"}</button>
+                                  </div>
+                                </div>
+                              )}
+                              {/* 調整・加工の画面（行を閉じていても、警告・画像検索などから開けるよう、ここで描く） */}
                                     {fitOpenId === sc.id && imageEls[sc.imageId] && (
                                       <ImageFitModal img={imageEls[sc.imageId]} fit={sc.imageFit} heading={sc.visual?.heading || ""} portrait={format === "short"} full={fullLayout}
                                         onApply={(fit) => { patchScene(sc.id, { imageFit: fit }); setFitOpenId(null); const idx = scenes.findIndex((s) => s.id === sc.id); if (idx >= 0) previewSceneAt(idx); }}
                                         onClose={() => setFitOpenId(null)}
                                         onPolygon={(fit, _op, tool) => { patchScene(sc.id, { imageFit: fit }); setFitOpenId(null); polyThenFitRef.current = sc.id; setPolyTool(tool === "blur" ? "blur" : "poly"); setPolyOpenId(sc.id); }} />
                                     )}
-                                    <button onClick={() => { setPolyTool("poly"); setPolyOpenId(sc.id); }} disabled={!images.find((im) => im.id === sc.imageId)} title="実在の人物などを、三角形の面で塗り分けたポリゴン風の絵にします" className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={btn()}><Sparkles size={10} />ポリゴン風に加工</button>
-                                    <button onClick={() => { setPolyTool("blur"); setPolyOpenId(sc.id); }} disabled={!images.find((im) => im.id === sc.imageId)} title="画像全体、または顔・看板などの範囲だけをぼかします" className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={btn()}><Droplets size={10} />ボカシ加工</button>
                                     {polyOpenId === sc.id && images.find((im) => im.id === sc.imageId) && (
                                       <LowPolyModal key={`${sc.imageId}-${polyTool}`} initialTool={polyTool} image={images.find((im) => im.id === sc.imageId).blob} credit={imageCreditOf(sc.imageId)} aspect={format === "short" ? "9:16" : "16:9"}
                                         onApply={(blob, mode) => applyPolygon(sc, blob, mode)} onClose={() => { setPolyOpenId(null); if (polyThenFitRef.current === sc.id) { polyThenFitRef.current = null; setFitOpenId(sc.id); } }} />
                                     )}
-                                </div>
-                              )}
-                              {sc.bgImageId && (
-                                <div className="flex items-center gap-1.5 flex-wrap">
-                                  <span className="text-[10px]" style={{ color: C.textDim }}>背景の画像：</span>
-                                      {imageEls[sc.bgImageId] && <span className="inline-block rounded overflow-hidden" style={{ width: 40, height: 24, border: `1px solid ${C.borderSoft}` }}><img src={imageEls[sc.bgImageId].src} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /></span>}
-                                      <button onClick={() => setBgFitOpenId(sc.id)} disabled={!imageEls[sc.bgImageId]} className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={{ ...btn(), color: C.teal }} title="実際のスライドを重ねたプレビューで、背景の濃さ（透かし具合）・サイズ・位置を調整します"><Maximize2 size={10} />濃さ・位置を調整（{Math.round((sc.bgOpacity ?? defaultBgOpacity(fullLayout)) * 100)}%）</button>
-                                      <button onClick={() => { setPolyTool("poly"); setBgPolyOpenId(sc.id); }} disabled={!images.find((im) => im.id === sc.bgImageId)} title="背景の画像を、三角形の面で塗り分けたポリゴン風の絵にします（濃さ・位置はそのまま）" className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={btn()}><Sparkles size={10} />ポリゴン風に加工</button>
-                                      <button onClick={() => { setPolyTool("blur"); setBgPolyOpenId(sc.id); }} disabled={!images.find((im) => im.id === sc.bgImageId)} title="背景の画像の全体、または顔・看板などの範囲だけをぼかします（濃さ・位置はそのまま）" className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={btn()}><Droplets size={10} />ボカシ加工</button>
-                                      <button onClick={() => { patchScene(sc.id, { bgImageId: null, bgFit: undefined, bgOpacity: undefined }); const idx = scenes.findIndex((s) => s.id === sc.id); if (idx >= 0) previewSceneAt(idx); }} className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={btn()}><X size={10} />背景を外す</button>
                                       {bgPolyOpenId === sc.id && images.find((im) => im.id === sc.bgImageId) && (
                                         <LowPolyModal key={`${sc.bgImageId}-${polyTool}`} initialTool={polyTool} image={images.find((im) => im.id === sc.bgImageId).blob} credit={imageCreditOf(sc.bgImageId)} aspect={format === "short" ? "9:16" : "16:9"}
                                           onApply={(blob, mode) => applyBgPolygon(sc, blob, mode)} onClose={() => { setBgPolyOpenId(null); if (bgPolyThenFitRef.current === sc.id) { bgPolyThenFitRef.current = null; setBgFitOpenId(sc.id); } }} />
                                       )}
-                                </div>
-                              )}
                               {bgFitOpenId === sc.id && imageEls[sc.bgImageId] && (
                                     <ImageFitModal background img={imageEls[sc.bgImageId]} fit={sc.bgFit} opacity={sc.bgOpacity} scene={sc} sceneImage={sc.imageId ? imageEls[sc.imageId] ?? null : null} light={fullLayout} portrait={format === "short"} full={fullLayout}
                                       onApply={(fit, op) => { patchScene(sc.id, { bgFit: fit, bgOpacity: op }); setBgFitOpenId(null); const idx = scenes.findIndex((s) => s.id === sc.id); if (idx >= 0) previewSceneAt(idx); }}
                                       onClose={() => setBgFitOpenId(null)}
                                       onPolygon={images.find((im) => im.id === sc.bgImageId) ? (fit, op, tool) => { patchScene(sc.id, { bgFit: fit, bgOpacity: op }); setBgFitOpenId(null); bgPolyThenFitRef.current = sc.id; setPolyTool(tool === "blur" ? "blur" : "poly"); setBgPolyOpenId(sc.id); } : undefined} />
                                   )}
-                              {/* [画像を追加] 追加先（スライドを画像に差し替える／スライドはそのまま背景に敷く）を必ず選んでから追加する */}
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                <span className="text-[10px]" style={{ color: C.textDim }}>画像の追加先：</span>
-                                <span className="inline-flex rounded overflow-hidden" style={{ border: `1px solid ${C.teal}66` }}>
-                                  {[["image", "スライドを画像に差し替え"], ["bg", "背景に追加（スライドはそのまま）"]].map(([slot, label]) => (
-                                    <button key={slot} onClick={() => chooseAddSlot(sc.id, slot)} className="text-[10px] px-1.5 py-0.5" style={{ background: addSlotOf(sc) === slot ? C.teal : "transparent", color: addSlotOf(sc) === slot ? C.bg : C.teal, fontWeight: addSlotOf(sc) === slot ? 700 : 400, border: "none", cursor: "pointer" }}>{label}</button>
-                                  ))}
-                                </span>
-                                {(addSlotOf(sc) === "bg" ? sc.bgImageId : sc.imageId && !BACKDROP_KINDS.includes(sc.visual.kind)) && <span className="text-[10px]" style={{ color: C.textDim }}>（今の画像と入れ替わります）</span>}
-                              </div>
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                <label className="text-[10px] px-1.5 py-0.5 rounded cursor-pointer" style={btn()}>ファイル選択
-                                  <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) attachImage(sc.id, f, undefined, { slot: addSlotOf(sc) }); }} />
-                                </label>
-                                {images.length > 0 && (
-                                  <button onClick={() => { const slot = addSlotOf(sc); setPickSlot(slot); setFreeOpenId(null); setWebOpenId(null); setRightsPendingId((v) => (v === sc.id && pickSlot === slot ? null : sc.id)); setImgGenError(""); refreshImages(); }} className="text-[10px] px-1.5 py-0.5 rounded" style={{ ...btn(), color: rightsPendingId === sc.id ? C.teal : C.textMuted }}>ライブラリから選ぶ</button>
-                                )}
-                                <button onClick={() => { const slot = addSlotOf(sc); setPickSlot(slot); setWebOpenId(null); if (!(freeOpenId === sc.id && pickSlot !== slot)) openFreeSearch(sc); }} title="著作権フリー（パブリックドメイン・CC0・CCライセンス・無料素材）の画像を検索して添付" className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={{ ...btn(), color: freeOpenId === sc.id ? C.teal : C.textMuted }}><Search size={10} />フリー素材を検索</button>
-                                <button onClick={() => openWebSearch(sc, addSlotOf(sc))} title="通常の画像検索（Google・Bing。著作権フリーに限らない）を開き、画面の撮影・貼り付けで取り込んで、ポリゴン風・ボカシに加工します" className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={{ ...btn(), color: webOpenId === sc.id ? C.teal : hasNames(sc) ? C.amber : C.textMuted, borderColor: hasNames(sc) ? `${C.amber}88` : undefined }}><Globe size={10} />{hasNames(sc) ? "人物・建物・地名を画像検索" : "Web画像検索"}</button>
-                                {sc.visual.imagePrompt && (
-                                  <button onClick={() => genSceneImage(sc, addSlotOf(sc))} disabled={imgGenBusyId === sc.id} className="text-[10px] px-1.5 py-0.5 rounded" style={{ ...btn("primary"), opacity: imgGenBusyId === sc.id ? 0.5 : 1 }}>{imgGenBusyId === sc.id ? "生成中…" : "AIで生成"}</button>
-                                )}
-                              </div>
                               {rightsPendingId === sc.id && (
                                 <SceneImagePicker title={sc.visual?.heading || sc.caption || ""} images={images} imageEls={imageEls}
                                   usedIds={new Set((project ? [...project.longScenes, ...project.shortScenes] : []).flatMap((x) => [x.imageId, x.bgImageId]).filter(Boolean))}
