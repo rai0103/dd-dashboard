@@ -135,6 +135,8 @@ export interface ExplainerScene {
   imageFit?: ImageFit;
   /** 背景に敷く画像（スライドはそのまま上に描く。画像の場面への差し替えとは別） */
   bgImageId?: string | null;
+  /** 画像に差し替える前の図解の種類と強調のひとこと（画像を外したら戻す） */
+  preImage?: { kind: VisualKind; emphasis?: string };
   /** 背景の画像の見せ方（無ければ画面いっぱい） */
   bgFit?: ImageFit;
   /** 背景の画像の濃さ（0〜1。無ければ既定：暗い背景0.38／白い背景0.25） */

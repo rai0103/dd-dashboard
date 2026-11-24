@@ -143,7 +143,6 @@ function GenProgressPanel({ step, done, total, elapsedSec, onAbort }) {
 // p=1（場面の最後まで進んだ状態）で描くことで、アニメーションの途中状態ではない完成形を見せる。
 // 表紙（タイトル）・章の扉に画像を付けたときは、スライドはそのままで背景に薄く敷く。それ以外は画像の場面にする
 const BACKDROP_KINDS = ["title", "chapter"];
-const withImageVisual = (v, extra = { emphasis: "" }) => (BACKDROP_KINDS.includes(v.kind) ? v : { ...v, kind: "image", ...extra });
 function SceneThumbCanvas({ sc, portrait, full = false, light = false, image = null, bg = null }) {
   const ref = useRef(null);
   useEffect(() => {
@@ -1237,7 +1236,9 @@ export default function ExplainerStudio() {
     const m = {};
     for (const im of images) {
       const c = im.credit;
-      if (c && c.source) m[im.id] = [`出典：${c.source}`, [c.credit, c.modified ? `（${c.modified}）` : ""].filter(Boolean).join("")].filter(Boolean);
+      // ポリゴン風・ボカシに加工した画像は、スライド上は「※AIイメージ」と表示する（出典は概要欄に「（ボカシ加工）」等を付けて記載）
+      if ((c && c.modified) || /^(poly|blur)-/i.test(im.name || "")) m[im.id] = ["※AIイメージ"];
+      else if (c && c.source) m[im.id] = [`出典：${c.source}`, c.credit || ""].filter(Boolean);
       else m[im.id] = [/^ai-/i.test(im.name || "") ? "※AI生成のイメージ" : "※イメージ"];
     }
     return m;
@@ -1268,10 +1269,15 @@ export default function ExplainerStudio() {
   // adjust：添付したあと、サイズ・位置の調整画面を開く（ファイル選択・ライブラリ・フリー素材。AIで生成した画像は枠に合わせて作るので開かない）
   // [背景に追加] slot="bg" のときは、スライドはそのままで背景に敷く（bgImageId）。それ以外は画像の場面に差し替える（imageId）
   const [pickSlot, setPickSlot] = useState("image");
+  // 場面ごとの「画像の追加先」（"image"＝スライドを画像に差し替え、"bg"＝背景に追加）。未選択は、表紙・章の扉なら背景、それ以外は差し替え
+  const [addSlots, setAddSlots] = useState({});
+  const addSlotOf = (sc) => addSlots[sc.id] || (BACKDROP_KINDS.includes(sc.visual?.kind) ? "bg" : "image");
+  const chooseAddSlot = (sceneId, slot) => { setAddSlots((m) => ({ ...m, [sceneId]: slot })); setPickSlot(slot); };
   const [bgFitOpenId, setBgFitOpenId] = useState(null);
   const putSceneImage = (sceneId, imageId, slot) => setScenes((list) => list.map((s) => (s.id !== sceneId ? s
     : slot === "bg" ? { ...s, bgImageId: imageId, bgFit: undefined }
-      : { ...s, imageId, imageFit: undefined, visual: withImageVisual(s.visual) })));
+      : { ...s, imageId, imageFit: undefined, visual: { ...s.visual, kind: "image", emphasis: s.visual.kind === "image" ? s.visual.emphasis : "" },
+        preImage: s.visual.kind === "image" ? s.preImage : { kind: s.visual.kind, emphasis: s.visual.emphasis } })));
   const attachImage = async (sceneId, file, credit, { adjust = true, slot = "image" } = {}) => {
     if (!file || !file.type.startsWith("image/")) { alert("画像ファイルを選んでください"); return; }
     const im = await saveImage(file, credit?.caption, credit);
@@ -1285,7 +1291,7 @@ export default function ExplainerStudio() {
   };
   const detachImage = async (sc) => {
     const id = sc.imageId;
-    patchScene(sc.id, { imageId: null, imageFit: undefined });
+    patchScene(sc.id, { imageId: null, imageFit: undefined, ...(sc.preImage ? { visual: { ...sc.visual, kind: sc.preImage.kind, emphasis: sc.preImage.emphasis ?? sc.visual.emphasis }, preImage: undefined } : {}) });
     const usedElsewhere = project && [...project.longScenes, ...project.shortScenes].some((s) => (s.imageId === id && s.id !== sc.id) || s.bgImageId === id);
     if (id && !usedElsewhere) { await deleteImage(id).catch(() => {}); refreshImages(); }
     const idx = scenes.findIndex((s) => s.id === sc.id);
@@ -1357,10 +1363,10 @@ export default function ExplainerStudio() {
   const applyPolygon = async (sc, blob, mode) => {
     const old = images.find((im) => im.id === sc.imageId);
     const credit = old?.credit ? { ...old.credit, modified: modifiedLabel(mode) } : undefined;
-    const file = new File([blob], `poly-${sc.id}-${Date.now()}.png`, { type: blob.type || "image/png" });
+    const file = new File([blob], `${mode === "blur" ? "blur" : "poly"}-${sc.id}-${Date.now()}.png`, { type: blob.type || "image/png" });
     const im = await saveImage(file, old?.caption, credit);
     await refreshImages();
-    setScenes((list) => list.map((s) => (s.id === sc.id ? { ...s, imageId: im.id, visual: withImageVisual(s.visual, {}) } : s)));
+    setScenes((list) => list.map((s) => (s.id === sc.id ? { ...s, imageId: im.id } : s)));
     setPolyOpenId(null);
     if (polyThenFitRef.current === sc.id) { polyThenFitRef.current = null; setFitOpenId(sc.id); }
     const idx = scenes.findIndex((s) => s.id === sc.id);
@@ -1372,7 +1378,7 @@ export default function ExplainerStudio() {
   const applyBgPolygon = async (sc, blob, mode) => {
     const old = images.find((im) => im.id === sc.bgImageId);
     const credit = old?.credit ? { ...old.credit, modified: modifiedLabel(mode) } : undefined;
-    const file = new File([blob], `poly-bg-${sc.id}-${Date.now()}.png`, { type: blob.type || "image/png" });
+    const file = new File([blob], `${mode === "blur" ? "blur" : "poly"}-bg-${sc.id}-${Date.now()}.png`, { type: blob.type || "image/png" });
     const im = await saveImage(file, old?.caption, credit);
     await refreshImages();
     setScenes((list) => list.map((s) => (s.id === sc.id ? { ...s, bgImageId: im.id } : s)));
@@ -1402,13 +1408,13 @@ export default function ExplainerStudio() {
   // 場面ごとに「AIで生成」：既存のimagePrompt（台本生成時にAIが用意した英語のプロンプト案）で1枚生成し、そのまま添付する
   const [imgGenBusyId, setImgGenBusyId] = useState(null);
   const [imgGenError, setImgGenError] = useState("");
-  const genSceneImage = async (sc) => {
+  const genSceneImage = async (sc, slot = "image") => {
     if (!sc.visual.imagePrompt) return;
     setImgGenBusyId(sc.id); setImgGenError("");
     try {
       const blob = await generateImage(withStyleHint(sc.visual.imagePrompt, imageStyleHint), format === "short" ? "9:16" : "16:9");
       const file = new File([blob], `ai-${sc.id}-${Date.now()}.png`, { type: blob.type || "image/png" });
-      await attachImage(sc.id, file, undefined, { adjust: false });
+      await attachImage(sc.id, file, undefined, { adjust: slot === "bg", slot });
     } catch (e) { setImgGenError(errMsg(e)); }
     finally { setImgGenBusyId(null); }
   };
@@ -2876,9 +2882,10 @@ export default function ExplainerStudio() {
                             </div>
                             <div className="flex-1 min-w-0 flex flex-col gap-1">
                               <div className="text-[10px] leading-snug" style={{ color: C.textDim }}>使えるのは、自分で撮影・作成した画像、利用条件を確認したフリー素材、画像生成AIで自作したもの（実在の人物・ロゴ・既存作品を含まない）です。</div>
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                {sc.imageId ? (
-                                  <>
+                              {/* 今の画像（差し替えた画像・背景の画像）。どちらも、いつでも外す・調整・加工ができる */}
+                              {sc.imageId && (
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="text-[10px]" style={{ color: C.textDim }}>{BACKDROP_KINDS.includes(sc.visual.kind) ? "表紙の背景の画像：" : "差し替えた画像："}</span>
                                     <button onClick={() => detachImage(sc)} className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={btn()}><X size={10} />画像を外す（図解表示に戻す）</button>
                                     <button onClick={() => setFitOpenId(sc.id)} disabled={!imageEls[sc.imageId]} title="スライドの枠に合わせて、画像の大きさ・位置を調整します（全体を表示／画面いっぱい）" className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={{ ...btn(), color: sc.imageFit ? C.teal : undefined }}><Maximize2 size={10} />サイズ・位置を調整{sc.imageFit ? "（調整済み）" : ""}</button>
                                     {fitOpenId === sc.id && imageEls[sc.imageId] && (
@@ -2893,32 +2900,11 @@ export default function ExplainerStudio() {
                                       <LowPolyModal key={`${sc.imageId}-${polyTool}`} initialTool={polyTool} image={images.find((im) => im.id === sc.imageId).blob} credit={imageCreditOf(sc.imageId)} aspect={format === "short" ? "9:16" : "16:9"}
                                         onApply={(blob, mode) => applyPolygon(sc, blob, mode)} onClose={() => { setPolyOpenId(null); if (polyThenFitRef.current === sc.id) { polyThenFitRef.current = null; setFitOpenId(sc.id); } }} />
                                     )}
-                                  </>
-                                ) : (
-                                  <>
-                                    {!BACKDROP_KINDS.includes(sc.visual.kind) && <span className="text-[10px]" style={{ color: C.textDim }}>画像に差し替え：</span>}
-                                    {BACKDROP_KINDS.includes(sc.visual.kind) ? null : (<>
-                                    <label className="text-[10px] px-1.5 py-0.5 rounded cursor-pointer" style={btn()}>ファイル選択
-                                      <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) attachImage(sc.id, f); }} />
-                                    </label>
-                                    {images.length > 0 && (
-                                      <button onClick={() => { setPickSlot("image"); setRightsPendingId((v) => (v === sc.id && pickSlot === "image" ? null : sc.id)); setImgGenError(""); refreshImages(); }} className="text-[10px] px-1.5 py-0.5 rounded" style={{ ...btn(), color: rightsPendingId === sc.id && pickSlot === "image" ? C.teal : C.textMuted }}>ライブラリから選ぶ</button>
-                                    )}
-                                    <button onClick={() => { setPickSlot("image"); if (!(freeOpenId === sc.id && pickSlot !== "image")) openFreeSearch(sc); }} title="著作権フリー（パブリックドメイン・CC0・CCライセンス・無料素材）の画像を検索して添付" className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={{ ...btn(), color: freeOpenId === sc.id && pickSlot === "image" ? C.teal : C.textMuted }}><Search size={10} />フリー素材を検索</button>
-                                    <button onClick={() => openWebSearch(sc, "image")} title="通常の画像検索（Google・Bing。著作権フリーに限らない）を開き、画面の撮影・貼り付けで取り込んで、ポリゴン風・ボカシに加工します" className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={{ ...btn(), color: webOpenId === sc.id && pickSlot === "image" ? C.teal : hasNames(sc) ? C.amber : C.textMuted, borderColor: hasNames(sc) ? `${C.amber}88` : undefined }}><Globe size={10} />{hasNames(sc) ? "人物・建物・地名を画像検索" : "Web画像検索"}</button>
-                                    </>)}
-                                    {sc.visual.imagePrompt && (
-                                      <button onClick={() => genSceneImage(sc)} disabled={imgGenBusyId === sc.id} className="text-[10px] px-1.5 py-0.5 rounded" style={{ ...btn("primary"), opacity: imgGenBusyId === sc.id ? 0.5 : 1 }}>{imgGenBusyId === sc.id ? "生成中…" : "AIで生成"}</button>
-                                    )}
-                                  </>
-                                )}
-                              </div>
-                              {/* [背景に追加] スライド（図解）はそのままで、背景に画像を薄く敷く。濃さ・サイズ・位置は調整画面で */}
-                              {sc.visual.kind !== "image" && (
+                                </div>
+                              )}
+                              {sc.bgImageId && (
                                 <div className="flex items-center gap-1.5 flex-wrap">
-                                  <span className="text-[10px]" style={{ color: C.textDim }}>背景に追加（スライドはそのまま）：</span>
-                                  {sc.bgImageId ? (
-                                    <>
+                                  <span className="text-[10px]" style={{ color: C.textDim }}>背景の画像：</span>
                                       {imageEls[sc.bgImageId] && <span className="inline-block rounded overflow-hidden" style={{ width: 40, height: 24, border: `1px solid ${C.borderSoft}` }}><img src={imageEls[sc.bgImageId].src} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /></span>}
                                       <button onClick={() => setBgFitOpenId(sc.id)} disabled={!imageEls[sc.bgImageId]} className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={{ ...btn(), color: C.teal }} title="実際のスライドを重ねたプレビューで、背景の濃さ（透かし具合）・サイズ・位置を調整します"><Maximize2 size={10} />濃さ・位置を調整（{Math.round((sc.bgOpacity ?? defaultBgOpacity(fullLayout)) * 100)}%）</button>
                                       <button onClick={() => { setPolyTool("poly"); setBgPolyOpenId(sc.id); }} disabled={!images.find((im) => im.id === sc.bgImageId)} title="背景の画像を、三角形の面で塗り分けたポリゴン風の絵にします（濃さ・位置はそのまま）" className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={btn()}><Sparkles size={10} />ポリゴン風に加工</button>
@@ -2928,28 +2914,38 @@ export default function ExplainerStudio() {
                                         <LowPolyModal key={`${sc.bgImageId}-${polyTool}`} initialTool={polyTool} image={images.find((im) => im.id === sc.bgImageId).blob} credit={imageCreditOf(sc.bgImageId)} aspect={format === "short" ? "9:16" : "16:9"}
                                           onApply={(blob, mode) => applyBgPolygon(sc, blob, mode)} onClose={() => { setBgPolyOpenId(null); if (bgPolyThenFitRef.current === sc.id) { bgPolyThenFitRef.current = null; setBgFitOpenId(sc.id); } }} />
                                       )}
-                                    </>
-                                  ) : (
-                                    <>
-                                      <label className="text-[10px] px-1.5 py-0.5 rounded cursor-pointer" style={btn()}>ファイル選択
-                                        <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) attachImage(sc.id, f, undefined, { slot: "bg" }); }} />
-                                      </label>
-                                      {images.length > 0 && (
-                                        <button onClick={() => { setPickSlot("bg"); setRightsPendingId((v) => (v === sc.id && pickSlot === "bg" ? null : sc.id)); refreshImages(); }} className="text-[10px] px-1.5 py-0.5 rounded" style={{ ...btn(), color: rightsPendingId === sc.id && pickSlot === "bg" ? C.teal : C.textMuted }}>ライブラリから選ぶ</button>
-                                      )}
-                                      <button onClick={() => { setPickSlot("bg"); if (!(freeOpenId === sc.id && pickSlot !== "bg")) openFreeSearch(sc); }} className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={{ ...btn(), color: freeOpenId === sc.id && pickSlot === "bg" ? C.teal : C.textMuted }}><Search size={10} />フリー素材を検索</button>
-                                      <button onClick={() => openWebSearch(sc, "bg")} title="通常の画像検索（Google・Bing。著作権フリーに限らない）を開き、画面の撮影・貼り付けで取り込んで、ポリゴン風・ボカシに加工します" className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={{ ...btn(), color: webOpenId === sc.id && pickSlot === "bg" ? C.teal : hasNames(sc) ? C.amber : C.textMuted, borderColor: hasNames(sc) ? `${C.amber}88` : undefined }}><Globe size={10} />{hasNames(sc) ? "人物・建物・地名を画像検索" : "Web画像検索"}</button>
-                                    </>
-                                  )}
-                                  {bgFitOpenId === sc.id && imageEls[sc.bgImageId] && (
+                                </div>
+                              )}
+                              {bgFitOpenId === sc.id && imageEls[sc.bgImageId] && (
                                     <ImageFitModal background img={imageEls[sc.bgImageId]} fit={sc.bgFit} opacity={sc.bgOpacity} scene={sc} sceneImage={sc.imageId ? imageEls[sc.imageId] ?? null : null} light={fullLayout} portrait={format === "short"} full={fullLayout}
                                       onApply={(fit, op) => { patchScene(sc.id, { bgFit: fit, bgOpacity: op }); setBgFitOpenId(null); const idx = scenes.findIndex((s) => s.id === sc.id); if (idx >= 0) previewSceneAt(idx); }}
                                       onClose={() => setBgFitOpenId(null)}
                                       onPolygon={images.find((im) => im.id === sc.bgImageId) ? (fit, op, tool) => { patchScene(sc.id, { bgFit: fit, bgOpacity: op }); setBgFitOpenId(null); bgPolyThenFitRef.current = sc.id; setPolyTool(tool === "blur" ? "blur" : "poly"); setBgPolyOpenId(sc.id); } : undefined} />
                                   )}
-                                </div>
-                              )}
-                              {(pickSlot === "bg" ? !sc.bgImageId : !sc.imageId) && rightsPendingId === sc.id && (
+                              {/* [画像を追加] 追加先（スライドを画像に差し替える／スライドはそのまま背景に敷く）を必ず選んでから追加する */}
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="text-[10px]" style={{ color: C.textDim }}>画像の追加先：</span>
+                                <span className="inline-flex rounded overflow-hidden" style={{ border: `1px solid ${C.teal}66` }}>
+                                  {[["image", "スライドを画像に差し替え"], ["bg", "背景に追加（スライドはそのまま）"]].map(([slot, label]) => (
+                                    <button key={slot} onClick={() => chooseAddSlot(sc.id, slot)} className="text-[10px] px-1.5 py-0.5" style={{ background: addSlotOf(sc) === slot ? C.teal : "transparent", color: addSlotOf(sc) === slot ? C.bg : C.teal, fontWeight: addSlotOf(sc) === slot ? 700 : 400, border: "none", cursor: "pointer" }}>{label}</button>
+                                  ))}
+                                </span>
+                                {(addSlotOf(sc) === "bg" ? sc.bgImageId : sc.imageId && !BACKDROP_KINDS.includes(sc.visual.kind)) && <span className="text-[10px]" style={{ color: C.textDim }}>（今の画像と入れ替わります）</span>}
+                              </div>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <label className="text-[10px] px-1.5 py-0.5 rounded cursor-pointer" style={btn()}>ファイル選択
+                                  <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) attachImage(sc.id, f, undefined, { slot: addSlotOf(sc) }); }} />
+                                </label>
+                                {images.length > 0 && (
+                                  <button onClick={() => { const slot = addSlotOf(sc); setPickSlot(slot); setFreeOpenId(null); setWebOpenId(null); setRightsPendingId((v) => (v === sc.id && pickSlot === slot ? null : sc.id)); setImgGenError(""); refreshImages(); }} className="text-[10px] px-1.5 py-0.5 rounded" style={{ ...btn(), color: rightsPendingId === sc.id ? C.teal : C.textMuted }}>ライブラリから選ぶ</button>
+                                )}
+                                <button onClick={() => { const slot = addSlotOf(sc); setPickSlot(slot); setWebOpenId(null); if (!(freeOpenId === sc.id && pickSlot !== slot)) openFreeSearch(sc); }} title="著作権フリー（パブリックドメイン・CC0・CCライセンス・無料素材）の画像を検索して添付" className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={{ ...btn(), color: freeOpenId === sc.id ? C.teal : C.textMuted }}><Search size={10} />フリー素材を検索</button>
+                                <button onClick={() => openWebSearch(sc, addSlotOf(sc))} title="通常の画像検索（Google・Bing。著作権フリーに限らない）を開き、画面の撮影・貼り付けで取り込んで、ポリゴン風・ボカシに加工します" className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5" style={{ ...btn(), color: webOpenId === sc.id ? C.teal : hasNames(sc) ? C.amber : C.textMuted, borderColor: hasNames(sc) ? `${C.amber}88` : undefined }}><Globe size={10} />{hasNames(sc) ? "人物・建物・地名を画像検索" : "Web画像検索"}</button>
+                                {sc.visual.imagePrompt && (
+                                  <button onClick={() => genSceneImage(sc, addSlotOf(sc))} disabled={imgGenBusyId === sc.id} className="text-[10px] px-1.5 py-0.5 rounded" style={{ ...btn("primary"), opacity: imgGenBusyId === sc.id ? 0.5 : 1 }}>{imgGenBusyId === sc.id ? "生成中…" : "AIで生成"}</button>
+                                )}
+                              </div>
+                              {rightsPendingId === sc.id && (
                                 <SceneImagePicker title={sc.visual?.heading || sc.caption || ""} images={images} imageEls={imageEls}
                                   usedIds={new Set((project ? [...project.longScenes, ...project.shortScenes] : []).flatMap((x) => [x.imageId, x.bgImageId]).filter(Boolean))}
                                   onPick={(id) => { attachExistingImage(sc.id, id, pickSlot); setRightsPendingId(null); }}
@@ -2964,7 +2960,7 @@ export default function ExplainerStudio() {
                                   </span>
                                 </div>
                               ))}
-                              {(pickSlot === "bg" ? !sc.bgImageId : !sc.imageId) && webOpenId === sc.id && (
+                              {webOpenId === sc.id && (
                                 <WebImageSearchPanel key={`${sc.id}-${pickSlot}`} texts={sceneTexts(sc, true)} defaultQuery={freeDefaultQuery(sc)}
                                   extractNames={(t) => extractImageSearchNames(t)}
                                   onImage={(file, credit) => attachWebImage(sc, file, credit)} onClose={() => setWebOpenId(null)} />
@@ -2974,7 +2970,7 @@ export default function ExplainerStudio() {
                                   出典：{imageCreditOf(sc.imageId).source}{imageCreditOf(sc.imageId).credit ? `｜${imageCreditOf(sc.imageId).credit}` : ""}（概要欄に自動で記載）
                                 </div>
                               )}
-                              {(pickSlot === "bg" ? !sc.bgImageId : !sc.imageId) && freeOpenId === sc.id && (
+                              {freeOpenId === sc.id && (
                                 <FreeImagePicker title={sc.visual?.heading || sc.caption || ""} query={freeQuery} setQuery={setFreeQuery} busy={freeBusy} items={freeResults} terms={freeTerms} error={freeError} pickId={freePickId}
                                   onSearch={() => runFreeSearch(sc)} onPick={(c) => pickFreeImage(sc, c)} onClose={() => { if (!freePickId) setFreeOpenId(null); }} />
                               )}

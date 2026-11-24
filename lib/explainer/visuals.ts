@@ -1695,8 +1695,9 @@ export function drawVisual(c: Ctx, sc0: ExplainerScene, e: VisualEnv): void {
   try { fn(c, sc, e); } catch (err) { console.error('図解の描画エラー', sc.visual.kind, err); }
   // 背景の画像の出典（右下・小さく）。表紙・章の扉に以前の方法で付けた背景の画像（imageId）も同じ
   try {
-    // 背景は飾りなので、出典があるとき（フリー素材）だけ書く（自分の画像の「※イメージ」は出さない）
-    const credited = (l?: string[]) => !!l?.length && /^出典/.test(l[0]);
+    // 背景は飾りなので、出典があるとき（フリー素材）と加工した画像だけ書く（自分の画像の「※イメージ」は出さない）
+    // ポリゴン風・ボカシに加工した画像（「※AIイメージ」）も書く
+    const credited = (l?: string[]) => !!l?.length && (/^出典/.test(l[0]) || l[0] === '※AIイメージ');
     if (e.bg && credited(e.bgLabel)) creditLines(c, e, e.bgLabel!, 'bottom', false);
     else if (e.image && credited(e.imageLabel) && (sc.visual.kind === 'title' || sc.visual.kind === 'chapter')) creditLines(c, e, e.imageLabel!, 'bottom', false);
   } catch { /* 表記の描画に失敗しても場面は描く */ }
