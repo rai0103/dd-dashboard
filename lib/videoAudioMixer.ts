@@ -19,6 +19,7 @@ export class AudioMixer {
   private bgmGain: GainNode | null = null;
   private bgmToken = 0;
   private tapDest: MediaStreamAudioDestinationNode | null = null;
+  private tapSilent: ConstantSourceNode | null = null;
   private bufSources: AudioBufferSourceNode[] = [];
   private bufferCache = new Map<string, AudioBuffer>();
   /** falseのあいだは、スピーカーに音を出さず録画（tapDest）にだけ流す（書き出し中に音を鳴らさないため） */
@@ -53,10 +54,21 @@ export class AudioMixer {
     if (!ctx) return null;
     if (ctx.state === 'suspended') ctx.resume().catch(() => {});
     this.tapDest = ctx.createMediaStreamDestination();
+    // 無音を流しておく：声もBGMも無い場面（音声を作れなかった等）でも音声の流れが途切れないようにする
+    // （録画は音声が流れてくるまで映像を書き出さないため、何もつながっていないと空のファイルになる）
+    try {
+      const silent = ctx.createConstantSource();
+      silent.offset.value = 0;
+      silent.connect(this.tapDest);
+      silent.start();
+      this.tapSilent = silent;
+    } catch { /* 古いブラウザは無視 */ }
     return this.tapDest.stream;
   }
 
   stopRecordingTap(): void {
+    try { this.tapSilent?.stop(); this.tapSilent?.disconnect(); } catch { /* ignore */ }
+    this.tapSilent = null;
     this.tapDest = null;
   }
 
