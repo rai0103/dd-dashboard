@@ -1056,17 +1056,6 @@ export default function ExplainerStudio() {
   // [Web画像検索] ネット上の画像（スクショ）を、ポリゴン風・ボカシに加工しないまま使っているか
   const isUnprocessedWeb = (id) => { const c = id ? imageCreditOf(id) : null; return !!(c?.web && !c?.modified); };
   // スライドに重ねる画像の表記：フリー素材は出典（提供元・作者／ライセンス）、AI生成は「AI生成のイメージ」、それ以外は「イメージ」
-  const imageLabels = useMemo(() => {
-    const m = {};
-    for (const im of images) {
-      const c = im.credit;
-      // ポリゴン風・ボカシに加工した画像は、スライド上は「※AIイメージ」と表示する（出典は概要欄に「（ボカシ加工）」等を付けて記載）
-      if ((c && c.modified) || /^(poly|blur)-/i.test(im.name || "")) m[im.id] = ["※AIイメージ"];
-      else if (c && c.source) m[im.id] = [`出典：${c.source}`, c.credit || ""].filter(Boolean);
-      else m[im.id] = [/^ai-/i.test(im.name || "") ? "※AI生成のイメージ" : "※イメージ"];
-    }
-    return m;
-  }, [images]);
   useEffect(() => { refreshImages(); }, []);
   // グラフ作成ページ（/chart-studio/）など、別タブ・別ウィンドウで画像ライブラリに保存してからこのタブに
   // 戻ってきたときに一覧が古いままにならないよう、このタブが前面に戻るたびに読み直す
@@ -1476,14 +1465,23 @@ export default function ExplainerStudio() {
   const [showSubtitles, setShowSubtitles] = useState(true);
   // 参考資料：既定では動画に入れず、概要欄にだけ記載する（入れる場合は長尺の最後に「参考資料」の場面を足す）
   const [sourcesInVideo, setSourcesInVideoState] = useState(() => { try { return localStorage.getItem("explainer-sources-in-video-v1") === "1"; } catch (e) { return false; } });
-  // スライドに出す画像の表記：「動画に出典を表示」がオフ（既定）のときは、フリー素材の「出典：…」を出さず「※イメージ」にする
-  // （出典は概要欄にはいつも記載する。加工した画像の「※AIイメージ」・AI生成の「※AI生成のイメージ」はそのまま）
+  // スライドに出す画像の表記
+  // ・ポリゴン風に加工した画像：「※AIイメージ」（いつも）
+  // ・フリー素材・ボカシ加工した画像：「動画に出典を表示」がオン＝「出典：…」、オフ（既定）＝何も書かない
+  // ・自分の画像：「※イメージ」、AIで生成した画像：「※AI生成のイメージ」
+  // （出典は概要欄にいつも記載する）
   const slideImageLabels = useMemo(() => {
-    if (sourcesInVideo) return imageLabels;
     const m = {};
-    for (const [id, l] of Object.entries(imageLabels)) m[id] = l?.length && /^出典/.test(l[0]) ? ["※イメージ"] : l;
+    for (const im of images) {
+      const c = im.credit, mod = c?.modified || "";
+      const poly = /ポリゴン/.test(mod) || (!mod && /^poly-/i.test(im.name || ""));
+      const blur = /ボカシ/.test(mod) || /^blur-/i.test(im.name || "");
+      if (poly) m[im.id] = ["※AIイメージ"];
+      else if (blur || (c && c.source)) m[im.id] = sourcesInVideo && c?.source ? [`出典：${c.source}`, [c.credit, mod ? `（${mod}）` : ""].filter(Boolean).join("")].filter(Boolean) : [];
+      else m[im.id] = [/^ai-/i.test(im.name || "") ? "※AI生成のイメージ" : "※イメージ"];
+    }
     return m;
-  }, [imageLabels, sourcesInVideo]);
+  }, [images, sourcesInVideo]);
   const setSourcesInVideo = (on) => {
     setSourcesInVideoState(on);
     try { localStorage.setItem("explainer-sources-in-video-v1", on ? "1" : "0"); } catch (e) { /* ignore */ }

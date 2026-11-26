@@ -913,7 +913,9 @@ const drawImage: Draw = (c, sc, e) => {
   // 画像の下部に重ねる文字は「強調のひとこと」を入れた場合だけ（空ならテロップで代用せず、何も重ねない）
   const msg = v.emphasis;
   if (msg) textBlock(c, msg, 20, e.H - (e.portrait ? 70 : 50), e.W - 40, e.portrait ? 22 : 24, PURE, { bold: true, maxLines: 2, shadow: true, alpha: ease(sub(e.p, 0.15, 0.35)) });
-  creditLines(c, e, e.imageLabel?.length ? e.imageLabel : ['※イメージ'], 'top', true);
+  // 表記：指定が無ければ「※イメージ」。空の指定（出典を出さない設定のフリー素材・ボカシ加工など）は何も書かない
+  const label = e.imageLabel ?? ['※イメージ'];
+  if (label.length) creditLines(c, e, label, 'top', true);
 };
 
 const drawPoint: Draw = (c, sc, e) => {
