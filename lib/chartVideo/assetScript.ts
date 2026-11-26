@@ -6,7 +6,7 @@ import { sanitizeReading } from '../explainer/scriptModel';
 import { WEEKLY_PERSONA, yenJp, signed, pct1, md } from '../explainer/weeklyReportCore';
 import type { AssetReport } from './assetReport';
 
-export type CVKind = 'title' | 'rules' | 'stats' | 'value' | 'stack' | 'holdings' | 'plan' | 'road' | 'outro';
+export type CVKind = 'title' | 'rules' | 'stats' | 'value' | 'stack' | 'share' | 'holdings' | 'plan' | 'road' | 'outro';
 export type CVFormat = 'long' | 'short';
 export interface CVScene {
   key: string;
@@ -22,7 +22,9 @@ export interface CVScene {
   enabled: boolean;
 }
 export interface CVYoutube { title: string; description: string; tags: string[]; shortTitle: string }
-export interface CVProject { report: 'asset'; asOf: string; long: CVScene[]; short: CVScene[]; youtube: CVYoutube }
+/** version：場面の構成・定型文の作り方を変えたら上げる（古い台本は今の数字・構成で作り直す） */
+export const CV_PROJECT_VERSION = 2;
+export interface CVProject { report: 'asset'; version?: number; asOf: string; long: CVScene[]; short: CVScene[]; youtube: CVYoutube }
 
 const pctTxt = (v: number, d = 1) => `${v >= 0 ? 'プラス' : 'マイナス'}${Math.abs(v).toFixed(d)}%`;
 const ratePct = (r: number) => `${(r * 100).toFixed(1)}%`;
@@ -64,6 +66,14 @@ function sceneFacts(r: AssetReport, kind: CVKind): { facts: string; text: string
         facts: `銘柄の内訳（評価額）：${r.holdings.map((h) => `${h.short} ${yenJp(h.value)}（${totalH > 0 ? ((h.value / totalH) * 100).toFixed(0) : 0}%）`).join('、')}／スクショの無い月は推計`,
         text: top ? `銘柄ごとの内訳の推移です。いちばん大きいのは${top.short}で、全体の${totalH > 0 ? ((top.value / totalH) * 100).toFixed(0) : 0}%を占めています。` : '銘柄ごとの内訳の推移です。',
       };
+    case 'share': {
+      const sh = r.holdings.map((h) => ({ h, pct: totalH > 0 ? (h.value / totalH) * 100 : 0 }));
+      const t3 = sh.slice(0, 3);
+      return {
+        facts: `今のシェア（評価額の割合）：${sh.map((x) => `${x.h.short} ${x.pct.toFixed(1)}%（${yenJp(x.h.value)}）`).join('、')}／合計 ${yenJp(totalH)}／${sh.length}銘柄`,
+        text: t3.length ? `今の銘柄のシェアです。いちばん大きいのは${t3[0].h.short}で${t3[0].pct.toFixed(1)}%${t3[1] ? `、続いて${t3[1].h.short}が${t3[1].pct.toFixed(1)}%` : ''}${t3[2] ? `、${t3[2].h.short}が${t3[2].pct.toFixed(1)}%` : ''}です。全部で${sh.length}銘柄に分けて持っています。` : '今の銘柄のシェアです。',
+      };
+    }
     case 'holdings': {
       const withPct = r.holdings.filter((h) => h.pct != null);
       const best = withPct.length ? withPct.reduce((a, b) => (b.pct! > a.pct! ? b : a)) : null;
@@ -100,11 +110,11 @@ function sceneFacts(r: AssetReport, kind: CVKind): { facts: string; text: string
 
 const HEADINGS: Record<CVKind, string> = {
   title: '資産形成レポート', rules: 'このチャンネルのルール', stats: '今の資産状況', value: '評価額と元本の推移',
-  stack: '銘柄ごとの内訳の推移', holdings: '銘柄別の評価額', plan: '計画との比較', road: '1億円までの道のり', outro: 'まとめ',
+  stack: '銘柄ごとの内訳の推移', share: '今の銘柄シェア', holdings: '銘柄別の評価額', plan: '計画との比較', road: '1億円までの道のり', outro: 'まとめ',
 };
-const MIN_SEC: Record<CVKind, number> = { title: 5, rules: 8, stats: 8, value: 9, stack: 9, holdings: 8, plan: 8, road: 9, outro: 5 };
-export const LONG_KINDS: CVKind[] = ['title', 'rules', 'stats', 'value', 'stack', 'holdings', 'plan', 'road', 'outro'];
-export const SHORT_KINDS: CVKind[] = ['title', 'stats', 'value', 'road', 'outro'];
+const MIN_SEC: Record<CVKind, number> = { title: 5, rules: 8, stats: 8, value: 9, stack: 9, share: 9, holdings: 8, plan: 8, road: 9, outro: 5 };
+export const LONG_KINDS: CVKind[] = ['title', 'rules', 'stats', 'value', 'stack', 'share', 'holdings', 'plan', 'road', 'outro'];
+export const SHORT_KINDS: CVKind[] = ['title', 'stats', 'value', 'share', 'road', 'outro'];
 
 /** ショート用の短い定型文（60秒以内に収めるため） */
 function shortText(r: AssetReport, k: CVKind): string | null {
@@ -112,6 +122,7 @@ function shortText(r: AssetReport, k: CVKind): string | null {
     case 'title': return `${r.channel}、${md(r.asOf)}時点の資産状況です。`;
     case 'stats': return `評価額は${yenJp(r.value)}、損益は${signed(r.pl, yenJp)}。1億円まで${r.goalPct.toFixed(2)}%の地点です。`;
     case 'value': return `緑の線が評価額、点線が元本です。今は評価額が元本を${r.pl >= 0 ? '上回って' : '少し下回って'}います。`;
+    case 'share': { const tot = r.holdings.reduce((a, h) => a + h.value, 0); const t = r.holdings[0]; return t && tot > 0 ? `いちばん多いのは${t.short}で、全体の${((t.value / tot) * 100).toFixed(1)}%です。` : null; }
     case 'road': return `今は${r.road.nowMonth}か月目。15年で1億円に必要な年率は、およそ${ratePct(r.road.rate)}です。`;
     case 'outro': return '続きは本編とチャンネル登録で。';
     default: return null;
@@ -120,14 +131,14 @@ function shortText(r: AssetReport, k: CVKind): string | null {
 
 /** 定型文の台本で場面を作る（データが無い場面は使わない） */
 export function buildAssetProject(r: AssetReport): CVProject {
-  const usable = (k: CVKind) => (k === 'stack' ? r.stack.rows.length >= 2 : k === 'holdings' ? r.holdings.length > 0 : k === 'value' ? r.points.filter((p) => p.value != null).length >= 2 : true);
+  const usable = (k: CVKind) => (k === 'stack' ? r.stack.rows.length >= 2 : k === 'holdings' || k === 'share' ? r.holdings.length > 0 : k === 'value' ? r.points.filter((p) => p.value != null).length >= 2 : true);
   const mk = (fmt: CVFormat) => (k: CVKind): CVScene => {
     const f = sceneFacts(r, k);
     const text = fmt === 'short' ? shortText(r, k) ?? f.text : f.text;
     return { key: `${fmt}:${k}`, kind: k, heading: HEADINGS[k], narration: text, reading: '', minSec: fmt === 'short' ? Math.max(4, MIN_SEC[k] - 2) : MIN_SEC[k], enabled: usable(k) };
   };
   return {
-    report: 'asset', asOf: r.asOf,
+    report: 'asset', version: CV_PROJECT_VERSION, asOf: r.asOf,
     long: LONG_KINDS.map(mk('long')),
     short: SHORT_KINDS.map(mk('short')),
     youtube: {

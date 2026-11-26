@@ -7,7 +7,11 @@ import { resolveBeginnerTrial } from '../investmentPerformance';
 import { withInitialSnapshot, purchasesMatched, checkpointsMatched } from '../beginnerTrialSeed';
 import { stackedHoldingRows, proxyForHolding, buildProxySeries, type Dated } from '../holdingProxies';
 import { TRIAL_RULES, requiredRate, simulatePlan, trialStatus, planVsActual, cagrOf, yearsToGoal, monthIndex, principalAt } from '../explainer/trialPlan';
-import { buildWeeklyData, shortFundName, WEEKLY_CHANNEL } from '../explainer/weeklyReportCore';
+import { buildWeeklyData, WEEKLY_CHANNEL } from '../explainer/weeklyReportCore';
+import { fundAbbr, fundKey } from './fundNames';
+
+/** 銘柄の色（どの場面でも同じ銘柄は同じ色。今の評価額が大きい順に割り当てる） */
+export const FUND_COLORS = ['#45C4B0', '#5B90C7', '#8E7CC3', '#D9A24B', '#7FA37A', '#BE7A63', '#C77FB0', '#4FA0A6', '#A3A24B', '#C0654B'];
 
 export const ASSET_CHANNEL = WEEKLY_CHANNEL;
 const BROKER_KEY = 'daiwa';
@@ -15,7 +19,7 @@ const ACCOUNT_LABEL = '大和コネクト証券';
 const START = '2026-01-01';
 const PROXY_CACHE_KEY = 'holding_proxy_cache_v1';
 
-export interface AssetHolding { name: string; short: string; value: number; pct: number | null; change: number | null }
+export interface AssetHolding { name: string; short: string; value: number; pct: number | null; change: number | null; color: string }
 export interface AssetReport {
   asOf: string;
   source: 'excel' | 'screenshot';
@@ -33,7 +37,7 @@ export interface AssetReport {
   /** 評価額・元本の推移（月末ごと＋最新） */
   points: { date: string; value: number | null; principal: number | null }[];
   /** 銘柄別の評価額の積み上げ（推計を含む） */
-  stack: { names: string[]; shorts: string[]; rows: { date: string; total: number; values: number[]; estimated: boolean }[] };
+  stack: { names: string[]; shorts: string[]; colors: string[]; rows: { date: string; total: number; values: number[]; estimated: boolean }[] };
   holdings: AssetHolding[];
   /** 計画（目標の年数で届く年率）と実績の月ごとの比較 */
   plan: { rate: number; rows: { ym: string; month: number; plan: number; principal: number; actual: number | null }[] };
@@ -97,10 +101,23 @@ export async function loadAssetReport(): Promise<{ report: AssetReport | null; e
   const cps = checkpointsMatched(snaps);
   const totals = [...points.filter((p) => !cps.some((c) => c.date === p.date)).map((p) => ({ date: p.date, value: p.value })), ...cps].sort((a, b) => a.date.localeCompare(b.date));
   const st = stackedHoldingRows(snaps, totals, proxyPriceOf(), START, purchases);
+  // 取り込みのたびに書き方が少し違う同じ銘柄（例：NF日経レバ と NEXT FUNDS 日経平均レバレッジ…）は1つにまとめる。
+  // 同じ日に2行ある場合（スクショと月末の推計など）は、実際の値（スクショ）を優先して1行にする
+  const keys = [...new Set(st.names.map(fundKey))];
+  const labelOf = new Map<string, string>();
+  for (const n of [...st.names].reverse()) labelOf.set(fundKey(n), fundAbbr(n)); // 新しい書き方（最後に出てきた名前）を優先
+  const byDate = new Map<string, { date: string; total: number; values: number[]; estimated: boolean }>();
+  for (const r of st.rows) {
+    const values = keys.map((k) => st.names.filter((n) => fundKey(n) === k).reduce((a, n) => a + (Number(r[n]) || 0), 0));
+    const row = { date: String(r.date), total: Number(r.total) || 0, values, estimated: !!r.estimated };
+    const prev = byDate.get(row.date);
+    if (!prev || (prev.estimated && !row.estimated)) byDate.set(row.date, row);
+  }
   const stack = {
-    names: st.names,
-    shorts: st.names.map(shortFundName),
-    rows: st.rows.map((r) => ({ date: String(r.date), total: Number(r.total) || 0, values: st.names.map((n) => Number(r[n]) || 0), estimated: !!r.estimated })),
+    names: keys,
+    shorts: keys.map((k) => labelOf.get(k) || k),
+    colors: [] as string[],
+    rows: [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date)),
   };
 
   // 前回のスクショからの変化（その間の買い付けは値上がりに含めない）
@@ -111,12 +128,22 @@ export async function loadAssetReport(): Promise<{ report: AssetReport | null; e
     const w = buildWeeklyData(snaps, buys);
     if (w && w.change != null) weekly = { prevDate: w.prevDate!, change: w.change, pct: w.pct };
   }
-  const wRows = new Map((w0 ? buildWeeklyData(snaps, []) : null)?.rows.map((r) => [r.name, r]) ?? []);
+  // 銘柄ごとの前回からの値動き（その間に買った分は値上がりに含めない）
+  const wBuys = w0?.prevDate ? purchases.filter((p) => p.date > w0.prevDate! && p.date <= w0.asOf).map((p) => ({ name: p.name, amount: p.amount })) : [];
+  const wRows = new Map((w0 ? buildWeeklyData(snaps, wBuys) : null)?.rows.map((r) => [fundKey(r.name), r]) ?? []);
   const holdingSrc: { name: string; value: number }[] = daiwa.length
     ? daiwa.map((h: any) => ({ name: h.name, value: h.amount }))
     : Object.entries(snaps[snaps.length - 1]?.items ?? {}).map(([name, v]) => ({ name, value: Number(v) }));
-  const holdings = holdingSrc.filter((h) => h.value > 0).sort((a, b) => b.value - a.value)
-    .map((h) => ({ name: h.name, short: shortFundName(h.name), value: h.value, pct: wRows.get(h.name)?.pct ?? null, change: wRows.get(h.name)?.change ?? null }));
+  const merged = new Map<string, { name: string; value: number }>();
+  for (const h of holdingSrc) { if (!(h.value > 0)) continue; const k = fundKey(h.name); const o = merged.get(k); merged.set(k, { name: o?.name ?? h.name, value: (o?.value ?? 0) + h.value }); }
+  const holdings = [...merged.entries()].sort((a, b) => b[1].value - a[1].value)
+    .map(([k, h], i) => ({ name: h.name, short: fundAbbr(h.name), value: h.value, pct: wRows.get(k)?.pct ?? null, change: wRows.get(k)?.change ?? null, color: FUND_COLORS[i % FUND_COLORS.length] }));
+  // 積み上げの色：今持っている銘柄はその色、もう持っていない銘柄は残りの色
+  const colorByKey = new Map([...merged.keys()].map((k, i) => [k, holdings[i]?.color]));
+  const order = [...merged.entries()].sort((a, b) => b[1].value - a[1].value).map(([k]) => k);
+  order.forEach((k, i) => colorByKey.set(k, FUND_COLORS[i % FUND_COLORS.length]));
+  let extra = order.length;
+  stack.colors = stack.names.map((k) => colorByKey.get(k) ?? FUND_COLORS[extra++ % FUND_COLORS.length]);
 
   const rate = requiredRate(TRIAL_RULES.targetYears);
   const plan = { rate, rows: planVsActual(valuePts, latest.date.slice(0, 7), rate) };

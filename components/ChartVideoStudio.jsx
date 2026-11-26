@@ -8,7 +8,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Play, Square, Download, RefreshCw, Sparkles, ChevronRight, Copy, Check, AlertTriangle } from "lucide-react";
 import { loadAssetReport } from "@/lib/chartVideo/assetReport";
-import { buildAssetProject, refreshFacts, generateAssetScript } from "@/lib/chartVideo/assetScript";
+import { buildAssetProject, refreshFacts, generateAssetScript, CV_PROJECT_VERSION } from "@/lib/chartVideo/assetScript";
 import { drawCVFrame, sceneDurations, sceneAt, CV_SIZE } from "@/lib/chartVideo/render";
 import { AudioMixer, getTtsBaseUrl } from "@/lib/videoAudioMixer";
 import { listAivisVoices, isAivisVoice } from "@/lib/videoAivisClient";
@@ -50,8 +50,11 @@ export default function ChartVideoStudio() {
     if (!r) return;
     let saved = null;
     try { saved = JSON.parse(localStorage.getItem(PROJECT_KEY) || "null"); } catch (e) { saved = null; }
-    if (saved && saved.asOf === r.asOf && saved.long && saved.short) setProj(saved);
-    else if (saved && saved.long) { setProj(refreshFacts(saved, r)); setNote(`データが新しくなった（${r.asOf}時点）ので、台本を今の数字で作り直しました。`); }
+    if (saved && saved.asOf === r.asOf && saved.long && saved.short && saved.version === CV_PROJECT_VERSION) setProj(saved);
+    else if (saved && saved.long) {
+      setProj(refreshFacts(saved, r));
+      setNote(saved.version !== CV_PROJECT_VERSION ? "場面の構成が新しくなった（銘柄シェアの円グラフを追加・銘柄名を略称に）ので、台本を作り直しました。" : `データが新しくなった（${r.asOf}時点）ので、台本を今の数字で作り直しました。`);
+    }
     else setProj(buildAssetProject(r));
   };
   useEffect(() => { reload(); loadReadingDict(getTtsBaseUrl).catch(() => {}); }, []);

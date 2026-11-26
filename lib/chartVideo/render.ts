@@ -79,6 +79,11 @@ function smoothPath(c: Ctx, pts: { x: number; y: number }[], move = true) {
   for (let i = 1; i < n - 1; i++) m.push(d[i - 1] * d[i] <= 0 ? 0 : (d[i - 1] + d[i]) / 2);
   m.push(d[n - 2]);
   for (let i = 0; i < n - 1; i++) {
+    if (d[i] === 0) { m[i] = 0; m[i + 1] = 0; continue; }
+    const a = m[i] / d[i], b = m[i + 1] / d[i], h2 = a * a + b * b;
+    if (h2 > 9) { const t = 3 / Math.sqrt(h2); m[i] = t * a * d[i]; m[i + 1] = t * b * d[i]; }
+  }
+  for (let i = 0; i < n - 1; i++) {
     const h = pts[i + 1].x - pts[i].x;
     c.bezierCurveTo(pts[i].x + h / 3, pts[i].y + (m[i] * h) / 3, pts[i + 1].x - h / 3, pts[i + 1].y - (m[i + 1] * h) / 3, pts[i + 1].x, pts[i + 1].y);
   }
@@ -315,11 +320,11 @@ const drawValue: DrawFn = (c, L, r, _sc, p) => {
 const drawStack: DrawFn = (c, L, r, _sc, p) => {
   const rows = r.stack.rows;
   if (rows.length < 2) return;
-  const xs = rows.map((q) => dayNum(q.date));
+  const xs = rows.map((_, i) => i); // 等間隔（ダッシュボードのグラフと同じ見え方）
   const hi = Math.max(...rows.map((q) => q.values.reduce((a, b) => a + b, 0)));
   const ticks = niceTicks(0, hi * 1.06, 4);
-  const legendH = L.portrait ? Math.ceil(r.stack.names.length / 2) * 54 * L.s + 20 * L.s : 0;
-  const R = { ...L.content, y: L.content.y + (L.portrait ? legendH : 10 * L.s), w: L.portrait ? L.content.w : L.content.w - 360 * L.s, h: L.content.h - (L.portrait ? legendH : 10 * L.s) };
+  const legendH = L.portrait ? r.stack.names.length * 46 * L.s + 20 * L.s : 0;
+  const R = { ...L.content, y: L.content.y + (L.portrait ? legendH : 10 * L.s), w: L.portrait ? L.content.w : L.content.w - 450 * L.s, h: L.content.h - (L.portrait ? legendH : 10 * L.s) };
   const labels: { x: number; label: string }[] = [];
   let lastYm = '';
   rows.forEach((q, i) => { const ym = q.date.slice(0, 7); if (ym !== lastYm && (labels.length === 0 || i - labels.length * 0 >= 0)) { lastYm = ym; labels.push({ x: xs[i], label: `${Number(q.date.slice(5, 7))}月` }); } });
@@ -334,7 +339,7 @@ const drawStack: DrawFn = (c, L, r, _sc, p) => {
     const lowP = rows.map((q, i) => ({ x: A.X(xs[i]), y: A.Y(base[i]) }));
     rows.forEach((q, i) => { base[i] += q.values[j]; });
     const upP = rows.map((q, i) => ({ x: A.X(xs[i]), y: A.Y(base[i]) }));
-    const col = HOLDING_COLORS[j % HOLDING_COLORS.length];
+    const col = r.stack.colors?.[j] ?? HOLDING_COLORS[j % HOLDING_COLORS.length];
     c.beginPath(); smoothPath(c, upP); smoothPath(c, [...lowP].reverse(), false); c.closePath();
     c.globalAlpha = 0.78; c.fillStyle = col; c.fill(); c.globalAlpha = 1;
     c.beginPath(); smoothPath(c, upP); c.strokeStyle = col; c.lineWidth = 2.5 * L.s; c.stroke();
@@ -350,13 +355,57 @@ const drawStack: DrawFn = (c, L, r, _sc, p) => {
   // 凡例
   const lk = easeOut(sub(p, 0.2, 0.4));
   r.stack.shorts.forEach((nm, j) => {
-    const col = HOLDING_COLORS[j % HOLDING_COLORS.length];
-    const lx = L.portrait ? L.content.x + (j % 2) * (L.content.w / 2) : L.content.x + L.content.w - 330 * L.s;
-    const ly = L.portrait ? L.content.y + Math.floor(j / 2) * 54 * L.s + 30 * L.s : L.content.y + 40 * L.s + j * 56 * L.s;
-    c.save(); c.globalAlpha *= lk; rr(c, lx, ly - 24 * L.s, 28 * L.s, 28 * L.s, 6 * L.s); c.fillStyle = col; c.fill(); c.restore();
-    text(c, nm, lx + 42 * L.s, ly, 28 * L.s, CVC.text, { alpha: lk, maxW: (L.portrait ? L.content.w / 2 : 330 * L.s) - 50 * L.s });
+    const col = r.stack.colors?.[j] ?? HOLDING_COLORS[j % HOLDING_COLORS.length];
+    const lx = L.portrait ? L.content.x : L.content.x + L.content.w - 420 * L.s;
+    const ly = L.portrait ? L.content.y + j * 46 * L.s + 26 * L.s : L.content.y + 40 * L.s + j * 52 * L.s;
+    c.save(); c.globalAlpha *= lk; rr(c, lx, ly - 22 * L.s, 26 * L.s, 26 * L.s, 6 * L.s); c.fillStyle = col; c.fill(); c.restore();
+    text(c, nm, lx + 40 * L.s, ly, 26 * L.s, CVC.text, { alpha: lk, maxW: (L.portrait ? L.content.w : 420 * L.s) - 46 * L.s });
   });
   if (rows.some((q) => q.estimated)) text(c, '※スクショの無い月は、値動きからの推計です', L.content.x + (L.portrait ? 0 : 110 * L.s), L.content.y + L.content.h + 26 * L.s, 22 * L.s, CVC.dim, { alpha: lk });
+};
+
+/** 今のシェア：ドーナツ型の円グラフが時計回りに描かれ、凡例に銘柄・割合・金額が順に出る */
+const drawShare: DrawFn = (c, L, r, _sc, p, t) => {
+  const list = r.holdings.filter((h) => h.value > 0);
+  if (!list.length) return;
+  const tot = list.reduce((a, h) => a + h.value, 0);
+  const R = L.content;
+  const rad = L.portrait ? Math.min(R.w * 0.3, 250 * L.s) : Math.min(R.h * 0.46, 300 * L.s);
+  const cx = L.portrait ? R.x + R.w / 2 : R.x + rad + 40 * L.s, cy = L.portrait ? R.y + rad + 20 * L.s : R.y + R.h / 2;
+  const inner = rad * 0.58;
+  const sweep = Math.PI * 2 * easeInOut(sub(p, 0.05, 0.55));
+  let a0 = -Math.PI / 2;
+  list.forEach((h, i) => {
+    const span = (h.value / tot) * Math.PI * 2;
+    const a1 = Math.min(a0 + span, -Math.PI / 2 + sweep);
+    if (a1 > a0) {
+      // いちばん大きい銘柄は、描き終わったあと少し外に出して強調する
+      const pop = i === 0 ? easeOut(sub(p, 0.6, 0.72)) * (8 + 2 * Math.sin(t * 3)) * L.s : 0;
+      const mid = a0 + span / 2;
+      c.save(); c.translate(Math.cos(mid) * pop, Math.sin(mid) * pop);
+      c.beginPath(); c.arc(cx, cy, rad, a0, a1); c.arc(cx, cy, inner, a1, a0, true); c.closePath();
+      c.fillStyle = h.color ?? HOLDING_COLORS[i % HOLDING_COLORS.length]; c.fill();
+      c.strokeStyle = CVC.bg0; c.lineWidth = 3 * L.s; c.stroke();
+      c.restore();
+    }
+    a0 += span;
+  });
+  const ck = easeOut(sub(p, 0.4, 0.6));
+  text(c, '合計', cx, cy - 18 * L.s, 30 * L.s, CVC.muted, { align: 'center', alpha: ck });
+  text(c, yenShort(tot), cx, cy + 34 * L.s, (L.portrait ? 50 : 46) * L.s, CVC.text, { align: 'center', bold: true, mono: true, alpha: ck });
+  // 凡例：色・略称・割合・金額
+  const lx = L.portrait ? R.x : cx + rad + 90 * L.s;
+  const ly0 = L.portrait ? cy + rad + 64 * L.s : R.y + Math.max(0, (R.h - list.length * 76 * L.s) / 2) + 40 * L.s;
+  const rowH = (L.portrait ? Math.min(54, 420 / Math.max(1, Math.min(9, list.length))) : 76) * L.s, lw = L.portrait ? R.w : R.x + R.w - lx;
+  list.slice(0, 9).forEach((h, i) => {
+    const k = easeOut(sub(p, 0.15 + i * 0.06, 0.35 + i * 0.06));
+    const y = ly0 + i * rowH;
+    const pct = (h.value / tot) * 100;
+    c.save(); c.globalAlpha *= k; rr(c, lx, y - 26 * L.s, 30 * L.s, 30 * L.s, 7 * L.s); c.fillStyle = h.color ?? HOLDING_COLORS[i % HOLDING_COLORS.length]; c.fill(); c.restore();
+    text(c, h.short, lx + 46 * L.s, y, 32 * L.s, CVC.text, { bold: i === 0, alpha: k, maxW: lw - 46 * L.s - 330 * L.s });
+    text(c, `${(pct * easeOut(sub(p, 0.3, 0.7))).toFixed(1)}%`, lx + lw - 200 * L.s, y, 34 * L.s, i === 0 ? CVC.amber : CVC.text, { align: 'right', bold: true, mono: true, alpha: k });
+    text(c, yenShort(h.value), lx + lw, y, 28 * L.s, CVC.muted, { align: 'right', mono: true, alpha: k });
+  });
 };
 
 const drawHoldings: DrawFn = (c, L, r, _sc, p) => {
@@ -364,11 +413,11 @@ const drawHoldings: DrawFn = (c, L, r, _sc, p) => {
   if (!list.length) return;
   const R = L.content, maxV = Math.max(...list.map((h) => h.value));
   const rowH = Math.min((L.portrait ? 120 : 92) * L.s, R.h / list.length);
-  const nameW = (L.portrait ? 0 : 330) * L.s, valW = (L.portrait ? 0 : 260) * L.s, pctW = (L.portrait ? 0 : 190) * L.s;
+  const nameW = (L.portrait ? 0 : 430) * L.s, valW = (L.portrait ? 0 : 250) * L.s, pctW = (L.portrait ? 0 : 170) * L.s;
   list.forEach((h, i) => {
     const k = easeOut(sub(p, 0.05 + i * 0.07, 0.4 + i * 0.07));
     const y = R.y + i * rowH;
-    const col = HOLDING_COLORS[i % HOLDING_COLORS.length];
+    const col = h.color ?? HOLDING_COLORS[i % HOLDING_COLORS.length];
     if (L.portrait) {
       text(c, h.short, R.x, y + 34 * L.s, 32 * L.s, CVC.text, { bold: true, alpha: easeOut(sub(p, i * 0.07, 0.15 + i * 0.07)), maxW: R.w * 0.55 });
       text(c, yenFull(h.value * k), R.x + R.w, y + 34 * L.s, 30 * L.s, CVC.text, { align: 'right', mono: true, alpha: k });
@@ -377,7 +426,7 @@ const drawHoldings: DrawFn = (c, L, r, _sc, p) => {
       if (h.pct != null) text(c, pctSigned(h.pct), R.x + R.w, y + 78 * L.s, 30 * L.s, h.pct >= 0 ? CVC.teal : CVC.rust, { align: 'right', bold: true, mono: true, alpha: sub(p, 0.45 + i * 0.07, 0.6 + i * 0.07) });
       return;
     }
-    text(c, h.short, R.x, y + rowH / 2 + 12 * L.s, 34 * L.s, CVC.text, { bold: true, alpha: easeOut(sub(p, i * 0.07, 0.15 + i * 0.07)), maxW: nameW - 20 * L.s });
+    text(c, h.short, R.x, y + rowH / 2 + 11 * L.s, 30 * L.s, CVC.text, { bold: true, alpha: easeOut(sub(p, i * 0.07, 0.15 + i * 0.07)), maxW: nameW - 20 * L.s });
     const bx = R.x + nameW, bwMax = R.w - nameW - valW - pctW;
     rr(c, bx, y + rowH * 0.22, Math.max(4, bwMax * (h.value / maxV) * k), rowH * 0.56, 10 * L.s); c.fillStyle = col; c.fill();
     text(c, yenFull(h.value * k), bx + bwMax + valW - 10 * L.s, y + rowH / 2 + 12 * L.s, 32 * L.s, CVC.text, { align: 'right', mono: true, alpha: k });
@@ -478,7 +527,7 @@ const drawOutro: DrawFn = (c, L, r, _sc, p, t) => {
   text(c, '※投資の判断はご自身でお願いします。過去の実績は将来の成果を保証しません。', cx, L.portrait ? L.H * 0.7 : L.H * 0.84, 24 * L.s, CVC.dim, { align: 'center', alpha: bk });
 };
 
-const DRAW: Record<string, DrawFn> = { title: drawTitle, rules: drawRules, stats: drawStats, value: drawValue, stack: drawStack, holdings: drawHoldings, plan: drawPlan, road: drawRoad, outro: drawOutro };
+const DRAW: Record<string, DrawFn> = { title: drawTitle, rules: drawRules, stats: drawStats, value: drawValue, stack: drawStack, share: drawShare, holdings: drawHoldings, plan: drawPlan, road: drawRoad, outro: drawOutro };
 
 export interface CVFrame { report: AssetReport; scenes: CVScene[]; durs: number[]; subtitles: boolean }
 
