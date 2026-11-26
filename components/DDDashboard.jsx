@@ -2795,8 +2795,8 @@ function CrashCompareChartBody({ comparisonData, selectedCrash, hiddenCrash, fon
         <ReferenceArea y1={0} y2={30} fill={C.teal} fillOpacity={0.07} />
         <ReferenceLine y={70} stroke={C.rust} strokeDasharray="4 3" strokeWidth={1.1} label={{ value: "70 買われすぎ", position: "insideBottomRight", fill: C.rust, fontSize: small }} />
         <ReferenceLine y={30} stroke={C.teal} strokeDasharray="4 3" strokeWidth={1.1} label={{ value: "30 売られすぎ", position: "insideTopRight", fill: C.teal, fontSize: small }} />
+        {!hiddenCrash.current && <Line type="monotone" dataKey="current__rsi" stroke={C.teal} strokeOpacity={0.5} strokeWidth={2} dot={false} isAnimationActive={false} connectNulls />}
         {selectedCrash && !hiddenCrash[selectedCrash.id] && <Line type="monotone" dataKey={`${selectedCrash.id}__rsi`} stroke={C.rust} strokeWidth={1.3} dot={false} isAnimationActive={false} connectNulls />}
-        {!hiddenCrash.current && <Line type="monotone" dataKey="current__rsi" stroke={C.teal} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls />}
       </LineChart>
     </div>
   );
@@ -4162,9 +4162,10 @@ function CrashRsiChart({ crash, compareCrashes = [], currentEpisodeCurve, hidden
       <ReferenceArea y1={0} y2={30} fill={C.teal} fillOpacity={0.07} />
       <ReferenceLine y={70} stroke={C.rust} strokeDasharray="4 3" strokeWidth={1.1} label={{ value: "70 買われすぎ", position: "insideBottomRight", fill: C.rust, fontSize: 9 }} />
       <ReferenceLine y={30} stroke={C.teal} strokeDasharray="4 3" strokeWidth={1.1} label={{ value: "30 売られすぎ", position: "insideTopRight", fill: C.teal, fontSize: 9 }} />
+      {/* 現在（緑）は半透明で下に描き、重なった部分でも過去の暴落のRSIが見えるようにする */}
+      {!hiddenLines.current && <Line data={currentEpisodeCurve} dataKey="rsi" type="monotone" stroke={C.teal} strokeOpacity={0.5} strokeWidth={2.2} dot={false} isAnimationActive={false} connectNulls name="current" />}
       {!hiddenLines.main && <Line data={crash.curve} dataKey="rsi" type="monotone" stroke={C.rust} strokeWidth={1.4} dot={false} isAnimationActive={false} connectNulls name="main" />}
       {compareCrashes.map((c, i) => <Line key={c.id} data={c.curve} dataKey="rsi" type="monotone" stroke={c.lineColor ?? COMPARE_COLORS[i] ?? C.gray} strokeWidth={0.8} dot={false} isAnimationActive={false} connectNulls name={c.id} />)}
-      {!hiddenLines.current && <Line data={currentEpisodeCurve} dataKey="rsi" type="monotone" stroke={C.teal} strokeWidth={2} dot={false} isAnimationActive={false} connectNulls name="current" />}
     </LineChart>
   );
 }
