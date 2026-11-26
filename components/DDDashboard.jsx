@@ -2066,6 +2066,31 @@ function computePeriodStats(periodRange, episodes) {
   return { periodReturn, maxDD, ddCount: eventsInRange.length, worstEpisode, athUpdateCount };
 }
 // 目盛りの日付：6年を超える範囲は年だけ、それ以下は年/月（3〜5年の表示で同じ年が並ばないように）
+// 年の切れ目（その年の最初のデータの日付）。縦の補助線と、長い期間の横軸の目盛に使う。
+// 年が多いときは間引く（16年以上＝2年ごと、31年以上＝5年ごと）。1年強より短い期間では使わない
+function yearStartDates(rows, rangeDays) {
+  if (!rows?.length || rangeDays < 400) return [];
+  const out = [];
+  let prevY = null;
+  for (const p of rows) { const y = p.date.getFullYear(); if (prevY !== null && y !== prevY) out.push(p.date); prevY = y; }
+  const step = out.length > 30 ? 5 : out.length > 15 ? 2 : 1;
+  return out.filter((dt) => dt.getFullYear() % step === 0);
+}
+// 年の切れ目の縦の補助線（RechartsのReferenceLineは日付の値を受け付けないため、横軸の目盛の位置に自分で線を引く）
+function YearGridLines({ xAxisMap, offset, dates }) {
+  const ax = xAxisMap && Object.values(xAxisMap)[0];
+  if (!ax?.scale || !offset || !dates?.length) return null;
+  const half = typeof ax.scale.bandwidth === "function" ? ax.scale.bandwidth() / 2 : 0;
+  return (
+    <g pointerEvents="none">
+      {dates.map((dt) => {
+        const x = ax.scale(dt);
+        if (x == null || !Number.isFinite(x)) return null;
+        return <line key={dt.getTime()} x1={x + half} x2={x + half} y1={offset.top} y2={offset.top + offset.height} stroke={C.textMuted} strokeOpacity={0.4} strokeWidth={1} strokeDasharray="3 4" />;
+      })}
+    </g>
+  );
+}
 function fmtAxisDate(d, rangeDays) { if (rangeDays > 2200) return `${d.getFullYear()}`; if (rangeDays > 120) return `${d.getFullYear()}/${d.getMonth() + 1}`; return `${d.getMonth() + 1}/${d.getDate()}`; }
 function fmtYMD(d) { return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`; }
 // 米国東部時間（NY市場基準）の年月日を "YYYY/M/D" 形式で返す。ヘッダーの日付表示・当日更新判定の基準に使う。
@@ -2282,6 +2307,9 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBru
   const leftW = compact ? 40 : 48, rightW = compact ? 38 : 46;
   // スクロールバー（Brush）は一番下に置く：RSI表示時はRSIの枠の下に付け、syncIdで上のチャートも同じ期間に絞り込む
   const mainH = showRsi && height ? Math.round((height - (withBrush ? 30 : 0)) * 0.72) : height;
+  // 年の切れ目の縦の補助線。長い期間（年表示）のときは、横軸の目盛も年の切れ目にそろえる（同じ年が2回出ないように）
+  const yearLines = yearStartDates(chartData, rangeDays);
+  const yearTicks = rangeDays > 2200 && yearLines.length ? { ticks: yearLines, interval: 0 } : {};
   const main = (
     <ComposedChart
       syncId={showRsi ? syncId : undefined}
@@ -2294,13 +2322,14 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBru
         <linearGradient id={priceFillId} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={priceColor} stopOpacity={0.22} /><stop offset="100%" stopColor={priceColor} stopOpacity={0} /></linearGradient>
       </defs>
       <CartesianGrid stroke={C.borderSoft} vertical={false} />
-      <XAxis dataKey="date" tickFormatter={(dt) => fmtAxisDate(dt, rangeDays)} tick={{ fill: C.textDim, fontSize }} axisLine={{ stroke: C.border }} tickLine={false} minTickGap={40} />
+      <XAxis dataKey="date" tickFormatter={(dt) => fmtAxisDate(dt, rangeDays)} tick={{ fill: C.textDim, fontSize }} axisLine={{ stroke: C.border }} tickLine={false} minTickGap={40} {...yearTicks} />
       <YAxis yAxisId="price" domain={["auto", "auto"]} tick={{ fill: priceColor, fontSize }} axisLine={false} tickLine={false} width={compact ? 40 : 48} label={{ value: "評価額", angle: -90, position: "insideLeft", fill: priceColor, fontSize }} />
       <YAxis yAxisId="dd" orientation="right" domain={[ddTicks[ddTicks.length - 1], 0]} ticks={ddTicks} interval={0} tick={{ fill: C.rust, fontSize }} axisLine={false} tickLine={false} width={compact ? 38 : 46} label={{ value: "DD%", angle: 90, position: "insideRight", fill: C.rust, fontSize }} />
       <Tooltip offset={TOOLTIP_OFFSET} position={tooltipBottomPos(mainH, margin.bottom, withBrush && !showRsi ? 26 : 0)} content={(props) => <AnchorBottom on={!!mainH}><EvalTooltipContent {...props} markerByTime={markerByTime} showRsi={showRsi} currency={d?.currency} /></AnchorBottom>} />
       {MILESTONES.filter((t) => t !== -3).map((t) => (<ReferenceLine key={t} yAxisId="dd" y={t} stroke={C.borderSoft} strokeDasharray="2 3" label={{ value: `${t}%`, position: "insideBottomRight", fill: C.textDim, fontSize: Math.max(8, fontSize - 2) }} />))}
       {/* DD-3%の目安ライン。値はDD%軸の目盛（常に-3を含む）で示すため、チャート内のラベルは付けない */}
       <ReferenceLine yAxisId="dd" y={-3} stroke={C.rust} strokeDasharray="4 3" strokeWidth={1.3} />
+      {yearLines.length > 0 && <Customized component={<YearGridLines dates={yearLines} />} />}
       {showSpyListing && chartData[0].date < SPY_LISTING_DATE && chartData[chartData.length - 1].date > SPY_LISTING_DATE && (<ReferenceLine yAxisId="price" x={SPY_LISTING_DATE} stroke={C.violet} strokeDasharray="3 3" label={{ value: "SPY上場（1993）", fill: C.violet, fontSize: Math.max(9, fontSize - 1), position: "top" }} />)}
       <Area yAxisId="dd" type="linear" dataKey="dd" stroke={C.rust} fill="url(#ddFill)" strokeWidth={1.3} dot={false} isAnimationActive={false} fillOpacity={hidden.dd ? 0 : 1} strokeOpacity={hidden.dd ? 0 : 1} />
       <Area yAxisId="price" type="linear" dataKey="price" stroke={priceColor} fill={`url(#${priceFillId})`} strokeWidth={1.8} dot={false} isAnimationActive={false} fillOpacity={hidden.price ? 0 : 1} strokeOpacity={hidden.price ? 0 : 1} />
@@ -2323,6 +2352,7 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBru
         <Tooltip content={() => null} cursor={{ stroke: C.textDim, strokeDasharray: "3 3" }} />
         {/* 70以上＝買われすぎ・30以下＝売られすぎの帯と線 */}
         <ReferenceArea yAxisId="rsi" y1={70} y2={100} fill={C.rust} fillOpacity={0.07} />
+        {yearLines.length > 0 && <Customized component={<YearGridLines dates={yearLines} />} />}
         <ReferenceArea yAxisId="rsi" y1={0} y2={30} fill={C.teal} fillOpacity={0.07} />
         <ReferenceLine yAxisId="rsi" y={70} stroke={C.rust} strokeDasharray="4 3" strokeWidth={1.2} label={{ value: "70 買われすぎ", position: "insideBottomRight", fill: C.rust, fontSize: small }} />
         <ReferenceLine yAxisId="rsi" y={30} stroke={C.teal} strokeDasharray="4 3" strokeWidth={1.2} label={{ value: "30 売られすぎ", position: "insideTopRight", fill: C.teal, fontSize: small }} />
@@ -2447,6 +2477,8 @@ function MultiPriceChartBody({ keys, views, hidden, fontSize = 10, compact = fal
   const active = keys.filter((k) => views[k]);
   const data = mergeMultiChartData(active, views);
   const rangeDays = data.length ? Math.round((data[data.length - 1].date - data[0].date) / 86400000) : 0;
+  const yearLines = yearStartDates(data, rangeDays);
+  const yearTicks = rangeDays > 2200 && yearLines.length ? { ticks: yearLines, interval: 0 } : {};
   const markerFontSize = Math.max(8, fontSize - 1);
   const markerPoints = [];
   for (const k of active) {
@@ -2459,12 +2491,13 @@ function MultiPriceChartBody({ keys, views, hidden, fontSize = 10, compact = fal
   return (
     <ComposedChart width={width} height={height} data={data} margin={compact ? { top: 10, right: 2, left: 0, bottom: 0 } : { top: 12, right: 8, left: 0, bottom: 0 }}>
       <CartesianGrid stroke={C.borderSoft} vertical={false} />
-      <XAxis dataKey="date" tickFormatter={(dt) => fmtAxisDate(dt, rangeDays)} tick={{ fill: C.textDim, fontSize }} axisLine={{ stroke: C.border }} tickLine={false} minTickGap={40} />
+      <XAxis dataKey="date" tickFormatter={(dt) => fmtAxisDate(dt, rangeDays)} tick={{ fill: C.textDim, fontSize }} axisLine={{ stroke: C.border }} tickLine={false} minTickGap={40} {...yearTicks} />
       {active.map((k, i) => {
         const sr = MULTI_SERIES[k];
         return <YAxis key={k} yAxisId={sr.yAxisId} orientation={i === 0 ? "left" : "right"} domain={["auto", "auto"]} tick={{ fill: sr.color, fontSize }} axisLine={false} tickLine={false} width={compact ? 44 : 52} label={{ value: sr.name, angle: i === 0 ? -90 : 90, position: i === 0 ? "insideLeft" : "insideRight", fill: sr.color, fontSize }} />;
       })}
       <Tooltip offset={TOOLTIP_OFFSET} position={tooltipBottomPos(height, 0)} content={(props) => <AnchorBottom on={!!height}><MultiTooltipContent {...props} markersByTime={markersByTime} hidden={hidden} keys={active} /></AnchorBottom>} />
+      {yearLines.length > 0 && <Customized component={<YearGridLines dates={yearLines} />} />}
       {active.map((k) => { const sr = MULTI_SERIES[k]; return <Line key={k} yAxisId={sr.yAxisId} type="linear" dataKey={sr.priceKey} stroke={sr.color} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls hide={!!hidden[sr.hiddenKey]} name={sr.name} />; })}
       {/* 単体表示と同様のATH補助線（DD開始～回復の間は水平になり、ドローダウン区間が分かる）。各銘柄の系列色の点線で描く */}
       {active.map((k) => { const sr = MULTI_SERIES[k]; return <Line key={`${k}-ath`} yAxisId={sr.yAxisId} type="linear" dataKey={sr.athKey} stroke={sr.color} strokeDasharray="3 4" strokeWidth={1} strokeOpacity={0.7} dot={false} activeDot={false} isAnimationActive={false} connectNulls hide={!!hidden[sr.hiddenKey] || !!hidden.markers} name={`${sr.name} ATH`} />; })}
