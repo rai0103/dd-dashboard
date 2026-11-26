@@ -423,7 +423,7 @@ function computeAll(rawSeries, trackRecordOverride, opts = {}) {
   const legDays = (episode.prevIdx !== -1 && episode.currentIdx !== -1) ? FULL[episode.currentIdx].i - FULL[episode.prevIdx].i : null;
   const isEntryLeg = episode.prevT === -3 && episode.currentT === -5;
   const currentTLabel = currentDD <= -50 ? "-50%以上" : (episode.currentT !== null ? `${episode.currentT}%` : "—");
-  const currentEpisodeCurve = FULL.slice(episode.athIdx, last.i + 1).map((p, idx) => ({ day: idx, dd: p.dd })); // day=0が直近ATH（DD0%）起点。暴落比較チャートの各局面と同じ基準に揃える
+  const currentEpisodeCurve = FULL.slice(episode.athIdx, last.i + 1).map((p, idx) => ({ day: idx, dd: p.dd, rsi: p.rsi ?? null })); // day=0が直近ATH（DD0%）起点。暴落比較チャートの各局面と同じ基準に揃える
   const speedCategory = legDays !== null ? (legDays <= 5 ? "急落" : "緩慢") : null;
   const nextProg = episode.currentT !== null ? trackRecord.progression.find((r) => r.from === episode.currentT) : null;
   const modelRow = nearestModelRow(currentDD, trackRecord.dynamicModelRows);
@@ -1780,7 +1780,7 @@ function buildHistoricalCrashes(FULL, minDD = CRASH_DETECT_MIN_DD, { includeOngo
     const endIdx = e.isOngoing ? FULL.length - 1 : e.recoveryIdx;
     const start = isoFromDate(e.athDate), low = isoFromDate(e.troughDate), athRecoveryDate = e.isOngoing ? null : isoFromDate(e.recoveryDate);
     const troughDay = e.troughIdx - e.athIdx, recoveryDay = endIdx - e.athIdx;
-    const curve = FULL.slice(e.athIdx, endIdx + 1).map((p, i) => ({ day: i, dd: p.dd, date: p.date }));
+    const curve = FULL.slice(e.athIdx, endIdx + 1).map((p, i) => ({ day: i, dd: p.dd, date: p.date, rsi: p.rsi ?? null }));
     const maxDD = Number(e.troughDD.toFixed(1));
     // KNOWN_CRASH_METAに該当しない局面は、ATH日（DD開始日）をキーにMINOR_EPISODE_METAの名称・トピックスを引く。
     // 登録が無い局面のうち、AUTO_EPISODE_LIST_FROM以降のものは名称・主要イベントを価格データから自動生成する。
@@ -1910,8 +1910,9 @@ function buildComparisonData(currentEpisodeCurve, crashes, qqqCrashCurve = null,
   const rows = [];
   for (let d = 0; d <= maxDay; d++) {
     const row = { day: d };
-    for (const c of crashes) row[c.id] = d < c.curve.length ? c.curve[d].dd : 0;
+    for (const c of crashes) { row[c.id] = d < c.curve.length ? c.curve[d].dd : 0; row[`${c.id}__rsi`] = d < c.curve.length ? c.curve[d].rsi ?? undefined : undefined; }
     row.current = d < currentEpisodeCurve.length ? currentEpisodeCurve[d].dd : undefined;
+    row.current__rsi = d < currentEpisodeCurve.length ? currentEpisodeCurve[d].rsi ?? undefined : undefined; // RSI（下の枠）
     if (qqqEpisodeCurve) row.qqq = d < qqqEpisodeCurve.length ? qqqEpisodeCurve[d].dd : undefined;
     if (goldCrashCurve) row.gold = d < goldCrashCurve.curve.length ? goldCrashCurve.curve[d].price : undefined; // 価格（$）。右軸で表示
     rows.push(row);
@@ -2761,8 +2762,13 @@ function YearComparePanel({ FULL, qqqFULL = [], nkxFULL = [], fontSize = 10, sho
 // 暴落比較（経過日数ベース）のチャート本体。拡大表示（DDChartModalContent）とスマホ縦画面のチャートタブで共通。
 // ResponsiveContainerの直下に置く（width/heightはResponsiveContainerから渡される）。
 function CrashCompareChartBody({ comparisonData, selectedCrash, hiddenCrash, fontSize = 10, margin = { top: 12, right: 20, left: 0, bottom: 0 }, width, height }) {
-  return (
-    <LineChart width={width} height={height} data={comparisonData} margin={margin}>
+  // RSI（14日）：高さに余裕がある拡大表示のときは、下に別の枠でメインの暴落と現在のRSIを重ねる（syncIdで日数の位置をそろえる）
+  const syncId = useId();
+  const showRsi = (height ?? 0) >= 300 && comparisonData.some((r) => r.current__rsi != null || (selectedCrash && r[`${selectedCrash.id}__rsi`] != null));
+  const mainH = showRsi ? Math.round(height * 0.72) : height;
+  const hasGoldAxis = comparisonData[0]?.gold !== undefined && !hiddenCrash.gold;
+  const main = (
+    <LineChart syncId={showRsi ? syncId : undefined} width={width} height={mainH} data={comparisonData} margin={showRsi ? { ...margin, bottom: Math.max(margin.bottom ?? 0, 12) } : margin}>
       <CartesianGrid stroke={C.borderSoft} vertical={false} />
       <XAxis dataKey="day" tick={{ fill: C.textDim, fontSize }} axisLine={{ stroke: C.border }} tickLine={false} label={{ value: "経過日数（下落開始起点）", position: "insideBottom", offset: -2, fill: C.textDim, fontSize }} />
       <YAxis domain={comparisonYDomain(comparisonData)} tick={{ fill: C.textDim, fontSize }} axisLine={false} tickLine={false} width={44} />
@@ -2773,6 +2779,26 @@ function CrashCompareChartBody({ comparisonData, selectedCrash, hiddenCrash, fon
       {comparisonData[0]?.qqq !== undefined && !hiddenCrash.qqq && <Line type="monotone" dataKey="qqq" stroke={C.violet} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls={false} name="Nasdaq（QQQ・同期間）" />}
       {comparisonData[0]?.gold !== undefined && !hiddenCrash.gold && <Line yAxisId="gold" type="monotone" dataKey="gold" stroke={C.gold} strokeOpacity={GOLD_LINE_OPACITY} strokeWidth={1.6} dot={false} isAnimationActive={false} connectNulls={false} name="GOLD（同期間・右軸$）" />}
     </LineChart>
+  );
+  if (!showRsi) return main;
+  const small = Math.max(8, fontSize - 1);
+  return (
+    <div style={{ width, height }}>
+      {main}
+      <LineChart syncId={syncId} width={width} height={height - mainH} data={comparisonData} margin={{ ...margin, top: 4, bottom: 0 }}>
+        <CartesianGrid stroke={C.borderSoft} vertical={false} />
+        <XAxis dataKey="day" hide />
+        <YAxis domain={[0, 100]} ticks={[30, 70]} interval={0} tick={{ fill: C.violet, fontSize: small }} axisLine={false} tickLine={false} width={44} label={{ value: "RSI", angle: -90, position: "insideLeft", fill: C.violet, fontSize }} />
+        {hasGoldAxis && <YAxis yAxisId="pad" orientation="right" tick={false} axisLine={false} tickLine={false} width={52} />}
+        <Tooltip content={() => null} cursor={{ stroke: C.textDim, strokeDasharray: "3 3" }} />
+        <ReferenceArea y1={70} y2={100} fill={C.rust} fillOpacity={0.07} />
+        <ReferenceArea y1={0} y2={30} fill={C.teal} fillOpacity={0.07} />
+        <ReferenceLine y={70} stroke={C.rust} strokeDasharray="4 3" strokeWidth={1.1} label={{ value: "70 買われすぎ", position: "insideBottomRight", fill: C.rust, fontSize: small }} />
+        <ReferenceLine y={30} stroke={C.teal} strokeDasharray="4 3" strokeWidth={1.1} label={{ value: "30 売られすぎ", position: "insideTopRight", fill: C.teal, fontSize: small }} />
+        {selectedCrash && !hiddenCrash[selectedCrash.id] && <Line type="monotone" dataKey={`${selectedCrash.id}__rsi`} stroke={C.rust} strokeWidth={1.3} dot={false} isAnimationActive={false} connectNulls />}
+        {!hiddenCrash.current && <Line type="monotone" dataKey="current__rsi" stroke={C.teal} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls />}
+      </LineChart>
+    </div>
   );
 }
 // 通常表示（評価額/DD%）と暴落比較（経過日数ベース）をタブで切り替えられる拡大チャート。
@@ -4120,6 +4146,28 @@ function CrashDetailChart({ crash, compareCrashes = [], daysSinceATH, currentDD,
     </LineChart>
   );
 }
+// 暴落比較のRSI（14日）：上の比較チャートと同じ経過日数の横軸で、メインの暴落・追加1/2・現在のRSIを重ねる。
+// 70以上＝買われすぎ・30以下＝売られすぎの帯。左右の軸の幅を上のチャートとそろえて、日数の位置を合わせる。
+function CrashRsiChart({ crash, compareCrashes = [], currentEpisodeCurve, hiddenLines = {}, maxDay, rightAxisW = 0, width, height }) {
+  const names = { main: crashDisplayName(crash), current: "VOO（現在）" };
+  compareCrashes.forEach((c) => { names[c.id] = crashDisplayName(c); });
+  return (
+    <LineChart width={width} height={height} margin={{ top: 6, right: 20, left: 0, bottom: 4 }}>
+      <CartesianGrid stroke={C.borderSoft} vertical={false} />
+      <XAxis dataKey="day" type="number" domain={[0, maxDay ?? crash.recoveryDay]} allowDuplicatedCategory={false} tick={{ fill: C.textDim, fontSize: 9 }} axisLine={{ stroke: C.border }} tickLine={false} height={16} />
+      <YAxis domain={[0, 100]} ticks={[30, 50, 70]} interval={0} tick={{ fill: C.violet, fontSize: 9 }} axisLine={false} tickLine={false} width={48} label={{ value: "RSI", angle: -90, position: "insideLeft", fill: C.violet, fontSize: 10 }} />
+      {rightAxisW > 0 && <YAxis yAxisId="pad" orientation="right" tick={false} axisLine={false} tickLine={false} width={rightAxisW} />}
+      <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 12 }} labelFormatter={(v) => `ATHから${v}日目`} formatter={(v, n) => [Number(v).toFixed(1), `RSI ${names[n] ?? n}`]} />
+      <ReferenceArea y1={70} y2={100} fill={C.rust} fillOpacity={0.07} />
+      <ReferenceArea y1={0} y2={30} fill={C.teal} fillOpacity={0.07} />
+      <ReferenceLine y={70} stroke={C.rust} strokeDasharray="4 3" strokeWidth={1.1} label={{ value: "70 買われすぎ", position: "insideBottomRight", fill: C.rust, fontSize: 9 }} />
+      <ReferenceLine y={30} stroke={C.teal} strokeDasharray="4 3" strokeWidth={1.1} label={{ value: "30 売られすぎ", position: "insideTopRight", fill: C.teal, fontSize: 9 }} />
+      {!hiddenLines.main && <Line data={crash.curve} dataKey="rsi" type="monotone" stroke={C.rust} strokeWidth={1.4} dot={false} isAnimationActive={false} connectNulls name="main" />}
+      {compareCrashes.map((c, i) => <Line key={c.id} data={c.curve} dataKey="rsi" type="monotone" stroke={c.lineColor ?? COMPARE_COLORS[i] ?? C.gray} strokeWidth={0.8} dot={false} isAnimationActive={false} connectNulls name={c.id} />)}
+      {!hiddenLines.current && <Line data={currentEpisodeCurve} dataKey="rsi" type="monotone" stroke={C.teal} strokeWidth={2} dot={false} isAnimationActive={false} connectNulls name="current" />}
+    </LineChart>
+  );
+}
 // 暴落の拡大画面の凡例の色見本。クリックでその系列の表示/非表示を切り替える（非表示中は枠線だけの□）。
 // disabled：プルダウンで「選択しない」になっていて切り替える線が無いとき。
 function LineSwatch({ color, hidden, onToggle, disabled = false }) {
@@ -4164,6 +4212,8 @@ function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve
   const maxDay = Math.max(crash.recoveryDay, daysSinceATH, ...compareCrashes.map((c) => c.recoveryDay), qqq ? qqq.crash.recoveryDay : 0, gold ? gold.crash.recoveryDay : 0);
   const ddTicks = ddAxisTicksForMaxDrawdown(Math.min(crash.maxDD, ...compareCrashes.map((c) => c.maxDD), qqq ? qqq.maxDD : 0)); // GOLDは専用の右軸のため含めない
   const annotationPoints = useMemo(() => resolveCrashAnnotations(crash), [crash]);
+  // RSI：日次終値から計算した値が曲線に入っているとき（以前の保存データ等で無いときは出さない）
+  const hasRsi = crash.curve.some((p) => p.rsi != null) || currentEpisodeCurve?.some((p) => p.rsi != null);
   // メインの下落を切り替えたら詳細解説を閉じ、切替先と重複する比較選択はクリアする。
   useEffect(() => {
     setShowDetail(false);
@@ -4236,6 +4286,12 @@ function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve
             <LineSwatch color={C.teal} hidden={!!hiddenLines.current} onToggle={() => toggleLine("current")} />
             <span style={rowStyle("current")}>VOO 現在（ATH更新から{daysSinceATH}日目・DD{currentDD.toFixed(1)}%）</span>
           </div>
+          {hasRsi && (
+            <div className="flex items-center gap-2 text-[11px]" style={{ color: C.textDim }}>
+              <LineSwatch color={C.textMuted} hidden={!!hiddenLines.rsi} onToggle={() => toggleLine("rsi")} />
+              <span style={rowStyle("rsi")}>RSI(14)（下の枠。メインの暴落・追加1/2・現在。70以上＝買われすぎ・30以下＝売られすぎ）</span>
+            </div>
+          )}
           {qqqFull?.length > 0 && (
             <div className="flex items-center gap-2 flex-wrap text-[11px]" style={{ color: C.textDim }}>
               <LineSwatch color={C.violet} hidden={!!hiddenLines.qqq} onToggle={() => toggleLine("qqq")} disabled={!qqq} />
@@ -4279,6 +4335,13 @@ function CrashModalContent({ crash, daysSinceATH, currentDD, currentEpisodeCurve
           <CrashDetailChart crash={crash} compareCrashes={visibleCompares} daysSinceATH={daysSinceATH} currentDD={currentDD} currentEpisodeCurve={currentEpisodeCurve} qqq={hiddenLines.qqq ? null : qqq} gold={hiddenLines.gold ? null : gold} hiddenLines={hiddenLines} annotationPoints={annotationPoints} ddTicks={ddTicks} maxDay={maxDay} />
         </ResponsiveContainer>
       </div>
+      {hasRsi && !hiddenLines.rsi && (
+        <div style={{ height: 150 }} className="mb-2">
+          <ResponsiveContainer width="100%" height="100%">
+            <CrashRsiChart crash={crash} compareCrashes={visibleCompares} currentEpisodeCurve={currentEpisodeCurve} hiddenLines={hiddenLines} maxDay={maxDay} rightAxisW={gold && !hiddenLines.gold ? 56 : 0} />
+          </ResponsiveContainer>
+        </div>
+      )}
       {annotationPoints.length > 0 && <div className="text-[10px] mb-2" style={{ color: C.textDim }}>● にカーソルを合わせると当時の出来事を表示します。</div>}
       <div className="rounded px-4 py-2 mb-2 text-sm leading-relaxed" style={{ background: C.panel2, border: `1px solid ${C.borderSoft}`, color: C.text }}>
         <div>現在はATH更新から{daysSinceATH}日目でDD{currentDD.toFixed(1)}%。</div>
