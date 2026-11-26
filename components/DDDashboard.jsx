@@ -2077,17 +2077,31 @@ function yearStartDates(rows, rangeDays) {
   return out.filter((dt) => dt.getFullYear() % step === 0);
 }
 // 年の切れ目の縦の補助線（RechartsのReferenceLineは日付の値を受け付けないため、横軸の目盛の位置に自分で線を引く）
-function YearGridLines({ xAxisMap, offset, dates }) {
+function YearGridLines({ xAxisMap, offset, dates, labels = null, fontSize = 10 }) {
   const ax = xAxisMap && Object.values(xAxisMap)[0];
   if (!ax?.scale || !offset || !dates?.length) return null;
   const half = typeof ax.scale.bandwidth === "function" ? ax.scale.bandwidth() / 2 : 0;
+  const xOf = (dt) => { const x = ax.scale(dt); return x == null || !Number.isFinite(x) ? null : x + half; };
+  const xs = dates.map(xOf);
+  // 年の表示（labels＝[最初の日付, 最後の日付]を渡したとき）：線と線の間（その年の範囲）の真ん中に年を書く。
+  // 端の年は表示期間に入っている部分の真ん中。狭すぎて文字が入らない区間は書かない
+  const spans = [];
+  if (labels) {
+    const [first, last] = labels;
+    const edges = [{ x: xOf(first), year: first.getFullYear() }, ...dates.map((dt, i) => ({ x: xs[i], year: dt.getFullYear() })), { x: xOf(last), year: null }];
+    for (let i = 0; i < edges.length - 1; i++) {
+      const a = edges[i], b = edges[i + 1];
+      if (a.x == null || b.x == null || b.x - a.x < fontSize * 3.2) continue;
+      // 間引いた線（2年・5年ごと）のときは「2018〜19」のように範囲で書く
+      const endYear = b.year != null ? b.year - 1 : last.getFullYear();
+      const label = endYear > a.year ? `${a.year}〜${String(endYear).slice(-2)}` : String(a.year);
+      spans.push({ x: (a.x + b.x) / 2, label });
+    }
+  }
   return (
     <g pointerEvents="none">
-      {dates.map((dt) => {
-        const x = ax.scale(dt);
-        if (x == null || !Number.isFinite(x)) return null;
-        return <line key={dt.getTime()} x1={x + half} x2={x + half} y1={offset.top} y2={offset.top + offset.height} stroke={C.textMuted} strokeOpacity={0.4} strokeWidth={1} strokeDasharray="3 4" />;
-      })}
+      {xs.map((x, i) => (x == null ? null : <line key={dates[i].getTime()} x1={x} x2={x} y1={offset.top} y2={offset.top + offset.height} stroke={C.textMuted} strokeOpacity={0.4} strokeWidth={1} strokeDasharray="3 4" />))}
+      {spans.map((sp) => <text key={sp.label + sp.x} x={sp.x} y={offset.top + offset.height + fontSize + 6} textAnchor="middle" fill={C.textDim} fontSize={fontSize}>{sp.label}</text>)}
     </g>
   );
 }
@@ -2309,7 +2323,8 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBru
   const mainH = showRsi && height ? Math.round((height - (withBrush ? 30 : 0)) * 0.72) : height;
   // 年の切れ目の縦の補助線。長い期間（年表示）のときは、横軸の目盛も年の切れ目にそろえる（同じ年が2回出ないように）
   const yearLines = yearStartDates(chartData, rangeDays);
-  const yearTicks = rangeDays > 2200 && yearLines.length ? { ticks: yearLines, interval: 0 } : {};
+  const yearMode = rangeDays > 2200 && yearLines.length > 0;
+  const yearTicks = yearMode ? { tick: false } : {};
   const main = (
     <ComposedChart
       syncId={showRsi ? syncId : undefined}
@@ -2329,7 +2344,7 @@ function EvalDDChartBody({ chartData, rangeDays, d, hidden, periodStats, withBru
       {MILESTONES.filter((t) => t !== -3).map((t) => (<ReferenceLine key={t} yAxisId="dd" y={t} stroke={C.borderSoft} strokeDasharray="2 3" label={{ value: `${t}%`, position: "insideBottomRight", fill: C.textDim, fontSize: Math.max(8, fontSize - 2) }} />))}
       {/* DD-3%の目安ライン。値はDD%軸の目盛（常に-3を含む）で示すため、チャート内のラベルは付けない */}
       <ReferenceLine yAxisId="dd" y={-3} stroke={C.rust} strokeDasharray="4 3" strokeWidth={1.3} />
-      {yearLines.length > 0 && <Customized component={<YearGridLines dates={yearLines} />} />}
+      {yearLines.length > 0 && <Customized component={<YearGridLines dates={yearLines} labels={yearMode ? [chartData[0].date, chartData[chartData.length - 1].date] : null} fontSize={fontSize} />} />}
       {showSpyListing && chartData[0].date < SPY_LISTING_DATE && chartData[chartData.length - 1].date > SPY_LISTING_DATE && (<ReferenceLine yAxisId="price" x={SPY_LISTING_DATE} stroke={C.violet} strokeDasharray="3 3" label={{ value: "SPY上場（1993）", fill: C.violet, fontSize: Math.max(9, fontSize - 1), position: "top" }} />)}
       <Area yAxisId="dd" type="linear" dataKey="dd" stroke={C.rust} fill="url(#ddFill)" strokeWidth={1.3} dot={false} isAnimationActive={false} fillOpacity={hidden.dd ? 0 : 1} strokeOpacity={hidden.dd ? 0 : 1} />
       <Area yAxisId="price" type="linear" dataKey="price" stroke={priceColor} fill={`url(#${priceFillId})`} strokeWidth={1.8} dot={false} isAnimationActive={false} fillOpacity={hidden.price ? 0 : 1} strokeOpacity={hidden.price ? 0 : 1} />
@@ -2478,7 +2493,8 @@ function MultiPriceChartBody({ keys, views, hidden, fontSize = 10, compact = fal
   const data = mergeMultiChartData(active, views);
   const rangeDays = data.length ? Math.round((data[data.length - 1].date - data[0].date) / 86400000) : 0;
   const yearLines = yearStartDates(data, rangeDays);
-  const yearTicks = rangeDays > 2200 && yearLines.length ? { ticks: yearLines, interval: 0 } : {};
+  const yearMode = rangeDays > 2200 && yearLines.length > 0;
+  const yearTicks = yearMode ? { tick: false } : {};
   const markerFontSize = Math.max(8, fontSize - 1);
   const markerPoints = [];
   for (const k of active) {
@@ -2497,7 +2513,7 @@ function MultiPriceChartBody({ keys, views, hidden, fontSize = 10, compact = fal
         return <YAxis key={k} yAxisId={sr.yAxisId} orientation={i === 0 ? "left" : "right"} domain={["auto", "auto"]} tick={{ fill: sr.color, fontSize }} axisLine={false} tickLine={false} width={compact ? 44 : 52} label={{ value: sr.name, angle: i === 0 ? -90 : 90, position: i === 0 ? "insideLeft" : "insideRight", fill: sr.color, fontSize }} />;
       })}
       <Tooltip offset={TOOLTIP_OFFSET} position={tooltipBottomPos(height, 0)} content={(props) => <AnchorBottom on={!!height}><MultiTooltipContent {...props} markersByTime={markersByTime} hidden={hidden} keys={active} /></AnchorBottom>} />
-      {yearLines.length > 0 && <Customized component={<YearGridLines dates={yearLines} />} />}
+      {yearLines.length > 0 && <Customized component={<YearGridLines dates={yearLines} labels={yearMode ? [data[0].date, data[data.length - 1].date] : null} fontSize={fontSize} />} />}
       {active.map((k) => { const sr = MULTI_SERIES[k]; return <Line key={k} yAxisId={sr.yAxisId} type="linear" dataKey={sr.priceKey} stroke={sr.color} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls hide={!!hidden[sr.hiddenKey]} name={sr.name} />; })}
       {/* 単体表示と同様のATH補助線（DD開始～回復の間は水平になり、ドローダウン区間が分かる）。各銘柄の系列色の点線で描く */}
       {active.map((k) => { const sr = MULTI_SERIES[k]; return <Line key={`${k}-ath`} yAxisId={sr.yAxisId} type="linear" dataKey={sr.athKey} stroke={sr.color} strokeDasharray="3 4" strokeWidth={1} strokeOpacity={0.7} dot={false} activeDot={false} isAnimationActive={false} connectNulls hide={!!hidden[sr.hiddenKey] || !!hidden.markers} name={`${sr.name} ATH`} />; })}
