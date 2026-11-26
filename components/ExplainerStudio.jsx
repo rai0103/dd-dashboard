@@ -1476,6 +1476,14 @@ export default function ExplainerStudio() {
   const [showSubtitles, setShowSubtitles] = useState(true);
   // 参考資料：既定では動画に入れず、概要欄にだけ記載する（入れる場合は長尺の最後に「参考資料」の場面を足す）
   const [sourcesInVideo, setSourcesInVideoState] = useState(() => { try { return localStorage.getItem("explainer-sources-in-video-v1") === "1"; } catch (e) { return false; } });
+  // スライドに出す画像の表記：「動画に出典を表示」がオフ（既定）のときは、フリー素材の「出典：…」を出さず「※イメージ」にする
+  // （出典は概要欄にはいつも記載する。加工した画像の「※AIイメージ」・AI生成の「※AI生成のイメージ」はそのまま）
+  const slideImageLabels = useMemo(() => {
+    if (sourcesInVideo) return imageLabels;
+    const m = {};
+    for (const [id, l] of Object.entries(imageLabels)) m[id] = l?.length && /^出典/.test(l[0]) ? ["※イメージ"] : l;
+    return m;
+  }, [imageLabels, sourcesInVideo]);
   const setSourcesInVideo = (on) => {
     setSourcesInVideoState(on);
     try { localStorage.setItem("explainer-sources-in-video-v1", on ? "1" : "0"); } catch (e) { /* ignore */ }
@@ -1567,7 +1575,7 @@ export default function ExplainerStudio() {
         format, scenes, videoTitle: format === "short" && project.youtube.shortTitle ? project.youtube.shortTitle.replace(/#\S+/g, "").trim() : project.videoTitle,
         kicker: project.kicker, chapterTitles: project.chapters.map((c) => c.title),
         avatar: fullLayout ? null : avatarObj, backgroundImage: backgroundImgEl, backgroundOpacity: backgroundOpacity / 100,
-        images: imageEls, imageLabels, showSubtitles, showSourceNotes: sourcesInVideo,
+        images: imageEls, imageLabels: slideImageLabels, showSubtitles, showSourceNotes: sourcesInVideo,
         layout: fullLayout ? "full" : "avatar", theme: fullLayout ? "weekly" : "standard",
       });
       r.setDurations(sceneDurs.length === scenes.length ? sceneDurs : estDurs);
@@ -1577,7 +1585,7 @@ export default function ExplainerStudio() {
       updateSceneProgress(seekPosRef.current);
     } catch (e) { console.error("ExplainerRenderer init error:", e); rendererRef.current = null; }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project, scenes, format, avatarObj, backgroundImgEl, backgroundOpacity, imageEls, imageLabels, showSubtitles, sourcesInVideo, estDurs, fullLayout]);
+  }, [project, scenes, format, avatarObj, backgroundImgEl, backgroundOpacity, imageEls, slideImageLabels, showSubtitles, sourcesInVideo, estDurs, fullLayout]);
 
   const stopLoop = () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); rafRef.current = 0; isPlayingRef.current = false; };
   // list：音声を用意する場面（省略時は表示中の形式の場面）。表示中でない形式（長尺＋ショートのセット書き出しで
@@ -1819,7 +1827,7 @@ export default function ExplainerStudio() {
         format: fmt, scenes: list, videoTitle: fmt === "short" && project.youtube.shortTitle ? project.youtube.shortTitle.replace(/#\S+/g, "").trim() : project.videoTitle,
         kicker: project.kicker, chapterTitles: project.chapters.map((c) => c.title),
         avatar: fullLayout ? null : avatarObj, backgroundImage: backgroundImgEl, backgroundOpacity: backgroundOpacity / 100,
-        images: imageEls, imageLabels, showSubtitles, showSourceNotes: sourcesInVideo,
+        images: imageEls, imageLabels: slideImageLabels, showSubtitles, showSourceNotes: sourcesInVideo,
         layout: fullLayout ? "full" : "avatar", theme: fullLayout ? "weekly" : "standard",
       });
       const audioStream = mixer().startRecordingTap();
@@ -2549,7 +2557,7 @@ export default function ExplainerStudio() {
                   ラベル<input value={project.kicker} onChange={(e) => setProject((p) => ({ ...p, kicker: e.target.value }))} className="w-32 px-1.5 py-0.5 rounded text-[11px]" style={inputStyle} title="左上の色付きラベル" />
                   タイトル<input value={project.videoTitle} onChange={(e) => setProject((p) => ({ ...p, videoTitle: e.target.value }))} className="flex-1 min-w-0 px-1.5 py-0.5 rounded text-[11px]" style={inputStyle} title="画面上部に出す動画タイトル" />
                 </div>
-                {format === "long" && <label className="flex items-center gap-1.5 text-[11px]" style={{ color: C.textDim }}><input type="checkbox" checked={sourcesInVideo} onChange={(e) => setSourcesInVideo(e.target.checked)} /> 動画に出典を表示（各スライドの「出典：…」と最後の「参考資料」の場面。オフでも概要欄には記載します）</label>}
+                <label className="flex items-center gap-1.5 text-[11px]" style={{ color: C.textDim }}><input type="checkbox" checked={sourcesInVideo} onChange={(e) => setSourcesInVideo(e.target.checked)} /> 動画に出典を表示（各スライドの「出典：…」と長尺の最後の「参考資料」の場面。オフでも概要欄には記載します）</label>
                 <label className="flex items-center gap-1.5 text-[11px]" style={{ color: C.textDim }}><input type="checkbox" checked={showSubtitles} onChange={(e) => setShowSubtitles(e.target.checked)} /> 字幕（ナレーション）を表示（オフでテロップ）</label>
                 <div className="flex items-center gap-2 flex-wrap text-[11px]" style={{ color: C.textDim }}>
                   <span>保存先：{canPickFolder() ? (exportFolder ? <b style={{ color: C.text }}>{exportFolder.name}</b> : "未選択（書き出し時に選びます）") : "ダウンロードフォルダ"}</span>
